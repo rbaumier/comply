@@ -66,15 +66,20 @@ fn is_well_known_path(path: &str) -> bool {
     path.starts_with("/.well-known/")
 }
 
-/// GraphQL endpoints are a single, unversioned URL by convention: the GraphQL
-/// spec and every major server/client (Apollo, Yoga, Pothos, Mercurius) default
-/// to `/graphql`, and versioning is done in the schema (field deprecation,
-/// additive changes), not in the URL. True when any `/`-delimited segment of the
-/// path is exactly `graphql` — covering the canonical `/graphql`, mounts like
-/// `/api/graphql`, and sub-paths like `/graphql/stream`. Whole-segment matching
-/// keeps a genuine REST resource such as `/graphql-admin-tools` flagged.
+/// GraphQL-paradigm routes are a single, unversioned URL by convention: the
+/// GraphQL spec and every major server/client (Apollo, Yoga, Pothos, Mercurius)
+/// default to `/graphql`, and versioning is done in the schema (field
+/// deprecation, additive changes), not in the URL. The same holds for the GraphQL
+/// in-browser IDEs served alongside it — GraphiQL (`/graphiql`) and the
+/// `/playground` UI — which are static developer tools, not versioned resources.
+/// True when any `/`-delimited segment of the path is exactly `graphql`,
+/// `graphiql`, or `playground` — covering the canonical endpoints, mounts like
+/// `/api/graphql`, sub-paths like `/graphql/stream`, and the IDE asset paths
+/// `/graphiql/main.js`. Whole-segment matching keeps a genuine REST resource such
+/// as `/graphql-admin-tools` flagged.
 fn is_graphql_path(path: &str) -> bool {
-    path.split('/').any(|seg| seg == "graphql")
+    path.split('/')
+        .any(|seg| matches!(seg, "graphql" | "graphiql" | "playground"))
 }
 
 fn has_version_prefix(path: &str) -> bool {
@@ -563,11 +568,26 @@ mod tests {
     }
 
     #[test]
+    fn allows_graphql_ide_routes() {
+        // Issue #5591 — GraphiQL (`/graphiql`) and the `/playground` UI are the
+        // GraphQL in-browser IDEs served at conventional unversioned paths; they
+        // are static developer tools, not versioned resources. The IDE root and
+        // its static asset sub-paths are all exempt.
+        assert!(run("app.get('/graphiql', (req, reply) => {});").is_empty());
+        assert!(run("app.get('/graphiql/main.js', (req, reply) => {});").is_empty());
+        assert!(run("app.get('/graphiql/sw.js', (req, reply) => {});").is_empty());
+        assert!(run("app.get('/graphiql/config.js', (req, reply) => {});").is_empty());
+        assert!(run("app.get('/playground', handler);").is_empty());
+    }
+
+    #[test]
     fn flags_graphql_lookalike_resource() {
         // Negative space: whole-segment matching only — a real REST resource whose
         // segment merely starts with `graphql` is not the GraphQL endpoint and
         // still requires a version prefix.
         assert_eq!(run("app.get('/graphql-admin-tools', handler);").len(), 1);
+        assert_eq!(run("app.get('/graphiql-settings', handler);").len(), 1);
+        assert_eq!(run("app.get('/playgrounds', handler);").len(), 1);
     }
 
     #[test]
