@@ -1183,4 +1183,34 @@ mod tests {
         // is scoped to the bit-reinterpretation sink.
         assert_eq!(run_on("fn f(x: f64) -> f32 { x as f32 }").len(), 1);
     }
+
+    #[test]
+    fn repro_5550_external_repr_enum_param_as_u32_not_flagged() {
+        // The issue's exact shape (naga SPIR-V backend): a parameter typed as an
+        // imported `#[repr(u32)]` enum cast to u32. The repr guarantees every
+        // discriminant fits u32, so the cast is lossless; `as` is the only
+        // conversion the language offers.
+        let src =
+            "fn source(source_language: spirv::SourceLanguage) -> u32 { source_language as u32 }";
+        assert!(run_on(src).is_empty());
+        let src2 = "fn decorate(decoration: spirv::Decoration) -> u32 { decoration as u32 }";
+        assert!(run_on(src2).is_empty());
+    }
+
+    #[test]
+    fn repro_5550_bare_type_name_binding_owned_by_numeric_cast() {
+        // A bare (unqualified) PascalCase type name is indistinguishable from a
+        // local numeric alias, so the discriminant exemption must NOT apply. The
+        // narrowing stays a finding — owned by `rust-no-as-numeric-cast`, so this
+        // rule cedes the span.
+        let src = "fn f(d: Decoration) -> u8 { d as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5550_numeric_param_narrowing_owned_by_numeric_cast() {
+        // A genuinely numeric operand is NOT enum-shaped: `u64 as u32` stays a
+        // lossy narrowing, owned by `rust-no-as-numeric-cast`.
+        assert!(run_on("fn f(x: u64) -> u32 { x as u32 }").is_empty());
+    }
 }
