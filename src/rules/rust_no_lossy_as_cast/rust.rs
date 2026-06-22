@@ -6,12 +6,14 @@
 //!
 //! - integer narrowing (`u32 as u8`, `i64 as i32`, etc.)
 //! - float to integer (`f64 as u32`)
-//! - integer to `f32` when the source type is resolvable and exceeds the
-//!   mantissa (`u32 as f32`, `i32 as f32`). Small integers that fit exactly
-//!   — `{i8,u8,i16,u16} as f32` — are lossless and silenced, and a cast
-//!   whose source type can't be resolved from the AST (index/field/method
-//!   operands, e.g. `gx[(x, y)][0] as f32`) is left to
-//!   `rust-no-as-numeric-cast`, since precision loss is not provable there.
+//!
+//! Integer -> float casts (`x as f32` / `x as f64`) are not flagged when the
+//! operand resolves to an integer type: a lossy int -> float conversion has no
+//! `From`/`TryFrom` alternative in std (the trait impls exist only for the
+//! lossless pairs), so `as` is the only conversion the language offers and a
+//! `try_into()` / `From` suggestion would not compile. An operand whose source
+//! type can't be resolved from the AST (index/field/method operands, e.g.
+//! `gx[(x, y)][0] as f32`) is left to `rust-no-as-numeric-cast`.
 //!
 //! Same-width signed/unsigned reinterpretations (`u8 as i8`, `i32 as u32`,
 //! …) preserve every bit — only the sign bit's interpretation changes via
@@ -62,14 +64,14 @@
 //! at least 8 bits wide, so the guarded cast cannot truncate.
 //!
 //! Casts that `rust-no-as-numeric-cast` already flags are suppressed here so
-//! the pair emits one diagnostic per span; this rule keeps firing only where
-//! that one does not — notably int `as f32` (no `f32::From` for those sources).
+//! the pair emits one diagnostic per span.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_feeds_sized_pointer_write,
-    cast_in_const_context, cast_operand_bit_width, cast_operand_indexed_element_type,
+    cast_in_const_context, cast_is_int_to_float, cast_operand_bit_width,
+    cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
@@ -176,17 +178,25 @@ impl AstCheck for Check {
         if cast_feeds_sized_pointer_write(node, source_bytes) {
             return;
         }
+        // An integer -> float cast (`x as f32` / `x as f64`) has no lossless
+        // trait alternative: `From`/`TryFrom` for int -> float exist only for
+        // the lossless pairs, and for the lossy pairs (`i64`/`u64`/… -> `f64`,
+        // `i32`/`u32`/… -> `f32`) `as` is the only conversion the language
+        // offers. Suggesting `try_into()` / `From::from(x)` there is impossible,
+        // so exempt the cast once the operand is a resolved integer.
+        if cast_is_int_to_float(node, source_bytes) {
+            return;
+        }
         let source_type = source_numeric_type(node, source_bytes);
         if let Some(source_type) = source_type
             && !is_dangerous_cast(source_type, target_type)
         {
             return;
         }
-        // A float target only loses precision when the source is wide enough to
-        // overflow the mantissa. That can only be proven from a resolvable
-        // source type; for an unresolved operand (index/field/method, e.g.
-        // `gx[(x, y)][0] as f32`) the loss is not provable, so defer to
-        // `rust-no-as-numeric-cast`, which flags float casts only when a
+        // A resolved-integer `as f32` was exempted above; what reaches here with
+        // a float target is an unresolved operand (index/field/method, e.g.
+        // `gx[(x, y)][0] as f32`), where precision loss is not provable, so defer
+        // to `rust-no-as-numeric-cast`, which flags float casts only when a
         // matching `From` impl makes `T::from(x)` a compiling suggestion.
         if target_type.kind == NumericKind::Float && source_type.is_none() {
             return;
@@ -196,7 +206,7 @@ impl AstCheck for Check {
         }
         // De-duplicate: when `rust-no-as-numeric-cast` owns this cast, let it
         // be the single diagnostic for the span. This rule keeps firing only
-        // where that one does not (e.g. int/float `as f32`).
+        // where that one does not (e.g. `f64 as f32` float narrowing).
         if fires_on_cast(node, source_bytes) {
             return;
         }
@@ -239,10 +249,6 @@ fn numeric_type(type_text: &str) -> Option<NumericType> {
     Some(NumericType { kind, bits })
 }
 
-/// `f32` has a 24-bit mantissa, so integers up to 24 bits wide are exactly
-/// representable.
-const F32_MANTISSA_BITS: u16 = 24;
-
 fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
     if source.kind == target.kind && source.kind != NumericKind::Float {
         return target.bits < source.bits;
@@ -267,13 +273,6 @@ fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
         && target.bits > source.bits
     {
         return false;
-    }
-    if target.kind == NumericKind::Float
-        && matches!(source.kind, NumericKind::Unsigned | NumericKind::Signed)
-    {
-        // Integer -> `f32` is lossless when the source fits the mantissa:
-        // `{i8,u8,i16,u16} as f32`. `i32`/`u32` (32 bits) overflow it.
-        return source.bits > F32_MANTISSA_BITS;
     }
     true
 }
@@ -450,9 +449,42 @@ mod tests {
     }
 
     #[test]
-    fn flags_lossy_cast_in_non_const_fn_body() {
-        // A runtime body is unaffected — `try_into()` / `From` is available there.
-        assert_eq!(run_on("fn f(x: i32) -> f32 { x as f32 }").len(), 1);
+    fn repro_5690_int_to_f32_in_non_const_fn_body_not_flagged() {
+        // Issue #5690: `i32 as f32` has no `f32::From<i32>` / `TryFrom` — `as` is
+        // the only conversion, so a runtime body is exempt too (not just const).
+        assert!(run_on("fn f(x: i32) -> f32 { x as f32 }").is_empty());
+    }
+
+    #[test]
+    fn float_to_int_owned_by_numeric_cast() {
+        // The inverse direction (`f64 as i32`) is not exempt: `try_into()` /
+        // `i32::try_from` exist for float -> int, so the cast stays a finding —
+        // here owned by `rust-no-as-numeric-cast`, so this rule cedes the span.
+        assert!(run_on("fn f(x: f64) -> i32 { x as i32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5690_int_narrowing_owned_by_numeric_cast() {
+        // The int -> float exemption must NOT bleed into int -> int narrowing:
+        // `i64 as i32` has a `try_into()` alternative, so it stays a finding —
+        // here owned by `rust-no-as-numeric-cast`, so this rule cedes the span.
+        assert!(run_on("fn f(x: i64) -> i32 { x as i32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5690_deref_int_narrowing_still_flagged() {
+        // A deref int narrowing is owned by this rule (numeric-cast cedes deref
+        // operands): `*x as i32` where `x: &i64` must still flag — the int -> int
+        // direction is never exempt.
+        assert_eq!(run_on("fn f(x: &i64) -> i32 { *x as i32 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5690_deref_float_to_int_still_flagged() {
+        // A deref operand is ceded by `rust-no-as-numeric-cast`, so this rule
+        // owns the span. `*x as i32` where `x: &f64` is a float -> int cast — the
+        // int-to-float exemption must NOT apply to the reverse direction.
+        assert_eq!(run_on("fn f(x: &f64) -> i32 { *x as i32 }").len(), 1);
     }
 
     #[test]
@@ -792,10 +824,10 @@ mod tests {
     }
 
     #[test]
-    fn repro_1254_int_as_f32_still_flagged_numeric_cast_skips_it() {
-        // `y as f32` where `y: u32`: `rust-no-as-numeric-cast` skips int->f32
-        // (no `f32::From<u32>` to suggest), so this rule still owns it.
-        assert_eq!(run_on("fn f(y: u32) -> f32 { let x = y as f32; x }").len(), 1);
+    fn repro_5690_u32_as_f32_not_flagged() {
+        // `y as f32` where `y: u32`: no `f32::From<u32>` / `TryFrom` exists, so
+        // `as` is the only conversion — neither rule flags it (#5690).
+        assert!(run_on("fn f(y: u32) -> f32 { let x = y as f32; x }").is_empty());
     }
 
     #[test]
@@ -821,9 +853,41 @@ mod tests {
     }
 
     #[test]
-    fn repro_4677_i32_as_f32_still_flagged() {
-        // i32 (32 bits) exceeds f32's 24-bit mantissa — genuinely lossy.
-        assert_eq!(run_on("fn f(g: i32) -> f32 { g as f32 }").len(), 1);
+    fn repro_5690_u64_as_f32_not_flagged() {
+        // The issue's exact shape (cranelift opts.rs `f32_from_uint`):
+        // `n as f32` where `n: u64`. No `f32::From<u64>` / `TryFrom` exists.
+        assert!(run_on("fn f32_from_uint(n: u64) -> f32 { n as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5690_i64_as_f32_not_flagged() {
+        // `f32_from_sint`: `n as f32` where `n: i64`.
+        assert!(run_on("fn f32_from_sint(n: i64) -> f32 { n as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5690_u64_as_f64_not_flagged() {
+        // `f64_from_uint`: `n as f64` where `n: u64`. `f64` is not even in the
+        // narrowing-target set, but the int -> float exemption covers it too.
+        assert!(run_on("fn f64_from_uint(n: u64) -> f64 { n as f64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5690_i64_as_f64_not_flagged() {
+        assert!(run_on("fn f64_from_sint(n: i64) -> f64 { n as f64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5690_usize_as_f64_not_flagged() {
+        // A platform-width source (`usize`) has no `f64::From<usize>` either.
+        assert!(run_on("fn f(n: usize) -> f64 { n as f64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5690_i32_as_f32_not_flagged() {
+        // i32 exceeds f32's 24-bit mantissa (lossy), but no `f32::From<i32>` /
+        // `TryFrom` exists, so `as` is the only conversion — not flagged (#5690).
+        assert!(run_on("fn f(g: i32) -> f32 { g as f32 }").is_empty());
     }
 
     #[test]
@@ -955,11 +1019,10 @@ mod tests {
     }
 
     #[test]
-    fn genuine_lossy_int_as_f32_still_flagged() {
-        // Sanity guard that the char carve-out did not over-exempt: a real
-        // unsigned widening to f32 (which `rust-no-as-numeric-cast` skips) still
-        // fires here.
-        assert_eq!(run_on("fn f(x: u32) -> f32 { x as f32 }").len(), 1);
+    fn repro_5690_u32_as_f32_after_char_carveout_not_flagged() {
+        // The char carve-out does not change the int -> f32 verdict: `u32 as f32`
+        // has no `From`/`TryFrom` alternative, so it is exempt (#5690).
+        assert!(run_on("fn f(x: u32) -> f32 { x as f32 }").is_empty());
     }
 
     #[test]
