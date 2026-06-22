@@ -76,6 +76,13 @@ use std::sync::Arc;
 /// paired with pagination siblings like `offset`/`pageSize` in the same
 /// object) is exempted by usage shape, not by name — see
 /// `used_as_pagination_count`.
+///
+/// `threshold` stays a base — a dimensioned `threshold` (a duration/distance
+/// limit compared to a measured magnitude) is genuinely unit-ambiguous and
+/// still flags. A `threshold` used as a dimensionless character/column count
+/// for text layout (subtracted from / compared to a string `.length`, or passed
+/// as the count to `padStart`/`padEnd`/`repeat`/`slice`/`substring`) is exempted
+/// by usage shape, not by name — see `used_as_char_count`.
 const AMBIGUOUS_BASES: &[&str] = &[
     "timeout",
     "interval",
@@ -181,6 +188,9 @@ impl OxcCheck for Check {
                 if used_as_pagination_count(name, id.symbol_id.get(), semantic) {
                     return;
                 }
+                if used_as_char_count(name, id.symbol_id.get(), semantic) {
+                    return;
+                }
                 check_name(name, decl.span().start, ctx, diagnostics);
             }
             oxc_ast::AstKind::FormalParameter(param) => {
@@ -199,6 +209,9 @@ impl OxcCheck for Check {
                     return;
                 }
                 if used_as_pagination_count(name, id.symbol_id.get(), semantic) {
+                    return;
+                }
+                if used_as_char_count(name, id.symbol_id.get(), semantic) {
                     return;
                 }
                 check_name(name, param.span().start, ctx, diagnostics);
@@ -351,6 +364,68 @@ fn object_has_pagination_sibling(obj: &oxc_ast::ast::ObjectExpression) -> bool {
         let lower = key.to_ascii_lowercase();
         lower != "limit" && PAGINATION_SIBLINGS.contains(&lower.as_str())
     })
+}
+
+/// String-layout method names whose count argument is a dimensionless character
+/// count. A `threshold` passed to one of these is a column/padding width, not a
+/// physical magnitude.
+const TEXT_LAYOUT_METHODS: &[&str] = &["padStart", "padEnd", "repeat", "slice", "substring", "substr"];
+
+/// Whether a `threshold`-based numeric binding is used as a dimensionless
+/// character/column count for text layout rather than a dimensioned (duration/
+/// distance) magnitude. The guard fires only for the `threshold` base: a
+/// dimensioned `threshold` carries no string-layout usage shape and stays
+/// flagged.
+///
+/// The structural signals, resolved from the binding's references:
+///   - the binding is an operand of a binary expression whose *other* operand is
+///     a `.length` member access (`threshold - prefix.length`, `text.length >
+///     threshold`) — column-alignment arithmetic against a string length, or
+///   - the binding is an argument of a string-layout method call
+///     (`padStart`/`padEnd`/`repeat`/`slice`/`substring`/`substr`) — a character
+///     count consumed by string formatting.
+///
+/// Anchoring on usage keeps a dimensioned `threshold` flagged — a duration or
+/// distance threshold compared to a measured magnitude has neither shape.
+fn used_as_char_count(
+    name: &str,
+    symbol_id: Option<oxc_semantic::SymbolId>,
+    semantic: &Semantic<'_>,
+) -> bool {
+    if matches_ambiguous_base(name) != Some("threshold") {
+        return false;
+    }
+    let Some(symbol_id) = symbol_id else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    scoping.get_resolved_references(symbol_id).any(|reference| {
+        let ref_node = reference.node_id();
+        match nodes.kind(nodes.parent_id(ref_node)) {
+            // `threshold - prefix.length` — the other operand is a string length.
+            AstKind::BinaryExpression(bin) => {
+                is_length_member(&bin.left) || is_length_member(&bin.right)
+            }
+            // `' '.repeat(threshold)` / `s.padStart(threshold)` — a layout call arg.
+            AstKind::CallExpression(call) => is_text_layout_method_call(call),
+            _ => false,
+        }
+    })
+}
+
+/// Whether the expression is a `.length` member access (`prefix.length`), the
+/// marker that a co-operand is a character count.
+fn is_length_member(expr: &Expression) -> bool {
+    matches!(expr, Expression::StaticMemberExpression(m) if m.property.name.as_str() == "length")
+}
+
+/// Whether the call is a string-layout method (`padStart`/`padEnd`/`repeat`/...).
+fn is_text_layout_method_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    TEXT_LAYOUT_METHODS.contains(&member.property.name.as_str())
 }
 
 fn check_name(name: &str, offset: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>) {
@@ -871,5 +946,48 @@ mod tests {
         );
         assert_eq!(run_on("const limit: number = 1048576;").len(), 1);
         assert_eq!(run_on("function f(limit: number) { if (size > limit) reject(); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_threshold_used_as_char_count_length_arithmetic() {
+        // `threshold` subtracted from a string `.length` is a column-alignment
+        // character count for CLI help formatting, not a physical magnitude —
+        // `thresholdMs`/`thresholdBytes` are nonsensical (#5533). The issue's
+        // exact shape: a default-valued `number` param fed into `threshold -
+        // prefix.length`.
+        assert!(
+            run_on(
+                "function formatWithGap(prefix: string, text: string, threshold: number = 30) { const indent = Math.max(1, threshold - prefix.length); return prefix + ' '.repeat(indent) + text; }"
+            )
+            .is_empty()
+        );
+        // The comparison shape (`text.length > threshold`) is also a char count.
+        assert!(
+            run_on("function f(threshold: number) { return text.length > threshold; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_threshold_passed_to_text_layout_method() {
+        // A `threshold` passed as the count to a string-layout method is a
+        // character/padding count (#5533).
+        assert!(run_on("function f(threshold: number) { return ' '.repeat(threshold); }").is_empty());
+        assert!(
+            run_on("function f(threshold: number) { return s.padStart(threshold); }").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_dimensioned_threshold_without_char_count_usage() {
+        // A `threshold` used as a dimensioned magnitude — compared to a duration
+        // or distance, with no string-length or layout-call usage — still demands
+        // a unit (#5533). The char-count guard must not be a blanket `threshold`
+        // exemption.
+        assert_eq!(run_on("const threshold: number = 5000;").len(), 1);
+        assert_eq!(
+            run_on("function f(threshold: number) { if (elapsed > threshold) abort(); }").len(),
+            1
+        );
+        assert_eq!(run_on("function f(threshold: number) { setTimeout(fn, threshold); }").len(), 1);
     }
 }
