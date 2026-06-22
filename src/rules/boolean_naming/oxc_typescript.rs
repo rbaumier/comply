@@ -94,6 +94,23 @@ fn is_boolean_annotation(annotation: &TSTypeAnnotation) -> bool {
     matches!(&annotation.type_annotation, TSType::TSBooleanKeyword(_))
 }
 
+/// True when a `boolean` parameter is an opt-in configuration flag: it is
+/// optional (`colored?: boolean`) or carries a default value
+/// (`partial: boolean = false`). An omittable boolean parameter is structurally
+/// a toggle the caller may flip — the published-API flag shape used pervasively
+/// in CLI / formatter / parser APIs (`colored`, `partial`, `verbose`) — where an
+/// adjective reads as the mode it selects, not as a predicate on some noun.
+/// Renaming such a flag to `isColored` would diverge from the framework's
+/// established public vocabulary and break backward compatibility.
+///
+/// Anchored on the parameter's own structure (`optional` marker or a default
+/// initializer), so it cannot widen into a name allowlist: a *required* boolean
+/// parameter (`colored: boolean`) is not an opt-in flag and still requires a
+/// predicate prefix, and plain boolean variables are unaffected.
+fn is_optional_flag_param(param: &FormalParameter) -> bool {
+    param.optional || param.initializer.is_some()
+}
+
 /// True when `node` is the parameter of a `set name(...)` accessor whose
 /// property name equals `param_name`. Walks up to the parameter's owning
 /// function (the setter's own `Function`); that function's enclosing element
@@ -199,6 +216,12 @@ impl OxcCheck for Check {
                     .as_ref()
                     .is_some_and(|ann| is_boolean_annotation(ann));
                 if !has_annotation {
+                    return;
+                }
+                // An optional / default-valued boolean parameter is an opt-in
+                // configuration flag (the published-API toggle shape), not a
+                // predicate variable; required boolean parameters still flag.
+                if is_optional_flag_param(param) {
                     return;
                 }
                 // A `set loop(loop: boolean)` accessor mirroring a standard
@@ -411,7 +434,7 @@ mod tests {
         assert_eq!(run("const loop: boolean = true;").len(), 1);
         assert_eq!(run("function f(mute: boolean) {}").len(), 1);
         assert_eq!(
-            run("class S { constructor(solo?: boolean) {} }").len(),
+            run("class S { constructor(solo: boolean) {} }").len(),
             1
         );
         // A getter is not a value-bearing setter context.
@@ -444,5 +467,31 @@ mod tests {
             run("class S { set ['loop'](loop: boolean) { this._loop = loop; } }").len(),
             1
         );
+    }
+
+    #[test]
+    fn no_fp_on_optional_flag_parameter() {
+        // An optional / default-valued boolean parameter is an opt-in
+        // configuration flag (the published-API toggle shape used across CLI /
+        // formatter / parser frameworks), not a predicate variable. (Closes #5452)
+        assert!(run("function f(colored?: boolean) {}").is_empty());
+        assert!(run("function f(partial: boolean = false) {}").is_empty());
+        assert!(run("class C { format(colored?: boolean): ColorFormat {} }").is_empty());
+        assert!(run("export function runMachineInternal(partial: boolean = false) {}").is_empty());
+        // The exemption is scoped to the parameter position by structure, not by
+        // name: any optional/defaulted boolean param is treated as an opt-in
+        // flag, while the same name as a plain variable still flags (see
+        // `still_flags_lowercase_adjective_boolean`).
+        assert!(run("function f(ready?: boolean) {}").is_empty());
+        assert!(run("function f(done: boolean = false) {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_required_boolean_parameter() {
+        // Strictness preserved: a required boolean parameter is not an opt-in
+        // flag and still requires a predicate prefix.
+        assert_eq!(run("function f(colored: boolean) {}").len(), 1);
+        assert_eq!(run("function f(partial: boolean) {}").len(), 1);
+        assert_eq!(run("class C { format(colored: boolean) {} }").len(), 1);
     }
 }
