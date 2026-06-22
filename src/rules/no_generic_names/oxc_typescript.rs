@@ -21,9 +21,9 @@ const BANNED_WORDS: &[&str] = &[
     "inputs", "payload", "payloads", "flag", "stub", "fake", "foobar", "quux", "corge", "blah",
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
     "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "byte", "ptr",
-    "ret", "out", "vars", "response", "responses", "request", "requests", "entity", "entities",
-    "dto", "resource", "resources", "entry", "entries", "chunk", "chunks", "blob", "elem", "comp",
-    "func", "widget", "record", "records", "body", "doc", "idx", "curr", "cfg", "found",
+    "ret", "out", "vars", "entity", "entities", "dto", "resource", "resources", "entry", "entries",
+    "chunk", "chunks", "blob", "elem", "comp", "func", "widget", "record", "records", "body", "doc",
+    "idx", "curr", "cfg", "found",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -1659,10 +1659,9 @@ mod tests {
     fn flags_generic_plurals_and_list() {
         // Plurals of already-banned singulars (`result`→`results`,
         // `value`→`values`, …) and `list`/`lists` are equally vague.
-        let src = r#"const results = []; const values = []; const responses = [];
-                     const requests = []; const entities = []; const records = [];
-                     const list = []; const lists = [];"#;
-        assert_eq!(run(src).len(), 8);
+        let src = r#"const results = []; const values = []; const entities = [];
+                     const records = []; const list = []; const lists = [];"#;
+        assert_eq!(run(src).len(), 6);
     }
 
     #[test]
@@ -2317,7 +2316,7 @@ mod tests {
         // A sample across the new whole-name additions — placeholders,
         // type-stub abbreviations, and backend fillers all fire as bare names.
         for name in [
-            "stub", "response", "entity", "dict", "idx", "cfg", "body", "doc", "record",
+            "stub", "entry", "entity", "dict", "idx", "cfg", "body", "doc", "record",
             "vec", "blob", "comp",
         ] {
             let src = format!("function f() {{ const {name} = compute(); return {name}; }}");
@@ -2479,5 +2478,28 @@ mod tests {
             1,
             "sole `str` typed as a non-string must still flag"
         );
+    }
+
+    #[test]
+    fn no_fp_request_and_response_are_descriptive_nouns_issue_5622() {
+        // Regression for #5622 — `request`/`response` name specific concepts (the
+        // demand for a resource and its answer), not generic catch-alls. They are
+        // the conventional bindings for HTTP request/response objects across every
+        // web framework, so a bare `request`/`response` is self-documenting.
+        assert!(run("const request = new Request(id, req);").is_empty());
+        assert!(run("const response = await handler(request);").is_empty());
+        assert!(run("const requests = pending.slice();").is_empty());
+        assert!(run("const responses = await Promise.all(reqs);").is_empty());
+        // The handler-signature form `function (request, h) { … }`.
+        assert!(run("function handler(request, h) { return request.url; }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_body_and_payload_as_vague_nouns_issue_5622() {
+        // Negative space for #5622 — `body` and `payload` name the content of
+        // *something* without saying what, so they stay generic. Only the
+        // descriptive HTTP nouns `request`/`response` were removed from the list.
+        assert_eq!(run("const body = JSON.stringify(error);").len(), 1);
+        assert_eq!(run("const payload = decode(token);").len(), 1);
     }
 }
