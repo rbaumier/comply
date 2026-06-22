@@ -65,6 +65,11 @@ pub enum Framework {
 pub struct PackageJson {
     pub name: Option<String>,
     pub version: Option<String>,
+    /// Entries of the top-level `keywords` array, lowercased. npm's discovery
+    /// taxonomy: a package self-classifies here (e.g. `cli`, `argv`, `parser`).
+    /// Lets a rule recognize a package's category from declared metadata rather
+    /// than a hardcoded name allowlist.
+    pub keywords: BTreeSet<String>,
     pub module_type: ModuleType,
     pub dependencies: BTreeMap<String, String>,
     pub dev_dependencies: BTreeMap<String, String>,
@@ -177,6 +182,16 @@ impl PackageJson {
                 .get("version")
                 .and_then(|node| node.as_str())
                 .map(String::from),
+            keywords: json
+                .get("keywords")
+                .and_then(|node| node.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_ascii_lowercase)
+                        .collect()
+                })
+                .unwrap_or_default(),
             module_type: match json.get("type").and_then(|node| node.as_str()) {
                 Some("module") => ModuleType::Module,
                 _ => ModuleType::CommonJs,
@@ -260,6 +275,32 @@ impl PackageJson {
             || self.peer_dependencies.contains_key(name)
             || self.optional_dependencies.contains_key(name)
             || self.engines.contains_key(name)
+    }
+
+    /// True when the package declares itself a CLI argument-parsing library via
+    /// its `keywords`. Such packages (meow, yargs-parser, commander, cac,
+    /// clipanion) own the help/version/usage-error display, where calling
+    /// `process.exit(code)` after printing is the canonical POSIX behavior — not
+    /// a code smell. Recognized by a `keywords` entry naming the argument-parsing
+    /// concept (`argv`, `parser`, `command-line`, …) together with a CLI marker
+    /// (`cli`, `command-line`), so a generic `parser` package (a JSON/CSS parser)
+    /// is not swept in.
+    pub fn is_cli_argument_parser(&self) -> bool {
+        const ARG_PARSING: &[&str] = &[
+            "argv",
+            "arg-parser",
+            "argument-parser",
+            "args-parser",
+            "option-parser",
+            "command-line",
+            "commandline",
+        ];
+        const CLI_MARKER: &[&str] = &["cli", "command-line", "commandline"];
+        let has = |set: &[&str]| set.iter().any(|k| self.keywords.contains(*k));
+        // `argv`/`command-line` is the unambiguous argument-parser signal on its
+        // own; the broader `parser` keyword requires a CLI marker too so a
+        // generic parser package is not classified as a CLI tool.
+        has(ARG_PARSING) || (has(CLI_MARKER) && self.keywords.contains("parser"))
     }
 
     /// Minimum supported Node.js version (`major`, `minor`) parsed from the
@@ -6212,6 +6253,35 @@ mod tests {
         assert!(!PackageJson::parse(r#"{"dependencies":{"a":"1"}}"#).unwrap().is_marker_only());
         assert!(!PackageJson::parse(r#"{"devDependencies":{"a":"1"}}"#).unwrap().is_marker_only());
         assert!(!PackageJson::parse(r#"{"workspaces":["packages/*"]}"#).unwrap().is_marker_only());
+    }
+
+    #[test]
+    fn is_cli_argument_parser_classifies_keywords() {
+        let parse = |s: &str| PackageJson::parse(s).unwrap();
+
+        // meow's real keyword set: `argv` is the unambiguous signal.
+        let meow = r#"{"name":"meow","keywords":["cli","bin","argv","parser","flags"]}"#;
+        assert!(parse(meow).is_cli_argument_parser());
+
+        // `command-line` alone classifies; case-insensitive.
+        assert!(parse(r#"{"keywords":["Command-Line"]}"#).is_cli_argument_parser());
+
+        // `cli` + `parser` together classify (yargs-parser shape).
+        assert!(parse(r#"{"keywords":["cli","parser"]}"#).is_cli_argument_parser());
+
+        // A generic parser (no CLI marker) is not a CLI tool.
+        assert!(!parse(r#"{"keywords":["json","parser","serializer"]}"#).is_cli_argument_parser());
+
+        // A feature-flag SDK ships a `cli` + `flags` keyword set but is not an
+        // argument parser — `flags` alone (no parser/argv) must not classify.
+        assert!(!parse(r#"{"keywords":["cli","flags","unleash"]}"#).is_cli_argument_parser());
+
+        // A plain CLI app (no parser/flags/argv keyword) is not a parser library;
+        // it falls under the existing entry-point exemptions instead.
+        assert!(!parse(r#"{"keywords":["cli","tool"]}"#).is_cli_argument_parser());
+
+        // No keywords at all.
+        assert!(!parse(r#"{"name":"x"}"#).is_cli_argument_parser());
     }
 
     #[test]
