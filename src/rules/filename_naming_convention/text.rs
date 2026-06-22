@@ -221,6 +221,22 @@ fn is_regression_test_name(stem: &str) -> bool {
     digits > 0 && rest.as_bytes().get(digits) == Some(&b'-')
 }
 
+/// Returns `true` for a test-file `stem` that encodes CLI option-assignment
+/// notation: two or more kebab-case segments joined by `=`, e.g.
+/// `option=value-notation` for a test of the `--option=value` argument syntax.
+/// The `=` is the literal CLI assignment operator the test exercises, so a
+/// filename mirroring that grammar cannot adopt plain kebab-case. Each
+/// `=`-separated segment must independently be kebab-case, so a malformed
+/// segment (`Option=value`) still fails. Gated to a test-fixture directory by
+/// the caller (see [`is_in_fixture_dir`]) so a production filename with `=` is
+/// still flagged.
+fn is_cli_notation_test_stem(stem: &str) -> bool {
+    let Some((first, rest)) = stem.split_once('=') else {
+        return false;
+    };
+    is_kebab_case(first) && rest.split('=').all(is_kebab_case)
+}
+
 /// Strips a trailing `@<version>` discriminator from a test-file `stem`,
 /// returning the base name the convention is then validated against. The
 /// `<name>@<version>` form names a test suite after the dependency major
@@ -418,7 +434,10 @@ impl TextCheck for Check {
         if is_test_context_path(ctx.path) && is_regression_test_name(convention_stem) {
             return Vec::new();
         }
-        if is_in_fixture_dir(ctx.path) && is_fixture_subject_stem(convention_stem) {
+        if is_in_fixture_dir(ctx.path)
+            && (is_fixture_subject_stem(convention_stem)
+                || is_cli_notation_test_stem(convention_stem))
+        {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -1095,6 +1114,45 @@ mod tests {
     #[test]
     fn flags_mixed_case_stem_in_contest_dir_issue_4757() {
         assert_eq!(run("src/contest/shorthand-tickX.ts").len(), 1);
+    }
+
+    // Regression for #5447: a test file named after the CLI option-assignment
+    // notation it exercises (`option=value-notation.js` for the `--option=value`
+    // syntax) encodes the literal `=` operator. Under a `test/` ancestor, the
+    // `=`-joined kebab segments must not be flagged.
+    #[test]
+    fn allows_cli_notation_test_file_issue_5447() {
+        assert!(run("test/option=value-notation.js").is_empty());
+    }
+
+    // The allowance covers other test-fixture directories and multiple segments.
+    #[test]
+    fn allows_cli_notation_in_other_fixture_dirs_issue_5447() {
+        assert!(run("tests/key=value=pair.ts").is_empty());
+        assert!(run("__tests__/flag=on-mode.ts").is_empty());
+    }
+
+    // Guard (scope proof): the SAME `=`-bearing filename in production `src/`
+    // (no test/fixture ancestor) must STILL fire — the directory gate grants the
+    // freedom, not the stem shape.
+    #[test]
+    fn flags_cli_notation_stem_in_src_issue_5447() {
+        assert_eq!(run("src/option=value-notation.ts").len(), 1);
+    }
+
+    // Guard: each `=`-separated segment must be kebab-case — a mis-cased segment
+    // (`Option=value`) is not CLI notation and still fires even under `test/`.
+    #[test]
+    fn flags_cli_notation_bad_segment_issue_5447() {
+        assert_eq!(run("test/Option=value.ts").len(), 1);
+    }
+
+    // Guard (unit): a stem with no `=` is not CLI notation — the helper requires
+    // an assignment operator, so plain kebab is handled by the kebab branch.
+    #[test]
+    fn rejects_non_assignment_stem_unit_issue_5447() {
+        assert!(!is_cli_notation_test_stem("option-value"));
+        assert!(is_cli_notation_test_stem("option=value-notation"));
     }
 
     // Regression for #3280: Nuxt's Nitro file-system router derives a server route
