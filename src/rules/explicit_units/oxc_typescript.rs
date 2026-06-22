@@ -132,6 +132,20 @@ const KNOWN_SUFFIXES: &[&str] = &[
 /// not listed here because it is already accepted as a unit suffix.
 const DERIVED_QUANTITY_HEADS: &[&str] = &["resolution", "iterations"];
 
+/// Head nouns that name a temporal quantity, making the identifier's dimension
+/// (time) explicit on its own. When an ambiguous base is only a leading
+/// qualifier (e.g. `WAIT_FOR_NEW_HANDLE_TIMEOUT`, `pollInterval`) and the head —
+/// the last segment — is one of these, the trailing word already states the
+/// quantity is a duration, so a unit suffix like `Ms`/`Bytes` is redundant and
+/// the rule's `waitBytes`-style suggestion is nonsensical.
+///
+/// A base that is itself the head (a bare `timeout`/`interval`/`delay`) is
+/// unaffected: the value IS the temporal magnitude and stays flagged, because
+/// even a temporal quantity is unit-ambiguous (seconds vs milliseconds) when
+/// the whole name is just that word. The gate fires only when a *different*
+/// leading qualifier precedes the temporal head.
+const TEMPORAL_DIMENSION_HEADS: &[&str] = &["timeout", "interval", "delay", "duration"];
+
 /// Coordinate-space / domain qualifiers that, when present as a camelCase
 /// segment of the identifier, already pin down the abstract unit-space — so a
 /// physical-unit suffix is neither expected nor meaningful.
@@ -441,6 +455,9 @@ fn check_name(name: &str, offset: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
     if base_is_qualifier_of_derived_head(name, base) {
         return;
     }
+    if base_is_qualifier_of_temporal_head(name, base) {
+        return;
+    }
     let (line, column) = byte_offset_to_line_col(ctx.source, offset as usize);
     diagnostics.push(Diagnostic {
         path: Arc::clone(&ctx.path_arc),
@@ -499,6 +516,23 @@ fn base_is_qualifier_of_derived_head(name: &str, base: &str) -> bool {
     DERIVED_QUANTITY_HEADS.contains(&head.as_str())
 }
 
+/// Whether the matched base is only a leading qualifier of a compound whose head
+/// noun is a temporal-dimension word (`WAIT_FOR_NEW_HANDLE_TIMEOUT`,
+/// `pollInterval`). The trailing temporal word already makes the dimension
+/// (time) explicit, so a unit suffix would be redundant. A base that is itself
+/// the head (a bare `timeout`/`interval`/`delay`) stays flagged: when the whole
+/// name is just the temporal word it is still magnitude-ambiguous (s vs ms).
+fn base_is_qualifier_of_temporal_head(name: &str, base: &str) -> bool {
+    let segments: Vec<String> = camel_segments(name).collect();
+    let Some(head) = segments.last() else {
+        return false;
+    };
+    if head == base {
+        return false;
+    }
+    TEMPORAL_DIMENSION_HEADS.contains(&head.as_str())
+}
+
 /// Whether the identifier carries a coordinate-space/domain qualifier as one of
 /// its camelCase segments. The qualifier pins the abstract unit-space, so the
 /// quantity is already explicit and needs no physical-unit suffix.
@@ -510,16 +544,33 @@ fn has_coordinate_space_qualifier(name: &str) -> bool {
     })
 }
 
-/// Splits a camelCase / PascalCase identifier into lowercase segments at each
-/// uppercase boundary (`distanceToTile2D` → `distance`, `to`, `tile2`, `d`).
+/// Splits a camelCase / PascalCase / SCREAMING_SNAKE_CASE identifier into
+/// lowercase segments at each underscore and camelCase boundary
+/// (`distanceToTile2D` → `distance`, `to`, `tile2`, `d`;
+/// `WAIT_FOR_NEW_HANDLE_TIMEOUT` → `wait`, `for`, `new`, `handle`, `timeout`).
+///
+/// A camelCase boundary is a lowercase-or-digit char followed by an uppercase
+/// char; a run of uppercase letters (as in SCREAMING_SNAKE_CASE segments) is
+/// kept whole so `_TIMEOUT` yields `timeout`, not one segment per letter.
 fn camel_segments(name: &str) -> impl Iterator<Item = String> {
     let mut segments = Vec::new();
     let mut current = String::new();
+    let mut prev: Option<char> = None;
     for ch in name.chars() {
-        if ch.is_ascii_uppercase() && !current.is_empty() {
+        if ch == '_' {
+            if !current.is_empty() {
+                segments.push(std::mem::take(&mut current));
+            }
+            prev = None;
+            continue;
+        }
+        let is_camel_boundary = ch.is_ascii_uppercase()
+            && prev.is_some_and(|p| p.is_ascii_lowercase() || p.is_ascii_digit());
+        if is_camel_boundary && !current.is_empty() {
             segments.push(std::mem::take(&mut current));
         }
         current.push(ch.to_ascii_lowercase());
+        prev = Some(ch);
     }
     if !current.is_empty() {
         segments.push(current);
@@ -904,6 +955,41 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_screaming_snake_temporal_head_suffix() {
+        // A SCREAMING_SNAKE_CASE constant whose ambiguous base is only a leading
+        // qualifier and whose trailing segment is a temporal word (`_TIMEOUT`,
+        // `_INTERVAL`, `_DELAY`, `_DURATION`) already states the dimension is
+        // time — `waitMs`/`waitBytes` are nonsensical, so it must not be flagged
+        // (#5547). `WAIT_FOR_NEW_HANDLE_TIMEOUT` is the issue's exact name. The
+        // leading segment is itself an ambiguous base in each case, which is what
+        // makes the constant a candidate for flagging absent the temporal head.
+        assert!(run_on("const WAIT_FOR_NEW_HANDLE_TIMEOUT = 3000;").is_empty());
+        assert!(run_on("const LIMIT_CHECK_INTERVAL: number = 1000;").is_empty());
+        assert!(run_on("const DISTANCE_CHECK_DELAY = 100;").is_empty());
+        assert!(run_on("const THRESHOLD_REFRESH_DURATION = 50;").is_empty());
+    }
+
+    #[test]
+    fn allows_camel_temporal_head_suffix() {
+        // The same temporal-head exemption applies to camelCase compounds whose
+        // leading qualifier is an ambiguous base (`waitTimeout`, `limitInterval`).
+        assert!(run_on("const waitTimeout: number = 3000;").is_empty());
+        assert!(run_on("function f(distanceCheckDelay: number) {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_temporal_word_screaming_snake() {
+        // The gate only exempts a temporal word that is a *trailing* segment after
+        // a different leading qualifier. A bare temporal word whose whole name is
+        // the base is still magnitude-ambiguous (seconds vs milliseconds) and must
+        // stay flagged (#5547); only a base-prefixed temporal head clears.
+        assert_eq!(run_on("const TIMEOUT = 5000;").len(), 1);
+        assert_eq!(run_on("const WAIT = 5000;").len(), 1);
+        // A non-temporal trailing segment after an ambiguous base still flags.
+        assert_eq!(run_on("const WAIT_VALUE = 5000;").len(), 1);
     }
 
     #[test]
