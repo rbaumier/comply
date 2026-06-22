@@ -1243,7 +1243,7 @@ pub fn is_in_index_trait_impl(node: Node, source: &[u8]) -> bool {
 /// `scoped_type_identifier` (`a::b::Foo`), or a `generic_type` wrapping either
 /// (`Foo<T>`, `a::b::Foo<T>`). This unwraps the generic and resolves the final
 /// segment in each case.
-fn trait_base_name<'a>(trait_node: Node, source: &'a [u8]) -> Option<&'a str> {
+pub(crate) fn trait_base_name<'a>(trait_node: Node, source: &'a [u8]) -> Option<&'a str> {
     let base = if trait_node.kind() == "generic_type" {
         trait_node.child_by_field_name("type")?
     } else {

@@ -39,6 +39,14 @@ const NUMERIC_TYPES: &[&str] = &[
     "f64",
 ];
 
+// Probability-distribution traits. A file that `impl`s one of these defines a
+// statistical distribution, so its `rate`/`frequency` parameters are the
+// canonical dimensionless distribution parameters (λ, the gamma/exponential
+// rate, …) rather than physical events-per-second quantities — demanding a
+// `_rps`/`_hz` suffix there is wrong (gamma/exponential/erlang `new(.., rate)`).
+const DISTRIBUTION_TRAITS: &[&str] =
+    &["Distribution", "Continuous", "Discrete", "ContinuousCDF", "DiscreteCDF"];
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -65,6 +73,9 @@ impl AstCheck for Check {
             return;
         };
         if has_known_suffix(name) {
+            return;
+        }
+        if matches!(base, "rate" | "frequency") && in_distribution_module(node, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -124,6 +135,24 @@ fn matches_ambiguous_base(name: &str) -> Option<&'static str> {
 
 fn has_known_suffix(name: &str) -> bool {
     KNOWN_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
+/// True when a top-level `impl` in the file containing `node` implements a
+/// probability-distribution trait, marking it a statistical-distribution module
+/// where `rate`/`frequency` are dimensionless distribution parameters.
+fn in_distribution_module(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    root.children(&mut cursor).any(|child| {
+        child.kind() == "impl_item"
+            && child
+                .child_by_field_name("trait")
+                .and_then(|t| crate::rules::rust_helpers::trait_base_name(t, source))
+                .is_some_and(|name| DISTRIBUTION_TRAITS.contains(&name))
+    })
 }
 
 #[cfg(test)]
@@ -238,5 +267,70 @@ mod tests {
         // Removing `elapsed` must not loosen genuinely unit-ambiguous bases.
         assert_eq!(run_on("fn f(timeout: u64) {}").len(), 1);
         assert_eq!(run_on("fn f(duration: u64) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_rate_param_in_distribution_module() {
+        // `rate` (λ) is a dimensionless distribution parameter in a probability
+        // distribution module, not a physical events-per-second quantity (#5495).
+        let src = "\
+struct Exp { rate: f64 }
+impl Exp {
+    pub fn new(rate: f64) -> Result<Exp, ExpError> { Ok(Exp { rate }) }
+}
+impl Continuous<f64, f64> for Exp {
+    fn pdf(&self, x: f64) -> f64 { x }
+}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_gamma_shape_rate_in_distribution_module() {
+        let src = "\
+struct Gamma { shape: f64, rate: f64 }
+impl Gamma {
+    pub fn new(shape: f64, rate: f64) -> Result<Gamma, GammaError> {
+        Ok(Gamma { shape, rate })
+    }
+}
+impl Distribution<f64> for Gamma {
+    fn sample(&self) -> f64 { 0.0 }
+}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_rate_with_path_qualified_distribution_trait() {
+        // statrs writes the rand sampling impl in path-qualified form
+        // (`impl ::rand::distr::Distribution<f64> for Exp`); the last path
+        // segment must still match the distribution-trait marker.
+        let src = "\
+struct Exp { rate: f64 }
+impl Exp {
+    pub fn new(rate: f64) -> Result<Exp, ExpError> { Ok(Exp { rate }) }
+}
+impl ::rand::distr::Distribution<f64> for Exp {
+    fn sample(&self) -> f64 { 0.0 }
+}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_rate_outside_distribution_module() {
+        // Physical events-per-second `rate` keeps needing a unit suffix when the
+        // file is not a probability-distribution module.
+        assert_eq!(run_on("fn f(rate: f64) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_timeout_even_in_distribution_module() {
+        // The distribution exemption is scoped to `rate`/`frequency`; a genuine
+        // physical `timeout` in the same file must still be flagged.
+        let src = "\
+impl Continuous<f64, f64> for Exp {
+    fn pdf(&self, x: f64) -> f64 { x }
+}
+fn poll(timeout: u64) {}";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
