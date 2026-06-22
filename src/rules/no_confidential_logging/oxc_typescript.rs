@@ -214,13 +214,69 @@ fn has_sensitive_template_argument(args: &[Argument], source: &str) -> bool {
 }
 
 fn template_has_sensitive_substitution(tpl: &TemplateLiteral, source: &str) -> bool {
-    for expr in &tpl.expressions {
-        let span = expr.span();
-        if text_is_sensitive(&source[span.start as usize..span.end as usize]) {
-            return true;
+    tpl.expressions
+        .iter()
+        .any(|expr| interpolation_is_sensitive(expr, source))
+}
+
+/// Whether a single template interpolation can leak a secret value.
+///
+/// The check is structural, not a name allowlist: an expression is exempt only
+/// when its *type* provably cannot carry the secret's bytes.
+///  - A ternary's `test` is consumed as a boolean — its bytes never reach the
+///    produced string — so only the `consequent`/`alternate` branches (the
+///    actual output) are examined. `${hasToken() ? "available" : "not found"}`
+///    is safe; `${cond ? accessToken : ""}` still flags on the consequent.
+///  - A provably-boolean expression (comparison, `!x`, `Boolean(...)`, boolean
+///    literal) reveals only presence/validity, never the value, so
+///    `${tokenLength === 32}`-style predicates are exempt.
+///
+/// Anything else — a bare identifier, a member access (`obj.token`), an
+/// unresolvable call — falls through to the name-based text check and still
+/// flags. Precision is in the safe direction: suppress only when boolean-ness
+/// is proven.
+fn interpolation_is_sensitive(expr: &Expression, source: &str) -> bool {
+    match crate::oxc_helpers::peel_parens(expr) {
+        Expression::ConditionalExpression(cond) => {
+            interpolation_is_sensitive(&cond.consequent, source)
+                || interpolation_is_sensitive(&cond.alternate, source)
+        }
+        peeled if is_boolean_expression(peeled) => false,
+        peeled => {
+            let span = peeled.span();
+            text_is_sensitive(&source[span.start as usize..span.end as usize])
         }
     }
-    false
+}
+
+/// True when `expr` provably produces a boolean: a comparison, a logical
+/// negation, a `Boolean(...)` coercion, or a boolean literal. Such a value
+/// reveals only true/false and cannot carry a secret. A logical `&&`/`||` is
+/// deliberately excluded — JS short-circuit returns an operand, not a boolean
+/// (`flag && rawToken` yields the token), so it is not provably boolean.
+fn is_boolean_expression(expr: &Expression) -> bool {
+    use oxc_ast::ast::{BinaryOperator, UnaryOperator};
+    match expr {
+        Expression::BooleanLiteral(_) => true,
+        Expression::UnaryExpression(unary) => unary.operator == UnaryOperator::LogicalNot,
+        Expression::BinaryExpression(bin) => matches!(
+            bin.operator,
+            BinaryOperator::Equality
+                | BinaryOperator::StrictEquality
+                | BinaryOperator::Inequality
+                | BinaryOperator::StrictInequality
+                | BinaryOperator::LessThan
+                | BinaryOperator::LessEqualThan
+                | BinaryOperator::GreaterThan
+                | BinaryOperator::GreaterEqualThan
+                | BinaryOperator::In
+                | BinaryOperator::Instanceof
+        ),
+        Expression::CallExpression(call) => {
+            matches!(&call.callee, Expression::Identifier(id) if id.name == "Boolean")
+        }
+        _ => false,
+    }
 }
 
 fn is_example_file(path: &std::path::Path) -> bool {
@@ -552,6 +608,67 @@ mod tests {
     fn fires_in_throw_only_source() {
         let src = "function f() { throw new Error(`db: ${connectionString}`); }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // #5687 — a boolean predicate call whose name contains "token", used in a
+    // ternary that produces only diagnostic string literals, logs presence not
+    // the secret value. The ternary test is consumed as a boolean.
+    #[test]
+    fn allows_boolean_predicate_availability_ternary() {
+        let src = r#"console.log(
+            `github host auth: ${hasHostGitHubToken() ? "available" : "not found"}`
+        );"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_predicate_oidc_token_ternary() {
+        let src = r#"console.log(
+            `vercel oidc token: ${hasHostVercelOidcToken() ? "available" : "not found"}`
+        );"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // A comparison/negation interpolation reveals only validity, not the value.
+    #[test]
+    fn allows_boolean_comparison_interpolation() {
+        assert!(run_on("console.log(`valid: ${tokenLength === 32}`);").is_empty());
+        assert!(run_on("console.log(`missing: ${!authToken}`);").is_empty());
+        assert!(run_on("console.log(`present: ${Boolean(apiToken)}`);").is_empty());
+    }
+
+    // Security control: the actual token STRING value still flags even when a
+    // ternary wraps it — the consequent carries the secret's bytes.
+    #[test]
+    fn still_flags_token_value_in_ternary_branch() {
+        assert_eq!(
+            run_on(r#"console.log(`auth: ${cond ? accessToken : ""}`);"#).len(),
+            1
+        );
+    }
+
+    // Security control: a member access (`obj.token`) is not provably boolean,
+    // so it still flags — the name-based check is the fallback.
+    #[test]
+    fn still_flags_member_access_token() {
+        assert_eq!(run_on("console.log(`auth: ${config.accessToken}`);").len(), 1);
+    }
+
+    // Security control: a bare predicate call is not type-resolved to boolean,
+    // so it falls through to the name check and still flags. Suppression
+    // requires proven boolean-ness (here, the ternary-test position).
+    #[test]
+    fn still_flags_bare_token_call_outside_ternary() {
+        assert_eq!(run_on("console.log(`auth: ${getAccessToken()}`);").len(), 1);
+    }
+
+    // Security control: a logical `&&`/`||` is not provably boolean — JS
+    // short-circuit returns an operand, so `flag && accessToken` yields the
+    // token. It must still flag.
+    #[test]
+    fn still_flags_logical_operand_token() {
+        assert_eq!(run_on("console.log(`auth: ${flag && accessToken}`);").len(), 1);
+        assert_eq!(run_on("console.log(`auth: ${accessToken || fallback}`);").len(), 1);
     }
 
     // #4733 — a `*.spec.ts` test that passes sentinel secrets to a logger to
