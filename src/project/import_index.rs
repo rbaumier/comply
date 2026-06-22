@@ -3243,12 +3243,18 @@ fn is_cjs_exports_target(expr: &oxc_ast::ast::Expression) -> bool {
 }
 
 /// Enumerable named-export keys of a `module.exports = { … }` object literal.
-/// Shorthand (`{ a }`) and explicit (`{ a: … }`) properties contribute their
-/// static key name; computed keys, methods with non-static keys, getters, and
-/// spreads contribute nothing.
+/// Shorthand (`{ a }`), explicit (`{ a: … }`), method, and accessor (`get a`,
+/// `set a`) properties contribute their static key name; computed keys and
+/// spreads contribute nothing. A complementary getter/setter pair for the same
+/// key (`get a` + `set a`) is a single accessor property and contributes that
+/// key only once.
 fn cjs_object_export_names(obj: &oxc_ast::ast::ObjectExpression) -> Vec<String> {
-    use oxc_ast::ast::{ObjectPropertyKind, PropertyKey};
+    use oxc_ast::ast::{ObjectPropertyKind, PropertyKey, PropertyKind};
     let mut names = Vec::new();
+    // Per static key: track whether a getter and a setter have already been
+    // seen, so a `get x` + `set x` accessor pair collapses to one name while two
+    // getters (or two setters, or get+init) of the same key still each count.
+    let mut accessors_seen: FxHashMap<String, (bool, bool)> = FxHashMap::default();
     for prop in &obj.properties {
         let ObjectPropertyKind::ObjectProperty(prop) = prop else {
             continue;
@@ -3256,10 +3262,32 @@ fn cjs_object_export_names(obj: &oxc_ast::ast::ObjectExpression) -> Vec<String> 
         if prop.computed {
             continue;
         }
-        match &prop.key {
-            PropertyKey::StaticIdentifier(id) => names.push(id.name.as_str().to_string()),
-            PropertyKey::StringLiteral(s) => names.push(s.value.as_str().to_string()),
-            _ => {}
+        let key = match &prop.key {
+            PropertyKey::StaticIdentifier(id) => id.name.as_str().to_string(),
+            PropertyKey::StringLiteral(s) => s.value.as_str().to_string(),
+            _ => continue,
+        };
+        match prop.kind {
+            PropertyKind::Get | PropertyKind::Set => {
+                let (seen_get, seen_set) =
+                    accessors_seen.entry(key.clone()).or_insert((false, false));
+                let same_kind_seen = if matches!(prop.kind, PropertyKind::Get) {
+                    std::mem::replace(seen_get, true)
+                } else {
+                    std::mem::replace(seen_set, true)
+                };
+                let complement_seen =
+                    if matches!(prop.kind, PropertyKind::Get) { *seen_set } else { *seen_get };
+                // Emit on the first accessor for this key (`complement_seen` is
+                // false), or on a repeat of the same kind (`same_kind_seen` is a
+                // genuine `get x` + `get x` / `set x` + `set x` redeclaration).
+                // Suppress only the complementary accessor of an otherwise unseen
+                // kind — the second half of a single `get x` + `set x` pair.
+                if !complement_seen || same_kind_seen {
+                    names.push(key);
+                }
+            }
+            PropertyKind::Init => names.push(key),
         }
     }
     names

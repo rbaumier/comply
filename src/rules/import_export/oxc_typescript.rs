@@ -121,4 +121,35 @@ mod tests {
         assert_eq!(diags.len(), 1, "expected one duplicate, got: {diags:?}");
         assert!(diags[0].message.contains('x'));
     }
+
+    #[test]
+    fn allows_accessor_pair_in_cjs_module_exports() {
+        // koajs/koa lib/response.js — a `get name` + `set name` accessor pair in
+        // a `module.exports = { … }` object literal is a single accessor
+        // property, not a duplicate export.
+        let source = "module.exports = {\n  get status () {\n    return this.res.statusCode\n  },\n  set status (code) {\n    this.res.statusCode = code\n  },\n  get body () {\n    return this._body\n  },\n  set body (val) {\n    this._body = val\n  },\n};\n";
+        let (_dir, project, paths) = setup_project(&[("response.js", source)]);
+        let diags = run(source, &paths[0], &project);
+        assert!(diags.is_empty(), "expected no duplicate-export diagnostics, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_two_getters_same_name_in_cjs() {
+        // Genuine redeclaration: two `get foo` accessors of the same key.
+        let source = "module.exports = {\n  get foo () { return 1 },\n  get foo () { return 2 },\n};\n";
+        let (_dir, project, paths) = setup_project(&[("m.js", source)]);
+        let diags = run(source, &paths[0], &project);
+        assert_eq!(diags.len(), 1, "expected one duplicate, got: {diags:?}");
+        assert!(diags[0].message.contains("foo"));
+    }
+
+    #[test]
+    fn flags_init_plus_getter_same_name_in_cjs() {
+        // Genuine duplicate: a value property and a getter share the key.
+        let source = "module.exports = {\n  foo: 1,\n  get foo () { return 2 },\n};\n";
+        let (_dir, project, paths) = setup_project(&[("m.js", source)]);
+        let diags = run(source, &paths[0], &project);
+        assert_eq!(diags.len(), 1, "expected one duplicate, got: {diags:?}");
+        assert!(diags[0].message.contains("foo"));
+    }
 }
