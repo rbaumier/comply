@@ -68,7 +68,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_operand_bit_width,
+    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_in_const_context, cast_operand_bit_width,
     cast_operand_indexed_element_type, cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded,
     cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
     cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
@@ -124,6 +124,9 @@ impl AstCheck for Check {
         let Some(target_type) = numeric_type(target) else {
             return;
         };
+        if cast_in_const_context(node, source_bytes) {
+            return;
+        }
         if cast_operand_is_char(node, source_bytes) && char_fits(target_type) {
             return;
         }
@@ -411,6 +414,29 @@ mod tests {
     #[test]
     fn allows_widening_to_u64() {
         assert!(run_on("fn f(x: u32) -> u64 { x as u64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_lossy_cast_in_const_initializer() {
+        // In a const-evaluation context `try_into()` is unavailable and `as`
+        // is the only conversion, so a lossy const cast is exempt (#5679).
+        assert!(run_on("const X: f32 = i32::MAX as f32;").is_empty());
+    }
+
+    #[test]
+    fn allows_lossy_cast_in_static_initializer() {
+        assert!(run_on("static S: f32 = i32::MAX as f32;").is_empty());
+    }
+
+    #[test]
+    fn allows_lossy_cast_in_const_fn_body() {
+        assert!(run_on("const fn f(x: i32) -> f32 { x as f32 }").is_empty());
+    }
+
+    #[test]
+    fn flags_lossy_cast_in_non_const_fn_body() {
+        // A runtime body is unaffected — `try_into()` / `From` is available there.
+        assert_eq!(run_on("fn f(x: i32) -> f32 { x as f32 }").len(), 1);
     }
 
     #[test]
