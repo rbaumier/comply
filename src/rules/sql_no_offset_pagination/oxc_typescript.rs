@@ -81,4 +81,50 @@ mod tests {
         let src = r#"const q = "SELECT * FROM users LIMIT 10";"#;
         assert!(run_on(src).is_empty());
     }
+
+    /// Regression for #5557: an `OFFSET` in an expected-SQL oracle string inside
+    /// a query-builder snapshot assertion (objection.js) is test data mirroring
+    /// generated output, not a production query path. The central
+    /// `skip_in_test_dir` gate suppresses the performance lint there.
+    #[test]
+    fn skips_offset_in_sql_snapshot_assertions_in_test_files() {
+        let src = r#"
+            QueryBuilder.forClass(TestModel)
+              .where('test', 100)
+              .range(100, 200)
+              .then((res) => {
+                expect(executedQueries).to.eql([
+                  'select "Model".* from "Model" where "test" = 100 order by "order" asc limit 101 offset 100',
+                ]);
+              });
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "tests/unit/queryBuilder/QueryBuilder.js"
+            )
+            .is_empty(),
+            "must not flag OFFSET in SQL oracle strings under a tests/ directory"
+        );
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "tests/unit/queryBuilder/QueryBuilder.spec.js"
+            )
+            .is_empty(),
+            "must not flag OFFSET in SQL oracle strings in a .spec.js file"
+        );
+    }
+
+    /// The performance lint still fires on OFFSET pagination in non-test source.
+    #[test]
+    fn still_fires_outside_test_dir() {
+        let src = r#"const q = "SELECT * FROM users LIMIT 10 OFFSET 100";"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/db/users.ts").len(),
+            1,
+        );
+    }
 }
