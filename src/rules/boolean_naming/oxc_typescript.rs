@@ -111,6 +111,24 @@ fn is_optional_flag_param(param: &FormalParameter) -> bool {
     param.optional || param.initializer.is_some()
 }
 
+/// True when a constructor parameter carries an accessibility (`public` /
+/// `private` / `protected`) or `readonly` modifier — a TypeScript *parameter
+/// property*. Such a parameter is not a free local binding: it declares an
+/// instance field, so its identifier becomes the class's property name and is
+/// governed by the data-model / implemented-interface contract (e.g. `public
+/// trainable: boolean` realizes the `Variable.trainable` field of an external
+/// ML API). The rule already leaves plain class-field and interface-member
+/// declarations out of scope; a parameter property is the same field
+/// declaration written in shorthand, so it is exempt for the same reason.
+///
+/// Anchored on the modifier shape, not a name list: an ordinary required
+/// boolean parameter without a modifier (`constructor(trainable: boolean)`,
+/// `format(colored: boolean)`) is still a local binding and keeps needing a
+/// predicate prefix.
+fn is_parameter_property(param: &FormalParameter) -> bool {
+    param.accessibility.is_some() || param.readonly
+}
+
 /// True when `node` is the parameter of a `set name(...)` accessor whose
 /// property name equals `param_name`. Walks up to the parameter's owning
 /// function (the setter's own `Function`); that function's enclosing element
@@ -222,6 +240,14 @@ impl OxcCheck for Check {
                 // configuration flag (the published-API toggle shape), not a
                 // predicate variable; required boolean parameters still flag.
                 if is_optional_flag_param(param) {
+                    return;
+                }
+                // A parameter property (`constructor(public trainable: boolean)`)
+                // declares an instance field, not a local binding; its name is the
+                // class's property name, governed by the implemented data-model /
+                // API contract. Plain field/interface-member declarations are
+                // already out of scope, so the shorthand form is too.
+                if is_parameter_property(param) {
                     return;
                 }
                 // A `set loop(loop: boolean)` accessor mirroring a standard
@@ -493,5 +519,31 @@ mod tests {
         assert_eq!(run("function f(colored: boolean) {}").len(), 1);
         assert_eq!(run("function f(partial: boolean) {}").len(), 1);
         assert_eq!(run("class C { format(colored: boolean) {} }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_parameter_property() {
+        // A constructor parameter property declares an instance field; the
+        // identifier is the class's property name, dictated by the implemented
+        // data-model / API contract (`public trainable: boolean` realizes the
+        // ML `Variable.trainable` field), not a free local predicate. Plain
+        // class-field declarations are already out of scope, so the parameter-
+        // property shorthand is exempt for the same reason. (Closes #5425)
+        assert!(run("class V { constructor(public trainable: boolean) {} }").is_empty());
+        assert!(run("class V { constructor(private verbose: boolean) {} }").is_empty());
+        assert!(run("class V { constructor(protected keepDims: boolean) {} }").is_empty());
+        assert!(run("class V { constructor(readonly alignCorners: boolean) {} }").is_empty());
+        assert!(
+            run("class V { constructor(public readonly trainable: boolean) {} }").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_plain_required_constructor_parameter() {
+        // Strictness preserved: a constructor parameter without an accessibility
+        // or `readonly` modifier is an ordinary local binding, not a field
+        // declaration, so it still requires a predicate prefix.
+        assert_eq!(run("class V { constructor(trainable: boolean) {} }").len(), 1);
+        assert_eq!(run("class V { constructor(verbose: boolean) {} }").len(), 1);
     }
 }
