@@ -11,6 +11,13 @@
 //! An element whose unqualified name is listed in `excluded_components` (e.g.
 //! `FormattedMessage`, which uses `id` for an i18n message, not a DOM id) is
 //! skipped on both shapes.
+//!
+//! An `id` whose value is referenced elsewhere in the same file via an SVG-style
+//! local reference — `url(#value)` (from `fill`/`filter`/`clip-path`/`mask`/…)
+//! or a `#value` fragment (from `href`/`xlink:href`) — is an internal SVG
+//! cross-reference (`<filter id="blur">` … `filter="url(#blur)"`), not a
+//! DOM-scoped element id. Such an id must match its `url(#…)` literally and so
+//! cannot be a generated `useId()`; it is exempt.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -44,6 +51,11 @@ impl OxcCheck for Check {
         // Bare `createElement(...)` only counts when imported from `react`.
         let bare_create_element = react_create_element_bindings(semantic);
 
+        // `id` values referenced internally as SVG-style local references
+        // (`url(#value)` / `#value`); these are structural cross-references, not
+        // DOM element ids, and are exempt.
+        let internally_referenced = internally_referenced_ids(semantic);
+
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {
             match node.kind() {
@@ -51,7 +63,10 @@ impl OxcCheck for Check {
                     if jsx_element_name(&opening.name).is_some_and(&is_excluded) {
                         continue;
                     }
-                    if let Some(span) = static_jsx_id_span(opening) {
+                    if let Some((span, value)) = static_jsx_id(opening) {
+                        if internally_referenced.contains(value) {
+                            continue;
+                        }
                         diagnostics.push(self.diag(ctx, span));
                     }
                 }
@@ -62,7 +77,10 @@ impl OxcCheck for Check {
                     if create_element_name(call).is_some_and(&is_excluded) {
                         continue;
                     }
-                    if let Some(span) = literal_id_prop_span(call) {
+                    if let Some((span, value)) = literal_id_prop(call) {
+                        if value.is_some_and(|v| internally_referenced.contains(v)) {
+                            continue;
+                        }
                         diagnostics.push(self.diag(ctx, span));
                     }
                 }
@@ -104,9 +122,12 @@ fn jsx_element_name<'a>(name: &'a JSXElementName<'a>) -> Option<&'a str> {
     }
 }
 
-/// The span of a static string-literal `id` attribute, or `None` when the
-/// element has no `id`, a dynamic `id={x}`, or an expression-container value.
-fn static_jsx_id_span(opening: &oxc_ast::ast::JSXOpeningElement) -> Option<u32> {
+/// The span and string value of a static string-literal `id` attribute, or
+/// `None` when the element has no `id`, a dynamic `id={x}`, or an
+/// expression-container value.
+fn static_jsx_id<'a>(
+    opening: &'a oxc_ast::ast::JSXOpeningElement<'a>,
+) -> Option<(u32, &'a str)> {
     for attr_item in &opening.attributes {
         let JSXAttributeItem::Attribute(attr) = attr_item else {
             continue;
@@ -117,8 +138,8 @@ fn static_jsx_id_span(opening: &oxc_ast::ast::JSXOpeningElement) -> Option<u32> 
         if name_ident.name.as_str() != "id" {
             continue;
         }
-        if let Some(JSXAttributeValue::StringLiteral(_)) = &attr.value {
-            return Some(attr.span.start);
+        if let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value {
+            return Some((attr.span.start, lit.value.as_str()));
         }
         return None;
     }
@@ -155,10 +176,14 @@ fn create_element_name<'a>(call: &'a oxc_ast::ast::CallExpression<'a>) -> Option
     }
 }
 
-/// The span of a literal-valued `id` property in `createElement`'s second
-/// (props) argument, or `None`. A shorthand (`{ id }`) or computed/spread/method
-/// member is not a static literal and is ignored.
-fn literal_id_prop_span(call: &oxc_ast::ast::CallExpression) -> Option<u32> {
+/// The span and (string-literal) value of a literal-valued `id` property in
+/// `createElement`'s second (props) argument, or `None`. A shorthand (`{ id }`)
+/// or computed/spread/method member is not a static literal and is ignored. The
+/// value is `Some` only for a string literal — the only id shape an SVG
+/// `url(#…)` reference can match; other literals (number/bool/…) yield `None`.
+fn literal_id_prop<'a>(
+    call: &'a oxc_ast::ast::CallExpression<'a>,
+) -> Option<(u32, Option<&'a str>)> {
     let Expression::ObjectExpression(obj) = call.arguments.get(1)?.as_expression()? else {
         return None;
     };
@@ -178,7 +203,11 @@ fn literal_id_prop_span(call: &oxc_ast::ast::CallExpression) -> Option<u32> {
             return None;
         }
         if is_literal_expression(&p.value) {
-            return Some(p.span.start);
+            let value = match &p.value {
+                Expression::StringLiteral(s) => Some(s.value.as_str()),
+                _ => None,
+            };
+            return Some((p.span.start, value));
         }
         return None;
     }
@@ -223,6 +252,57 @@ fn react_create_element_bindings(semantic: &oxc_semantic::Semantic) -> FxHashSet
         }
     }
     bindings
+}
+
+/// All `id` values referenced internally as SVG-style local references in the
+/// file: a `url(#value)` (from `fill`/`filter`/`clip-path`/`mask`/`stroke`/…, in
+/// any attribute) or a `#value` fragment in an `href`/`xlink:href`. Scans every
+/// string-literal JSX attribute value, so the referencing element need not be
+/// the id's sibling — only same-file, matching the SVG document scope these refs
+/// resolve in.
+fn internally_referenced_ids(semantic: &oxc_semantic::Semantic) -> FxHashSet<String> {
+    let mut referenced = FxHashSet::default();
+    for node in semantic.nodes().iter() {
+        let AstKind::JSXAttribute(attr) = node.kind() else {
+            continue;
+        };
+        let JSXAttributeName::Identifier(name) = &attr.name else {
+            continue;
+        };
+        let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value else {
+            continue;
+        };
+        collect_local_references(name.name.as_str(), lit.value.as_str(), &mut referenced);
+    }
+    referenced
+}
+
+/// Extract every locally-referenced id from one attribute's value.
+///
+/// - `url(#id)` functional references (several may share one value, e.g.
+///   `fill="url(#a) url(#b)"`) count in any attribute.
+/// - A whole-value `#id` fragment counts only in a fragment-reference attribute
+///   (`href`/`xlinkHref`/`xlink:href`); restricting it keeps a CSS color
+///   (`fill="#fff"`) from being read as a reference to an id named `fff`.
+fn collect_local_references(attr_name: &str, value: &str, out: &mut FxHashSet<String>) {
+    let mut rest = value;
+    while let Some(pos) = rest.find("url(#") {
+        let after = &rest[pos + "url(#".len()..];
+        let end = after.find(')').unwrap_or(after.len());
+        let id = after[..end].trim();
+        if !id.is_empty() {
+            out.insert(id.to_string());
+        }
+        rest = &after[end..];
+    }
+
+    let is_href = matches!(attr_name, "href" | "xlinkHref" | "xlink:href");
+    if is_href && let Some(fragment) = value.strip_prefix('#') {
+        let id = fragment.trim();
+        if !id.is_empty() {
+            out.insert(id.to_string());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -472,5 +552,62 @@ mod tests {
             1,
             "the same static id is still flagged outside test directories"
         );
+    }
+
+    // ---- issue #5685: SVG internal cross-reference ids are exempt ----
+
+    #[test]
+    fn allows_svg_id_referenced_via_url() {
+        // The issue's shape: a `<filter id="…">` referenced from `filter="url(#…)"`.
+        let src = "function G() { return (\
+            <svg>\
+              <rect filter=\"url(#filter0_d_16_1393)\" fill=\"url(#paint0_linear_16_1393)\" />\
+              <defs>\
+                <filter id=\"filter0_d_16_1393\"><feFlood floodOpacity=\"0\" /></filter>\
+                <linearGradient id=\"paint0_linear_16_1393\" />\
+              </defs>\
+            </svg>); }";
+        assert!(
+            run(src).is_empty(),
+            "ids referenced via url(#id) within the SVG are internal cross-refs, not DOM ids"
+        );
+    }
+
+    #[test]
+    fn allows_svg_id_referenced_via_href_fragment() {
+        let src = "function G() { return (\
+            <svg>\
+              <use href=\"#shape\" />\
+              <clipPath id=\"shape\" />\
+            </svg>); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_svg_id_referenced_via_xlink_href_fragment() {
+        let src = "function G() { return (\
+            <svg>\
+              <use xlinkHref=\"#shape\" />\
+              <path id=\"shape\" />\
+            </svg>); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_svg_id_not_referenced_internally() {
+        // A hardcoded `id` with no `url(#…)`/`#…` reference is the rule's real
+        // target and still flags.
+        let src = "function G() { return (\
+            <svg><filter id=\"unused-filter\" /></svg>); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn color_hash_in_non_href_attr_is_not_a_reference() {
+        // `fill="#abc"` is a CSS color; the `#abc` must not be read as a
+        // fragment reference, so the unrelated `id="abc"` still flags.
+        let src = "function G() { return (\
+            <svg><rect fill=\"#abc\" /><circle id=\"abc\" /></svg>); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
