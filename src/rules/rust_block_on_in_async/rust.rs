@@ -10,19 +10,22 @@ use tree_sitter::Node;
 /// Combinators whose closure argument runs blocking code off the async
 /// worker, so a `block_on` lexically inside it does not start a runtime
 /// within the running runtime: `task::block_in_place` runs on the current
-/// thread but tells tokio to move other tasks off it, `thread::spawn`
-/// (and `Builder::spawn`) runs on a separate OS thread with no runtime
-/// context, and `task::spawn_blocking` runs the closure on tokio's
-/// dedicated blocking-thread pool where `Handle::current().block_on(..)`
-/// is the documented bridge. Matched against the call's final path segment
-/// only.
+/// thread but tells tokio to move other tasks off it, `thread::spawn` runs
+/// on a separate OS thread with no runtime context, and `task::spawn_blocking`
+/// runs the closure on tokio's dedicated blocking-thread pool where
+/// `Handle::current().block_on(..)` is the documented bridge. Matched against
+/// the call's final path segment only; the `thread::Builder::new()…spawn(..)`
+/// method-chain form is handled separately by `is_thread_builder_spawn`.
 const BLOCKING_OFFLOAD_COMBINATORS: &[&str] = &["block_in_place", "spawn", "spawn_blocking"];
 
 /// True if `node` is lexically inside a synchronous closure that is an
-/// argument to one of the `BLOCKING_OFFLOAD_COMBINATORS`. Walks the
-/// ancestor chain for the nearest enclosing `closure_expression`, then
-/// confirms that closure sits in the `arguments` of a `call_expression`
-/// whose `function`'s final segment is an offload combinator.
+/// argument to a blocking-offload call. Walks the ancestor chain for the
+/// nearest enclosing `closure_expression`, then confirms that closure sits
+/// in the `arguments` of a `call_expression` that offloads its closure off
+/// the async runtime — either a path call whose final segment is in
+/// `BLOCKING_OFFLOAD_COMBINATORS` (`thread::spawn`, `task::block_in_place`,
+/// `task::spawn_blocking`), or a `thread::Builder::new()…spawn(..)` method
+/// chain.
 ///
 /// Only a `closure_expression` (`|| { … }` / `move || { … }`) qualifies.
 /// `tokio::task::spawn` takes an `async_block`, not a closure, so a
@@ -37,14 +40,24 @@ fn is_inside_blocking_offload_closure(node: Node, source: &[u8]) -> bool {
             && let Some(call) = args.parent()
             && call.kind() == "call_expression"
             && let Some(function) = call.child_by_field_name("function")
-            && let Some(segment) = call_final_segment(function, source)
-            && BLOCKING_OFFLOAD_COMBINATORS.contains(&segment)
+            && is_blocking_offload_function(function, source)
         {
             return true;
         }
         cur = parent;
     }
     false
+}
+
+/// True if `function` (a `call_expression`'s `function` child) names a
+/// blocking-offload call: either its final path segment is in
+/// `BLOCKING_OFFLOAD_COMBINATORS`, or it is a `spawn` method call whose
+/// receiver chain roots at `std::thread::Builder::new()`.
+fn is_blocking_offload_function(function: Node, source: &[u8]) -> bool {
+    if let Some(segment) = call_final_segment(function, source) {
+        return BLOCKING_OFFLOAD_COMBINATORS.contains(&segment);
+    }
+    is_thread_builder_spawn(function, source)
 }
 
 /// The final path segment of a `call_expression`'s `function` child: the
@@ -58,6 +71,68 @@ fn call_final_segment<'a>(function: Node, source: &'a [u8]) -> Option<&'a str> {
         _ => return None,
     };
     segment.utf8_text(source).ok()
+}
+
+/// True if `function` is a `spawn` method call whose receiver chain roots at
+/// `std::thread::Builder::new()` — the builder form
+/// `Builder::new()[.name(..)][.stack_size(..)]….spawn(closure)`, which runs
+/// the closure on a dedicated OS thread with no runtime context, exactly like
+/// the free `thread::spawn`. Anchoring on the `thread::Builder::new()` root
+/// keeps unrelated `.spawn` methods (e.g. a `tokio` handle's `.spawn`, which
+/// stays on the async runtime) from being treated as offload.
+fn is_thread_builder_spawn(function: Node, source: &[u8]) -> bool {
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let Some(field) = function.child_by_field_name("field") else {
+        return false;
+    };
+    if field.utf8_text(source).ok() != Some("spawn") {
+        return false;
+    }
+    let Some(mut receiver) = function.child_by_field_name("value") else {
+        return false;
+    };
+    // Walk down the builder method chain (`.name(..)`, `.stack_size(..)`, …)
+    // to its root call, then confirm that root is `…thread::Builder::new()`.
+    loop {
+        if receiver.kind() != "call_expression" {
+            return false;
+        }
+        let Some(callee) = receiver.child_by_field_name("function") else {
+            return false;
+        };
+        match callee.kind() {
+            "field_expression" => {
+                let Some(value) = callee.child_by_field_name("value") else {
+                    return false;
+                };
+                receiver = value;
+            }
+            "scoped_identifier" => return is_thread_builder_new(callee, source),
+            _ => return false,
+        }
+    }
+}
+
+/// True if `path` is a `scoped_identifier` ending in `Builder::new` whose
+/// parent segment is a `thread`-qualified `Builder` — matches
+/// `thread::Builder::new`, `std::thread::Builder::new`, etc. A bare
+/// `Builder::new` is not matched: `Builder` is ambiguous across many crates,
+/// and only `std::thread::Builder` is known to offload onto an OS thread.
+fn is_thread_builder_new(path: Node, source: &[u8]) -> bool {
+    let Some(name) = path.child_by_field_name("name") else {
+        return false;
+    };
+    if name.utf8_text(source).ok() != Some("new") {
+        return false;
+    }
+    let Some(prefix) = path.child_by_field_name("path") else {
+        return false;
+    };
+    prefix
+        .utf8_text(source)
+        .is_ok_and(|text| text.ends_with("thread::Builder"))
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
@@ -167,6 +242,34 @@ mod tests {
     #[test]
     fn flags_block_on_inside_task_spawn_async_block() {
         let source = "async fn f() { task::spawn(async move { rt.block_on(fut); }); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_block_on_inside_thread_builder_spawn_closure() {
+        let source = "async fn test_anvil() { std::thread::Builder::new()\
+                      .stack_size(16 * 1024 * 1024)\
+                      .spawn(|| { let rt = tokio::runtime::Runtime::new().unwrap(); \
+                      rt.block_on(async {}) }).unwrap().join().unwrap(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_block_on_inside_unqualified_thread_builder_spawn_closure() {
+        let source = "async fn f() { thread::Builder::new().name(\"w\".into())\
+                      .spawn(|| { rt.block_on(fut) }).unwrap(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_block_on_inside_non_thread_builder_spawn_closure() {
+        let source = "async fn f() { handle.spawn(|| { rt.block_on(fut) }); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_block_on_inside_unrelated_builder_spawn_closure() {
+        let source = "async fn f() { Pool::builder().spawn(|| { rt.block_on(fut) }); }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
