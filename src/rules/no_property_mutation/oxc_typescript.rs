@@ -10,8 +10,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding, is_node_module_system_target,
-    is_react_display_name_assignment, is_reduce_accumulator_param, is_typed_array_binding,
-    is_vue_reactive_object_target, is_vue_ref_value_target,
+    is_react_display_name_assignment, is_reduce_accumulator_param, is_rtk_reducer_draft_param,
+    is_typed_array_binding, is_vue_reactive_object_target, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -403,6 +403,7 @@ impl OxcCheck for Check {
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
+                                || is_rtk_reducer_draft_param(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
@@ -442,6 +443,7 @@ impl OxcCheck for Check {
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
+                                || is_rtk_reducer_draft_param(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
@@ -480,6 +482,7 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
+                                || is_rtk_reducer_draft_param(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
@@ -499,6 +502,7 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
+                                || is_rtk_reducer_draft_param(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
@@ -526,6 +530,7 @@ impl OxcCheck for Check {
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
+                                || is_rtk_reducer_draft_param(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
@@ -535,6 +540,7 @@ impl OxcCheck for Check {
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
+                                || is_rtk_reducer_draft_param(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
@@ -1628,6 +1634,122 @@ mod tests {
             const register = (k) => {
                 handlers[k] = fn;
             };
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Redux Toolkit Immer draft mutations — issue #5596
+
+    #[test]
+    fn allows_draft_mutation_in_create_slice_object_reducers_issue_5596() {
+        // Classic `reducers: { … }` object form: the `state` first param is an
+        // Immer draft; assigning/deleting its properties is the documented RTK
+        // update mechanism, not aliased-state mutation.
+        let src = r#"
+            import { createSlice } from '@reduxjs/toolkit'
+            const slice = createSlice({
+                name: 'polling',
+                initialState,
+                reducers: {
+                    updatePolling(state, action) {
+                        state.apps[action.payload.app] = action.payload.value;
+                        state.enabled = true;
+                    },
+                },
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_draft_mutation_in_create_slice_builder_reducer_issue_5596() {
+        // The `reducers: (creators) => ({ … })` builder form wraps the reducer in
+        // `creators.reducer((state) => …)`; the draft is still the first param of
+        // that nested callback under `createSlice`.
+        let src = r#"
+            import { createSlice } from '@reduxjs/toolkit'
+            const slice = createSlice({
+                name: 'polling',
+                initialState,
+                reducers: (creators) => ({
+                    toggleGlobalPolling: creators.reducer((state) => {
+                        state.enabled = !state.enabled;
+                    }),
+                }),
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_draft_mutation_in_create_reducer_builder_add_case_issue_5596() {
+        // `createReducer(initial, (builder) => builder.addCase(act, (state) => …))`
+        // — the case-reducer callback's first param is the draft.
+        let src = r#"
+            import { createReducer } from '@reduxjs/toolkit'
+            const reducer = createReducer(initialState, (builder) => {
+                builder.addCase(increment, (state) => {
+                    state.value += 1;
+                });
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_draft_typed_parameter_mutation_issue_5596() {
+        // The entity-adapter helpers take a `Draft<T>` state by reference and
+        // mutate it in place; the `Draft<…>` annotation is the structural signal.
+        let src = r#"
+            import type { Draft } from 'immer';
+            function addOneMutably(entity: T, state: Draft<R>): void {
+                state.entities[key] = entity;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_ordinary_parameter_mutation_outside_reducer_issue_5596() {
+        // Negative space: a first parameter mutated in an ordinary function (no
+        // createSlice/createReducer context, no `Draft<…>` type) stays flagged.
+        let src = r#"
+            function mutate(state) {
+                state.enabled = true;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_immer_draft_typed_parameter_mutation_issue_5596() {
+        // Negative space: a `Draft<…>` annotation not imported from `immer` is a
+        // same-named domain type, not Immer's draft — mutating it stays flagged.
+        let src = r#"
+            type Draft<T> = T;
+            function edit(doc: Draft<Document>) {
+                doc.title = 'x';
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_draft_variable_inside_reducer_issue_5596() {
+        // Negative space: a captured outer object mutated inside a reducer is not
+        // the draft (not the reducer's first param) — it stays flagged.
+        let src = r#"
+            import { createSlice } from '@reduxjs/toolkit'
+            const cache = getCache();
+            const slice = createSlice({
+                name: 's',
+                initialState,
+                reducers: {
+                    update(state) {
+                        cache.dirty = true;
+                    },
+                },
+            })
         "#;
         assert_eq!(run(src).len(), 1);
     }
