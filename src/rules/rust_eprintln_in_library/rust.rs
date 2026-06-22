@@ -4,7 +4,8 @@
 //! flags any invocation that:
 //!
 //! - is **not** in test context (`#[test]` / `#[cfg(test)]` /
-//!   `tests/` integration directory), and
+//!   `tests/` integration directory / an inline-test-module file named
+//!   `tests.rs` or `test.rs`), and
 //! - is **not** in a Cargo build script (`build.rs`), and
 //! - is **not** in a binary file (`main.rs`, `src/bin/*.rs`), and
 //! - is **not** in a file declared as an explicit-path executable target
@@ -93,7 +94,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 use std::path::Path;
 
 const KINDS: &[&str] = &["macro_invocation"];
@@ -193,10 +194,6 @@ impl AstCheck for Check {
             Severity::Warning,
         ));
     }
-}
-
-fn is_under_tests_dir(path: &Path) -> bool {
-    path.components().any(|c| c.as_os_str() == "tests")
 }
 
 /// True if `path` is a binary entry point: `main.rs` at any directory
@@ -920,5 +917,33 @@ required-features = ["std"]
     fn allows_eprintln_in_tests_dir() {
         let source = "fn f() { eprintln!(\"trace\"); }";
         assert!(run_on(source, "tests/it.rs").is_empty());
+    }
+
+    /// Regression for #5594 (qdrant `lib/segment/src/payload_storage/tests.rs`):
+    /// a `src/**/tests.rs` file is the idiomatic Rust inline-test-module
+    /// (`mod tests;` -> sibling `tests.rs`). A helper called from its `#[test]`
+    /// functions carries no `#[test]`/`#[cfg(test)]` attribute on the call site,
+    /// so the attribute walk misses it — the filename marks it as test code.
+    /// Run inside a library crate so only the test-file gate can clear it.
+    #[test]
+    fn allows_eprintln_in_inline_tests_module_file() {
+        let source = "fn helper() { eprintln!(\"storage is correct before drop\"); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/payload_storage/tests.rs", source).is_empty());
+    }
+
+    /// The singular `test.rs` inline-test-module name is the same convention.
+    #[test]
+    fn allows_eprintln_in_singular_test_module_file() {
+        let source = "fn helper() { eprintln!(\"trace\"); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/parser/test.rs", source).is_empty());
+    }
+
+    /// The test-file gate matches the whole filename stem `tests`/`test` only: a
+    /// library file whose stem merely *contains* `test` (`latest.rs`) is
+    /// production code and stays flagged.
+    #[test]
+    fn flags_eprintln_in_latest_rs_library_file() {
+        let source = "fn f() { eprintln!(\"oops\"); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/latest.rs", source).len(), 1);
     }
 }
