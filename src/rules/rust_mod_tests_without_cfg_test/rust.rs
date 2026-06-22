@@ -6,6 +6,15 @@
 //! compound forms like `#[cfg(all(test, …))]` and `#[cfg(any(test, …))]`, and
 //! `#[cfg_attr(test, …)]`. Flag if absent.
 //!
+//! A module named `test`/`tests` is only flagged when its body actually
+//! contains a test-attributed function (`#[test]`, `#[tokio::test]`,
+//! `#[rstest]`, `#[test_case]`, …) — that is what makes it a unit-test module
+//! whose missing `#[cfg(test)]` gate would ship test code in release builds. A
+//! `mod test`/`mod tests` holding only domain code (constants, types, runtime
+//! logic) is a namespace that happens to be named `test`; gating it would
+//! conditionally compile real code out of non-test builds, so it is not
+//! flagged.
+//!
 //! Only inline `mod tests { … }` blocks are checked. An external declaration
 //! `mod tests;` is gated by an inner `#![cfg(test)]` in the referenced file
 //! (`tests.rs` / `tests/mod.rs`), which a single-file check cannot see, so it
@@ -43,7 +52,14 @@ impl AstCheck for Check {
         // gating `#![cfg(test)]` lives in the referenced file, which this
         // single-file check cannot see. Only inline `mod tests { … }` blocks
         // can carry the outer `#[cfg(test)]` this rule looks for.
-        if node.child_by_field_name("body").is_none() {
+        let Some(body) = node.child_by_field_name("body") else {
+            return;
+        };
+        // A `mod test`/`mod tests` is provably a unit-test module only when its
+        // body holds a function carrying a test-runner attribute. Without one it
+        // is a domain namespace that merely shares the name (issue #5638), and
+        // forcing `#[cfg(test)]` would compile real code out of release builds.
+        if !body_has_test_fn(body, source_bytes) {
             return;
         }
         if crate::rules::rust_helpers::has_test_attribute(node, source_bytes) {
@@ -64,6 +80,65 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// True if the module `body` (a `declaration_list`) directly contains a
+/// function carrying a test-runner attribute. A `#[cfg(test)]` on a function is
+/// not such a signal — it gates the function, it does not make it a test — so
+/// this checks for genuine test attributes only, never the `cfg` forms that
+/// `has_test_attribute` also accepts.
+///
+/// Only functions directly in the module body count: a test attribute on a
+/// function nested inside a *child* module belongs to that child, not to this
+/// module.
+fn body_has_test_fn(body: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor).any(|item| {
+        item.kind() == "function_item" && fn_has_test_runner_attribute(item, source)
+    })
+}
+
+/// True if `item` (a `function_item`) has a test-runner attribute as a
+/// preceding `attribute_item` sibling: `#[test]`, a path test macro
+/// (`#[tokio::test]`, `#[actix_rt::test(…)]`, …), or a framework test attribute
+/// (`#[rstest]`, `#[test_case(…)]`, `#[proptest]`, …). Doc comments may
+/// interleave the attributes; they are skipped, not treated as the end of the
+/// attribute block.
+fn fn_has_test_runner_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && attr_is_test_runner(text)
+                {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if a single attribute's source text is a test-runner attribute. Matches
+/// the attribute path's last segment against the common test attributes so both
+/// bare (`#[test]`) and path (`#[tokio::test]`) forms, with or without an
+/// argument list, are recognized.
+fn attr_is_test_runner(text: &str) -> bool {
+    const TEST_ATTRS: &[&str] = &["test", "test_case", "rstest", "proptest"];
+    // Strip the `#[` / `#![` framing and any argument list / trailing `]`, then
+    // take the last `::`-delimited segment of the path.
+    let inner = text
+        .trim_start_matches("#![")
+        .trim_start_matches("#[")
+        .trim_start_matches('!')
+        .trim();
+    let path = inner.split(['(', ']']).next().unwrap_or(inner).trim();
+    let last_segment = path.rsplit("::").next().unwrap_or(path).trim();
+    TEST_ATTRS.contains(&last_segment)
 }
 
 #[cfg(test)]
@@ -92,6 +167,62 @@ mod tests {
     #[test]
     fn flags_mod_tests_without_cfg() {
         assert_eq!(run_on("mod tests { #[test] fn t() {} }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_mod_test_domain_namespace() {
+        // A `mod test` holding only domain code (constants, no test functions)
+        // is a namespace, not a test module — gating it with `#[cfg(test)]`
+        // would compile real code out of release builds (issue #5638).
+        let source = "\
+pub mod test {
+    pub const FAILED: &str = \"test.failed\";
+    pub const SETUP_FAILED: &str = \"test.setup_failed\";
+    pub(crate) const ALL: &[&str] = &[FAILED, SETUP_FAILED];
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_mod_tests_with_only_types_and_fns() {
+        // No test-attributed function anywhere in the body → domain namespace.
+        let cases = [
+            "mod tests { pub struct Foo; pub fn build() -> Foo { Foo } }",
+            "mod test { type Code = u32; const X: Code = 1; }",
+            "mod tests { pub use crate::foo::Bar; }",
+        ];
+        for source in cases {
+            assert!(
+                run_on(source).is_empty(),
+                "should not flag namespace with no test fn: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_flag_when_only_child_module_has_test_fn() {
+        // The test attribute is on a function nested in a *child* module; the
+        // outer `mod tests` itself holds no test function, so it is a namespace.
+        let source = "mod tests { mod inner { #[test] fn t() {} } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_mod_tests_with_framework_test_fn() {
+        // Framework test attributes mark a real test module just as `#[test]`
+        // does, so an ungated module containing one is still flagged.
+        let cases = [
+            "mod tests { #[tokio::test] async fn t() {} }",
+            "mod tests { #[rstest] fn t() {} }",
+            "mod test { #[test_case(1)] fn t(_x: u32) {} }",
+        ];
+        for source in cases {
+            assert_eq!(
+                run_on(source).len(),
+                1,
+                "should flag ungated module with a framework test fn: {source}"
+            );
+        }
     }
 
     #[test]
