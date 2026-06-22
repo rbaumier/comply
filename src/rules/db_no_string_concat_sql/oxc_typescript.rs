@@ -11,7 +11,8 @@ use crate::rules::sql_helpers::is_sql_string;
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
-use super::position::all_substitutions_in_identifier_position;
+use super::placeholder::interpolation_is_provably_placeholder_only;
+use super::position::{all_substitutions_in_identifier_position, placeholder_is_identifier_position};
 
 pub struct Check;
 
@@ -51,10 +52,12 @@ impl OxcCheck for Check {
                 if static_text.contains("$1") || static_text.contains("$2") {
                     return;
                 }
-                // Every interpolation sits in an identifier position (a relation
-                // or column name): those cannot be bind parameters, so this is
-                // the only possible form, not an injection.
-                if all_substitutions_in_identifier_position(&fragments) {
+                // Every interpolation is benign — either it sits in an
+                // identifier position (a relation or column name, which cannot
+                // be a bind parameter) or it provably yields only SQL
+                // placeholders (`?`, `$1`) and carries no data. Either way this
+                // is the only possible form, not an injection.
+                if all_interpolations_benign(&fragments, &tpl.expressions, semantic) {
                     return;
                 }
                 let (line, column) =
@@ -130,6 +133,36 @@ impl OxcCheck for Check {
             _ => {}
         }
     }
+}
+
+/// Whether *every* interpolation point in a SQL template literal is benign, so
+/// the literal cannot be an injection vector.
+///
+/// An interpolation `${expr}` at point `i` is benign when either:
+/// - it sits in an *identifier position* (a relation/column name, which cannot
+///   be a bind parameter), determined from the static text `fragments[0..=i]`
+///   preceding it; or
+/// - `expr` *provably* yields only SQL placeholders (`?`, `$1`) and carries no
+///   data — the dynamic IN-clause idiom `ids.map(() => '?').join(',')`.
+///
+/// `fragments` are the `n + 1` quasis around the `n` `expressions`; the two are
+/// positionally aligned, so `expressions[i]` follows `fragments[i]`.
+fn all_interpolations_benign<'a>(
+    fragments: &[&str],
+    expressions: &oxc_allocator::Vec<'a, Expression<'a>>,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> bool {
+    let mut prefix = String::new();
+    for (i, expr) in expressions.iter().enumerate() {
+        prefix.push_str(fragments[i]);
+        let in_identifier_position = placeholder_is_identifier_position(&prefix, prefix.len());
+        if !in_identifier_position
+            && !interpolation_is_provably_placeholder_only(expr, semantic)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// The static text of a string-literal or interpolation-free template-literal
@@ -531,6 +564,90 @@ mod tests {
     #[test]
     fn flags_single_quoted_value_interpolation_template() {
         let src = r#"const q = `UPDATE users SET name = '${name}' WHERE id = 1`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #5676 — the dynamic IN-clause placeholder idiom. The interpolation
+    // expands to `?,?,?` (placeholders only); the values are bound separately,
+    // so there is no injection. Both the inline form and a one-variable hop.
+    #[test]
+    fn does_not_flag_inline_placeholder_join_in_clause() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${ids.map(() => '?').join(',')})`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_placeholder_join_via_const_binding() {
+        let src = r#"
+            const placeholders = missingEllipses.map(() => '?').join(',');
+            const query = `SELECT e.name FROM ellipsoid e WHERE e.name IN (${placeholders})`;
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Other placeholder-only producers: positional `$${i + 1}`, `Array().fill`,
+    // and `Array.from`. None embeds the element value.
+    #[test]
+    fn does_not_flag_positional_placeholder_join() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${ids.map((_, i) => '$' + (i + 1)).join(',')})`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_named_positional_placeholder_join_template() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${ids.map((_, i) => `:p${i}`).join(',')})`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_array_fill_placeholder_join() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${Array(ids.length).fill('?').join(',')})`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_array_from_placeholder_join() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${Array.from({ length: n }, () => '?').join(',')})`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #5676 SECURITY GATE — value interpolation must STILL flag. The exemption
+    // is for placeholders only; any callback returning or deriving from the
+    // element value, or a bare value join, is a genuine injection.
+    #[test]
+    fn flags_join_of_values() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${ids.join(',')})`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_returning_element_value_join() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${ids.map(id => id).join(',')})`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_embedding_element_value_in_quotes_join() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${ids.map(v => `'${v}'`).join(',')})`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // The element value reached even through the index-named slot must flag: the
+    // body references the element parameter, not (only) the index.
+    #[test]
+    fn flags_map_returning_value_with_index_param_present() {
+        let src = r#"const q = `SELECT * FROM t WHERE id IN (${ids.map((v, i) => v).join(',')})`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A const binding whose initializer joins the values (not placeholders) must
+    // still flag — resolving the hop must not blindly trust the `.join` shape.
+    #[test]
+    fn flags_value_join_via_const_binding() {
+        let src = r#"
+            const values = ids.map(id => id).join(',');
+            const q = `SELECT * FROM t WHERE id IN (${values})`;
+        "#;
         assert_eq!(run_on(src).len(), 1);
     }
 }

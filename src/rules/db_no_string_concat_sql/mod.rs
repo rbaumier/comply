@@ -38,6 +38,7 @@
 //! substring false positives.
 
 mod oxc_typescript;
+mod placeholder;
 mod position;
 mod rust;
 mod vue;
