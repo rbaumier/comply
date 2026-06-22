@@ -1,15 +1,22 @@
 //! OxcCheck backend for no-inner-html — flag `.innerHTML = ...` / `.outerHTML = ...`.
 //!
-//! Two right-hand sides are exempt because they are provably non-dangerous:
+//! Right-hand sides exempt because they are provably non-dangerous:
 //! - a `.__html` member access (`x.innerHTML = value.__html`) — the
 //!   `dangerouslySetInnerHTML` implementation idiom, where the raw-HTML opt-in
 //!   and escaping responsibility belong to the caller, not the renderer;
 //! - an empty string literal (`x.innerHTML = ''` / `""`) — clearing a node
-//!   cannot inject markup. A non-empty literal or a template literal stays flagged.
+//!   cannot inject markup. A non-empty literal stays flagged;
+//! - a template literal whose every `${...}` is provably numeric — numbers
+//!   cannot carry HTML markup. A string/unknown interpolation stays flagged.
+//!
+//! Assignments inside a Playwright/Puppeteer injection callback
+//! (`page.evaluate(() => { el.innerHTML = ... })`) are also exempt: the callback
+//! runs in a controlled automation browser, not an application XSS sink.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_browser_injection_callback};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::html_sink_helpers::is_numeric_only_template;
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
@@ -28,7 +35,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::AssignmentExpression(assign) = node.kind() else { return };
@@ -40,6 +47,12 @@ impl OxcCheck for Check {
             return;
         }
         if rhs_is_non_dangerous(&assign.right) {
+            return;
+        }
+        if is_numeric_only_template(&assign.right) {
+            return;
+        }
+        if is_inside_browser_injection_callback(node, semantic) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -126,5 +139,36 @@ mod tests {
     #[test]
     fn flags_outer_html_dynamic() {
         assert_eq!(run_on("el.outerHTML = userInput;").len(), 1);
+    }
+
+    // Numbers cannot carry HTML markup, so a numeric-only template is safe.
+    #[test]
+    fn allows_numeric_only_template() {
+        assert!(run_on("el.innerHTML = `left: ${10}px; top: ${20}px`;").is_empty());
+    }
+
+    #[test]
+    fn allows_arithmetic_only_template() {
+        assert!(run_on("el.innerHTML = `width: ${10 * 2}px; n: ${items.length}`;").is_empty());
+    }
+
+    // A string interpolation outside any injection callback must still flag.
+    #[test]
+    fn flags_string_interpolation_template() {
+        assert_eq!(run_on("el.innerHTML = `<b>${userString}</b>`;").len(), 1);
+    }
+
+    // Repro for #5541: numeric interpolations inside a Puppeteer page.evaluate()
+    // injection callback target a controlled automation browser, not an app DOM.
+    #[test]
+    fn allows_inner_html_inside_page_evaluate() {
+        let src = "page.evaluate((x, y) => { const h = document.createElement('div'); h.innerHTML = `<style>:scope { left: ${x}px; top: ${y}px; }</style>`; }, x, y);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_inner_html_outside_injection_callback() {
+        let src = "function f(html) { el.innerHTML = `<div>${html}</div>`; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
