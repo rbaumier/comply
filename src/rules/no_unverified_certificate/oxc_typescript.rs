@@ -6,7 +6,13 @@ use std::sync::Arc;
 
 pub struct Check;
 
-const FALSY_REJECT_KEYS: &[&str] = &["rejectUnauthorized", "verify"];
+/// `rejectUnauthorized` is the only object-property key that unambiguously
+/// disables TLS certificate verification in JS/TS HTTP clients (Node `tls`,
+/// `https`, `axios`'s `httpsAgent`, etc.). A bare `verify` key is *not* a Node
+/// TLS option — it collides with unrelated APIs such as Cypress action options
+/// (`cy.now('click', { verify: false })`) and form-validation flags — so
+/// matching it by name alone is a false positive and it is not included here.
+const FALSY_REJECT_KEYS: &[&str] = &["rejectUnauthorized"];
 
 fn is_false_literal(expr: &Expression) -> bool {
     match expr {
@@ -38,11 +44,7 @@ impl OxcCheck for Check {
     }
 
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&[
-            "rejectUnauthorized",
-            "NODE_TLS_REJECT_UNAUTHORIZED",
-            "verify",
-        ])
+        Some(&["rejectUnauthorized", "NODE_TLS_REJECT_UNAUTHORIZED"])
     }
 
     fn run<'a>(
@@ -130,18 +132,30 @@ mod tests {
     }
 
     #[test]
-    fn flags_verify_false() {
-        assert_eq!(run_on("const x = { verify: false };").len(), 1);
-    }
-
-    #[test]
     fn allows_reject_unauthorized_true() {
         assert!(run_on("const x = { rejectUnauthorized: true };").is_empty());
     }
 
     #[test]
-    fn allows_verify_true() {
-        assert!(run_on("const x = { verify: true };").is_empty());
+    fn allows_cypress_verify_false_option() {
+        // Issue #5554: `verify: false` in a Cypress action-command options
+        // object skips post-action DOM-assertion retries, not TLS certificate
+        // verification. It is not a Node TLS option, so it must not flag.
+        let src = r#"
+            return cy.now('click', options.$el, {
+              log: false,
+              verify: false,
+              errorOnSelect: false,
+              force: options.force,
+              timeout: options.timeout,
+            })
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_verify_false() {
+        assert!(run_on("const x = { verify: false };").is_empty());
     }
 
     #[test]
