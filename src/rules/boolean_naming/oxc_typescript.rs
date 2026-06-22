@@ -63,6 +63,13 @@ fn is_screaming_case(name: &str) -> bool {
 
 /// Return a short problem description if the name doesn't match the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
+    // A leading underscore is a convention marker (private/internal state,
+    // intentionally-unused binding), not part of the predicate. Strip it so
+    // `_hasWarnedZodMismatch` is classified on `hasWarnedZodMismatch`: a valid
+    // `has*` prefix is no longer hidden by the sigil. Strictness is preserved —
+    // `_ready` strips to `ready`, which still lacks a prefix and flags.
+    let name = name.trim_start_matches('_');
+
     // A leading `$` sigil marks a spec/framework-bound name (jQuery, Vue
     // `$`-props, JSON Schema `$`-keywords like `$async`/`$data`), not a
     // developer-chosen camelCase boolean. Such names mirror an external
@@ -519,6 +526,28 @@ mod tests {
         assert_eq!(run("function f(colored: boolean) {}").len(), 1);
         assert_eq!(run("function f(partial: boolean) {}").len(), 1);
         assert_eq!(run("class C { format(colored: boolean) {} }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_leading_underscore_prefixed_boolean() {
+        // A leading underscore marks a private/internal boolean state flag; the
+        // predicate prefix sits past the sigil, so `_hasWarnedZodMismatch` is a
+        // valid `has*` name and must not flag. (Closes #5154)
+        assert!(run("let _hasWarnedZodMismatch = false;").is_empty());
+        assert!(run("let _isReady: boolean = true;").is_empty());
+        assert!(run("let __hasValue: boolean = false;").is_empty());
+        assert!(run("function f(_isEnabled: boolean) {}").is_empty());
+        // Underscores strip before the `$` early-return, so a `_$`-sigil spec
+        // name stays exempt (locks in the strip-then-`$` check ordering).
+        assert!(run("const _$async: boolean = true;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_underscore_prefixed_boolean_without_predicate() {
+        // Strictness preserved: stripping the leading underscore does not relax
+        // the prefix requirement — `_ready` strips to `ready`, still unprefixed.
+        assert_eq!(run("let _ready: boolean = true;").len(), 1);
+        assert_eq!(run("let __debug = false;").len(), 1);
     }
 
     #[test]
