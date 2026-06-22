@@ -41,6 +41,41 @@ fn is_document_like_receiver(expr: &Expression) -> bool {
     }
 }
 
+/// Playwright/Puppeteer methods that serialize a function argument and execute
+/// it inside a controlled automation browser context, not the application DOM.
+const BROWSER_INJECTION_METHODS: &[&str] = &[
+    "evaluate",
+    "evaluateHandle",
+    "evaluateOnNewDocument",
+    "addInitScript",
+    "$eval",
+    "$$eval",
+];
+
+/// True when `node` sits inside a function/arrow that is a direct argument of a
+/// browser-injection call — `page.evaluate(() => { document.write(html) })`,
+/// `frame.addInitScript(...)`, `page.$eval(...)`, etc. The callback is
+/// serialized and run in the automation browser, so the HTML written there is
+/// not the application's XSS sink.
+fn is_inside_browser_injection_callback<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        if matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) && let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
+            && let Expression::StaticMemberExpression(member) = &call.callee
+            && BROWSER_INJECTION_METHODS.contains(&member.property.name.as_str())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -60,7 +95,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -81,6 +116,13 @@ impl OxcCheck for Check {
         // (`insertAdjacentHTML`, `setHTMLUnsafe`, `createContextualFragment`)
         // have no such collision and fire on any receiver.
         if matches!(method, "write" | "writeln") && !is_document_like_receiver(&member.object) {
+            return;
+        }
+
+        // Calls inside a Playwright/Puppeteer browser-injection callback run in
+        // a controlled automation browser, not the application DOM, so the HTML
+        // written there is not the XSS sink this rule targets.
+        if is_inside_browser_injection_callback(node, semantic) {
             return;
         }
 
@@ -177,5 +219,46 @@ mod tests {
     #[test]
     fn allows_document_write_literal() {
         assert!(run_on("document.write('<p>static</p>');").is_empty());
+    }
+
+    #[test]
+    fn allows_document_write_in_page_evaluate_callback() {
+        assert!(
+            run_on(
+                "page.evaluate(({ html }) => {\n  document.open();\n  document.write(html);\n  document.close();\n}, { html });"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_document_write_in_add_init_script_callback() {
+        assert!(run_on("page.addInitScript(() => { document.write(content); });").is_empty());
+    }
+
+    #[test]
+    fn allows_document_write_in_eval_helper_callback() {
+        assert!(run_on("page.$eval('#sel', () => { document.write(markup); });").is_empty());
+    }
+
+    #[test]
+    fn flags_top_level_document_write_outside_injection_callback() {
+        assert_eq!(run_on("document.write(userInput);").len(), 1);
+    }
+
+    #[test]
+    fn flags_document_write_in_non_injection_callback() {
+        assert_eq!(
+            run_on("setTimeout(() => { document.write(userInput); }, 0);").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_document_write_in_non_injection_member_callback() {
+        assert_eq!(
+            run_on("widget.render(() => { document.write(userInput); });").len(),
+            1
+        );
     }
 }
