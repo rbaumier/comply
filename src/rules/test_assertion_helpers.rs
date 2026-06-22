@@ -111,6 +111,99 @@ fn member_chain_root_is_cy(expr: &Expression) -> bool {
     }
 }
 
+/// True when `call`'s callee is a method access on the AVA execution-context
+/// parameter — `t.is(...)`, `t.deepEqual(...)`, `t.throwsAsync(...)`,
+/// `t.notThrowsAsync(...)`, `t.truthy(...)`, … — where the receiver resolves to
+/// the *first* formal parameter of an enclosing `it`/`test` callback.
+///
+/// AVA passes its assertion API as that context object (`test('name', (t) =>
+/// { … })`); every assertion is a method on it. Rather than match a fixed
+/// method allow-list, this counts *any* method call on the context parameter,
+/// mirroring how AVA itself works: a body that calls a method on `t` is
+/// exercising the assertion context. The receiver must be the literal context
+/// parameter (resolved through scope binding), so an unrelated `foo.equal(...)`
+/// on some other object is not matched.
+///
+/// ```ts
+/// import test from 'ava'
+/// test('introspectionRequest()', async (t) => {
+///   await t.throwsAsync(lib.introspectionRequest(...), { message: '…' })
+/// })
+/// ```
+pub(crate) fn is_ava_context_assertion_call(
+    call: &CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(receiver) = member.object.get_inner_expression() else {
+        return false;
+    };
+    let Some(ref_id) = receiver.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl = scoping.symbol_declaration(sym_id);
+    declaration_is_test_callback_first_param(decl, semantic)
+}
+
+/// True when `decl` is the first formal parameter of a function/arrow that is the
+/// callback (2nd argument) of an `it`/`test` call — i.e. AVA's execution-context
+/// (`t`) parameter.
+fn declaration_is_test_callback_first_param(
+    decl: NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    let decl_span = nodes.kind(decl).span();
+    let callback_id = std::iter::once(nodes.get_node(decl))
+        .chain(nodes.ancestors(decl))
+        .find(|anc| {
+            matches!(
+                anc.kind(),
+                AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+            )
+        })
+        .map(|anc| anc.id());
+    let Some(callback_id) = callback_id else {
+        return false;
+    };
+
+    // The binding must be the FIRST formal parameter of that callback.
+    let params = match nodes.kind(callback_id) {
+        AstKind::Function(f) => &f.params,
+        AstKind::ArrowFunctionExpression(f) => &f.params,
+        _ => return false,
+    };
+    let is_first_param = params.items.first().is_some_and(|param| {
+        param.span.start <= decl_span.start && decl_span.end <= param.span.end
+    });
+    if !is_first_param {
+        return false;
+    }
+
+    // The callback must be the 2nd argument of a bare `it`/`test` call.
+    let parent_id = nodes.parent_id(callback_id);
+    let AstKind::CallExpression(call) = nodes.kind(parent_id) else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    if callee.name.as_str() != "it" && callee.name.as_str() != "test" {
+        return false;
+    }
+    matches!(
+        call.arguments.get(1).map(|a| a.span()),
+        Some(span) if span.start <= decl_span.start && decl_span.end <= span.end
+    )
+}
+
 /// True when the test callback (2nd argument of an `it`/`test` call) invokes an
 /// identifier bound to a formal parameter of an *enclosing* function. Such a
 /// test is a factory whose real body — and its assertions — is supplied by the
