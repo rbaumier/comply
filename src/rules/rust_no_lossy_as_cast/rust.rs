@@ -1127,4 +1127,26 @@ mod tests {
         // stays a finding, owned by `rust-no-as-numeric-cast`.
         assert!(run_on("fn f(thing: T) -> u8 { thing.bytes()[0] as u8 }").is_empty());
     }
+
+    #[test]
+    fn repro_5469_suffixed_literal_u64_as_u32_not_flagged() {
+        // Issue #5469 (wasm-bindgen web-sys WebGL constants): `NNNu64 as u32`
+        // where the operand is a suffixed integer literal whose value fits u32.
+        // The literal value is statically known and in range, so the cast is
+        // provably lossless.
+        assert!(run_on("pub const DEPTH: u32 = 256u64 as u32;").is_empty());
+        assert!(run_on("pub const STENCIL: u32 = 1024u64 as u32;").is_empty());
+        assert!(run_on("pub const COLOR: u32 = 16384u64 as u32;").is_empty());
+        // Hex form, the other WebGL constant shape (`0x1F00u64 as u32`).
+        assert!(run_on("pub const TEXTURE: u32 = 0x1F00u64 as u32;").is_empty());
+    }
+
+    #[test]
+    fn repro_5469_out_of_range_suffixed_literal_owned_by_numeric_cast() {
+        // A suffixed literal whose value exceeds the target is genuinely lossy.
+        // `rust-no-as-numeric-cast` owns the span (it flags out-of-range integer
+        // literals), so this rule suppresses — the pair emits one diagnostic.
+        assert!(run_on("fn f() -> u8 { 300u64 as u8 }").is_empty());
+        assert!(run_on("fn f() -> u16 { 0x1_0000u64 as u16 }").is_empty());
+    }
 }
