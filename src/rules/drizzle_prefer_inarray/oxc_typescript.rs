@@ -22,6 +22,30 @@ fn in_followed_by_select(text: &str) -> bool {
     false
 }
 
+/// SQL clause keywords whose presence proves the `sql` template is more than a
+/// bare `col IN (...)` predicate — a full or multi-clause query (#5750).
+/// `inArray(col, [...])` builds a *standalone* predicate fragment from a column
+/// object and a JS array; it can only replace the template when the template
+/// *is* that predicate. It cannot be spliced into the middle of a hand-written
+/// multi-line analytical / system-catalog query, a `sql.join(...)` fragment, or
+/// any statement carrying other clauses, so those must not be flagged.
+/// Markers are space-delimited and matched against a whitespace-collapsed,
+/// space-padded uppercase rendering of the template (see `template_has_other_clauses`).
+const NON_BARE_CLAUSE_MARKERS: &[&str] = &[
+    " FROM ", " WHERE ", " JOIN ", " AND ", " OR ", " GROUP BY ", " ORDER BY ",
+    " HAVING ", " UNION ", " INTERSECT ", " EXCEPT ",
+];
+
+/// True when the joined template text contains SQL beyond a single bare
+/// `IN (...)` predicate. The quasis are joined, uppercased, whitespace-collapsed
+/// and space-padded so a marker matches regardless of surrounding newlines/tabs
+/// and even at the very start of the template (e.g. a fragment opening on `WHERE`).
+fn template_has_other_clauses(joined: &str) -> bool {
+    let normalized = joined.to_ascii_uppercase();
+    let padded = format!(" {} ", normalized.split_whitespace().collect::<Vec<_>>().join(" "));
+    NON_BARE_CLAUSE_MARKERS.iter().any(|marker| padded.contains(marker))
+}
+
 pub struct Check;
 
 #[cfg(test)]
@@ -48,9 +72,30 @@ mod tests {
     }
 
     #[test]
-    fn flags_sql_template_with_literal_in() {
-        let src = "const q = sql`SELECT * FROM u WHERE id IN (${ids})`";
+    fn flags_bare_in_predicate() {
+        // The whole `sql` template is a bare `col IN (...)` predicate over a JS
+        // array — `inArray(users.role, roles)` is the applicable rewrite, so the
+        // true positive must still fire.
+        let src = "db.select().from(users).where(sql`${users.role} IN (${roles})`)";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_full_query_with_literal_in() {
+        // #5750 firing site (user-level-exclusivity.integration.test.ts): a raw
+        // multi-clause analytical query. `inArray()` cannot be spliced into the
+        // middle of it, so this must not be flagged.
+        let src = "const q = sql`SELECT DISTINCT u.id FROM users u WHERE om.role IN ('org_admin', 'org_read')`";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_sql_join_fragment_in_larger_query() {
+        // #5750 firing site (trgm-indexes): a `NOT IN (${sql.join(...)})` clause
+        // embedded in a larger raw query — already parameterized, inexpressible
+        // via `inArray()`.
+        let src = "const q = sql`SELECT relname FROM pg_class WHERE relname NOT IN (${notInList})`";
+        assert!(run(src).is_empty());
     }
 
     #[test]
@@ -106,6 +151,19 @@ impl OxcCheck for Check {
             in_followed_by_select(&q.value.raw)
         });
         if has_in_subquery {
+            return;
+        }
+        // The `IN` must be the *whole* predicate for `inArray()` to be an
+        // applicable rewrite. A full or multi-clause query (FROM/WHERE/JOIN/
+        // AND/OR/…) cannot host an `inArray()` fragment — skip it (#5750).
+        let joined = tagged
+            .quasi
+            .quasis
+            .iter()
+            .map(|q| q.value.raw.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if template_has_other_clauses(&joined) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, tagged.span.start as usize);
