@@ -4,10 +4,18 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, Expression};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// A zero-length allocation (`Buffer.allocUnsafe(0)` / `new Buffer(0)`) holds no
+/// bytes, so there is no uninitialized memory to disclose. Only the numeric
+/// literal `0` is trivially sound here — identifiers or expressions that might
+/// evaluate to `0` are not, and must still be flagged.
+fn is_zero_length(arg: &Argument) -> bool {
+    matches!(arg, Argument::NumericLiteral(n) if n.value == 0.0)
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -40,6 +48,9 @@ impl OxcCheck for Check {
                 if prop != "allocUnsafe" && prop != "allocUnsafeSlow" {
                     return;
                 }
+                if call.arguments.first().is_some_and(is_zero_length) {
+                    return;
+                }
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, call.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -64,12 +75,15 @@ impl OxcCheck for Check {
                 let Some(first) = new_expr.arguments.first() else {
                     return;
                 };
+                if is_zero_length(first) {
+                    return;
+                }
                 // Flag numeric args and identifiers (potentially numeric).
                 // `new Buffer("string")` or `new Buffer(array)` are not size-based.
                 let is_suspect = match first {
-                    oxc_ast::ast::Argument::NumericLiteral(_) => true,
-                    oxc_ast::ast::Argument::Identifier(_) => true,
-                    oxc_ast::ast::Argument::BinaryExpression(_) => true,
+                    Argument::NumericLiteral(_) => true,
+                    Argument::Identifier(_) => true,
+                    Argument::BinaryExpression(_) => true,
                     _ => false,
                 };
                 if !is_suspect {
@@ -89,5 +103,83 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.js")
+    }
+
+    #[test]
+    fn flags_alloc_unsafe() {
+        assert_eq!(run("const b = Buffer.allocUnsafe(2);").len(), 1);
+    }
+
+    #[test]
+    fn flags_alloc_unsafe_slow() {
+        assert_eq!(run("const b = Buffer.allocUnsafeSlow(8);").len(), 1);
+    }
+
+    #[test]
+    fn flags_new_buffer_size() {
+        assert_eq!(run("const b = new Buffer(16);").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_immediately_overwritten_encoder_buffer() {
+        // Regression for rbaumier/comply#5882 — the "every byte is written by
+        // writeUInt8 before the buffer escapes" claim is a soundness property
+        // comply cannot prove (loops, conditional/partial writes, early
+        // returns), so the security diagnostic must hold for the encoder
+        // pattern.
+        let src = r#"
+            function generateBuffer(i) {
+              const buffer = Buffer.allocUnsafe(2);
+              buffer.writeUInt8(i >> 8, 0);
+              buffer.writeUInt8(i & 0x00FF, 1);
+              return buffer;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_zero_length_alloc_unsafe() {
+        // Regression for rbaumier/comply#5882 — a zero-byte buffer holds no
+        // bytes, so there is no uninitialized memory to disclose. Trivially
+        // sound from the literal `0` at the allocation site.
+        assert!(run("const empty = Buffer.allocUnsafe(0);").is_empty());
+    }
+
+    #[test]
+    fn allows_zero_length_new_buffer() {
+        assert!(run("const empty = new Buffer(0);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_size_from_identifier() {
+        // An identifier that could be 0 at runtime is NOT trivially sound — the
+        // literal `0` is the only admissible structural marker.
+        assert_eq!(run("const b = Buffer.allocUnsafe(n);").len(), 1);
     }
 }
