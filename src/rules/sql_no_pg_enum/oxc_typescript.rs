@@ -81,6 +81,23 @@ mod tests {
     }
 
     #[test]
+    fn does_not_flag_pg_migrate_builder_template_literal() {
+        // Issue #5789: node-pg-migrate src/operations/types/createType.ts — the
+        // library's internal DDL builder interpolates both the type name and the
+        // entire value list, so there are no literal enum values to flag.
+        let src = r#"const sql = `CREATE TYPE ${typeNameStr} AS ENUM (${optionsStr});`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_template_literal_with_literal_values() {
+        // A user writing the raw enum DDL with only the type name interpolated
+        // still has literal values and is a concrete declaration.
+        let src = r#"await db.query(`CREATE TYPE ${name} AS ENUM ('active', 'inactive')`);"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn does_not_flag_has_enum_values_prose() {
         // Issue #3264: a Jest test description, not SQL. "has enumValues" spells
         // "as enum" across the word boundary under a bare substring match.
