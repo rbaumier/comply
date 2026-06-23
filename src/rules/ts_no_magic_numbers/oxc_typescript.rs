@@ -221,6 +221,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A literal that is the value of a named property in an object literal
+        // whose every entry is a `name: numeric-literal` pair is an entry of an
+        // enum-map / numeric lookup table (MIDI status nibbles, opcode tables,
+        // key-code maps). The property key already names the value, so a separate
+        // named constant adds nothing. The object analogue of the numeric-data
+        // array exemption: a mixed object (any non-numeric value) is an ordinary
+        // config object and keeps its numeric values flagged.
+        if is_numeric_enum_map_value(node.id(), semantic) {
+            return;
+        }
+
         if is_allowed_context(node.id(), semantic) {
             return;
         }
@@ -330,6 +341,83 @@ fn is_numeric_array_element(element: &oxc_ast::ast::ArrayExpressionElement<'_>) 
         return false;
     };
     match expr {
+        Expression::NumericLiteral(_) => true,
+        Expression::UnaryExpression(unary) => {
+            unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+                && matches!(unary.argument, Expression::NumericLiteral(_))
+        }
+        _ => false,
+    }
+}
+
+/// True when this literal is the value of a named property in an object literal
+/// whose every property is a `name: numeric-literal` pair (≥2 such properties) —
+/// an enum-map / numeric lookup table (MIDI status nibbles, opcode tables,
+/// key-code maps). Each value is named by its key, so a separate named constant
+/// adds nothing. The object analogue of [`is_numeric_data_array_element`]:
+///
+/// - The literal must be the *value* of an `ObjectProperty` (not nested in an
+///   expression), so `{ x: a + 7 }` keeps `7` flagged.
+/// - Every entry must be a plain `name: numeric-literal` property, so any
+///   non-numeric value, computed key, method, shorthand, or spread makes the
+///   object an ordinary config object and disables the exemption.
+/// - At least two entries: a one-property object (`{ timeout: 5000 }`) is a
+///   config object, not an enumeration.
+fn is_numeric_enum_map_value(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The literal is the value of an ObjectProperty, possibly via a unary minus.
+    let mut value_id = node_id;
+    let parent_id = nodes.parent_id(value_id);
+    if parent_id != value_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        value_id = parent_id;
+    }
+
+    let prop_id = nodes.parent_id(value_id);
+    if prop_id == value_id {
+        return false;
+    }
+    let AstKind::ObjectProperty(prop) = nodes.get_node(prop_id).kind() else {
+        return false;
+    };
+    // The literal must be the property's value, not part of its key or a nested
+    // expression spanning it.
+    if prop.value.span() != nodes.get_node(value_id).kind().span() {
+        return false;
+    }
+
+    let obj_id = nodes.parent_id(prop_id);
+    if obj_id == prop_id {
+        return false;
+    }
+    let AstKind::ObjectExpression(obj) = nodes.get_node(obj_id).kind() else {
+        return false;
+    };
+
+    obj.properties.len() >= 2 && obj.properties.iter().all(is_named_numeric_property)
+}
+
+/// True when an object-literal member is a plain `name: numeric-literal` property
+/// (the key is a static identifier or string literal, the value a numeric literal
+/// optionally wrapped in a unary minus). Spreads, methods, computed keys, and
+/// non-numeric values all return false.
+fn is_named_numeric_property(prop: &oxc_ast::ast::ObjectPropertyKind<'_>) -> bool {
+    let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) = prop else {
+        return false;
+    };
+    if !matches!(
+        p.key,
+        PropertyKey::StaticIdentifier(_) | PropertyKey::StringLiteral(_)
+    ) {
+        return false;
+    }
+    match &p.value {
         Expression::NumericLiteral(_) => true,
         Expression::UnaryExpression(unary) => {
             unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
@@ -1801,5 +1889,56 @@ mod tests {
         // not a TypedArray argument) keeps every element flagged.
         let src = r#"draw([86400, 3600, 1440]);"#;
         assert_eq!(run(src).len(), 3);
+    }
+
+    // Regression for issue #5794: a numeric literal that is the value of a named
+    // key in an object literal whose every entry is a `name: numeric-literal`
+    // pair is an enum-map / lookup table. The key names the value, so naming it
+    // again with a separate constant adds nothing. webmidi's
+    // `Enumerations.CHANNEL_MESSAGES` / `CHANNEL_MODE_MESSAGES` are the shape.
+    #[test]
+    fn allows_numeric_enum_map_values() {
+        // Returned (not const-bound) so the enum-map guard, not the const-init
+        // exemption, is what suppresses the values.
+        let src = r#"
+            function f() {
+              return {
+                noteoff: 0x8, noteon: 0x9, keyaftertouch: 0xA, controlchange: 0xB,
+                programchange: 0xC, channelaftertouch: 0xD, pitchbend: 0xE
+              };
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "values of a homogeneously-numeric enum-map object must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_decimal_enum_map_values() {
+        // The exemption is positional (named-member value in a numeric-only
+        // object), not value- or domain-gated: decimal values are equally named.
+        let src = r#"
+            function f() {
+              return { allsoundoff: 120, allnotesoff: 123, polymodeon: 127 };
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_numeric_value_in_mixed_object() {
+        // The anchor is a *homogeneously* numeric object: one non-numeric value
+        // makes it an ordinary config object, so its numeric values still flag.
+        let src = r#"function f() { return { timeout: 5000, name: "x" }; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_single_entry_numeric_object() {
+        // A one-property object is not an enumeration; a lone `{ timeout: 5000 }`
+        // is the classic config-object magic number this rule must keep catching.
+        let src = r#"function f() { return { timeout: 5000 }; }"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
