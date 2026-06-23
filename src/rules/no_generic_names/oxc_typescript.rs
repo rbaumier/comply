@@ -21,7 +21,7 @@ const BANNED_WORDS: &[&str] = &[
     "payload", "payloads", "flag", "stub", "fake", "foobar", "quux", "corge", "blah",
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
     "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "ptr",
-    "ret", "out", "vars", "entity", "entities", "dto", "resource", "resources", "entry", "entries",
+    "ret", "vars", "entity", "entities", "dto", "resource", "resources", "entry", "entries",
     "blob", "elem", "comp", "func", "widget", "record", "records", "body", "idx", "curr", "cfg",
     "found",
 ];
@@ -2551,5 +2551,28 @@ mod tests {
         assert_eq!(run("function f() { const value = mk(); return value; }").len(), 1);
         assert_eq!(run("function f() { const payload = build(); return payload; }").len(), 1);
         assert_eq!(run("function f() { const body = read(); return body; }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_out_is_io_role_noun_issue_5855() {
+        // Regression for #5855 — `out` is the canonical abbreviation of `output`,
+        // naming the same directional I/O role (the downstream sink). With
+        // `output` allowed (#5796), banning `out` is an inconsistent asymmetry;
+        // it is the established name for the output stream in FRP/stream
+        // operators (xstream `Operator._start(out)`, Cycle.js drivers) and for
+        // writers (`write(out)`). It clears the same concreteness bar, so it is
+        // no longer banned.
+        assert!(run("class Op { public out: Stream<T> = null as any; }").is_empty());
+        assert!(run("class Op { _start(out: Stream<T>): void { this.out = out; } }").is_empty());
+        assert!(run("function elements() { const out = adapt(this._html$); return out; }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_catch_all_placeholders_issue_5855() {
+        // Negative space for #5855 — removing the I/O-role noun `out` does not
+        // weaken the catch-all placeholders. `data`/`value` still read as "I
+        // don't know what this holds" and keep firing.
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        assert_eq!(run("function f() { const value = mk(); return value; }").len(), 1);
     }
 }
