@@ -23,13 +23,13 @@ pub const META: RuleMeta = RuleMeta {
 
 /// Prefixes whose values are unambiguously mutually exclusive — any two
 /// classes sharing one of these prefixes conflict. Ambiguous prefixes
-/// (`text-`, `font-`, `flex-`, `border-`, `bg-`) are handled by dedicated
-/// sub-categorisation functions that split by CSS sub-property.
+/// (`text-`, `font-`, `flex-`, `border-`, `bg-`, `shadow-`) are handled by
+/// dedicated sub-categorisation functions that split by CSS sub-property.
 pub(crate) const CONFLICT_PREFIXES: &[&str] = &[
     "p-", "px-", "py-", "pt-", "pr-", "pb-", "pl-",
     "m-", "mx-", "my-", "mt-", "mr-", "mb-", "ml-",
     "w-", "h-", "min-w-", "min-h-", "max-w-", "max-h-",
-    "rounded-", "shadow-", "opacity-", "z-",
+    "rounded-", "opacity-", "z-",
     "gap-", "gap-x-", "gap-y-", "grid-cols-", "grid-rows-", "justify-", "items-", "self-", "order-", "overflow-",
 ];
 
@@ -245,12 +245,27 @@ pub(crate) fn bg_category(class: &str) -> Option<&'static str> {
     }
 }
 
+/// Splits `shadow-*` by the CSS custom property it sets. `shadow-{size}` sets the
+/// box-shadow shape via `--tw-shadow`; `shadow-{color}` sets `--tw-shadow-color`.
+/// They target distinct properties and are the documented combine-pattern
+/// (`shadow-lg shadow-pink-500/50`), so a size and a colour must not conflict —
+/// only two sizes, or two colours, do. rbaumier/comply#4688.
+pub(crate) fn shadow_category(class: &str) -> Option<&'static str> {
+    const SHADOW_SIZES: &[&str] = &["none", "sm", "md", "lg", "xl", "2xl", "inner"];
+    let suffix = &class[7..];
+    if SHADOW_SIZES.contains(&suffix) {
+        return Some("shadow-size");
+    }
+    Some("shadow-color")
+}
+
 pub(crate) fn conflict_key(class: &str) -> Option<&'static str> {
     if class.starts_with("text-") { return text_category(class); }
     if class.starts_with("flex-") { return flex_category(class); }
     if class.starts_with("border-") { return border_category(class); }
     if class.starts_with("font-") { return font_category(class); }
     if class.starts_with("bg-") { return bg_category(class); }
+    if class.starts_with("shadow-") { return shadow_category(class); }
 
     let mut prefixes: Vec<&&str> = CONFLICT_PREFIXES.iter().collect();
     prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
@@ -427,6 +442,44 @@ mod border_category_tests {
         assert_eq!(conflict_key("border-4"), Some("border-width"));
         assert_eq!(conflict_key("border-red-500"), Some("border-color"));
         assert_eq!(conflict_key("border-border"), Some("border-color"));
+    }
+}
+
+#[cfg(test)]
+mod shadow_category_tests {
+    use super::*;
+
+    #[test]
+    fn size_and_color_have_distinct_keys() {
+        // Regression for rbaumier/comply#4688 — `shadow-2xl` (box-shadow shape,
+        // --tw-shadow) and `shadow-black/40` (--tw-shadow-color) set different
+        // CSS properties and are the documented combine-pattern, so they must
+        // not conflict.
+        assert_eq!(conflict_key("shadow-2xl"), Some("shadow-size"));
+        assert_eq!(conflict_key("shadow-black/40"), Some("shadow-color"));
+        assert_ne!(conflict_key("shadow-2xl"), conflict_key("shadow-black/40"));
+        assert_ne!(conflict_key("shadow-lg"), conflict_key("shadow-pink-500/50"));
+    }
+
+    #[test]
+    fn all_sizes_classified() {
+        for size in ["none", "sm", "md", "lg", "xl", "2xl", "inner"] {
+            assert_eq!(conflict_key(&format!("shadow-{size}")), Some("shadow-size"));
+        }
+    }
+
+    #[test]
+    fn two_sizes_still_conflict() {
+        assert_eq!(conflict_key("shadow-sm"), conflict_key("shadow-2xl"));
+    }
+
+    #[test]
+    fn two_colors_still_conflict() {
+        // Named color, opacity-modified color, keywords and arbitrary colors all
+        // share the colour key, so two of them conflict.
+        assert_eq!(conflict_key("shadow-black/40"), conflict_key("shadow-white"));
+        assert_eq!(conflict_key("shadow-red-500"), conflict_key("shadow-transparent"));
+        assert_eq!(conflict_key("shadow-[#fff]"), Some("shadow-color"));
     }
 }
 
