@@ -13,7 +13,9 @@ fn is_set_x_to_y(name: &str) -> bool {
     if let Some(pos) = rest.find("_to_") {
         let x = &rest[..pos];
         let y = &rest[pos + 4..];
-        return !x.is_empty() && !y.is_empty();
+        // X == Y identity (`set_hz_to_hz`) is a unit/coordinate conversion, not
+        // a value-hardcoding setter: you cannot "set property X to the value X".
+        return !x.is_empty() && !y.is_empty() && x != y;
     }
     false
 }
@@ -72,5 +74,12 @@ mod tests {
     #[test]
     fn allows_normal_setter() {
         assert!(run_on("fn set_name(n: &str) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_identity_conversion_setter() {
+        // `set_hz_to_hz` is a Hz→Hz rate conversion, not a value-hardcoding
+        // setter — X == Y can never be the anti-pattern.
+        assert!(run_on("fn set_hz_to_hz(source_hz: f64, target_hz: f64) {}").is_empty());
     }
 }

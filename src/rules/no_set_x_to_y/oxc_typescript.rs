@@ -82,7 +82,9 @@ impl OxcCheck for Check {
     }
 }
 
-/// True if `name` matches `set<X>To<Y>` where X and Y start uppercase.
+/// True if `name` matches `set<X>To<Y>` where X and Y start uppercase and the
+/// two segments differ. `setHzToHz` (X == Y) is a unit/coordinate conversion,
+/// not a value-hardcoding setter, so it is not the anti-pattern.
 fn matches_set_x_to_y(name: &str) -> bool {
     let bytes = name.as_bytes();
     if bytes.len() < 8 {
@@ -101,7 +103,9 @@ fn matches_set_x_to_y(name: &str) -> bool {
             && bytes[i - 1].is_ascii_lowercase()
             && bytes[i + 2].is_ascii_uppercase()
         {
-            return true;
+            let x = &name[3..i];
+            let y = &name[i + 2..];
+            return !x.eq_ignore_ascii_case(y);
         }
         i += 1;
     }
@@ -171,10 +175,17 @@ mod tests {
     }
 
     #[test]
+    fn allows_identity_conversion_setter() {
+        // `setHzToHz` is a Hz→Hz rate conversion, not a value-hardcoding setter.
+        assert!(run_on("function setHzToHz(src: number, dst: number) {}").is_empty());
+    }
+
+    #[test]
     fn unit_pattern_match() {
         assert!(matches_set_x_to_y("setStatusToClosed"));
         assert!(matches_set_x_to_y("setRoleToAdmin"));
         assert!(matches_set_x_to_y("setUserToActive"));
+        assert!(!matches_set_x_to_y("setHzToHz"));
         assert!(!matches_set_x_to_y("setUser"));
         assert!(!matches_set_x_to_y("setupAuto"));
         assert!(!matches_set_x_to_y("getUserToken"));
