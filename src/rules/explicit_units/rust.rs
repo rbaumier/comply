@@ -1,10 +1,10 @@
 //! explicit-units backend for Rust.
 //!
 //! Detects numeric bindings whose semantic head — the last snake_case segment
-//! — is an ambiguous measurement base (delay / timeout / duration / rate / …)
-//! lacking an explicit unit. A unit suffix moves the head off the base
-//! (`delay_ms`, `size_bytes`, `rate_rps`), and a non-final base is a qualifier
-//! on another head noun (`rate_limit`), so neither is flagged.
+//! — is an ambiguous measurement base (delay / timeout / duration / …) lacking
+//! an explicit unit. A unit suffix moves the head off the base (`delay_ms`,
+//! `size_bytes`), and a non-final base is a qualifier on another head noun
+//! (`timeout_policy`), so neither is flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -19,28 +19,20 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // (the sibling of `duration`): elapsed time since a start point is expressed
 // without a suffix, so a unit suffix adds little and `elapsed_bytes`/
 // `elapsed_count` are nonsensical.
-const AMBIGUOUS_BASES: &[&str] = &[
-    "delay",
-    "timeout",
-    "duration",
-    "age",
-    "wait",
-    "rate",
-    "frequency",
-];
+//
+// `frequency` is excluded as a named physical quantity with a canonical SI unit
+// (Hz): in audio/DSP code the unit is implicit and `frequency_ms`/
+// `frequency_bytes` are nonsensical.
+//
+// `rate` is excluded as either a dimensionless ratio/multiplier (playback rate)
+// or a quantity that carries its unit in a qualifier (`sample_rate`→Hz,
+// `bit_rate`→bps): `rate_ms`/`sample_rate_bytes` are wrong.
+const AMBIGUOUS_BASES: &[&str] = &["delay", "timeout", "duration", "age", "wait"];
 
 const NUMERIC_TYPES: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32",
     "f64",
 ];
-
-// Probability-distribution traits. A file that `impl`s one of these defines a
-// statistical distribution, so its `rate`/`frequency` parameters are the
-// canonical dimensionless distribution parameters (λ, the gamma/exponential
-// rate, …) rather than physical events-per-second quantities — demanding a
-// `_rps`/`_hz` suffix there is wrong (gamma/exponential/erlang `new(.., rate)`).
-const DISTRIBUTION_TRAITS: &[&str] =
-    &["Distribution", "Continuous", "Discrete", "ContinuousCDF", "DiscreteCDF"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -67,9 +59,6 @@ impl AstCheck for Check {
         let Some(base) = matches_ambiguous_base(name) else {
             return;
         };
-        if matches!(base, "rate" | "frequency") && in_distribution_module(node, source_bytes) {
-            return;
-        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -118,31 +107,12 @@ fn identifier_of<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a st
 /// Returns the ambiguous base only when it is the *semantic head* of the
 /// identifier — the last snake_case segment, i.e. the thing actually being
 /// measured. A measurement word in a non-final position is a qualifier
-/// modifying a different head noun (`rate_limit`, `rate_limit_retry_number`:
-/// head is `limit` / `number`, `rate` qualifies it), so it does not demand a
-/// unit suffix. A standalone `rate` or `request_rate` (head is `rate`) still
-/// does.
+/// modifying a different head noun (`timeout_policy`, `delay_strategy`: head is
+/// `policy` / `strategy`), so it does not demand a unit suffix. A standalone
+/// `timeout` or `connect_timeout` (head is `timeout`) still does.
 fn matches_ambiguous_base(name: &str) -> Option<&'static str> {
     let head = name.rsplit('_').next()?.to_ascii_lowercase();
     AMBIGUOUS_BASES.iter().find(|&&base| head == base).copied()
-}
-
-/// True when a top-level `impl` in the file containing `node` implements a
-/// probability-distribution trait, marking it a statistical-distribution module
-/// where `rate`/`frequency` are dimensionless distribution parameters.
-fn in_distribution_module(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut root = node;
-    while let Some(parent) = root.parent() {
-        root = parent;
-    }
-    let mut cursor = root.walk();
-    root.children(&mut cursor).any(|child| {
-        child.kind() == "impl_item"
-            && child
-                .child_by_field_name("trait")
-                .and_then(|t| crate::rules::rust_helpers::trait_base_name(t, source))
-                .is_some_and(|name| DISTRIBUTION_TRAITS.contains(&name))
-    })
 }
 
 #[cfg(test)]
@@ -260,77 +230,6 @@ mod tests {
     }
 
     #[test]
-    fn allows_rate_param_in_distribution_module() {
-        // `rate` (λ) is a dimensionless distribution parameter in a probability
-        // distribution module, not a physical events-per-second quantity (#5495).
-        let src = "\
-struct Exp { rate: f64 }
-impl Exp {
-    pub fn new(rate: f64) -> Result<Exp, ExpError> { Ok(Exp { rate }) }
-}
-impl Continuous<f64, f64> for Exp {
-    fn pdf(&self, x: f64) -> f64 { x }
-}";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_gamma_shape_rate_in_distribution_module() {
-        let src = "\
-struct Gamma { shape: f64, rate: f64 }
-impl Gamma {
-    pub fn new(shape: f64, rate: f64) -> Result<Gamma, GammaError> {
-        Ok(Gamma { shape, rate })
-    }
-}
-impl Distribution<f64> for Gamma {
-    fn sample(&self) -> f64 { 0.0 }
-}";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_rate_with_path_qualified_distribution_trait() {
-        // statrs writes the rand sampling impl in path-qualified form
-        // (`impl ::rand::distr::Distribution<f64> for Exp`); the last path
-        // segment must still match the distribution-trait marker.
-        let src = "\
-struct Exp { rate: f64 }
-impl Exp {
-    pub fn new(rate: f64) -> Result<Exp, ExpError> { Ok(Exp { rate }) }
-}
-impl ::rand::distr::Distribution<f64> for Exp {
-    fn sample(&self) -> f64 { 0.0 }
-}";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_rate_outside_distribution_module() {
-        // Physical events-per-second `rate` keeps needing a unit suffix when the
-        // file is not a probability-distribution module.
-        assert_eq!(run_on("fn f(rate: f64) {}").len(), 1);
-    }
-
-    #[test]
-    fn allows_rate_limit_compound_noun() {
-        // `rate_limit_retry_number`: the semantic head is `number`, `rate` is a
-        // leading qualifier on the "rate limit" concept (HTTP 429 handling), not
-        // a physical events-per-second measurement (#5634).
-        assert!(run_on("fn f() { let rate_limit_retry_number: u32 = 0; }").is_empty());
-        assert!(run_on("fn f() { let rate_limit: u32 = 100; }").is_empty());
-        assert!(run_on("fn f(rate_limit_window: u32) {}").is_empty());
-    }
-
-    #[test]
-    fn flags_rate_as_head_segment() {
-        // `rate` as the semantic head (standalone or last segment) still needs a
-        // unit — it is a genuine events-per-second quantity.
-        assert_eq!(run_on("fn f(rate: f64) {}").len(), 1);
-        assert_eq!(run_on("fn f() { let request_rate: f64 = 0.0; }").len(), 1);
-    }
-
-    #[test]
     fn other_bases_only_flag_as_head_segment() {
         // The head-position gate generalizes across all measurement bases:
         // `timeout`/`delay`/`duration` flag as the head, but as a leading
@@ -342,14 +241,34 @@ impl ::rand::distr::Distribution<f64> for Exp {
     }
 
     #[test]
-    fn flags_timeout_even_in_distribution_module() {
-        // The distribution exemption is scoped to `rate`/`frequency`; a genuine
-        // physical `timeout` in the same file must still be flagged.
-        let src = "\
-impl Continuous<f64, f64> for Exp {
-    fn pdf(&self, x: f64) -> f64 { x }
-}
-fn poll(timeout: u64) {}";
-        assert_eq!(run_on(src).len(), 1);
+    fn allows_frequency_named_physical_quantity() {
+        // `frequency` names a physical quantity with a canonical SI unit (Hz);
+        // the unit is implicit and `frequency_ms`/`frequency_bytes` are
+        // nonsensical, so it must not be flagged (#5921). Mirrors the TS
+        // backend exclusion (#5063).
+        assert!(run_on("fn route(&mut self, frequency: f64) {}").is_empty());
+        assert!(run_on("fn f() { let mod_frequency: f64 = 440.0; }").is_empty());
+        // `sampling_frequency`: head is `frequency`, equally canonical.
+        assert!(run_on("fn to_applier(&self, sampling_frequency: u32) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_rate_qualified_or_dimensionless_quantity() {
+        // `rate` is either a dimensionless ratio/multiplier or carries its unit
+        // in a qualifier (`sample_rate`→Hz); `rate_ms`/`sample_rate_bytes` are
+        // wrong, so it must not be flagged (#5921). Mirrors the TS exclusion
+        // (#5073).
+        assert!(run_on("fn resonator(sample_rate: f64) {}").is_empty());
+        assert!(run_on("fn f() { let source_rate: f64 = 0.0; }").is_empty());
+        assert!(run_on("fn f(rate: f64) {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_bases_after_frequency_rate_removal() {
+        // Removing `frequency`/`rate` must not loosen genuinely unit-ambiguous
+        // bases — a bare `timeout`/`duration`/`delay` still demands a suffix.
+        assert_eq!(run_on("fn f(timeout: u64) {}").len(), 1);
+        assert_eq!(run_on("fn f(duration: u64) {}").len(), 1);
+        assert_eq!(run_on("fn f() { let retry_delay: u64 = 5; }").len(), 1);
     }
 }
