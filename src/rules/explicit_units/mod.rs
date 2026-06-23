@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "explicit-units",
     description: "Numeric names should include an explicit unit (Ms, Bytes, Kb...).",
     remediation: "Add a unit suffix: `delay` → `delayMs`, `size` → \
-                  `sizeBytes`, `rate` → `rateRps`. Ambiguous units cause \
+                  `sizeBytes`, `timeout` → `timeoutMs`. Ambiguous units cause \
                   real bugs — setTimeout(delay) expects ms.",
     severity: Severity::Warning,
     doc_url: None,
