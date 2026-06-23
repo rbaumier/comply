@@ -66,6 +66,17 @@
 //!   caller (no `?`, no `Result` return). `let _ =` is the idiomatic best-effort
 //!   cleanup for an RAII destructor. Scoped to a `fn drop` directly inside a
 //!   `Drop` trait impl, so a `let _ =` in any other method still fires.
+//! - `let _ = fallible()` in an exit-imminent scope: the discard's enclosing
+//!   block also contains a `process::exit(..)` call (e.g. best-effort terminal
+//!   cleanup in a `ctrlc::set_handler` closure that exits with code 130). After
+//!   `process::exit` the process terminates, so the error cannot be propagated
+//!   or handled — structurally identical to the `Drop::drop` case. Anchored on a
+//!   `process::exit` / `std::process::exit` call (a `scoped_identifier` callee
+//!   whose tail is `exit` qualified by `process`) anywhere in the same block,
+//!   including a nested `if`/`match` arm — so a conditional exit also exempts. An
+//!   ordinary discard in a block with no exit still fires, a user method
+//!   `foo.exit()` does not qualify, and an exit buried in a nested closure does
+//!   not exempt a sibling discard in the outer block.
 //! - `let _ = f::<Infallible, _>(..)`: a turbofish call whose type arguments fix
 //!   the error type to `Infallible`. `Result<_, Infallible>` is uninhabited on
 //!   its `Err` side, so the result can never be `Err` — discarding it ignores no
@@ -181,6 +192,13 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Skip best-effort cleanup in an exit-imminent scope: the enclosing block
+    // also calls `process::exit(..)`, after which the process terminates and no
+    // error can be handled — structurally identical to `Drop::drop`.
+    if is_in_process_exit_scope(node, source) {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -252,6 +270,87 @@ fn enclosing_impl_is_drop(func: Node, source: &[u8]) -> bool {
         current = ancestor.parent();
     }
     false
+}
+
+/// True if `node` sits in an exit-imminent scope: the nearest enclosing block
+/// also contains a `process::exit(..)` call somewhere below it.
+///
+/// Walks up to the nearest `block` ancestor and scans it for a call whose callee
+/// is a `scoped_identifier` ending in `exit` qualified by `process`
+/// (`process::exit`, `std::process::exit`). The scan descends into nested
+/// expressions (an `if`/`match` arm), so a conditional exit also exempts; it
+/// stops at nested fn/closure boundaries. After `process::exit` the process
+/// terminates, so any error discarded with `let _ =` in the same block cannot be
+/// propagated or handled — best-effort cleanup before shutdown, structurally
+/// like `Drop::drop`. Anchoring on the `process::exit` call shape (not a method
+/// `foo.exit()`, not a bare `exit()`) keeps the exemption tight: an ordinary
+/// discard in a block with no such call still fires.
+fn is_in_process_exit_scope(node: Node, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "block" {
+            return block_calls_process_exit(ancestor, source);
+        }
+        current = ancestor.parent();
+    }
+    false
+}
+
+/// True if any descendant call within `block` is `process::exit(..)`. Scans the
+/// block's statement expressions (and the nested expressions a `process::exit`
+/// commonly hides in, e.g. inside an `if`/`match` arm) for a `call_expression`
+/// whose function is a `scoped_identifier` whose final segment is `exit` and
+/// whose second-to-last segment is `process`.
+fn block_calls_process_exit(block: Node, source: &[u8]) -> bool {
+    let mut found = false;
+    descend_for_process_exit(block, source, &mut found);
+    found
+}
+
+/// Recursively walk `node`'s descendants looking for a `process::exit` call,
+/// stopping the descent at nested item/closure boundaries that introduce a new
+/// scope (`function_item`, `closure_expression`) — a `process::exit` buried in a
+/// nested closure does not make the outer block exit-imminent.
+fn descend_for_process_exit(node: Node, source: &[u8], found: &mut bool) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if *found {
+            return;
+        }
+        if child.kind() == "call_expression" && call_is_process_exit(child, source) {
+            *found = true;
+            return;
+        }
+        // Do not descend into a nested fn or closure: its `process::exit` does
+        // not terminate the path of a sibling discard in the outer block.
+        if matches!(child.kind(), "function_item" | "closure_expression") {
+            continue;
+        }
+        descend_for_process_exit(child, source, found);
+    }
+}
+
+/// True if `call` is `process::exit(..)` — a `call_expression` whose function is
+/// a `scoped_identifier` whose final segment is `exit` and whose path contains
+/// `process` (`process::exit`, `std::process::exit`).
+fn call_is_process_exit(call: Node, source: &[u8]) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "scoped_identifier" {
+        return false;
+    }
+    let Ok(text) = function.utf8_text(source) else {
+        return false;
+    };
+    let mut segments = text.rsplit("::");
+    let Some(last) = segments.next() else {
+        return false;
+    };
+    if last.trim() != "exit" {
+        return false;
+    }
+    segments.next().map(str::trim) == Some("process")
 }
 
 /// True if `value` is `Arc::from_raw(..)` / `Box::from_raw(..)` /
@@ -1072,6 +1171,69 @@ mod tests {
         let src = "pub fn cleanup() { let _ = fallible(); }";
         let diagnostics = crate::rules::test_helpers::run_rule(&Check, src, "src/lib.rs");
         assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_in_process_exit_scope() {
+        // Regression for #5734: best-effort terminal cleanup in a Ctrl-C handler
+        // closure that calls `process::exit(..)` right after. The process is
+        // terminating, so the error cannot be propagated — like `Drop::drop`.
+        // The issue's exact cargo-workspaces `main.rs` example.
+        let ctrlc = r#"
+            fn set_handlers() {
+                ctrlc::set_handler(move || {
+                    let term = dialoguer::console::Term::stdout();
+                    let _ = term.show_cursor();
+                    std::process::exit(130);
+                })
+                .expect("Error setting Ctrl-C handler");
+            }
+        "#;
+        // Bare `process::exit` (a `use std::process;` import) and a discard
+        // followed by `exit` in a plain fn body both qualify.
+        let unqualified = r#"
+            fn shutdown() {
+                let _ = restore_terminal();
+                process::exit(1);
+            }
+        "#;
+        // The exit may sit in a sibling `if`/match arm in the same block.
+        let conditional = r#"
+            fn handle() {
+                let _ = cleanup();
+                if fatal {
+                    std::process::exit(2);
+                }
+            }
+        "#;
+        assert!(run_on(ctrlc).is_empty());
+        assert!(run_on(unqualified).is_empty());
+        assert!(run_on(conditional).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_outside_process_exit_scope() {
+        // Negative space for #5734: the exemption requires a `process::exit(..)`
+        // sibling call in the same block. An ordinary discard with no exit still
+        // fires; a `process::exit` buried in a NESTED closure does not make the
+        // outer discard exit-imminent; and a user method `foo.exit()` (not the
+        // `process::exit` free function) does not qualify.
+        let no_exit = "fn f() { let _ = fallible(); }";
+        let nested_closure = r#"
+            fn f() {
+                let _ = fallible();
+                let cb = || std::process::exit(1);
+            }
+        "#;
+        let method_exit = r#"
+            fn f(app: App) {
+                let _ = fallible();
+                app.exit();
+            }
+        "#;
+        assert_eq!(run_on(no_exit).len(), 1);
+        assert_eq!(run_on(nested_closure).len(), 1);
+        assert_eq!(run_on(method_exit).len(), 1);
     }
 
     #[test]
