@@ -203,6 +203,37 @@ mod tests {
     }
 
     #[test]
+    fn allows_shadow_size_with_shadow_color_in_vue() {
+        // Regression for rbaumier/comply#4688 — `shadow-2xl` (box-shadow shape,
+        // --tw-shadow) and `shadow-black/40` (--tw-shadow-color) target distinct
+        // CSS properties; combining a shadow size with a shadow color is the
+        // documented Tailwind pattern, so the pair must not conflict. This is the
+        // real `.vue` reproduction from nuxt/nuxt.com.
+        let source = r#"<template>
+  <div class="shadow-2xl shadow-black/40" />
+</template>"#;
+        assert!(run_vue(source).is_empty());
+    }
+
+    #[test]
+    fn flags_conflicting_shadow_sizes_in_vue() {
+        // Two box-shadow sizes still conflict.
+        let source = r#"<template>
+  <div class="shadow-sm shadow-2xl" />
+</template>"#;
+        assert_eq!(run_vue(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_conflicting_shadow_colors_in_vue() {
+        // Two shadow colors still conflict.
+        let source = r#"<template>
+  <div class="shadow-black/40 shadow-white" />
+</template>"#;
+        assert_eq!(run_vue(source).len(), 1);
+    }
+
+    #[test]
     fn allows_bg_cover_center_no_repeat() {
         assert!(run(r#"const x = <div className="bg-cover bg-center bg-no-repeat" />;"#).is_empty());
     }
