@@ -189,6 +189,39 @@ fn is_parameter_property(param: &FormalParameter) -> bool {
     param.accessibility.is_some() || param.readonly
 }
 
+/// True when the parameter belongs to a type-only callable signature rather than
+/// a runtime function — an interface/type-literal method signature, a function or
+/// constructor type (`type F = (flag: boolean) => boolean`), a call/construct
+/// signature, or a body-less `Function` (an abstract method or a function
+/// overload signature). In every such position the parameter declares no runtime
+/// binding: its identifier is a pure type-level contract, not a variable that
+/// could carry a predicate prefix. This mirrors the rule's existing
+/// ambient-declaration exemption (type-level only — no runtime variable to name)
+/// and the `is_runtime_function_param` gate of `no-boolean-flag-param`.
+///
+/// Anchored on the enclosing-callable shape, not a name list: the same parameter
+/// inside a concrete (body-bearing) `Function`/arrow is a real runtime binding
+/// and still requires a predicate prefix.
+fn is_type_only_signature_param(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let params_node = nodes.parent_node(node.id());
+    if !matches!(params_node.kind(), AstKind::FormalParameters(_)) {
+        return false;
+    }
+    match nodes.parent_node(params_node.id()).kind() {
+        // A concrete, body-bearing function/arrow is the only runtime binding
+        // site; a body-less `Function` is an abstract method or overload
+        // signature, which declares no runtime variable.
+        AstKind::Function(func) => func.body.is_none(),
+        AstKind::ArrowFunctionExpression(_) => false,
+        // Any other callable parent is a pure type-level signature.
+        _ => true,
+    }
+}
+
 /// True when `node` is the parameter of a `set name(...)` accessor whose
 /// property name equals `param_name`. Walks up to the parameter's owning
 /// function (the setter's own `Function`); that function's enclosing element
@@ -294,6 +327,14 @@ impl OxcCheck for Check {
                     .as_ref()
                     .is_some_and(|ann| is_boolean_annotation(ann));
                 if !has_annotation {
+                    return;
+                }
+                // A parameter in a type-only callable signature (interface method
+                // signature, function/constructor type, abstract method, function
+                // overload) declares no runtime binding — its name is a pure
+                // type-level contract, not a variable to name. Concrete
+                // (body-bearing) functions still flag.
+                if is_type_only_signature_param(node, semantic) {
                     return;
                 }
                 // An optional / default-valued boolean parameter is an opt-in
@@ -704,5 +745,47 @@ mod tests {
         // the copula, so it still flags; strictness is preserved.
         assert!(run("function f(parentFieldsAreEqual: boolean) {}").is_empty());
         assert_eq!(run("let compareAreas: boolean = true;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_type_only_signature_param() {
+        // A boolean parameter in a type-only callable signature (interface method
+        // signature, function type, call/construct signature, abstract method,
+        // function overload signature) declares NO runtime binding — its name is a
+        // pure type-level contract, not a variable to name with a predicate
+        // prefix. The OpenFeature `getBooleanValue(flagKey, defaultValue: boolean)`
+        // signature is mandated uniformly across the boolean/string/number/object
+        // overloads. (Closes #5853)
+        assert!(
+            run("interface Client { getBooleanValue(flagKey: string, defaultValue: boolean, options?: object): boolean; }")
+                .is_empty()
+        );
+        assert!(run("type F = (defaultValue: boolean) => boolean;").is_empty());
+        // A plain unprefixed adjective param (`verbose`) — which still flags in a
+        // runtime function body — is exempt purely by the type-only position, so
+        // the exemption is name-free, not a `defaultValue` allowlist.
+        assert!(run("interface I { m(verbose: boolean): void; }").is_empty());
+        assert!(
+            run("abstract class C { abstract getBooleanValue(defaultValue: boolean): boolean; }")
+                .is_empty()
+        );
+        // A function overload signature (bodiless) is also a type-only declaration.
+        assert!(run("declare function f(defaultValue: boolean): boolean;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_required_boolean_param_in_runtime_function() {
+        // Strictness preserved: a required boolean parameter in a concrete
+        // (body-bearing) function or method is a real runtime binding and still
+        // requires a predicate prefix — the type-only exemption is anchored on the
+        // callable shape, not on the parameter name.
+        assert_eq!(
+            run("class C { getBooleanValue(defaultValue: boolean): boolean { return defaultValue; } }").len(),
+            1
+        );
+        assert_eq!(run("function f(defaultValue: boolean): boolean { return defaultValue; }").len(), 1);
+        assert_eq!(run("function f(verbose: boolean) { if (verbose) {} }").len(), 1);
+        // An arrow function is a runtime binding site too.
+        assert_eq!(run("const f = (verbose: boolean) => { if (verbose) {} };").len(), 1);
     }
 }
