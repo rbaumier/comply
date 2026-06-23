@@ -16,8 +16,14 @@
 //! (`syn::Index.index` is a `u32`).
 //!
 //! Non-numeric targets (pointer, reference, trait object) are ignored.
-//! Casts like `*const u8 as usize` are false positives; suppress with
-//! `// comply-ignore` on the offending line.
+//!
+//! A raw-pointer-to-integer cast is exempt: when the operand is a raw pointer —
+//! an inner `<expr> as *const/*mut T` cast, a `.as_ptr()`/`.as_mut_ptr()` call,
+//! or a `ptr::null()`/`null_mut()` call — `as <int>` is the only conversion (no
+//! `From`/`TryFrom` exists for `*const T`/`*mut T` to an integer), so the rule's
+//! `from`/`try_from` remediation is inapplicable. This is the embedded idiom for
+//! passing a memory-mapped register / DMA buffer address to a hardware register
+//! (`task.as_ptr() as u32`, `&mut self.table as *mut _ as *mut u32 as u32`).
 //!
 //! Casts whose operand's outermost expression is a bitwise op
 //! (`>>`, `<<`, `&`, `|`, `^`, parens transparent) are bit manipulation —
@@ -77,8 +83,8 @@ use crate::rules::rust_helpers::{
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
-    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
-    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -170,6 +176,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     };
     if target == "usize" || target == "isize" {
+        return false;
+    }
+    if cast_operand_is_raw_pointer(node, source_bytes) {
         return false;
     }
     if is_in_test_context(node, source_bytes) {
@@ -514,6 +523,32 @@ name = "normal_lib"
     #[test]
     fn flags_signed_to_unsigned() {
         assert_eq!(run_on("fn f(x: i32) -> u32 { x as u32 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_raw_pointer_to_integer() {
+        // Issue #5885: embedded DMA/MMIO address passing. A raw-pointer-to-integer
+        // cast has no `From`/`TryFrom` path, so neither rule should flag it.
+        // Inner `as *const _` / `as *mut <int>` cast operand.
+        assert!(run_on("fn f() { let _ = executor as *const _ as u32; }").is_empty());
+        assert!(
+            run_on("fn f() { let _ = &mut self.table as *mut _ as *mut u32 as u32; }").is_empty()
+        );
+        // `.as_ptr()` / `.as_mut_ptr()` method-call operand.
+        assert!(run_on("fn f() { let _ = task.as_ptr() as u32; }").is_empty());
+        assert!(run_on("fn f() { let _ = regs.ch().cc().as_ptr() as u32; }").is_empty());
+        assert!(run_on("fn f() { let _ = region.as_mut_ptr() as usize; }").is_empty());
+        // `ptr::null()` / `null_mut()` operand, including turbofish.
+        assert!(run_on("fn f() { let _ = core::ptr::null::<u8>() as u32; }").is_empty());
+        assert!(run_on("fn f() { let _ = ptr::null_mut() as u32; }").is_empty());
+    }
+
+    #[test]
+    fn flags_numeric_truncation_not_pointer() {
+        // A genuine numeric narrowing must still fire — the pointer exemption is
+        // shape-specific, not a blanket as-<int> exemption.
+        assert_eq!(run_on("fn f(len: u64) -> u32 { len as u32 }").len(), 1);
+        assert_eq!(run_on("fn f(x: u32) -> u8 { x as u8 }").len(), 1);
     }
 
     #[test]

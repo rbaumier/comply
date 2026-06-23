@@ -3194,6 +3194,69 @@ pub fn cast_feeds_sized_pointer_write(cast: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True when the operand of `cast` (a `type_cast_expression`) is a raw pointer,
+/// recognised structurally without type inference.
+///
+/// A raw-pointer-to-integer cast (`ptr as usize`, `buf.as_ptr() as u32`) is
+/// categorically not a lossy numeric conversion: no `From`/`TryFrom` impl exists
+/// for `*const T`/`*mut T` to an integer, so `as` is the only conversion, and the
+/// rules' `try_from`/`from` remediation does not compile. It is the standard
+/// embedded idiom for handing a memory-mapped register / DMA buffer address to a
+/// hardware register. Both numeric-cast rules treat such a cast as out of scope.
+///
+/// The recognised operand shapes, all derived from the cast TARGET/inner-cast
+/// TYPE which is present in the AST (no source-type inference, no name allowlist):
+///
+/// - the operand is itself a `type_cast_expression` whose target is a
+///   `pointer_type` — `executor as *const _`, `&mut self.table as *mut u32` — so
+///   the value handed to the outer `as <int>` is provably a raw pointer;
+/// - the operand is a method call `.as_ptr()` / `.as_mut_ptr()`, the standard way
+///   to obtain a raw pointer from a slice/array/`Vec`/`UnsafeCell`/register block;
+/// - the operand is a `ptr::null()` / `ptr::null_mut()` call (any path:
+///   `core::ptr::null`, `std::ptr::null_mut`, turbofished `null::<T>()`).
+///
+/// A single layer of `parenthesized_expression` around the operand is
+/// transparent. A plain integer operand (`len as u32`) is not a pointer and is
+/// left to the rule's numeric-truncation logic.
+pub fn cast_operand_is_raw_pointer(cast: Node, source: &[u8]) -> bool {
+    let Some(mut value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    while value.kind() == "parenthesized_expression" {
+        let Some(inner) = value.named_child(0) else {
+            return false;
+        };
+        value = inner;
+    }
+    match value.kind() {
+        // `<expr> as *const T` / `<expr> as *mut T`: the inner cast yields a raw
+        // pointer, so the outer `as <int>` is a pointer-to-integer cast.
+        "type_cast_expression" => value
+            .child_by_field_name("type")
+            .is_some_and(|t| t.kind() == "pointer_type"),
+        // `recv.as_ptr()` / `recv.as_mut_ptr()` / `ptr::null()` / `null_mut()`.
+        "call_expression" => value
+            .child_by_field_name("function")
+            .and_then(|f| pointer_call_segment(f, source))
+            .is_some_and(|seg| {
+                matches!(seg, "as_ptr" | "as_mut_ptr" | "null" | "null_mut")
+            }),
+        _ => false,
+    }
+}
+
+/// The last path/field segment naming a call's callee, also unwrapping a
+/// `generic_function` (a turbofished call like `null::<u8>()`) to its underlying
+/// callee. Returns `None` for callee shapes with no simple trailing name.
+fn pointer_call_segment<'a>(function: Node, source: &'a [u8]) -> Option<&'a str> {
+    let callee = if function.kind() == "generic_function" {
+        function.child_by_field_name("function")?
+    } else {
+        function
+    };
+    call_function_last_segment(callee, source)
+}
+
 /// If `node` is `<expr> as *[const|mut] <int>` (a `type_cast_expression` whose
 /// target is a `pointer_type` over a fixed-width integer), the pointee's bit
 /// width; otherwise `None`.
@@ -6131,6 +6194,40 @@ mod tests {
                 local_let_binds_vec(for_node, var, src.as_bytes()),
                 expected,
                 "local_let_binds_vec mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_raw_pointer_recognizes_pointer_sources() {
+        let cases = [
+            // Inner `as *const _` / `as *mut <int>` cast operand → pointer source.
+            ("fn f() { let _ = executor as *const _ as u32; }", true),
+            ("fn f() { let _ = &mut self.table as *mut _ as *mut u32 as u32; }", true),
+            // `.as_ptr()` / `.as_mut_ptr()` method call operand.
+            ("fn f() { let _ = task.as_ptr() as u32; }", true),
+            ("fn f() { let _ = regs.ch().cc().as_ptr() as u32; }", true),
+            ("fn f() { let _ = region.as_mut_ptr() as usize; }", true),
+            // `ptr::null()` / `null_mut()` operand, including turbofish.
+            ("fn f() { let _ = core::ptr::null::<u8>() as u32; }", true),
+            ("fn f() { let _ = ptr::null_mut() as u32; }", true),
+            // Parenthesized pointer operand stays transparent.
+            ("fn f() { let _ = (task.as_ptr()) as u32; }", true),
+            // Plain integer / non-pointer operands are NOT pointer sources.
+            ("fn f() { let _ = len as u32; }", false),
+            ("fn f() { let _ = x as u8; }", false),
+            ("fn f() { let _ = buf.len() as u32; }", false),
+            // A non-pointer inner cast must not match (`x as u64 as u32`).
+            ("fn f() { let _ = x as u64 as u32; }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_raw_pointer(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_raw_pointer mismatch for `{src}`"
             );
         }
     }

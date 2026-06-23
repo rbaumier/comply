@@ -20,6 +20,13 @@
 //! two's complement — so they are not lossy and are silenced when the
 //! source type is locally visible.
 //!
+//! A raw-pointer-to-integer cast — operand an inner `<expr> as *const/*mut T`
+//! cast, a `.as_ptr()`/`.as_mut_ptr()` call, or a `ptr::null()`/`null_mut()`
+//! call — is exempt: no `From`/`TryFrom` exists for `*const T`/`*mut T` to an
+//! integer, so `as` is the only conversion and a `try_into()` / `From`
+//! suggestion would not compile. This is the embedded idiom for passing a
+//! memory-mapped register / DMA buffer address to a hardware register.
+//!
 //! A cast feeding a `from_bits` call — `f32::from_bits(p as u32)`,
 //! `f64::from_bits(x as u64)` — is exempt regardless of the operand's
 //! resolvability: `from_bits` reinterprets raw bits, so the `as` adapting the
@@ -75,8 +82,8 @@ use crate::rules::rust_helpers::{
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
-    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
-    find_identifier_type, is_in_enum_discriminant,
+    cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -127,6 +134,12 @@ impl AstCheck for Check {
             return;
         };
         if cast_in_const_context(node, source_bytes) {
+            return;
+        }
+        // A raw-pointer-to-integer cast (`ptr.as_ptr() as u32`, `&REG as *const _
+        // as usize`) has no `From`/`TryFrom` path — `as` is the only conversion —
+        // so `try_into()` / `From::from` is inapplicable (issue #5885).
+        if cast_operand_is_raw_pointer(node, source_bytes) {
             return;
         }
         if cast_operand_is_char(node, source_bytes) && char_fits(target_type) {
@@ -485,6 +498,30 @@ mod tests {
         // owns the span. `*x as i32` where `x: &f64` is a float -> int cast — the
         // int-to-float exemption must NOT apply to the reverse direction.
         assert_eq!(run_on("fn f(x: &f64) -> i32 { *x as i32 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_raw_pointer_to_integer() {
+        // Issue #5885: embedded DMA/MMIO address passing. A raw-pointer-to-integer
+        // cast has no `From`/`TryFrom` path. Without the exemption these would fire
+        // here (numeric-cast cedes them once it stops owning the span).
+        assert!(run_on("fn f() { let _ = executor as *const _ as u32; }").is_empty());
+        assert!(
+            run_on("fn f() { let _ = &mut self.table as *mut _ as *mut u32 as u32; }").is_empty()
+        );
+        assert!(run_on("fn f() { let _ = task.as_ptr() as u32; }").is_empty());
+        assert!(run_on("fn f() { let _ = regs.ch().cc().as_ptr() as u32; }").is_empty());
+        assert!(run_on("fn f() { let _ = region.as_mut_ptr() as usize; }").is_empty());
+        assert!(run_on("fn f() { let _ = core::ptr::null::<u8>() as u32; }").is_empty());
+        assert!(run_on("fn f() { let _ = ptr::null_mut() as u32; }").is_empty());
+    }
+
+    #[test]
+    fn flags_numeric_truncation_not_pointer() {
+        // A genuine narrowing of an unresolved operand still flags — the pointer
+        // exemption is shape-specific, not a blanket as-<int> exemption. (`*x`
+        // deref is ceded by numeric-cast, so this rule owns it.)
+        assert_eq!(run_on("fn f(x: &i64) -> i32 { *x as i32 }").len(), 1);
     }
 
     #[test]
