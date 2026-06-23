@@ -287,4 +287,36 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].span, Some((0, 17)));
     }
+
+    // --- Test fixtures are out of scope: a fixture may encode any return ---
+    // --- value, including a bare `null` for an expected "no result". ---
+
+    #[test]
+    fn null_root_in_test_fixture_not_flagged() {
+        // Issue #5935: an end-to-end fixture whose expected scan result is `null`.
+        let path = Path::new("tests/end-to-end/66/output.json");
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            "null\n",
+            crate::files::Language::Json,
+            crate::project::default_static_project_ctx(),
+        );
+        assert!(file.path_segments.in_test_dir);
+        assert!(!crate::rules::no_top_level_literals::META.applies_to_file(&file));
+    }
+
+    #[test]
+    fn literal_root_outside_test_dir_still_flagged() {
+        // Control: a bare literal in an ordinary JSON file is still a smell.
+        let path = Path::new("config/settings.json");
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            "42\n",
+            crate::files::Language::Json,
+            crate::project::default_static_project_ctx(),
+        );
+        assert!(!file.path_segments.in_test_dir);
+        assert!(crate::rules::no_top_level_literals::META.applies_to_file(&file));
+        assert_eq!(check("42\n").len(), 1);
+    }
 }
