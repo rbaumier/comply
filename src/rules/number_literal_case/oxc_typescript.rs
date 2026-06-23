@@ -6,8 +6,8 @@ use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
-/// The canonical form: lowercase prefix/exponent and lowercase hex digits,
-/// matching oxfmt's normalisation of hex literals.
+/// The canonical form: lowercase prefix/exponent and uppercase hex digits,
+/// matching `unicorn/number-literal-case` (and oxlint): `0xFF`, `1e3`.
 fn canonical(raw: &str) -> Option<String> {
     let (body, suffix) = if let Some(stripped) = raw.strip_suffix('n') {
         (stripped, "n")
@@ -23,7 +23,7 @@ fn canonical(raw: &str) -> Option<String> {
     let fixed = match prefix_lower.as_str() {
         "0x" => {
             let digits = &body[2..];
-            format!("0x{}{}", digits.to_lowercase(), suffix)
+            format!("0x{}{}", digits.to_uppercase(), suffix)
         }
         "0b" | "0o" => {
             format!("{}{}{}", prefix_lower, &body[2..], suffix)
@@ -102,29 +102,42 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
-    // Regression for issue #958: oxfmt normalises hex literals to lowercase,
-    // so lowercase hex must be accepted and uppercase hex flagged.
+    // Regression for issue #5797: uppercase hex digits are canonical under
+    // `unicorn/number-literal-case`, so MIDI/protocol constants written to match
+    // spec notation (`0x3D`, `0x7F`) must NOT be flagged.
     #[test]
-    fn flags_uppercase_hex_digits_in_issue_reproducer() {
-        let d = run("const buf = new Uint8Array([0x50, 0x4B, 0x03, 0x04, 0xFF, 0xFF]);");
+    fn allows_uppercase_hex_digits_issue_5797() {
+        assert!(run("const rpn = [0x3D, 0x7F, 0xB0, 0xFF];").is_empty());
+    }
+
+    // Lowercase hex digits are non-canonical and fixed to uppercase.
+    #[test]
+    fn flags_lowercase_hex_digits() {
+        let d = run("const buf = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff, 0xff]);");
         assert_eq!(d.len(), 3);
-        assert!(d[0].message.contains("`0x4B` should be `0x4b`"));
-        assert!(d[1].message.contains("`0xFF` should be `0xff`"));
-        assert!(d[2].message.contains("`0xFF` should be `0xff`"));
+        assert!(d[0].message.contains("`0x4b` should be `0x4B`"));
+        assert!(d[1].message.contains("`0xff` should be `0xFF`"));
+        assert!(d[2].message.contains("`0xff` should be `0xFF`"));
     }
 
-    #[test]
-    fn allows_lowercase_hex_issue_reproducer() {
-        assert!(
-            run("const buf = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff, 0xff]);").is_empty()
-        );
-    }
-
+    // The prefix stays lowercase even though the digits are uppercased.
     #[test]
     fn flags_uppercase_hex_prefix() {
         let d = run("const x = 0XFF;");
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("0xff"));
+        assert!(d[0].message.contains("`0XFF` should be `0xFF`"));
+    }
+
+    #[test]
+    fn flags_uppercase_prefix_with_lowercase_digits() {
+        let d = run("const x = 0Xff;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`0Xff` should be `0xFF`"));
+    }
+
+    #[test]
+    fn allows_canonical_uppercase_hex() {
+        assert!(run("const x = 0xFF;").is_empty());
     }
 
     #[test]
