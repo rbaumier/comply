@@ -20,7 +20,7 @@ const BANNED_WORDS: &[&str] = &[
     "dummy", "placeholder", "arr", "list", "lists", "str", "num", "output", "outputs", "input",
     "inputs", "payload", "payloads", "flag", "stub", "fake", "foobar", "quux", "corge", "blah",
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
-    "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "byte", "ptr",
+    "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "ptr",
     "ret", "out", "vars", "entity", "entities", "dto", "resource", "resources", "entry", "entries",
     "blob", "elem", "comp", "func", "widget", "record", "records", "body", "idx", "curr", "cfg",
     "found",
@@ -2503,5 +2503,25 @@ mod tests {
         assert_eq!(run("function getUserData() { return 1; }").len(), 1);
         assert_eq!(run("const data = fetchData();").len(), 1);
         assert_eq!(run("const nodeDataResponse = fetch();").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_byte_in_byte_stream_parser_issue_5742() {
+        // Regression for #5742 — `byte` is a concrete data-unit noun (the precise
+        // ECMA-48 / ISO 6429 term for each code unit in ANSI/VT escape-sequence
+        // parsing), not a vague placeholder. It patterns with the removed concrete
+        // nouns (`chunk`/`row`/`doc`), so it is no longer a banned word.
+        assert!(run("const isParameterByte = (byte: number): boolean => byte >= 0x30;").is_empty());
+        assert!(run("function classify(byte) { return byte; }").is_empty());
+        assert!(run("function f() { const byte = input.codePointAt(0); return byte; }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_catch_all_placeholders_issue_5742() {
+        // Negative space for #5742 — removing the concrete `byte` does not weaken
+        // the catch-all placeholders. `data`/`value` still read as "I don't know
+        // what this holds" and keep firing.
+        assert_eq!(run("function f() { const value = mk(); return value; }").len(), 1);
+        assert_eq!(run("const data = fetchData();").len(), 1);
     }
 }
