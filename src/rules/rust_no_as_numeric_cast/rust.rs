@@ -9,6 +9,12 @@
 //! Tests are exempted — fuzz / numeric scaffolding inside `#[test]`
 //! functions or `#[cfg(test)]` modules doesn't need this discipline.
 //!
+//! `proc-macro = true` crates are exempted wholesale: their `as` casts operate on
+//! compile-time AST/codegen quantities (token indices, field counts) that are
+//! bounded and tiny, not runtime data, so the lossy-truncation concern does not
+//! apply, and `as` is the idiomatic way to feed syn/quote constructors
+//! (`syn::Index.index` is a `u32`).
+//!
 //! Non-numeric targets (pointer, reference, trait object) are ignored.
 //! Casts like `*const u8 as usize` are false positives; suppress with
 //! `// comply-ignore` on the offending line.
@@ -106,6 +112,19 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
+        // A `proc-macro = true` crate's `as` casts operate on compile-time
+        // AST/codegen quantities (token indices, field counts from `.enumerate()`
+        // over struct fields) that are bounded and tiny, not runtime data. The
+        // rule's lossy-truncation concern does not apply, and `as` is the
+        // idiomatic way to feed syn/quote constructors (`syn::Index { index, .. }`
+        // is a `u32`), where `try_from` would force an impossible error path.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_proc_macro())
+        {
+            return;
+        }
         if !fires_on_cast(node, source_bytes) {
             return;
         }
@@ -413,6 +432,37 @@ mod tests {
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
+
+    /// Run on a file next to the given `Cargo.toml` so the manifest
+    /// (`proc-macro = true` exemption) resolves via `nearest_cargo_manifest`.
+    fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            cargo_toml_contents,
+            source,
+            "src/x.rs",
+        )
+    }
+
+    const PROC_MACRO_CARGO_TOML: &str = r#"
+[package]
+name = "derive-impl-like"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+"#;
+
+    const LIB_CARGO_TOML: &str = r#"
+[package]
+name = "normal-lib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "normal_lib"
+"#;
 
     #[test]
     fn allows_widening_u8_to_u64() {
@@ -1357,5 +1407,27 @@ mod tests {
         // signed↔unsigned cast feeding an ordinary call stays flagged when the
         // source is unresolved (no non-negativity proof).
         assert_eq!(run_on("fn f() -> u64 { consume(load() as u64) }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5844_usize_as_u32_in_proc_macro_crate_not_flagged() {
+        // Issue #5844 (hecs/specs-derive): `i as u32` building a `syn::Index`
+        // field index, where `i` is an `.enumerate()` counter over struct fields.
+        // In a `proc-macro = true` crate the value is a compile-time field count
+        // (trivially < u32::MAX), and `syn::Index.index` is a `u32`, so `as` is
+        // the idiomatic constructor input.
+        let src = "fn f(i: usize) -> Member { \
+                   Member::Unnamed(Index { index: i as u32, span: s }) }";
+        assert!(run_on_with_cargo(PROC_MACRO_CARGO_TOML, src).is_empty());
+    }
+
+    #[test]
+    fn repro_5844_usize_as_u32_in_normal_crate_still_flagged() {
+        // The exemption is proc-macro-only: in a normal library crate a
+        // `usize as u32` narrowing operates on runtime data and stays flagged.
+        assert_eq!(
+            run_on_with_cargo(LIB_CARGO_TOML, "fn f(i: usize) -> u32 { i as u32 }").len(),
+            1
+        );
     }
 }
