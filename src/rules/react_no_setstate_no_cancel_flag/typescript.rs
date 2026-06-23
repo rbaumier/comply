@@ -9,13 +9,17 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Check;
 
+// Matched case-insensitively against a lowercased effect body (see `check`), so
+// these are written lowercase. A camelCase flag such as `isCancelled` /
+// `isMounted` (the common React idiom) must satisfy the cancellation
+// requirement just like the lowercase `cancelled` form (#5755).
 const CANCEL_MARKERS: &[&str] = &[
     "cancelled",
     "cancel",
-    "AbortController",
+    "abortcontroller",
     ".signal",
     "abort",
-    "isMounted",
+    "ismounted",
     "mounted",
 ];
 
@@ -82,9 +86,13 @@ impl TextCheck for Check {
                 break;
             };
             let body = &ctx.source[paren_open + 1..paren_close];
+            // Cancellation markers are matched case-insensitively so a camelCase
+            // flag (`isCancelled`, `isMounted`) is recognised; `await `/`set[A-Z]`
+            // detection stays on the original-case body.
+            let body_lower = body.to_ascii_lowercase();
             if body.contains("await ")
                 && body_uses_set_state(body)
-                && !CANCEL_MARKERS.iter().any(|m| body.contains(m))
+                && !CANCEL_MARKERS.iter().any(|m| body_lower.contains(m))
             {
                 // Compute (line, col) for `useEffect`.
                 let prefix = &ctx.source[..abs];
@@ -147,5 +155,38 @@ mod tests {
     fn allows_await_no_setstate() {
         let src = "useEffect(() => { (async () => { await sendMetric(); })(); }, []);";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_camelcase_iscancelled_flag_in_nested_async() {
+        // #5755 firing site (__root.tsx): a camelCase `isCancelled` flag,
+        // checked before the setter and flipped in cleanup, inside a nested
+        // named async function. The guard must be recognised despite the
+        // capital `C` in `isCancelled`.
+        let src = r#"useEffect(() => {
+  let isCancelled = false;
+  async function loadToastShells() {
+    const mod = await import("@/app/components/ui/toast");
+    if (isCancelled) { return; }
+    setToastShells({ ToastProvider: mod.ToastProvider });
+  }
+  void loadToastShells();
+  return () => { isCancelled = true; };
+}, []);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_nested_async_setstate_without_any_flag() {
+        // The genuine bug still fires when the nested async setter has no
+        // cancellation flag of any case.
+        let src = r#"useEffect(() => {
+  async function load() {
+    const r = await fetch('/');
+    setData(r);
+  }
+  void load();
+}, []);"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
