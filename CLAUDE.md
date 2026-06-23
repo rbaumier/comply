@@ -24,8 +24,6 @@
 
 - Pas de `pkill` ou `kill` par nom — le user a des sessions actives, n'arrêter QUE les PIDs qu'on a soi-même lancés.
 - Pas de désactivation de règle pour faire passer un test — fixer la règle ou changer le code à tester.
-- Pas d'agents en parallèle — un à la fois pour ne pas brûler l'usage.
-- Pas de comply en parallèle sur plusieurs projets — séquentiel.
 
 ## Suppression d'issues sur GitHub
 
