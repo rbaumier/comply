@@ -85,6 +85,18 @@ impl AstCheck for Check {
         {
             return;
         }
+        // Proc-macro crate (`[lib] proc-macro = true`): Rust only lets such a
+        // crate export procedural macros, so downstream crates cannot import an
+        // ordinary `pub` type from it. The enum is reachable only inside the
+        // crate, making `#[non_exhaustive]` (a cross-crate API attribute)
+        // pointless.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_proc_macro())
+        {
+            return;
+        }
         if is_internal_crate(ctx.path) {
             return;
         }
@@ -512,6 +524,36 @@ mod tests {
         fs::write(&src_path, source).unwrap();
 
         assert!(crate::rules::test_helpers::run_rule(&Check, source, &src_path).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_pub_enum_in_proc_macro_crate() {
+        // #5733: a `pub enum` in a `[lib] proc-macro = true` crate
+        // (structopt-derive's `StructOptAttr`) cannot be imported by any
+        // downstream crate — Rust only lets proc-macro crates export procedural
+        // macros — so `#[non_exhaustive]` is meaningless. Detection reuses the
+        // central `CargoManifest::is_proc_macro` lever.
+        let diagnostics = crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            "[package]\nname = \"structopt-derive\"\nversion = \"0.1.0\"\n[lib]\nproc-macro = true\n",
+            "pub enum StructOptAttr { Short(Ident), Long(Ident) }",
+            "src/parse.rs",
+        );
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn flags_pub_enum_in_normal_lib_crate() {
+        // #5733 negative space: the same `pub enum` in a normal library crate
+        // (no `proc-macro = true`) is a SemVer-bound public API and stays
+        // flagged — the proc-macro exemption must not weaken the rule.
+        let diagnostics = crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n[lib]\n",
+            "pub enum StructOptAttr { Short(Ident), Long(Ident) }",
+            "src/lib.rs",
+        );
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
