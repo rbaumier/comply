@@ -50,6 +50,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The recommended inline-literal form (`.get('/health', 'ok')`) is
+        // exactly what `elysia-cf-no-inline-values` (Error) forbids on the
+        // Cloudflare Workers adapter, where AOT-inlining a string handler is
+        // broken. On a Cloudflare target the two rules would be mutually
+        // contradictory — no call shape satisfies both — so this one backs off
+        // and lets the Error-severity cf rule govern (#5753).
+        if ctx.project.is_cloudflare_target() {
+            return;
+        }
+
         let AstKind::CallExpression(call) = node.kind() else { return };
 
         let Expression::StaticMemberExpression(member) = &call.callee else { return };
@@ -86,5 +96,83 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ProjectCtx;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn cf_project(dir: &Path) -> ProjectCtx {
+        std::fs::write(dir.join("wrangler.toml"), "name = \"x\"\n").unwrap();
+        let mut ctx = ProjectCtx::for_test_with_framework("elysia");
+        ctx.project_root = Some(dir.to_path_buf());
+        ctx
+    }
+
+    fn non_cf_project(dir: &Path) -> ProjectCtx {
+        let mut ctx = ProjectCtx::for_test_with_framework("elysia");
+        ctx.project_root = Some(dir.to_path_buf());
+        ctx
+    }
+
+    fn run_in_project(source: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            "t.ts",
+            project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn flags_arrow_returning_string_on_non_cf_project() {
+        // On a Bun/Node/K8s target the inline literal is valid and preferred,
+        // so the arrow-returning-only-a-string handler is flagged.
+        let dir = TempDir::new().unwrap();
+        let src = r#"app.get("/health", () => "ok")"#;
+        assert_eq!(run_in_project(src, &non_cf_project(dir.path())).len(), 1);
+    }
+
+    #[test]
+    fn ignores_arrow_returning_string_on_cloudflare_target() {
+        // #5753: on a Cloudflare target the inline form this rule recommends is
+        // exactly what cf-no-inline-values forbids, so this rule backs off.
+        let dir = TempDir::new().unwrap();
+        let src = r#"app.get("/health", () => "ok")"#;
+        assert!(
+            run_in_project(src, &cf_project(dir.path())).is_empty(),
+            "{:?}",
+            run_in_project(src, &cf_project(dir.path())),
+        );
+    }
+
+    #[test]
+    fn ignores_handler_with_logic_on_non_cf_project() {
+        // A handler doing real work (not just returning a literal) is never the
+        // rule's target, even on a non-Cloudflare project.
+        let dir = TempDir::new().unwrap();
+        let src = r#"app.get("/health", () => { check(); return "ok"; })"#;
+        assert!(run_in_project(src, &non_cf_project(dir.path())).is_empty());
     }
 }

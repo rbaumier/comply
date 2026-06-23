@@ -28,6 +28,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // This rule is specific to the Cloudflare Workers adapter, where an
+        // inline string handler bypasses the compiled path. On any other target
+        // (Bun, Node, K8s) the inline form is valid and even preferred — that is
+        // what `elysia-static-inline-value` recommends — so firing here would
+        // directly contradict it. Gate on a detected Cloudflare target (#5753).
+        if !ctx.project.is_cloudflare_target() {
+            return;
+        }
+
         let AstKind::CallExpression(call) = node.kind() else { return };
 
         // Extract the method name from the callee (e.g. `app.get`).
@@ -94,22 +103,40 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::ProjectCtx;
+    use std::path::Path;
+    use tempfile::TempDir;
 
-    fn run_on(source: &str) -> Vec<Diagnostic> {
+    fn cf_project(dir: &Path) -> ProjectCtx {
+        std::fs::write(dir.join("wrangler.toml"), "name = \"x\"\n").unwrap();
+        let mut ctx = ProjectCtx::for_test_with_framework("elysia");
+        ctx.project_root = Some(dir.to_path_buf());
+        ctx
+    }
+
+    fn non_cf_project(dir: &Path) -> ProjectCtx {
+        let mut ctx = ProjectCtx::for_test_with_framework("elysia");
+        ctx.project_root = Some(dir.to_path_buf());
+        ctx
+    }
+
+    fn run_in_project(source: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule_with_ctx(
             &Check,
             source,
             "t.ts",
-            &crate::project::ProjectCtx::for_test_with_framework("elysia"),
+            project,
             crate::rules::file_ctx::default_static_file_ctx(),
         )
     }
 
     #[test]
     fn flags_genuine_inline_string_route() {
-        // The rule's real target: a route whose handler is an inline string.
+        // The rule's real target: a route whose handler is an inline string,
+        // on a Cloudflare target.
+        let dir = TempDir::new().unwrap();
         let src = r#"app.get("/", "Hello")"#;
-        assert_eq!(run_on(src).len(), 1);
+        assert_eq!(run_in_project(src, &cf_project(dir.path())).len(), 1);
     }
 
     #[test]
@@ -117,22 +144,40 @@ mod tests {
         // #5754 firing site (error-handler.ts): `Reflect.get` shares the
         // `.get(x, "string")` shape but is not a route — its first argument is
         // the target object, not a `/` route path.
+        let dir = TempDir::new().unwrap();
         let src = r#"const status = Reflect.get(value, "status");"#;
-        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+        let found = run_in_project(src, &cf_project(dir.path()));
+        assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]
     fn ignores_non_path_string_first_arg() {
         // Any `.get(key, default)` whose first argument is not a route path is
         // not a route registration (e.g. a cache/map-like lookup).
+        let dir = TempDir::new().unwrap();
         let src = r#"const v = cache.get("session", "anonymous");"#;
-        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+        let found = run_in_project(src, &cf_project(dir.path()));
+        assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]
     fn ignores_function_handler_route() {
         // A proper arrow-function handler is the remediation, not a violation.
+        let dir = TempDir::new().unwrap();
         let src = r#"app.get("/", () => "Hello")"#;
-        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+        let found = run_in_project(src, &cf_project(dir.path()));
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn ignores_inline_string_route_on_non_cf_project() {
+        // #5753: on a non-Cloudflare target (Bun/Node/K8s) the inline form is
+        // valid and preferred (elysia-static-inline-value recommends it), so
+        // this Cloudflare-specific rule must not fire — the two rules are
+        // mutually exclusive by target.
+        let dir = TempDir::new().unwrap();
+        let src = r#"app.get("/", "Hello")"#;
+        let found = run_in_project(src, &non_cf_project(dir.path()));
+        assert!(found.is_empty(), "{found:?}");
     }
 }
