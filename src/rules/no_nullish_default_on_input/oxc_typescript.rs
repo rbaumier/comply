@@ -127,18 +127,26 @@ fn check_logical(
     if !is_boundary_param(id, semantic) {
         return;
     }
-    // A typed identifier fallback (e.g. `param ?? otherParam`) is intentional
-    // domain logic — skip.
-    if let Expression::Identifier(right_id) = &expr.right {
-        if right_id.name.as_str() != "undefined" {
+    let right = crate::oxc_helpers::peel_parens(&expr.right);
+    // `param ?? undefined` / `param ?? void 0` is a null-to-undefined coercion
+    // (the callee wants `T | undefined`, not `T | null`), not a semantic default:
+    // `undefined` is "no value", so it cannot pave over invalid input — skip.
+    // A typed identifier fallback (e.g. `param ?? otherParam`) is likewise
+    // intentional domain logic, not a literal default value — skip.
+    match right {
+        Expression::Identifier(_) => return,
+        Expression::UnaryExpression(unary)
+            if unary.operator == oxc_ast::ast::UnaryOperator::Void =>
+        {
             return;
         }
+        _ => {}
     }
     // `param || (a && b)` is a boolean OR combining two conditions, not a
     // fallback default for `param`. When the right side of `||` is itself a
     // boolean computation, no replacement value is being assigned — skip.
     // `??` is always nullish defaulting regardless of the right side's shape.
-    if op == LogicalOperator::Or && is_boolean_computation(crate::oxc_helpers::peel_parens(&expr.right)) {
+    if op == LogicalOperator::Or && is_boolean_computation(right) {
         return;
     }
     let op_text = op.as_str();
@@ -316,6 +324,23 @@ mod tests {
             run_on("function f(items: number[]) { const v = items || []; return v; }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_nullish_coerce_to_undefined_on_param() {
+        // Issue #4687: `timezone ?? undefined` is a null-to-undefined coercion
+        // (the callee wants `string | undefined`), not a semantic default.
+        assert!(run_on(
+            "function f(timezone: string | null) { return parse({ tz: timezone ?? undefined }); }"
+        ).is_empty());
+    }
+
+    #[test]
+    fn allows_nullish_coerce_to_void_zero_on_param() {
+        // `param ?? void 0` evaluates to `undefined` — same coercion, not a default.
+        assert!(run_on(
+            "function f(timezone: string | null) { return parse({ tz: timezone ?? void 0 }); }"
+        ).is_empty());
     }
 
     #[test]
