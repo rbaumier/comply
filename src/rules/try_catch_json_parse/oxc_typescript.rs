@@ -93,3 +93,50 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod gated_tests {
+    use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
+
+    #[test]
+    fn skips_json_parse_in_test_dir() {
+        // #5758 firing site (error-handler.test.ts): parsing a controlled
+        // fixture (the middleware's own Problem+JSON body) where an unexpected
+        // parse throw is the intended test oracle, not a production crash. The
+        // central `skip_in_test_dir` gate must suppress it.
+        let src = r#"const body: unknown = JSON.parse(text);"#;
+        assert!(run_rule_gated(&Check, src, "src/api/middleware/error-handler.test.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_unwrapped_json_parse_in_production() {
+        // Negative-space guard: an unwrapped `JSON.parse` in a production module
+        // is the rule's genuine target — keep flagging.
+        let src = r#"export function handle(text: string) { return JSON.parse(text); }"#;
+        assert_eq!(run_rule_gated(&Check, src, "src/api/middleware/handler.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_allows_try_wrapped_json_parse_in_production() {
+        // The remediation (wrap in try) keeps the rule silent in production.
+        let src = r#"export function handle(text: string) { try { return JSON.parse(text); } catch { return null; } }"#;
+        assert!(run_rule_gated(&Check, src, "src/api/middleware/handler.ts").is_empty());
+    }
+}
