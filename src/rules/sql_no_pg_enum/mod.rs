@@ -52,26 +52,56 @@ pub fn register() -> RuleDef {
     }
 }
 
-/// True if `text` contains an `AS ENUM` clause (case-insensitive),
-/// the marker for `CREATE TYPE ... AS ENUM (...)`.
+/// True if `text` declares a concrete `CREATE TYPE ... AS ENUM ('a', 'b')`
+/// statement: an `AS ENUM` clause (case-insensitive) followed by a value
+/// list that holds at least one literal value.
 ///
 /// `AS` and `ENUM` must be complete whitespace-delimited tokens, where the
 /// `ENUM` token is either `ENUM` or `ENUM(` (the `(` opening the value list).
 /// This rejects substring matches inside larger identifiers — e.g.
 /// `has enumValues`, `AS enumValue`, `AS ENUMERATED` — which are prose, not DDL.
+///
+/// The value list must contain a literal Postgres value — a single-quoted
+/// token (`'active'`). A concrete enum always single-quotes its values; a
+/// DDL *builder* interpolates them (e.g. node-pg-migrate's
+/// `` `CREATE TYPE ${name} AS ENUM (${values});` ``, whose value list is an
+/// interpolation hole, or a string-concat fragment like `" AS ENUM ("` whose
+/// parens are empty), so its literal text carries no quoted value and is not
+/// a statement to flag — the user's `createType([...])` call site is.
 pub(super) fn declares_pg_enum(text: &str) -> bool {
     let upper = text.to_ascii_uppercase();
-    let mut tokens = upper.split_whitespace().peekable();
-    while let Some(tok) = tokens.next() {
-        if tok == "AS"
-            && tokens
-                .peek()
-                .is_some_and(|next| *next == "ENUM" || next.starts_with("ENUM("))
-        {
+    // Token-walk to find an `AS ENUM` / `AS ENUM(` boundary, tracking the byte
+    // offset of the `ENUM` token so the value-list check starts right after it.
+    let mut search_from = 0;
+    while let Some(rel) = upper[search_from..].find("AS") {
+        let as_start = search_from + rel;
+        let as_end = as_start + 2;
+        search_from = as_end;
+        // `AS` must be a whole token (word boundaries on both sides).
+        let before_ok = as_start == 0
+            || !crate::rules::sql_helpers::is_ident_byte(upper.as_bytes()[as_start - 1]);
+        if !before_ok {
+            continue;
+        }
+        let rest = upper[as_end..].trim_start();
+        let enum_at = as_end + (upper.len() - as_end - rest.len());
+        // Next token must be `ENUM` (followed by a non-ident char) or `ENUM(`.
+        let is_enum_token = rest.strip_prefix("ENUM").is_some_and(|after| {
+            !after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if is_enum_token && enum_value_list_has_literal(&upper.as_bytes()[enum_at..]) {
             return true;
         }
     }
     false
+}
+
+/// True if the value list following the `ENUM` keyword holds at least one
+/// literal Postgres value — a single-quoted token (`'active'`). Postgres enum
+/// values are always single-quoted string literals; a DDL builder interpolates
+/// them, so its literal text carries none.
+fn enum_value_list_has_literal(after_enum: &[u8]) -> bool {
+    after_enum.iter().any(|&b| b == b'\'')
 }
 
 #[cfg(test)]
@@ -109,5 +139,28 @@ mod predicate_tests {
     #[test]
     fn allows_as_enumerated() {
         assert!(!declares_pg_enum("column AS ENUMERATED somewhere"));
+    }
+
+    #[test]
+    fn fp_interpolated_builder_value_list_not_flagged() {
+        // Issue #5789: node-pg-migrate's createType builder template literal,
+        // joined with the interpolation holes collapsed to whitespace, has an
+        // empty value list — no literal value to flag. The user's createType
+        // call site is the place to flag, not the builder.
+        assert!(!declares_pg_enum("CREATE TYPE   AS ENUM (  );"));
+    }
+
+    #[test]
+    fn fp_string_concat_fragment_not_flagged() {
+        // A builder assembling the DDL via string concatenation emits the
+        // `AS ENUM (` prefix as its own fragment with no value.
+        assert!(!declares_pg_enum(" AS ENUM ("));
+    }
+
+    #[test]
+    fn flags_literal_value_list_with_interpolated_type_name() {
+        // Only the type name is interpolated; the values are literal — still a
+        // concrete enum declaration.
+        assert!(declares_pg_enum("CREATE TYPE   AS ENUM ('active', 'inactive')"));
     }
 }
