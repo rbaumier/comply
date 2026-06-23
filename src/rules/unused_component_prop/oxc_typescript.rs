@@ -102,6 +102,16 @@ impl OxcCheck for Check {
                         .collect()
                 }
                 BindingPattern::BindingIdentifier(ident) => {
+                    // A whole-identifier parameter (`(constraint: Constraint)`)
+                    // is the conventional shape of a *domain* function
+                    // (predicates, reducers, operator impls) as much as of a
+                    // `props`-style component, and PascalCase names alone do not
+                    // distinguish the two (`InOperator`, `Strategy`). Require
+                    // genuine React-component evidence — the body returns JSX —
+                    // before treating its fields as component props.
+                    if !body_returns_jsx(body) {
+                        continue;
+                    }
                     let Some(sym) = ident.symbol_id.get() else {
                         continue;
                     };
@@ -229,6 +239,59 @@ fn is_stub_literal(expr: &Expression) -> bool {
         Expression::BooleanLiteral(b) => !b.value,
         Expression::Identifier(id) => id.name.as_str() == "undefined",
         Expression::UnaryExpression(u) => u.operator == UnaryOperator::Void,
+        _ => false,
+    }
+}
+
+/// True when `body` returns JSX anywhere in its own control flow — the
+/// structural signature of a React component. Return statements and concise-arrow
+/// expression bodies are inspected at any depth inside the body's own statements
+/// (blocks, `if`/`else`, `switch`, `try`); nested function/arrow definitions are
+/// *not* descended into, so JSX rendered by an inner callback does not make the
+/// outer function a component.
+fn body_returns_jsx(body: &FunctionBody) -> bool {
+    body.statements.iter().any(stmt_returns_jsx)
+}
+
+fn stmt_returns_jsx(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ReturnStatement(ret) => ret.argument.as_ref().is_some_and(expr_is_jsx),
+        // A concise-arrow expression body is stored as a single
+        // `ExpressionStatement` (`(props) => <x/>`).
+        Statement::ExpressionStatement(es) => expr_is_jsx(&es.expression),
+        Statement::BlockStatement(block) => block.body.iter().any(stmt_returns_jsx),
+        Statement::IfStatement(if_stmt) => {
+            stmt_returns_jsx(&if_stmt.consequent)
+                || if_stmt.alternate.as_ref().is_some_and(stmt_returns_jsx)
+        }
+        Statement::SwitchStatement(sw) => sw
+            .cases
+            .iter()
+            .any(|case| case.consequent.iter().any(stmt_returns_jsx)),
+        Statement::TryStatement(t) => {
+            t.block.body.iter().any(stmt_returns_jsx)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.body.iter().any(stmt_returns_jsx))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.body.iter().any(stmt_returns_jsx))
+        }
+        _ => false,
+    }
+}
+
+/// True when `expr` is a `JSXElement`/`JSXFragment`, unwrapping parentheses and
+/// the conditional/logical wrappers components commonly render JSX through
+/// (`cond ? <a/> : <b/>`, `cond && <a/>`).
+fn expr_is_jsx(expr: &Expression) -> bool {
+    match expr {
+        Expression::JSXElement(_) | Expression::JSXFragment(_) => true,
+        Expression::ParenthesizedExpression(p) => expr_is_jsx(&p.expression),
+        Expression::ConditionalExpression(c) => {
+            expr_is_jsx(&c.consequent) || expr_is_jsx(&c.alternate)
+        }
+        Expression::LogicalExpression(l) => expr_is_jsx(&l.left) || expr_is_jsx(&l.right),
         _ => false,
     }
 }
@@ -627,5 +690,105 @@ export declare namespace ErrorLink {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    /// Regression for #5840: a PascalCase *domain* class (instantiated with
+    /// `new`, with methods, never rendered as JSX and not extending a React
+    /// base) is not a React component. The fields of an interface used as a
+    /// method-parameter type must not be flagged as unused component props.
+    #[test]
+    fn allows_pascalcase_domain_class_method_param_interface() {
+        let src = r#"
+interface Constraint {
+  contextName: string;
+  operator: string;
+  inverted: boolean;
+  values: string[];
+}
+
+export class Strategy {
+  checkConstraint(constraint: Constraint) {
+    if (constraint.inverted) {
+      return constraint.values.includes(constraint.contextName)
+        && constraint.operator === "IN";
+    }
+    return false;
+  }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Regression for #5840 (the actual construct): a PascalCase `const` bound
+    /// to a non-JSX arrow (an `OperatorImpl` predicate that returns a boolean)
+    /// is not a React component. Its `Constraint`-typed first argument is a
+    /// domain parameter, not destructured props, so fields it happens not to
+    /// read (`inverted`, `value`, `caseInsensitive`) must not be flagged.
+    #[test]
+    fn allows_pascalcase_const_arrow_returning_boolean() {
+        let src = r#"
+interface Constraint {
+  contextName: string;
+  operator: string;
+  inverted: boolean;
+  values: string[];
+  value?: string | number;
+  caseInsensitive?: boolean;
+}
+
+const InOperator = (constraint: Constraint, context: Context) => {
+  const field = constraint.contextName;
+  const values = constraint.values;
+  return constraint.operator === "IN" && values.includes(field);
+};
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A real arrow React component (returns JSX) with a genuinely unused prop
+    /// must still fire after tightening component detection.
+    #[test]
+    fn flags_unused_prop_in_jsx_arrow_component() {
+        let src = r#"
+interface Props { title: string; subtitle: string; }
+const Banner = ({ title }: Props) => {
+  return <h1>{title}</h1>;
+};
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`subtitle`"));
+    }
+
+    /// A real function-declaration React component (returns JSX) with an unused
+    /// prop must still fire.
+    #[test]
+    fn flags_unused_prop_in_jsx_function_component() {
+        let src = r#"
+interface Props { name: string; age: number; }
+function App({ name }: Props) {
+  return <div>{name}</div>;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`age`"));
+    }
+
+    /// A real React component that takes a whole-identifier `props` parameter
+    /// (rather than destructuring) and returns JSX must still have its unused
+    /// props flagged: the JSX-return gate confirms it is a component, then
+    /// member-access usage is collected. `subtitle` is never read.
+    #[test]
+    fn flags_unused_prop_in_jsx_component_with_identifier_props() {
+        let src = r#"
+interface Props { title: string; subtitle: string; }
+function App(props: Props) {
+  return <h1>{props.title}</h1>;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`subtitle`"));
     }
 }
