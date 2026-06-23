@@ -9,6 +9,8 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
 
     if super::is_screaming_snake(name) { return; }
 
+    if has_no_lowercase_letter(name) { return; }
+
     if is_google_k_prefix_constant(name) { return; }
 
     // A `static`/`const` with no initializer is never free-standing Rust: it is a
@@ -28,6 +30,18 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
         format!("Constant `{name}` is not in `SCREAMING_SNAKE_CASE`."),
         Severity::Warning,
     ));
+}
+
+/// True if `name` contains no lowercase ASCII letter, meaning there is nothing
+/// to uppercase: such a name is already SCREAMING_SNAKE_CASE-conformant. This
+/// covers digit-named constants written with a leading underscore (Rust
+/// identifiers cannot start with a digit, so numeric-valued constants are named
+/// `_0`, `_1`, `_1_2`) as well as leading-underscore uppercase names (`_AREA`),
+/// which `is_screaming_snake` rejects only because its first character is `_`
+/// rather than an uppercase letter. A name with at least one lowercase letter
+/// (`fooBar`, `en_US`) still fires.
+fn has_no_lowercase_letter(name: &str) -> bool {
+    !name.bytes().any(|b| b.is_ascii_lowercase())
 }
 
 /// True if `name` follows the Google C++ `k`-prefix constant convention:
@@ -362,5 +376,40 @@ mod tests {
         // The canonical form remains accepted (covered by is_screaming_snake,
         // not the k-prefix path).
         assert!(run("const MAX_VALUE: i32 = 1;").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_prefixed_numeric_constants() {
+        // The rust-num/num-rational case from the issue: Rust identifiers cannot
+        // start with a digit, so numeric-valued constants are named with a
+        // leading underscore (`_0` = zero, `_1_2` = one-half). These have no
+        // lowercase letter to uppercase, so they are already conformant.
+        assert!(run("pub const _0: Rational64 = Ratio { numer: 0, denom: 1 };").is_empty());
+        assert!(run("pub const _1: Rational64 = Ratio { numer: 1, denom: 1 };").is_empty());
+        assert!(run("pub const _1_2: Rational64 = Ratio { numer: 1, denom: 2 };").is_empty());
+        assert!(run("pub const _NEG2: Rational64 = Ratio { numer: -2, denom: 1 };").is_empty());
+    }
+
+    #[test]
+    fn allows_leading_underscore_uppercase_const() {
+        // A leading-underscore uppercase name has no lowercase letter to
+        // uppercase, so it is conformant even though `is_screaming_snake`
+        // rejects it for not starting with an uppercase letter.
+        assert!(run("const _AREA: u32 = 1;").is_empty());
+    }
+
+    #[test]
+    fn no_lowercase_exemption_keeps_flagging_lowercase_names() {
+        // The no-lowercase-letter exemption must not weaken the rule: names that
+        // do contain a lowercase letter still require SCREAMING_SNAKE_CASE.
+        assert_eq!(run("const myValue: i32 = 1;").len(), 1);
+        assert_eq!(run("const my_value: i32 = 1;").len(), 1);
+        assert_eq!(run("const fooBar: i32 = 1;").len(), 1);
+    }
+
+    #[test]
+    fn no_lowercase_exemption_keeps_screaming_snake_accepted() {
+        // The canonical form remains accepted unchanged.
+        assert!(run("const MAX_LEN: usize = 16;").is_empty());
     }
 }
