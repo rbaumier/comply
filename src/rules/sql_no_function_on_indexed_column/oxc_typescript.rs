@@ -83,4 +83,40 @@ mod tests {
         let src = r#"const q = "SELECT id FROM user WHERE email = 'a@b.c'";"#;
         assert!(run_on(src).is_empty());
     }
+
+    #[test]
+    fn allows_coalesce_outside_where_predicate() {
+        // FP #5752: COALESCE appears only in SELECT / ORDER BY / HAVING, never
+        // in the WHERE predicate — no index seek to defeat.
+        let src = r#"const q = `
+WITH expanded AS (
+  SELECT ru.user_id, ru.clinique_id
+  FROM role_user ru
+  WHERE ru.clinique_id IS NOT NULL AND ru.clinique_id <> ''
+)
+SELECT
+  e.user_id,
+  string_agg(DISTINCT COALESCE(c.groupement_id::text, 'rcs'), ',' ORDER BY COALESCE(c.groupement_id::text, 'rcs')) AS groupements
+FROM expanded e
+JOIN cliniques c ON c.id = (e.clinique_id)::int
+GROUP BY e.user_id
+HAVING COUNT(DISTINCT COALESCE(c.groupement_id::text, 'rcs')) > 1
+`;"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_lower_in_where_predicate() {
+        // A banned function genuinely inside the WHERE predicate still fires.
+        let src = r#"const q = `SELECT id FROM users WHERE LOWER(email) = ${x}`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_func_after_parenthesized_condition() {
+        // A balanced `(...)` inside the predicate does not end it: a banned
+        // function after `(a OR b)` is still in the WHERE and still fires.
+        let src = r#"const q = "SELECT id FROM users WHERE (a = 1 OR b = 2) AND LOWER(email) = 'x'";"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
 }
