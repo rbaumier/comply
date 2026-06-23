@@ -162,6 +162,18 @@
 //!   directory: vanilla `<script>`-loaded scripts served verbatim by the web
 //!   server, never bundled, so the tree-shaking concern does not apply (a
 //!   bundler never processes these files);
+//! - application root entry points (`is_application_root_entry`): the
+//!   conventional root entry file of a package directory (an `index`/`main`
+//!   stem sitting directly in the nearest `package.json`'s directory) whose
+//!   manifest is an *application* (not a published library — no
+//!   `main`/`exports`/`module`/`publishConfig`) and which declares no module
+//!   exports. Such a file is executed as the application's start file (e.g.
+//!   Electron's main-process `app/index.ts`), never imported for an API: with
+//!   no exports there is no public surface for tree-shaking to act on, and a
+//!   non-library application bundles its own entry point, so its top-level
+//!   bootstrap side effects are intentional. A nested module
+//!   (`src/scripts/loader.ts`), a published library's root barrel, or a root
+//!   entry that exports an API are all still flagged;
 //! - package-root script entry files reported by
 //!   `ProjectCtx::is_script_entry_file`: a file the nearest `package.json`'s
 //!   `scripts` invoke directly (e.g. `"build": "tsx ./build.ts"` makes the
@@ -2092,6 +2104,110 @@ fn is_entry_barrel_shape(program: &Program) -> bool {
     star_reexports > 0 && star_reexports > effectful_calls
 }
 
+/// True when the program declares any module export: an ESM
+/// `export …` / `export default …` / `export * …` statement, a TypeScript
+/// `export = …` assignment, or a top-level CommonJS export assignment
+/// (`module.exports = …`, `module.exports.x = …`, `exports.x = …`). A module
+/// with at least one export is imported by other modules to obtain that API, so
+/// its top-level side effects are observed by importers and the tree-shaking
+/// concern applies.
+fn module_has_any_export(program: &Program) -> bool {
+    program.body.iter().any(|stmt| match stmt {
+        Statement::ExportNamedDeclaration(_)
+        | Statement::ExportDefaultDeclaration(_)
+        | Statement::ExportAllDeclaration(_)
+        | Statement::TSExportAssignment(_) => true,
+        Statement::ExpressionStatement(es) => {
+            let Expression::AssignmentExpression(assign) = &es.expression else {
+                return false;
+            };
+            assignment_target_is_commonjs_export(&assign.left)
+        }
+        _ => false,
+    })
+}
+
+/// True when `target` is a CommonJS export target: the bare `exports` identifier,
+/// a `module.exports` member, or any member access rooted at one of them
+/// (`exports.x`, `module.exports.x`).
+fn assignment_target_is_commonjs_export(target: &AssignmentTarget) -> bool {
+    fn expr_is_commonjs_export(expr: &Expression) -> bool {
+        match expr {
+            Expression::Identifier(id) => id.name == "exports",
+            Expression::StaticMemberExpression(m) => {
+                (m.property.name == "exports"
+                    && matches!(&m.object, Expression::Identifier(o) if o.name == "module"))
+                    || expr_is_commonjs_export(&m.object)
+            }
+            _ => false,
+        }
+    }
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => id.name == "exports",
+        AssignmentTarget::StaticMemberExpression(m) => {
+            (m.property.name == "exports"
+                && matches!(&m.object, Expression::Identifier(o) if o.name == "module"))
+                || expr_is_commonjs_export(&m.object)
+        }
+        _ => false,
+    }
+}
+
+/// True when `path` is the conventional root entry file of its package directory:
+/// it has the `index` or `main` stem and sits directly in the directory of its
+/// nearest `package.json` (not a subdirectory of it). This is the Node
+/// directory-entry convention — a bare directory import resolves to its `index`
+/// — so such a file is the package's run-directly entry point, not a nested
+/// library module.
+fn is_package_root_entry_file(
+    path: &std::path::Path,
+    project: &crate::project::ProjectCtx,
+) -> bool {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if !matches!(stem, "index" | "main") {
+        return false;
+    }
+    let Some(manifest_dir) = project.nearest_package_json_dir(path) else {
+        return false;
+    };
+    path.parent() == Some(manifest_dir.as_path())
+}
+
+/// True when `path` is an application's run-directly entry point: the
+/// conventional root entry file of its package directory
+/// (`is_package_root_entry_file`), whose nearest `package.json` is an
+/// *application* manifest (not a published library — no `main`/`exports`/
+/// `module`/`publishConfig`), and whose module declares no exports
+/// (`module_has_any_export` is false).
+///
+/// Such a file is executed as the application's start file (e.g. Electron's main
+/// process `app/index.ts`, a desktop/CLI app bootstrap), never imported by
+/// another module to obtain an API. With no exports there is no public surface
+/// for tree-shaking to act on, and a non-library application bundles its own
+/// entry point rather than publishing it, so its top-level bootstrap side
+/// effects are intentional, not a tree-shaking hazard.
+///
+/// All three signals are required and together keep the exemption narrow:
+/// - a *nested* module under the manifest (`src/scripts/loader.ts`) is not a
+///   root entry and stays flagged;
+/// - a published *library*'s root barrel (`is_library`) is exactly where init
+///   side effects defeat tree-shaking, so it stays flagged;
+/// - a root entry that *does* export an API is imported for that API and stays
+///   flagged.
+fn is_application_root_entry(
+    path: &std::path::Path,
+    project: &crate::project::ProjectCtx,
+    program: &Program,
+) -> bool {
+    if !is_package_root_entry_file(path, project) {
+        return false;
+    }
+    let Some(pkg) = project.nearest_package_json(path) else {
+        return false;
+    };
+    !pkg.is_library && !module_has_any_export(program)
+}
+
 fn effectful_expression_label(expr: &Expression) -> Option<&'static str> {
     match expr {
         Expression::CallExpression(_) => Some("call"),
@@ -2162,6 +2278,7 @@ impl OxcCheck for Check {
 
         if is_framework_entry_point(ctx.path, ctx.project)
             || is_tanstack_start_entry(ctx.path, ctx.project)
+            || is_application_root_entry(ctx.path, ctx.project, program)
             || ctx.project.is_script_entry_file(ctx.path)
             || ctx
                 .project
@@ -4744,6 +4861,103 @@ mod tests {
             1,
             "a nested src/scripts/ library module must still be flagged, got {diags:?}"
         );
+    }
+
+    // --- Application root entry point (Closes #5735) ----------------------
+
+    // Regression for #5735: an Electron main-process entry point
+    // (vercel/hyper's `app/index.ts`) is the conventional root entry of a
+    // non-library application package and declares no exports. It is executed
+    // as the application's start file, never imported for an API, so its
+    // top-level bootstrap side effects (`app.commandLine.appendSwitch(...)`,
+    // `remoteInitialize()`, `config.setup()`) are intentional, not a
+    // tree-shaking hazard.
+    #[test]
+    fn allows_application_root_entry_no_exports_issue5735() {
+        let src = "\
+            import {initialize as remoteInitialize} from '@electron/remote/main';\n\
+            import {app} from 'electron';\n\
+            import * as config from './config';\n\
+            remoteInitialize();\n\
+            config.setup();\n\
+            app.commandLine.appendSwitch('ignore-gpu-blacklist');\n\
+            app.whenReady().then(() => {});\n";
+        let (_dir, project, paths) = project_rooted_at_tempdir(&[
+            (
+                "package.json",
+                r#"{"name":"hyper","productName":"Hyper","dependencies":{"@electron/remote":"2.1.2"}}"#,
+            ),
+            ("index.ts", src),
+        ]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            &paths[1],
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(
+            diags.is_empty(),
+            "an application root entry point with no exports must be exempt, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #5735: a published *library*'s root barrel
+    // (`package.json` declares `main`) with a top-level side effect is exactly
+    // where init side effects defeat tree-shaking — importing the library to
+    // use an export pays the cost — so it stays flagged even though the file
+    // declares no exports of its own.
+    #[test]
+    fn still_flags_library_root_entry_with_side_effect_issue5735() {
+        let src = "registerGlobals();\n";
+        let (_dir, project, paths) = project_rooted_at_tempdir(&[
+            ("package.json", r#"{"name":"mylib","main":"./dist/index.js"}"#),
+            ("index.ts", src),
+        ]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            &paths[1],
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a library root barrel with a top-level side effect must stay flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #5735: a non-library root entry that *exports* an
+    // API is imported for that API, so its top-level side effects are observed
+    // by importers and the tree-shaking concern applies — it stays flagged.
+    #[test]
+    fn still_flags_application_root_entry_with_exports_issue5735() {
+        // Each export form keeps the root entry flagged: a named export, an
+        // ESM default-class export, and a CommonJS `module.exports` assignment.
+        for export in [
+            "export const ready = true;",
+            "export default class App {}",
+            "module.exports = App;",
+        ] {
+            let src = format!("registerGlobals();\n{export}\n");
+            let (_dir, project, paths) = project_rooted_at_tempdir(&[
+                ("package.json", r#"{"name":"app"}"#),
+                ("index.ts", &src),
+            ]);
+            let diags = crate::rules::test_helpers::run_rule_with_ctx(
+                &Check,
+                &src,
+                &paths[1],
+                &project,
+                crate::rules::file_ctx::default_static_file_ctx(),
+            );
+            assert_eq!(
+                diags.len(),
+                1,
+                "a root entry exporting via `{export}` must stay flagged, got {diags:?}"
+            );
+        }
     }
 
     // --- (i) Node.js CLI entry-point setup (Closes #1631) -----------------
