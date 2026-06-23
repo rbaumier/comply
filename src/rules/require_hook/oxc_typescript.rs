@@ -493,6 +493,58 @@ fn local_test_suite_wrapper_decl_ids(
     out
 }
 
+/// Is `expr` an iteration call of the shape `<value>.forEach(cb)` /
+/// `<value>.map(cb)` / `<value>.flatMap(cb)` — a member call whose property is
+/// an array iteration method? The receiver value is irrelevant; only the method
+/// name matters.
+fn is_iteration_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(mem) = &call.callee else {
+        return false;
+    };
+    matches!(mem.property.name.as_str(), "forEach" | "map" | "flatMap")
+}
+
+/// Is `stmt` a module-scope iteration whose body REGISTERS tests — an
+/// `<arr>.forEach/.map/.flatMap(cb => { test(...) })` call statement, or a
+/// `for` / `for...of` / `for...in` loop whose body calls `it`/`test`/`describe`
+/// (incl. member forms like `it.each` / `test.only`)?
+///
+/// Dynamic, table-driven test registration must run at collection time (module
+/// or `describe` scope): you cannot register `it`/`test` cases from inside a
+/// `beforeEach`/`beforeAll` hook, which runs at execution time. So such an
+/// iteration is test structure, not ungated setup, and the require-hook
+/// remediation does not apply. Detected structurally by scanning the iteration's
+/// span for a test-registration call via the semantic node graph, reusing
+/// `call_is_allowed_test_call`. An iteration whose body does no test
+/// registration (`data.forEach(d => seed(d))`) contains no such call and stays
+/// flagged.
+fn is_test_registering_iteration(stmt: &Statement, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+    let is_iteration = match stmt {
+        Statement::ExpressionStatement(expr_stmt) => is_iteration_call(&expr_stmt.expression),
+        Statement::ForStatement(_)
+        | Statement::ForOfStatement(_)
+        | Statement::ForInStatement(_) => true,
+        _ => false,
+    };
+    if !is_iteration {
+        return false;
+    }
+    let iteration_span = stmt.span();
+    semantic.nodes().iter().any(|node| {
+        let AstKind::CallExpression(call) = node.kind() else {
+            return false;
+        };
+        let call_span = call.span();
+        iteration_span.start <= call_span.start
+            && call_span.end <= iteration_span.end
+            && call_is_allowed_test_call(call)
+    })
+}
+
 /// Classify a top-level statement.
 fn top_level_is_allowed(
     stmt: &Statement,
@@ -501,6 +553,14 @@ fn top_level_is_allowed(
     wrapper_decl_ids: &FxHashSet<oxc_semantic::NodeId>,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
+    // A module-scope iteration whose body registers tests
+    // (`cases.forEach(c => it(c.name, ...))`, `for (const c of cases) { test(...) }`)
+    // is dynamic table-driven test registration. It must run at collection time;
+    // `it`/`test` cannot be registered from inside a hook — see
+    // `is_test_registering_iteration`.
+    if is_test_registering_iteration(stmt, semantic) {
+        return true;
+    }
     match stmt {
         Statement::ImportDeclaration(_)
         | Statement::ExportAllDeclaration(_)
@@ -1796,6 +1856,99 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "peeling parens must reach the CallExpression of a wrapped IIFE, which still fires and must be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_foreach_registering_tests_at_top_level() {
+        let src = r#"
+import fs from 'node:fs'
+import { test } from 'vitest'
+
+const examples = fs.readdirSync(examplesDir)
+
+examples.forEach(ex => {
+  test(`example ${ex}`, async () => {});
+})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "examples.test.ts");
+        assert!(
+            d.is_empty(),
+            "a module-scope forEach that registers tests is dynamic test registration and must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_for_of_registering_tests_at_top_level() {
+        let src = r#"
+import { describe, it } from 'vitest'
+
+const cases = [{ name: 'a' }, { name: 'b' }]
+
+for (const c of cases) {
+  it(c.name, () => {});
+}
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "table.test.ts");
+        assert!(
+            d.is_empty(),
+            "a module-scope for...of loop that registers tests must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_map_registering_tests_with_member_form_at_top_level() {
+        let src = r#"
+import { test } from 'vitest'
+
+const cases = ['a', 'b']
+
+cases.map(c => test.only(c, () => {}))
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "member.test.ts");
+        assert!(
+            d.is_empty(),
+            "a module-scope .map registering tests via a member form (test.only) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_foreach_doing_setup_without_test_registration() {
+        let src = r#"
+import { describe, it } from 'vitest'
+
+const data = [1, 2, 3]
+
+data.forEach(d => seed(d))
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "seed.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a module-scope forEach that does genuine setup (no it/test/describe) must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_for_loop_doing_setup_without_test_registration() {
+        let src = r#"
+import { describe, it } from 'vitest'
+
+const data = [1, 2, 3]
+
+for (const d of data) {
+  seed(d);
+}
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "seed-loop.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a module-scope for...of loop doing genuine setup (no test registration) must still be flagged: {d:?}"
         );
     }
 }
