@@ -25,6 +25,17 @@ fn leading_prefix(name: &str) -> String {
     buf
 }
 
+/// Whether `ty` is a function type — an arrow signature `(...) => T`
+/// (`TSFunctionType`) or a constructor signature `new (...) => T`
+/// (`TSConstructorType`). An optional member typed as a function is a
+/// callback / event-handler / visitor hook (`visitProgram?: (ctx) => Result`,
+/// `onClick?: () => void`), independently overridable, never a
+/// mutually-exclusive DATA variant — so it must not feed the cluster.
+fn is_function_type(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::TSType;
+    matches!(ty, TSType::TSFunctionType(_) | TSType::TSConstructorType(_))
+}
+
 /// Whether `name` is a DOM/React event-handler prop (`on` followed by an
 /// uppercase letter, e.g. `onClick`, `onMouseEnter`). These are independent
 /// callbacks that share the `on*` prefix by naming convention — a component
@@ -167,13 +178,21 @@ fn collect_optional_prefixes<'b>(
         if !prop.optional {
             continue;
         }
-        // Skip phantom / mutually-exclusive-props patterns where the
-        // annotation is `never` — those keys MUST be absent, opposite
-        // of an optional state flag. (Regression: #120.)
-        if let Some(annot) = &prop.type_annotation
-            && matches!(annot.type_annotation, oxc_ast::ast::TSType::TSNeverKeyword(_))
-        {
-            continue;
+        if let Some(annot) = &prop.type_annotation {
+            // Skip phantom / mutually-exclusive-props patterns where the
+            // annotation is `never` — those keys MUST be absent, opposite
+            // of an optional state flag. (Regression: #120.)
+            if matches!(annot.type_annotation, oxc_ast::ast::TSType::TSNeverKeyword(_)) {
+                continue;
+            }
+            // Skip function-typed members — callbacks / event handlers /
+            // visitor hooks (`visitProgram?: (ctx) => Result`) are
+            // independently overridable, not mutually-exclusive DATA
+            // variants, so they carry no discriminated-union signal.
+            // (Regression: #4698.)
+            if is_function_type(&annot.type_annotation) {
+                continue;
+            }
         }
         let name = match &prop.key {
             oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
@@ -243,6 +262,12 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Generated files (e.g. the ANTLR `// Generated from … by ANTLR`
+        // banner) declare machine-emitted interfaces — a discriminated-union
+        // refactor is not actionable. (Regression: #4698.)
+        if ctx.file.is_generated {
+            return;
+        }
         // Module augmentations (`declare module 'foo' { ... }`) are not API
         // response types — optional fields there are intentional metadata.
         if crate::oxc_helpers::is_in_ambient_declaration(node.id(), semantic) {
@@ -547,6 +572,63 @@ mod tests {
         // start with `on` followed by a lowercase letter (`onlineSince`/
         // `onlineUntil`, bucket `onli`) is not an event handler and stays flagged.
         let src = "interface Session { onlineSince?: Date; onlineUntil?: Date }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_antlr_visitor_interface_function_typed_hooks() {
+        // Regression for #4698: an ANTLR4-generated visitor interface declares
+        // one optional `visit*` member per grammar rule, each typed as an arrow
+        // signature `(ctx) => Result`. These are independent, selectively
+        // overridable hooks (visitor pattern), not mutually-exclusive DATA
+        // variants — the discriminated-union refactor is nonsensical. Function-
+        // typed optional members must not feed the cluster.
+        let src = r#"export interface TSQLParserVisitor<Result> {
+  visitProgram?: (ctx: ProgramContext) => Result;
+  visitDeclaration?: (ctx: DeclarationContext) => Result;
+  visitVarDecl?: (ctx: VarDeclContext) => Result;
+  visitFunctionDef?: (ctx: FunctionDefContext) => Result;
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_hand_written_handler_interface_function_typed() {
+        // Regression for #4698: the function-type discriminator is general, so
+        // a hand-written event-handler interface whose optional members are
+        // arrow types (`handleA?: () => void`, bucket `hand`) is also exempt —
+        // independent handlers, not data variants. The `on*` exemption already
+        // covers `onA`/`onB`, so `handle*` exercises the type-shape signal.
+        let src = r#"interface Handlers {
+  handleOpen?: () => void;
+  handleClose?: () => void;
+  handleToggle?: () => void;
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_data_field_variant_cluster_among_function_fields() {
+        // Negative-space guard for #4698: dropping function-typed members from
+        // the cluster must not mask a genuine DATA-field variant smell declared
+        // in the same type — `cancelReason?`/`cancelledAt?` (bucket `canc`,
+        // string/Date data) stays flagged alongside arrow-typed handlers.
+        let src = r#"interface Order {
+  handleOpen?: () => void;
+  handleClose?: () => void;
+  cancelReason?: string;
+  cancelledAt?: Date;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_data_field_cluster_sharing_visit_prefix() {
+        // Negative-space guard for #4698: the exemption is the function-type
+        // shape, NOT the `visit` name. A DATA-field cluster that merely shares
+        // the `visi` bucket (`visibleFrom?: Date`/`visitedAt?: Date`) is a
+        // genuine optional-flag smell and stays flagged.
+        let src = "interface Page { visibleFrom?: Date; visitedAt?: Date; visualMode?: string }";
         assert_eq!(run_on(src).len(), 1);
     }
 
