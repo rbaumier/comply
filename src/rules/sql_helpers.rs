@@ -57,12 +57,16 @@ pub(crate) fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// True when `path` sits inside a migration directory — any path
-/// component named `migrations`, `migration`, or containing `migrate`.
+/// True when `path` sits inside a migration directory — a path
+/// component named exactly `migrations`, `migration`, or `migrate`.
+/// An exact component match (not a substring) so a migration-framework
+/// package whose own directory name merely contains `migrate`
+/// (`node-pg-migrate`, `db-migrate`) is not mistaken for a migrations
+/// directory.
 pub fn is_migration_path(path: &std::path::Path) -> bool {
     path.components().any(|c| {
         let s = c.as_os_str().to_string_lossy().to_ascii_lowercase();
-        s == "migrations" || s == "migration" || s.contains("migrate")
+        s == "migrations" || s == "migration" || s == "migrate"
     })
 }
 
@@ -422,5 +426,28 @@ mod tests {
             "varchar_value(arg)",
             "varchar"
         ));
+    }
+
+    #[test]
+    fn is_migration_path_matches_migration_dirs() {
+        use std::path::Path;
+        assert!(is_migration_path(Path::new("myapp/migrations/001.ts")));
+        assert!(is_migration_path(Path::new("src/migration/0001.ts")));
+        assert!(is_migration_path(Path::new("db/migrate/0001_init.rb")));
+        assert!(is_migration_path(Path::new("MIGRATIONS/v1.sql"))); // case-insensitive
+    }
+
+    #[test]
+    fn is_migration_path_rejects_framework_package_dirs_issue_5793() {
+        use std::path::Path;
+        // node-pg-migrate / db-migrate-pg own source: the package directory
+        // name contains `migrate` as a substring but is not a migrations dir.
+        assert!(!is_migration_path(Path::new(
+            "node-pg-migrate/src/operations/tables/addConstraint.ts"
+        )));
+        assert!(!is_migration_path(Path::new("db-migrate/pg/index.js")));
+        assert!(!is_migration_path(Path::new(
+            "node_modules/db-migrate-pg/index.js"
+        )));
     }
 }
