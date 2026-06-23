@@ -371,6 +371,25 @@ export function AnotherComponent() { return <span />; }
     }
 
     #[test]
+    fn no_fp_zero_component_only_factory_exports() {
+        // #5769 firing site (products-columns.tsx, achats/teams/categories/gammes):
+        // a `.tsx` exporting only camelCase column/filter factories — JSX lives in
+        // cell-renderer closures, not in a top-level component export. With zero
+        // component exports there is no Fast-Refresh boundary to protect, so the
+        // `component_exports.is_empty()` gate must keep the module silent.
+        let source = r#"
+import React from 'react';
+export function getProductsColumns() {
+  return [{ cell: () => <span>x</span> }];
+}
+export function getProductsFilters() {
+  return [statutFilter()];
+}
+"#;
+        assert!(run(source).is_empty(), "{:?}", run(source));
+    }
+
+    #[test]
     fn allows_type_exports_with_components() {
         let source = r#"
 export type Props = { name: string };
