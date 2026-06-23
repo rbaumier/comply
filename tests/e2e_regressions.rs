@@ -149,3 +149,47 @@ fn comply_ignore_file_suppresses_unused_file_on_plugin_resolved_entry() {
         .assert()
         .stdout(predicate::str::contains("unused-file").not());
 }
+
+#[test]
+fn migration_lock_timeout_ignores_framework_package_dirs() {
+    // node-pg-migrate / db-migrate own source: the package directory name
+    // contains `migrate` as a substring but is not a migrations directory.
+    // The framework's own DDL builders must not be flagged for a missing
+    // `SET lock_timeout`; a real file under `migrations/` still is.
+    let dir = TempDir::new().expect("failed to create temp dir");
+    fs::create_dir_all(dir.path().join("node-pg-migrate/src/operations/tables"))
+        .unwrap();
+    fs::write(
+        dir.path()
+            .join("node-pg-migrate/src/operations/tables/addConstraint.ts"),
+        "export const add = (tableName: string) =>\n\
+         `ALTER TABLE ${tableName} ADD CONSTRAINT fk FOREIGN KEY (id);`;\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("migrations")).unwrap();
+    fs::write(
+        dir.path().join("migrations/001_add_age.ts"),
+        "export const up = `ALTER TABLE users ADD COLUMN age INT;`;\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(dir.path())
+        .assert()
+        // Framework package source must NOT get the lock-timeout warning…
+        .stdout(
+            predicate::str::is_match(
+                r"addConstraint\.ts:\d+:\d+:.*\[migration-needs-lock-timeout\]",
+            )
+            .unwrap()
+            .not(),
+        )
+        // …while the real migration file still does.
+        .stdout(
+            predicate::str::is_match(
+                r"001_add_age\.ts:\d+:\d+:.*\[migration-needs-lock-timeout\]",
+            )
+            .unwrap(),
+        );
+}
