@@ -19,6 +19,12 @@
 //! `julian_days`, `unix_seconds`, `created_at_seconds`, `*_timestamp`,
 //! `*_epoch`, `*_epoch_*`) are exempted — `Duration` models an elapsed span,
 //! not an absolute timeline point, so the suggestion would be wrong.
+//! A struct *field* is exempted when its enclosing `struct_item` derives serde
+//! `Serialize` or `Deserialize`: the integer is the wire/JSON contract. A
+//! `Duration` serializes as a `{secs, nanos}` object, so swapping the type
+//! changes the serialized representation and breaks the API schema. This applies
+//! to fields only — a function parameter is not a serialization target and
+//! still flags.
 //! A plain-integer field is exempted when the file declares an atomic-integer
 //! field (`AtomicU64`, `std::sync::atomic::AtomicI64`, ...) with the exact same
 //! name. Rust has no `AtomicDuration`, so a field built from an atomic counter
@@ -90,6 +96,7 @@ impl AstCheck for Check {
             && has_time_unit_suffix(name)
             && is_integer_type(type_text)
             && !mirrors_atomic_counter(node, name, source_bytes)
+            && !in_serde_derived_struct(node, source_bytes)
         {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
             return;
@@ -177,6 +184,67 @@ fn file_has_atomic_field_named(node: tree_sitter::Node, name: &str, source: &[u8
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .any(|child| file_has_atomic_field_named(child, name, source))
+}
+
+/// True when the `field_declaration`'s enclosing `struct_item` carries a
+/// `#[derive(...)]` whose list includes serde's `Serialize` or `Deserialize`.
+/// Such a struct is a (de)serialization target: the integer field is the
+/// wire/JSON representation, and `Duration` would serialize as a nested
+/// `{secs, nanos}` object — changing the contract. The derive list is matched
+/// by final path segment, so `serde::Serialize` counts but a custom
+/// `MySerialize` does not.
+fn in_serde_derived_struct(field: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut node = field;
+    while let Some(parent) = node.parent() {
+        if parent.kind() == "struct_item" {
+            return struct_derives_serde(parent, source);
+        }
+        node = parent;
+    }
+    false
+}
+
+/// True when `struct_item`'s preceding `#[derive(...)]` attributes include a
+/// serde `Serialize` or `Deserialize` entry (matched by final path segment).
+fn struct_derives_serde(struct_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = struct_item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && derive_paths(text).any(|p| {
+                        let seg = final_segment(p);
+                        seg == "Serialize" || seg == "Deserialize"
+                    })
+                {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// Yield each derive entry inside `#[derive(...)]` as a trimmed path string.
+/// Returns nothing when the attribute text carries no derive list.
+fn derive_paths(attr_text: &str) -> impl Iterator<Item = &str> {
+    attr_text
+        .split_once("derive(")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(inside, _)| inside)
+        .into_iter()
+        .flat_map(|inside| inside.split(','))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+}
+
+/// The last `::`-separated segment of a path token (`serde::Serialize` ->
+/// `Serialize`, `Serialize` -> `Serialize`).
+fn final_segment(path: &str) -> &str {
+    path.rsplit("::").next().unwrap_or(path).trim()
 }
 
 fn make_diagnostic(
@@ -387,5 +455,71 @@ struct UnrelatedMetrics { timeout_ms: AtomicU64 }";
     #[test]
     fn flags_fn_parameter_delay_ms_i64() {
         assert_eq!(run_on("fn f(delay_ms: i64) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_serde_serialized_field() {
+        // quickwit `SearchResponseRest`: the integer is the REST API's JSON
+        // contract. `Duration` would serialize as `{secs, nanos}`, breaking
+        // the schema. Regression for #5608.
+        let source = "#[derive(Serialize)]\nstruct Resp { elapsed_time_micros: u64 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_serde_deserialize_serialize_field() {
+        let source =
+            "#[derive(Serialize, Deserialize)]\nstruct Resp { timeout_ms: u64 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_qualified_serde_serialize_field() {
+        let source = "#[derive(serde::Serialize)]\nstruct Resp { latency_ms: u64 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_serde_field_with_interleaved_attrs_and_doc() {
+        // The derive may sit above other attributes and a doc comment.
+        let source = "\
+/// REST response.
+#[derive(Serialize, PartialEq, Debug)]
+#[allow(dead_code)]
+struct Resp { elapsed_time_micros: u64 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_field_in_non_serde_struct() {
+        // A duration integer field in a struct that does NOT derive serde is
+        // still flagged — there is no serialization contract to protect.
+        let source = "#[derive(Debug, Clone)]\nstruct Config { timeout_ms: u64 }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_field_in_struct_without_derive() {
+        assert_eq!(run_on("struct Config { timeout_ms: u64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_fn_param_when_serde_struct_in_same_file() {
+        // The serde exemption is field-scoped: a function parameter is not a
+        // serialization target, so a serde-derived struct elsewhere in the file
+        // must not silence it.
+        let source = "\
+#[derive(Serialize)]
+struct Resp { latency_ms: u64 }
+fn build(timeout_ms: u64) -> u64 { timeout_ms }";
+        // The struct field is exempt; the fn parameter still flags → exactly one.
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_custom_serialize_derive_field() {
+        // A custom derive whose name merely contains the substring is not serde.
+        let source = "#[derive(MySerialize)]\nstruct Config { timeout_ms: u64 }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
