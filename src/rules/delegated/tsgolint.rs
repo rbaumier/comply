@@ -934,7 +934,37 @@ impl PostFilter for NoUnsafeAssignmentFilter {
     fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
         let Some(src) = source else { return true };
         !is_plugin_option_cast_fp(src, diag.line)
+            && !is_vitest_asymmetric_matcher_fp(src, diag.line)
     }
+}
+
+// Vitest/Jest asymmetric-matcher factories. Each is typed to return `any`
+// (their public typings), so nesting one inside an `objectContaining({ … })`
+// or assigning it to a typed location trips `no-unsafe-assignment`. The matcher
+// is a runtime assertion object consumed by the equality engine — there is no
+// type hole to close, and rewriting to avoid the `any` is impossible without
+// casting Vitest's public API. These call signatures are test-only (the `expect`
+// global does not exist in production code), so a line-level signature match is a
+// safe, scope-free drop (#5770).
+const VITEST_ASYMMETRIC_MATCHERS: &[&str] = &[
+    "expect.any(",
+    "expect.anything(",
+    "expect.stringMatching(",
+    "expect.stringContaining(",
+    "expect.objectContaining(",
+    "expect.arrayContaining(",
+    "expect.closeTo(",
+];
+
+fn is_vitest_asymmetric_matcher_fp(src: &str, line_1based: usize) -> bool {
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    let line_text = lines[line_1based - 1];
+    VITEST_ASYMMETRIC_MATCHERS
+        .iter()
+        .any(|matcher| line_text.contains(matcher))
 }
 
 fn is_plugin_option_cast_fp(src: &str, line_1based: usize) -> bool {
@@ -2811,6 +2841,40 @@ const x: string = unknownAny as string;
 "#;
         let path = write_temp("no_plugin_option.ts", src);
         let line = line_of(src, "as string");
+        let src_content = source_for(&path);
+        let f = NoUnsafeAssignmentFilter;
+        assert!(f.keep(&unsafe_assign_diag(&path, line), Some(&src_content)));
+    }
+
+    // Regression for #5770: a Vitest asymmetric matcher nested in
+    // `objectContaining` returns `any` from its own typings — drop the FP.
+    #[test]
+    fn drops_vitest_asymmetric_matcher() {
+        let src = r#"it("reports", () => {
+  expect(errorReporter.captureException).toHaveBeenCalledWith(
+    expect.any(Error),
+    expect.objectContaining({ requestId: expect.stringMatching(uuidv7Regex) }),
+  );
+});
+"#;
+        let path = write_temp("error-handler.test.ts", src);
+        let line = line_of(src, "expect.objectContaining(");
+        let src_content = source_for(&path);
+        let f = NoUnsafeAssignmentFilter;
+        assert!(!f.keep(&unsafe_assign_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn keeps_unsafe_assignment_on_non_matcher_line_in_test() {
+        // Negative-space guard: a genuine unsafe assignment in a test file whose
+        // line carries no asymmetric matcher must still be reported.
+        let src = r#"it("does work", () => {
+  const value: string = readAny() as string;
+  expect(value).toBe("x");
+});
+"#;
+        let path = write_temp("genuine.test.ts", src);
+        let line = line_of(src, "readAny()");
         let src_content = source_for(&path);
         let f = NoUnsafeAssignmentFilter;
         assert!(f.keep(&unsafe_assign_diag(&path, line), Some(&src_content)));
