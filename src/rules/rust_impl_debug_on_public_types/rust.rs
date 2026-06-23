@@ -18,7 +18,9 @@
 //! mirrors — whether spelled as an item-level outer attribute, an outer
 //! attribute on an enclosing `mod`, or a file/module-level inner attribute
 //! `#![allow(missing_debug_implementations)]` (which suppresses every item in
-//! that file/module, as rustc does), types with
+//! that file/module, as rustc does), PyO3 `#[pyclass]` types (Python extension
+//! objects whose debug surface is Python's `__repr__`/`__str__`, not Rust
+//! `Debug`), types with
 //! raw-pointer fields, and types that store a closure/function in a field
 //! whose generic type parameter carries an `Fn`/`FnMut`/`FnOnce` bound (the
 //! combinator pattern in poem/tower/axum — closures don't implement `Debug`,
@@ -37,8 +39,14 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    has_clippy_allow, has_doc_hidden, has_test_attribute, is_in_test_context,
+    has_clippy_allow, has_doc_hidden, has_outer_attribute_path, has_test_attribute,
+    is_in_test_context,
 };
+
+/// PyO3 `#[pyclass]` attribute spellings: the bare form and the fully-qualified
+/// path. A type carrying it is a Python extension class whose debug surface is
+/// the Python `__repr__`/`__str__` protocol, not Rust's `Debug`.
+const PYCLASS_ATTRS: &[&str] = &["pyclass", "pyo3::pyclass"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -91,6 +99,14 @@ impl AstCheck for Check {
             return;
         }
         if has_doc_hidden(node, source_bytes) {
+            return;
+        }
+        // A PyO3 `#[pyclass]` type is a Python extension object: its public-facing
+        // debug surface is Python's `__repr__`/`__str__` (defined in
+        // `#[pymethods]`), a distinct contract from Rust's `Debug`. PyO3 itself
+        // does not require `Debug`, so the rule's premise — "Rust consumers can't
+        // log it" — does not apply.
+        if has_outer_attribute_path(node, source_bytes, PYCLASS_ATTRS) {
             return;
         }
         // The author opted out of the rustc lint this rule mirrors, at item,
@@ -896,6 +912,53 @@ edition = "2021"
             run_on_with_cargo(BINARY_ONLY_CARGO_TOML, "pub enum Buffer { Stdout, Stderr }")
                 .is_empty(),
             "must not flag pub enums in a binary-only crate"
+        );
+    }
+
+    /// Closes #5784 (issue repro): a PyO3 `#[pyclass]` enum is a Python
+    /// extension object — Python uses `__repr__`/`__str__`, not Rust `Debug` —
+    /// so it must not be flagged for a missing `Debug` impl.
+    #[test]
+    fn suppresses_pyclass_enum() {
+        let source = "#[pyclass]\npub enum PySign { Positive, Negative }";
+        assert!(
+            run_on(source).is_empty(),
+            "a #[pyclass] enum must not be flagged for missing Debug"
+        );
+    }
+
+    /// Closes #5784: the parametrized form `#[pyclass(name = "UBig")]` (dashu's
+    /// `UPy`) must also be exempted — the guard keys on the attribute path, not
+    /// its arguments.
+    #[test]
+    fn suppresses_parametrized_pyclass_struct() {
+        let source = "#[derive(Clone)]\n#[pyclass(name = \"UBig\")]\npub struct UPy(pub u32);";
+        assert!(
+            run_on(source).is_empty(),
+            "a #[pyclass(name = ...)] struct must not be flagged for missing Debug"
+        );
+    }
+
+    /// The fully-qualified `#[pyo3::pyclass]` path form is the same Python
+    /// extension class and must also be exempted.
+    #[test]
+    fn suppresses_qualified_pyo3_pyclass_struct() {
+        let source = "#[pyo3::pyclass]\npub struct Wrapper(pub u32);";
+        assert!(
+            run_on(source).is_empty(),
+            "a #[pyo3::pyclass] struct must not be flagged for missing Debug"
+        );
+    }
+
+    /// Load-bearing negative: an ordinary public type with no `#[pyclass]` is a
+    /// Rust-facing type and must still be flagged — the exemption is
+    /// `#[pyclass]`-specific, not a blanket carve-out.
+    #[test]
+    fn still_flags_plain_pub_struct_without_pyclass() {
+        assert_eq!(
+            run_on("pub struct Api { name: String }").len(),
+            1,
+            "a public type without #[pyclass] must still flag"
         );
     }
 
