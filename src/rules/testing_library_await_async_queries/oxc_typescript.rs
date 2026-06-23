@@ -8,6 +8,28 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// True when the file imports from a `@testing-library/*` package. A genuine
+/// async query (`screen.findByText`, a `render()`-destructured `findBy*`, …)
+/// originates from Testing Library, which is always pulled in via such an
+/// import. Without it, a `findBy*` / `findAllBy*` method is just a domain API
+/// whose name coincides with the query convention (e.g. a `pgDriver.findByName`
+/// migration lookup, a repository's `findByEmail`) and returns no Promise to
+/// await — so the rule must not fire at all in that file.
+///
+/// Queries re-exported through a custom test-utils module (imported only from a
+/// relative path, never directly from `@testing-library/*`) are not detected —
+/// matching eslint-plugin-testing-library's default, which requires opt-in
+/// config to recognize custom render modules.
+fn file_imports_testing_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(decl) = node.kind() else {
+            return false;
+        };
+        let spec = decl.source.value.as_str();
+        spec == "@testing-library" || spec.starts_with("@testing-library/")
+    })
+}
+
 /// Cypress Testing Library (`@testing-library/cypress`) adds `findBy*` /
 /// `findAllBy*` methods to the `cy` object. They return a `Cypress.Chainable`
 /// (resolved through Cypress's command queue), not a Promise — awaiting them
@@ -96,6 +118,13 @@ impl OxcCheck for Check {
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
+        // An async query originates from Testing Library, imported via a
+        // `@testing-library/*` package. Without that import the `findBy*` name
+        // belongs to an unrelated domain API (DB driver, repository, …), not a
+        // TL query, so nothing in the file should flag (#5801).
+        if !file_imports_testing_library(semantic) {
+            return;
+        }
         let name = match &call.callee {
             Expression::Identifier(id) => id.name.as_str(),
             Expression::StaticMemberExpression(m) => {
@@ -154,29 +183,67 @@ mod tests {
 
     #[test]
     fn flags_unawaited_find_by_query() {
-        let src = r#"const el = screen.findByText("hi");"#;
+        let src = r#"
+            import { screen } from "@testing-library/react";
+            const el = screen.findByText("hi");
+        "#;
         assert_eq!(run(src, "t.ts").len(), 1);
     }
 
     #[test]
     fn skips_awaited_find_by_query() {
-        let src = r#"const el = await screen.findByText("hi");"#;
+        let src = r#"
+            import { screen } from "@testing-library/react";
+            const el = await screen.findByText("hi");
+        "#;
         assert!(run(src, "t.ts").is_empty());
+    }
+
+    // Regression for #5801: a domain API whose method name happens to start with
+    // `findBy*` (a db-migrate driver's `findByName`, a repository's
+    // `findByEmail`) is not a Testing Library query — the file does not import
+    // `@testing-library/*`, so nothing should flag even when the call is not
+    // awaited.
+    #[test]
+    fn skips_find_by_on_non_testing_library_receiver() {
+        let src = r#"
+            var pgDriver = require('../index.js');
+            pgDriver.findByName('migration_name', function(err, migration) {
+              assert.equal(migration.name, 'migration_name');
+            });
+        "#;
+        assert!(run(src, "pg_test.js").is_empty(), "{:?}", run(src, "pg_test.js"));
+    }
+
+    #[test]
+    fn skips_repository_find_by_email_without_testing_library() {
+        let src = r#"
+            import { repository } from "./repository";
+            const user = repository.findByEmail("a@b.com");
+        "#;
+        assert!(run(src, "user.test.ts").is_empty(), "{:?}", run(src, "user.test.ts"));
     }
 
     // Regression for #1897: react-test-renderer's `findByType`/`findByProps`
     // (and their `findAllBy*` variants) are synchronous — they return a
-    // `ReactTestInstance`, not a Promise — so an unawaited call is correct.
+    // `ReactTestInstance`, not a Promise — so an unawaited call is correct even
+    // in a file that also uses Testing Library.
     #[test]
     fn skips_react_test_renderer_find_by_type() {
-        let src = r#"const view = tree.root.findByType(View);"#;
+        let src = r#"
+            import { render } from "@testing-library/react";
+            const view = tree.root.findByType(View);
+        "#;
         assert!(run(src, "createTheme.test.tsx").is_empty(), "{:?}", run(src, "createTheme.test.tsx"));
     }
 
     #[test]
     fn skips_react_test_renderer_sync_queries() {
         for name in ["findByProps", "findAllByType", "findAllByProps"] {
-            let src = format!("const r = tree.root.{name}(View);");
+            let src = format!(
+                "import {{ render }} from \"@testing-library/react\";\n\
+                 const r = tree.root.{name}(View);"
+            );
             assert!(run(&src, "t.tsx").is_empty(), "{name}: {:?}", run(&src, "t.tsx"));
         }
     }
@@ -187,6 +254,7 @@ mod tests {
     #[test]
     fn skips_cypress_find_by_queries() {
         let src = r#"
+            import "@testing-library/cypress/add-commands";
             describe('Select', () => {
               it('should submit and react to changes', () => {
                 cy.findByText('buy').click();
@@ -201,7 +269,9 @@ mod tests {
     #[test]
     fn skips_cypress_find_by_chained_on_cy() {
         for q in ["cy.get('form').findByRole('button')", "cy.findAllByText('x')"] {
-            let src = format!("{q};");
+            let src = format!(
+                "import \"@testing-library/cypress/add-commands\";\n{q};"
+            );
             assert!(run(&src, "t.cy.ts").is_empty(), "{q}: {:?}", run(&src, "t.cy.ts"));
         }
     }
