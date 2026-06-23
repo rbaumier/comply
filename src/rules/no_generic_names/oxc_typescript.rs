@@ -12,13 +12,13 @@ pub struct Check;
 /// Filler words flagged only when the *entire* identifier (case-insensitive)
 /// equals one of them: `result`/`Result`/`RESULT` fire, but `parsedResult` and
 /// `resultData` do not. These read as vague on their own yet are legitimate
-/// segments of a descriptive compound (`resultCount`, `inputValue`), so they
+/// segments of a descriptive compound (`resultCount`, `valueKind`), so they
 /// never match as a prefix or suffix.
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "results", "obj", "objs", "item", "items", "thing", "stuff", "val",
     "retval", "value", "values", "foo", "bar", "baz", "qux", "tmp",
-    "dummy", "placeholder", "arr", "list", "lists", "str", "num", "output", "outputs", "input",
-    "inputs", "payload", "payloads", "flag", "stub", "fake", "foobar", "quux", "corge", "blah",
+    "dummy", "placeholder", "arr", "list", "lists", "str", "num",
+    "payload", "payloads", "flag", "stub", "fake", "foobar", "quux", "corge", "blah",
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
     "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "ptr",
     "ret", "out", "vars", "entity", "entities", "dto", "resource", "resources", "entry", "entries",
@@ -1412,19 +1412,19 @@ mod tests {
 
     #[test]
     fn no_fp_pascal_case_react_component_exports_issue_4368() {
-        // Regression for #4368 — `Input`/`Label`/… are conventional design-system
+        // Regression for #4368 — `Result`/`Label`/… are conventional design-system
         // component export names (shadcn / Base UI). A PascalCase binding whose
-        // initializer is a React component is out of scope; `input`/`item`/etc.
+        // initializer is a React component is out of scope; `result`/`item`/etc.
         // are banned words but the component shape proves they are not generic.
         assert!(
-            run_tsx("export const Input = React.forwardRef((props, ref) => <input ref={ref} {...props} />);")
+            run_tsx("export const Result = React.forwardRef((props, ref) => <output ref={ref} {...props} />);")
                 .is_empty()
         );
         assert!(
-            run_tsx("export const Input = forwardRef((props, ref) => <input {...props} />);").is_empty()
+            run_tsx("export const Record = forwardRef((props, ref) => <div {...props} />);").is_empty()
         );
         assert!(run_tsx("export const Label = (props) => <label {...props} />;").is_empty());
-        assert!(run_tsx("const Output = React.memo(() => <output />);").is_empty());
+        assert!(run_tsx("const Value = React.memo(() => <output />);").is_empty());
         assert!(run_tsx("export function Item() { return <li />; }").is_empty());
     }
 
@@ -1432,12 +1432,12 @@ mod tests {
     fn still_flags_pascal_case_non_component_bindings_issue_4368() {
         // Negative space: the exemption requires the React-component shape, not
         // just PascalCase. `DefaultData` (plain call), `class DataSource`, and
-        // `Input = 5` (literal) keep firing, while an ordinary generic value is
+        // `Result = 5` (literal) keep firing, while an ordinary generic value is
         // unchanged.
         assert_eq!(run_tsx("export const DefaultData = computeData();").len(), 1);
         assert_eq!(run("const data = fetchData();").len(), 1);
         assert_eq!(run("class DataSource {}").len(), 1);
-        assert_eq!(run_tsx("export const Input = 5;").len(), 1);
+        assert_eq!(run_tsx("export const Result = 5;").len(), 1);
     }
 
     #[test]
@@ -2523,5 +2523,33 @@ mod tests {
         // what this holds" and keep firing.
         assert_eq!(run("function f() { const value = mk(); return value; }").len(), 1);
         assert_eq!(run("const data = fetchData();").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_input_output_are_io_role_nouns_issue_5796() {
+        // Regression for #5796 — `input`/`output` name a specific I/O role: a
+        // source vs a sink. They are the canonical, self-documenting bindings for
+        // an I/O endpoint across I/O, MIDI (`MIDIInput`/`MIDIOutput`), audio,
+        // streams, and compilers — a directional domain noun like
+        // `request`/`response`, not a vague catch-all — so they are no longer
+        // banned. Bare and plural forms are all clean.
+        assert!(run("this.inputs.forEach(input => promises.push(input.destroy()));").is_empty());
+        assert!(run("this.outputs.forEach(output => promises.push(output.destroy()));").is_empty());
+        assert!(run("constructor(output, number) { this.output = output; }").is_empty());
+        assert!(run("function guessNoteNumber(input) { return parse(input); }").is_empty());
+        assert!(run("const inputs = ports.filter(p => p.kind === 'input');").is_empty());
+        assert!(run("const outputs = ports.filter(p => p.kind === 'output');").is_empty());
+    }
+
+    #[test]
+    fn still_flags_catch_all_placeholders_issue_5796() {
+        // Negative space for #5796 — removing the directional I/O nouns
+        // `input`/`output` does not weaken the catch-all placeholders. `data`/
+        // `value`/`payload`/`body` still read as "I don't know what this holds"
+        // and keep firing.
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        assert_eq!(run("function f() { const value = mk(); return value; }").len(), 1);
+        assert_eq!(run("function f() { const payload = build(); return payload; }").len(), 1);
+        assert_eq!(run("function f() { const body = read(); return body; }").len(), 1);
     }
 }
