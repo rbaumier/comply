@@ -54,8 +54,13 @@ pub fn register() -> RuleDef {
 
 /// True if `text` contains a `LIKE '%...` (leading-wildcard) pattern.
 /// Matches both single and double quote variants, case-insensitive on
-/// the keyword.
+/// the keyword. Exempts introspection over Postgres system catalogs
+/// (`pg_catalog.*` / `information_schema.*`): those tables are tiny and have no
+/// relevant index, so the leading wildcard costs nothing (#5751).
 pub(super) fn has_leading_wildcard_like(text: &str) -> bool {
+    if crate::rules::sql_helpers::targets_system_catalog(text) {
+        return false;
+    }
     text.contains("LIKE '%")
         || text.contains("like '%")
         || text.contains("LIKE \"%")

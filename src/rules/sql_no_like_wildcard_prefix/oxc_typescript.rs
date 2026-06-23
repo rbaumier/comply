@@ -78,4 +78,24 @@ mod tests {
         let src = r#"const q = "SELECT * FROM t WHERE name LIKE 'test%'";"#;
         assert!(run_on(src).is_empty());
     }
+
+    #[test]
+    fn allows_leading_wildcard_on_system_catalog() {
+        // FP #5751: introspection over pg_class — tiny unindexed catalog, no
+        // index to lose to the leading wildcard.
+        let src = r#"const q = `
+SELECT cls.relname AS name
+FROM pg_index i
+JOIN pg_class cls ON cls.oid = i.indexrelid
+WHERE cls.relname LIKE '%_trgm'
+`;"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_leading_wildcard_on_user_table() {
+        // The performance premise holds for real user tables.
+        let src = r#"const q = "SELECT * FROM products WHERE name LIKE '%foo'";"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
 }

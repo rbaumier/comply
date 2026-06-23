@@ -201,6 +201,43 @@ pub fn word_followed_by_open_paren(lower_text: &str, word: &str) -> bool {
     false
 }
 
+/// Postgres system-catalog relations that appear in schema-introspection
+/// queries. Whole-word matched (via `contains_word`) so user identifiers like
+/// `signup_class` don't match `pg_class`.
+const SYSTEM_CATALOG_TABLES: &[&str] = &[
+    "pg_class",
+    "pg_constraint",
+    "pg_index",
+    "pg_indexes",
+    "pg_namespace",
+    "pg_attribute",
+    "pg_am",
+    "pg_type",
+    "pg_proc",
+    "pg_depend",
+    "pg_inherits",
+    "pg_enum",
+    "pg_description",
+    "pg_stat_user_tables",
+    "pg_stat_user_indexes",
+];
+
+/// True if `text` is a query against a Postgres system catalog
+/// (`pg_catalog.*` relation or an `information_schema.*` view).
+///
+/// System catalogs are tiny, unindexed-for-text metadata tables: the
+/// leading-wildcard / function-on-indexed-column performance premises (which
+/// assume an index on a large table) do not apply, so SQL-quality rules whose
+/// justification is "this defeats an index on a large table" should exempt
+/// these queries.
+pub fn targets_system_catalog(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("information_schema.") {
+        return true;
+    }
+    SYSTEM_CATALOG_TABLES.iter().any(|t| contains_word(&lower, t))
+}
+
 /// Tree-sitter node kinds that represent string literals in TS / TSX / JS.
 /// Used by SQL rules to find candidate strings via
 /// `walker::collect_nodes_of_kinds`.
