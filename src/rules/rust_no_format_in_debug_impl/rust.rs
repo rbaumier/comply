@@ -21,6 +21,13 @@
 //!   return value of a closure (`unwrap_or_else(|e| format!(...))`,
 //!   `.map(|i| { ...; format!(...) })`). There is no formatter in scope to
 //!   `write!` to — the closure or binding must yield an owned `String`.
+//! - One supplying the *value* argument of a debug-builder field method —
+//!   `.field(name, &format!(...))` / `.entry(...)` / `.key(...)` / `.value(...)`
+//!   whose receiver chain roots at a `debug_struct`/`debug_tuple`/`debug_list`/
+//!   `debug_set`/`debug_map` call. Those methods take a `&dyn Debug`, so a
+//!   combined render of several values can only be passed via `format!`;
+//!   `write!`-ing into the formatter would bypass the builder and produce
+//!   malformed output.
 //!
 //! Nested helper functions (`fn helper() { ... }` declared inside the `fmt`
 //! method body) are skipped entirely: they open a new scope where the outer
@@ -147,6 +154,106 @@ fn is_first_named_arg(arguments: tree_sitter::Node, child: tree_sitter::Node) ->
         .named_children(&mut cursor)
         .next()
         .is_some_and(|first| first == child)
+}
+
+/// Debug-builder field methods that take a `&dyn Debug` value argument.
+const DEBUG_BUILDER_FIELD_METHODS: &[&str] = &["field", "entry", "key", "value"];
+
+/// The `debug_*` builder constructors whose returned builder a field method
+/// chains off of.
+const DEBUG_BUILDER_CTORS: &[&str] = &[
+    "debug_struct",
+    "debug_tuple",
+    "debug_list",
+    "debug_set",
+    "debug_map",
+];
+
+/// True when the `format!` invocation supplies a *value* argument of a
+/// debug-builder field method — `.field(name, &format!(...))` / `.entry(...)` /
+/// `.key(...)` / `.value(...)` — whose receiver chain roots at a `debug_struct`
+/// / `debug_tuple` / `debug_list` / `debug_set` / `debug_map` call. Those
+/// methods take a `&dyn Debug`; a render combining several values can only be
+/// produced via `format!`, and `write!`-ing into the formatter would bypass the
+/// builder and emit malformed output, so this `format!` cannot be rewritten.
+///
+/// Requiring an inline `debug_*` constructor in the receiver chain keeps the
+/// exemption precise: a `.field(&format!(...))` on an arbitrary (non-builder)
+/// receiver is not blanket-exempted.
+fn is_debug_builder_field_value(format_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let value = climb_value_wrappers(format_node);
+    let Some(arguments) = value.parent() else {
+        return false;
+    };
+    if arguments.kind() != "arguments" {
+        return false;
+    }
+    let Some(call) = arguments.parent() else {
+        return false;
+    };
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let is_field_method = function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
+        .is_some_and(|name| DEBUG_BUILDER_FIELD_METHODS.contains(&name));
+    if !is_field_method {
+        return false;
+    }
+    function
+        .child_by_field_name("value")
+        .is_some_and(|receiver| receiver_chain_roots_at_debug_builder(receiver, source))
+}
+
+/// Walks a method-call receiver chain (`a.b(..).c(..)` → `c`'s receiver is
+/// `a.b(..)`, whose receiver is `a`) looking for a `debug_*` builder
+/// constructor call (`f.debug_struct(...)`). A chain whose only links are
+/// further field/method accesses on a `debug_*` call returns true.
+fn receiver_chain_roots_at_debug_builder(receiver: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = receiver;
+    loop {
+        match current.kind() {
+            "call_expression" => {
+                if call_is_debug_builder_ctor(current, source) {
+                    return true;
+                }
+                // Step to the receiver of this call's method (`recv.method(..)`).
+                let Some(function) = current.child_by_field_name("function") else {
+                    return false;
+                };
+                if function.kind() != "field_expression" {
+                    return false;
+                }
+                match function.child_by_field_name("value") {
+                    Some(next) => current = next,
+                    None => return false,
+                }
+            }
+            // `a.b` access on a partial chain (rare): descend into the value.
+            "field_expression" => match current.child_by_field_name("value") {
+                Some(next) => current = next,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+}
+
+/// `call`'s function is a `field_expression` whose field is one of the
+/// `debug_*` builder constructors.
+fn call_is_debug_builder_ctor(call: tree_sitter::Node, source: &[u8]) -> bool {
+    call.child_by_field_name("function")
+        .filter(|function| function.kind() == "field_expression")
+        .and_then(|function| function.child_by_field_name("field"))
+        .and_then(|field| field.utf8_text(source).ok())
+        .is_some_and(|name| DEBUG_BUILDER_CTORS.contains(&name))
 }
 
 /// True when the `format!` invocation's arguments carry a truncation
@@ -314,6 +421,7 @@ fn collect_format_macros_in(
             && let Ok(name) = macro_node.utf8_text(source)
             && name == "format"
             && !is_debug_builder_name_arg(node, source)
+            && !is_debug_builder_field_value(node, source)
             && !format_args_contain_truncation_signal(node, source)
             && !format_is_owned_string_value(node)
         {
@@ -430,9 +538,11 @@ mod tests {
     }
 
     #[test]
-    fn flags_format_for_field_value_even_with_debug_struct() {
-        // The name arg is a literal here; the `format!` builds a field value,
-        // which is the genuine waste the rule targets.
+    fn allows_format_as_inline_debug_struct_field_value() {
+        // The `.field(..)` value is a `&dyn Debug`; `write!`-ing into the
+        // formatter would bypass the `debug_struct` builder. With the receiver
+        // chain rooting inline at `debug_struct`, this `format!` is exempt.
+        // See #4694.
         let source = r#"impl Debug for Foo {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.debug_struct("Foo")
@@ -440,7 +550,7 @@ mod tests {
                     .finish()
             }
         }"#;
-        assert_eq!(run_on(source).len(), 1);
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
@@ -493,6 +603,65 @@ mod tests {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 debug.field("name", &format!("{}", self.raw));
                 debug.finish()
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_format_as_debug_struct_field_value_issue_4694() {
+        // georust/geo edge_end.rs: two coords combined into one debug-display
+        // string for a `.field(..)` value. `DebugStruct::field` needs a
+        // `&dyn Debug`; `write!` would bypass the builder. See #4694.
+        let source = r#"impl<F: GeoFloat> fmt::Debug for EdgeEndKey<F> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("EdgeEndKey")
+                    .field(
+                        "coords",
+                        &format!("{:?} -> {:?}", &self.coord_0, &self.coord_1),
+                    )
+                    .field("quadrant", &self.quadrant)
+                    .finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_format_as_debug_tuple_field_value() {
+        // A `debug_tuple` builder's `.field(&format!(...))` value is exempt for
+        // the same reason. See #4694.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_tuple("Foo")
+                    .field(&format!("{:?}/{:?}", self.a, self.b))
+                    .finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_format_as_debug_map_entry_value() {
+        // `debug_map().entry(key, &format!(...))` value is exempt. See #4694.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_map()
+                    .entry(&"k", &format!("{:?}->{:?}", self.a, self.b))
+                    .finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_field_value_format_on_non_builder_receiver() {
+        // `.field(&format!(...))` on a receiver that does NOT root at a `debug_*`
+        // builder is not blanket-exempted — the precision guard for #4694.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let _ = self.builder.field("x", &format!("{}-{}", self.a, self.b));
+                write!(f, "Foo")
             }
         }"#;
         assert_eq!(run_on(source).len(), 1);
