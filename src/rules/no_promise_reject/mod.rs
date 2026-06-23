@@ -16,7 +16,13 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["functional"],
 
-    skip_in_test_dir: false,
+    // `Promise.reject(...)` is a production error-propagation anti-pattern: the
+    // rule steers callers toward a Result / typed throw. In test code a rejected
+    // promise is the *stimulus* — a `vi.fn(() => Promise.reject(...))` fixture
+    // that drives a queryFn/mutation error branch under test — not error handling
+    // to refactor, and there is no caller to hand a Result back to. Exempt the
+    // test scope via the central gate (#5757), mirroring comply#1396.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
