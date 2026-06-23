@@ -95,33 +95,12 @@ match node.kind() {
                 });
                 return;
             }
-            // Check self-comparison: `x == x`, `x != x`
-            if let Some(op_node) = node.child_by_field_name("operator")
-                && let Ok(op) = op_node.utf8_text(source)
-                && (op == "==" || op == "!=")
-                && let Some(left) = node.child_by_field_name("left")
-                && let Some(right) = node.child_by_field_name("right")
-                && let Ok(lt) = left.utf8_text(source)
-                && let Ok(rt) = right.utf8_text(source)
-                && lt == rt
-                && !lt.trim().is_empty()
-            {
-                let pos = node.start_position();
-                let msg = if op == "!=" {
-                    "Gratuitous expression: comparison `x != x` is always false."
-                } else {
-                    "Gratuitous expression: comparison `x == x` is always true."
-                };
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "no-gratuitous-expression".into(),
-                    message: msg.into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
-            }
+            // `x == x` / `x != x` is NOT flagged: it is the IEEE 754
+            // NaN-detection idiom (`x != x` is true iff `x` is NaN, the only
+            // value not equal to itself). Without type inference the operand
+            // cannot be proven to be a float, so this self-comparison form is
+            // left to `no-identical-expressions` (which also exempts it). See
+            // issue #5788.
         }
         _ => {}
     }
@@ -248,5 +227,17 @@ mod tests {
         // An unrelated `#[allow(dead_code)]` must not suppress.
         let d = run_on("fn f(x: bool) {\n#[allow(dead_code)]\nlet _ = x && false;\n}");
         assert_eq!(d.len(), 1);
+    }
+
+    // `x != x` / `x == x` is the IEEE 754 NaN-detection idiom, not a gratuitous
+    // always-false/always-true comparison. See issue #5788.
+    #[test]
+    fn allows_self_inequality_nan_idiom() {
+        assert!(run_on("fn is_nan(self) -> bool { self != self }").is_empty());
+    }
+
+    #[test]
+    fn allows_self_equality_nan_idiom() {
+        assert!(run_on("fn not_nan(x: f64) -> bool { x == x }").is_empty());
     }
 }

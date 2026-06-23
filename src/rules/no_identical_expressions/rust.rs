@@ -1,10 +1,18 @@
 //! no-identical-expressions Rust backend.
 //!
 //! Flag `expr OP expr` where both sides are identical.
+//!
+//! `==` / `!=` are excluded: `x != x` (and `x == x`) is the canonical IEEE 754
+//! NaN-detection idiom — for floats, `x != x` is true iff `x` is NaN, which is
+//! the only value not equal to itself. Rust AstCheck has no type inference, so
+//! the operand cannot be proven to be a float; the `==`/`!=` self-comparison
+//! form is overwhelmingly this idiom, so it is exempted in general (a deliberate
+//! precision-over-recall tradeoff). Every other identical-operand expression
+//! (`a && a`, `a - a`, `a / a`, …) is still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const FLAGGED_OPS: &[&str] = &["==", "!=", "&&", "||", "-", "/"];
+const FLAGGED_OPS: &[&str] = &["&&", "||", "-", "/"];
 
 crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let Some(op_node) = node.child_by_field_name("operator") else { return };
@@ -66,11 +74,35 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
+    // `x != x` / `x == x` is the IEEE 754 NaN-detection idiom (`is_nan`), not a
+    // duplicate-operand bug. See issue #5788 (rust-num/num-traits float.rs).
     #[test]
-    fn flags_identical_eq() {
-        let d = run_on("fn f() { if a == a {} }");
+    fn allows_self_inequality_nan_idiom() {
+        assert!(run_on("fn is_nan(self) -> bool { self != self }").is_empty());
+    }
+
+    #[test]
+    fn allows_self_equality_nan_idiom() {
+        assert!(run_on("fn not_nan(x: f64) -> bool { x == x }").is_empty());
+    }
+
+    #[test]
+    fn allows_identical_eq() {
+        assert!(run_on("fn f() { if a == a {} }").is_empty());
+    }
+
+    #[test]
+    fn flags_identical_sub() {
+        let d = run_on("fn f() { let z = total - total; }");
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("=="));
+        assert!(d[0].message.contains("-"));
+    }
+
+    #[test]
+    fn flags_identical_div() {
+        let d = run_on("fn f() { let r = total / total; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("/"));
     }
 
     #[test]
@@ -78,6 +110,13 @@ mod tests {
         let d = run_on("fn f() { let ok = valid && valid; }");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("&&"));
+    }
+
+    #[test]
+    fn flags_identical_or() {
+        let d = run_on("fn f() { let ok = valid || valid; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("||"));
     }
 
     #[test]
