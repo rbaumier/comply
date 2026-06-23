@@ -559,11 +559,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "`.toString()` on object without override returns `[object Object]`.",
             "Implement custom `.toString()` or use JSON.stringify.",
         ),
-        entry(
+        entry_with_filter(
             "no-implied-eval",
             "no-implied-eval",
             "`setTimeout(\"code\")` executes string as code like eval.",
             "Pass a function instead of a string.",
+            Some(Arc::new(NoImpliedEvalFilter)),
         ),
         entry_with_filter(
             "no-misused-spread",
@@ -2594,6 +2595,165 @@ fn nivt_is_generic_type_arg(
     false
 }
 
+// ── no-implied-eval post-filter ────────────────────────────────────────────
+//
+// tsgolint reports two shapes under `no-implied-eval`:
+//
+//  1. `new Function("…")` — the Function-constructor variant. Always a true
+//     positive; the post-filter never touches it.
+//  2. A `setTimeout` / `setInterval` / `setImmediate` first argument — the
+//     "Consider passing a function." variant. Only a *string* argument is
+//     implied eval (the string is compiled and run like `eval`). A function
+//     value is the safe, idiomatic usage.
+//
+// Without resolvable types tsgolint flags any first argument it cannot prove is
+// a function, including an untyped callback parameter (`it('x', (done) => {
+// setImmediate(done) })`). That misfires on a plain function reference. This
+// filter re-parses the file and drops the timer-argument variant unless the
+// first argument is provably string-like, mirroring eslint's `no-implied-eval`,
+// which reports only string-typed first arguments.
+
+struct NoImpliedEvalFilter;
+
+impl PostFilter for NoImpliedEvalFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        // The Function-constructor variant is always a true positive.
+        if diag.message.contains("Function constructor") {
+            return true;
+        }
+        let Some(src) = source else {
+            return true;
+        };
+        let Some(offset) = nivt_byte_offset(src, diag.line, diag.column) else {
+            return true;
+        };
+        nie_timer_arg_is_string_like(src, &diag.path, offset)
+    }
+}
+
+/// Re-parse `src` and report whether the timer first argument starting at byte
+/// `offset` (where tsgolint anchors the diagnostic) is provably string-like.
+/// Returns `true` (keep the diagnostic) when the argument is a string/template
+/// literal, a binary expression (kept as a possible string concat — the safe,
+/// no-suppression direction), or an identifier bound to a string value, and
+/// also when nothing resolves at the offset. Only a directly-written function
+/// value (arrow or function expression) or an identifier bound to a function is
+/// dropped; a function obtained via member access or a call (`obj.cb`, `mk()`)
+/// is not an admitted shape and is kept.
+fn nie_timer_arg_is_string_like(src: &str, path: &std::path::Path, offset: usize) -> bool {
+    use crate::oxc_helpers::with_oxc_parse;
+    use oxc_span::GetSpan;
+
+    with_oxc_parse(src, path, |semantic| {
+        let offset = offset as u32;
+        // The flagged argument is the smallest expression node whose span starts
+        // at the diagnostic offset.
+        let arg = semantic
+            .nodes()
+            .iter()
+            .filter(|node| nie_is_expression(node.kind()))
+            .filter(|node| node.kind().span().start == offset)
+            .min_by_key(|node| node.kind().span().end);
+        let Some(arg) = arg else {
+            return true; // unresolved → keep tsgolint's verdict
+        };
+        nie_kind_is_string_like(arg.kind(), semantic)
+    })
+}
+
+fn nie_is_expression(kind: oxc_ast::AstKind) -> bool {
+    use oxc_ast::AstKind;
+    matches!(
+        kind,
+        AstKind::StringLiteral(_)
+            | AstKind::TemplateLiteral(_)
+            | AstKind::BinaryExpression(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Function(_)
+            | AstKind::IdentifierReference(_)
+    )
+}
+
+/// Classify the flagged argument. String/template literals and `+` expressions
+/// are string-like; arrow/function expressions are function values; an
+/// identifier is resolved to its binding.
+fn nie_kind_is_string_like(
+    kind: oxc_ast::AstKind,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    match kind {
+        AstKind::StringLiteral(_) | AstKind::TemplateLiteral(_) | AstKind::BinaryExpression(_) => {
+            true
+        }
+        AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => false,
+        AstKind::IdentifierReference(ident) => nie_binding_is_string(ident, semantic),
+        _ => true,
+    }
+}
+
+/// Resolve `ident` to its declaration and report whether it is provably a
+/// string value. A `const`/`let` with a string/template-literal initializer or
+/// an explicit string-ish type annotation is string-like (keep). A function
+/// declaration, a function-valued initializer, or a parameter that is not
+/// annotated as a string is a function reference (drop). Unresolved bindings
+/// keep the diagnostic.
+fn nie_binding_is_string(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return true;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return true;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::Function(_) => return false, // function declaration
+            AstKind::VariableDeclarator(decl) => {
+                if let Some(ann) = decl.type_annotation.as_ref() {
+                    return nie_type_is_string(&ann.type_annotation);
+                }
+                return match &decl.init {
+                    Some(Expression::StringLiteral(_) | Expression::TemplateLiteral(_)) => true,
+                    Some(
+                        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_),
+                    ) => false,
+                    // No annotation and a non-literal initializer: cannot prove
+                    // it is a string, so treat it as a function reference.
+                    _ => false,
+                };
+            }
+            AstKind::FormalParameter(param) => {
+                return param
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| nie_type_is_string(&ann.type_annotation));
+            }
+            _ => continue,
+        }
+    }
+    true
+}
+
+/// True when a type annotation is `string` or a string-literal type.
+fn nie_type_is_string(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSLiteral, TSType};
+    match ty {
+        TSType::TSStringKeyword(_) => true,
+        TSType::TSLiteralType(lit) => matches!(lit.literal, TSLiteral::StringLiteral(_)),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4089,5 +4249,111 @@ function pick(x: unknown): unknown {
     fn keeps_unsafe_call_in_production_file() {
         let f = TypeTestFileFilter;
         assert!(f.keep(&unsafe_diag("src/index.ts", "no-unsafe-call"), None));
+    }
+
+    // ── no-implied-eval ─────────────────────────────────────────────────────
+
+    fn implied_eval_diag(
+        path: &std::path::Path,
+        line: usize,
+        col: usize,
+        message: &str,
+    ) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line,
+            column: col,
+            rule_id: Cow::Borrowed("no-implied-eval"),
+            message: message.to_string(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    const TIMER_MSG: &str = "Implied eval. Consider passing a function.";
+
+    // Regression for #5888: a function-reference argument is not implied eval.
+    #[test]
+    fn drops_set_immediate_with_function_ref() {
+        let src = "it('x', (done) => {\n  setImmediate(done)\n})\n";
+        let path = write_temp("ie_set_immediate_ref.ts", src);
+        let (line, col) = line_col_of(src, "setImmediate(done)");
+        let col = col + "setImmediate(".len();
+        let src_content = source_for(&path);
+        let f = NoImpliedEvalFilter;
+        assert!(!f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+    }
+
+    #[test]
+    fn drops_set_immediate_with_arrow() {
+        let src = "setImmediate(() => doStuff())\n";
+        let path = write_temp("ie_set_immediate_arrow.ts", src);
+        let (line, col) = line_col_of(src, "() =>");
+        let src_content = source_for(&path);
+        let f = NoImpliedEvalFilter;
+        assert!(!f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+    }
+
+    #[test]
+    fn drops_set_timeout_with_named_function_decl() {
+        let src = "function tick() {}\nsetTimeout(tick, 0)\n";
+        let path = write_temp("ie_set_timeout_fn_decl.ts", src);
+        let (line, col) = line_col_of(src, "tick, 0");
+        let src_content = source_for(&path);
+        let f = NoImpliedEvalFilter;
+        assert!(!f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+    }
+
+    // Positive space: a string first argument is still implied eval.
+    #[test]
+    fn keeps_set_immediate_with_string_literal() {
+        let src = "setImmediate(\"doStuff()\")\n";
+        let path = write_temp("ie_set_immediate_str.ts", src);
+        let (line, col) = line_col_of(src, "\"doStuff()\"");
+        let src_content = source_for(&path);
+        let f = NoImpliedEvalFilter;
+        assert!(f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+    }
+
+    #[test]
+    fn keeps_set_timeout_with_string_literal() {
+        let src = "setTimeout(\"code\", 0)\n";
+        let path = write_temp("ie_set_timeout_str.ts", src);
+        let (line, col) = line_col_of(src, "\"code\"");
+        let src_content = source_for(&path);
+        let f = NoImpliedEvalFilter;
+        assert!(f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+    }
+
+    #[test]
+    fn keeps_set_timeout_with_string_typed_variable() {
+        let src = "const codeStr: string = build()\nsetTimeout(codeStr, 0)\n";
+        let path = write_temp("ie_set_timeout_str_var.ts", src);
+        let (line, col) = line_col_of(src, "codeStr, 0");
+        let src_content = source_for(&path);
+        let f = NoImpliedEvalFilter;
+        assert!(f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+    }
+
+    #[test]
+    fn keeps_set_timeout_with_template_literal() {
+        let src = "setTimeout(`alert(1)`, 0)\n";
+        let path = write_temp("ie_set_timeout_tmpl.ts", src);
+        let (line, col) = line_col_of(src, "`alert(1)`");
+        let src_content = source_for(&path);
+        let f = NoImpliedEvalFilter;
+        assert!(f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+    }
+
+    // Positive space: the Function-constructor variant is always a true positive.
+    #[test]
+    fn keeps_new_function_constructor() {
+        let src = "const f = new Function(\"return 1\")\n";
+        let path = write_temp("ie_new_function.ts", src);
+        let (line, col) = line_col_of(src, "new Function");
+        let src_content = source_for(&path);
+        let f = NoImpliedEvalFilter;
+        let msg = "Implied eval. Do not use the Function constructor to create functions.";
+        assert!(f.keep(&implied_eval_diag(&path, line, col, msg), Some(&src_content)));
     }
 }
