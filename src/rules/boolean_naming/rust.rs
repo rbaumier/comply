@@ -22,10 +22,11 @@ use crate::rules::rust_helpers::is_in_test_context;
 // verb-modal prefixes idiomatic for boolean config parameters:
 // `allow_empty` ("allow empty?"), `use_tls` ("use TLS?"),
 // `always_quote` ("always quote?"), `with_header` ("with header?").
-// `is_allow_empty` would be grammatically wrong.
+// `is_allow_empty` would be grammatically wrong. `needs_` is a necessity/modal
+// predicate like `should_` (`needs_refresh` reads "does it need a refresh?").
 const VALID_PREFIXES: &[&str] = &[
     "is_", "has_", "should_", "can_", "will_", "did_", "was_", "had_", "in_", "seen_", "found_",
-    "allow_", "use_", "always_", "with_",
+    "allow_", "use_", "always_", "with_", "needs_",
 ];
 
 const IDIOMATIC_NAMES: &[&str] = &[
@@ -119,7 +120,7 @@ fn check_node(node: tree_sitter::Node, ctx: &CheckCtx) -> Option<Diagnostic> {
         message: format!(
             "Boolean '{name}' {problem}. Use a predicate prefix: \
              `is_*`, `has_*`, `should_*`, `can_*`, `will_*`, `did_*`, `was_*`, \
-             `in_*`, `seen_*`, `found_*`, `allow_*`, `use_*`, `always_*`, `with_*`."
+             `in_*`, `seen_*`, `found_*`, `allow_*`, `use_*`, `always_*`, `with_*`, `needs_*`."
         ),
         severity: Severity::Warning,
         span: None,
@@ -808,6 +809,20 @@ mod tests {
             let source = format!("fn f({name}: bool) {{}}");
             assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
         }
+    }
+
+    #[test]
+    fn allows_needs_necessity_prefix() {
+        // `needs_` is a necessity/modal predicate like `should_`: `needs_barrier`
+        // reads "does it need a barrier?". (Closes #5857)
+        for name in ["needs_barrier", "needs_refresh", "needs_update"] {
+            let source = format!("fn f() {{ let {name}: bool = true; }}");
+            assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
+        }
+        assert!(run_on("fn f(needs_update: bool) {}").is_empty());
+        // Strictness preserved: the prefix requires the `_` word boundary; a
+        // name merely starting with the letters `needs` still flags.
+        assert_eq!(run_on("fn f() { let needsbarrier: bool = true; }").len(), 1);
     }
 
     #[test]

@@ -10,12 +10,14 @@ pub struct Check;
 
 // `are` is the plural copula: a valid predicate prefix for collective/plural
 // booleans (`areMutuallyExclusive`, `areEqual`) that read as "the subjects are
-// X", exactly like the singular `is`. The camelCase-boundary guard in
+// X", exactly like the singular `is`. `needs` is a necessity/modal verb that
+// forms a predicate just like the allowed `should`/`will`: `needsBarrier`,
+// `needsRefresh` read as "does it need X?". The camelCase-boundary guard in
 // `classify_name` (the prefix must be followed by an uppercase letter) keeps
-// noun names whose first letters happen to be `are` — `area`, `arena` — out:
-// they strip to a lowercase remainder and still flag.
+// noun names whose first letters happen to be `are`/`needs` — `area`, `arena` —
+// out: they strip to a lowercase remainder and still flag.
 const VALID_PREFIXES: &[&str] = &[
-    "is", "has", "should", "can", "will", "did", "was", "in", "seen", "found", "are",
+    "is", "has", "should", "can", "will", "did", "was", "in", "seen", "found", "are", "needs",
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
@@ -387,7 +389,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Boolean '{name}' {problem}. Use a predicate prefix: \
                  `is*`, `has*`, `should*`, `can*`, `will*`, `did*`, `was*`, \
-                 `in*`, `seen*`, `found*`."
+                 `in*`, `seen*`, `found*`, `are*`, `needs*`."
             ),
             severity: Severity::Warning,
             span: None,
@@ -735,6 +737,27 @@ mod tests {
         assert_eq!(run("let area: boolean = true;").len(), 1);
         assert_eq!(run("let arena: boolean = false;").len(), 1);
         assert_eq!(run("function f(arenaCount: boolean) {}").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_needs_necessity_prefix() {
+        // `needs` is a necessity/modal predicate prefix (`needsBarrier` reads
+        // "does this need a barrier?"), the same boolean-question form as the
+        // allowed `should`/`will`. (Closes #5857)
+        assert!(run("var needsBarrier: boolean = true;").is_empty());
+        assert!(run("const needsRefresh: boolean = false;").is_empty());
+        assert!(run("function f(needsUpdate: boolean) {}").is_empty());
+    }
+
+    #[test]
+    fn needs_prefix_requires_camelcase_boundary() {
+        // Strictness preserved: a noun whose name merely begins with the letters
+        // `needs` (`needsful`-style lowercase remainders) is not a predicate —
+        // the prefix must be followed by an uppercase letter, and unprefixed
+        // adjective/state booleans still flag.
+        assert_eq!(run("let needsful: boolean = true;").len(), 1);
+        assert_eq!(run("let barrier: boolean = true;").len(), 1);
+        assert_eq!(run("function f(barrier: boolean) {}").len(), 1);
     }
 
     #[test]
