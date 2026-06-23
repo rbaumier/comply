@@ -683,21 +683,35 @@ fn quoted_specifier(s: &str) -> Option<&str> {
 //
 // The rule flags `${...}` inside a regular (non-template) string, where the
 // real bug is a single/double-quoted string that should have been a backtick
-// template literal: `"Hi ${name}"`.
+// template literal: `"Hi ${name}"`. The rule's premise is that the author meant
+// to interpolate an *in-scope* binding but forgot the backticks.
 //
-// The false positive: component registries (e.g. shadcn-vue's
-// `registry-examples.ts`) store source code as JSON string data. That source
-// frequently contains a *backtick* template literal — `` `$ ${expr}` `` — and
-// the `${...}` there is intentional code-as-data, not a non-interpolated
-// placeholder. This filter drops the diagnostic when the flagged string value
-// holds a backtick before its `${`, i.e. the placeholder is bracketed by an
-// embedded template literal. A genuine `"Hi ${name}"` bug has no backtick and
-// is still flagged.
+// Two false positives are dropped:
+//
+//   1. Code-as-data registries (e.g. shadcn-vue's `registry-examples.ts`) store
+//      source code as JSON string data. That source frequently contains a
+//      *backtick* template literal — `` `$ ${expr}` `` — and the `${...}` there
+//      is intentional code-as-data, not a non-interpolated placeholder. Dropped
+//      when a backtick precedes the `${`, i.e. the placeholder is bracketed by
+//      an embedded template literal.
+//
+//   2. Library DSL placeholders (e.g. DynamoDB OneTable schemas:
+//      `pk: {value: 'user#${email}'}`) where `${field}` is the library's own
+//      runtime-substitution syntax, not JS interpolation. The tell: the
+//      identifier inside `${...}` resolves to no binding in scope at that
+//      location. Converting to a backtick template literal would interpolate
+//      nothing (or a different in-scope `email`), so it cannot be the
+//      forgot-backticks mistake — it's an intentional literal placeholder. This
+//      generalizes to any DSL using `${}` with non-variable placeholders.
+//
+// A genuine `const name = ...; "Hi ${name}"` bug — `name` resolves to an
+// in-scope binding — is still flagged.
 //
 // Load-bearing oxlint contract: the diagnostic's `(line, column)` points at the
 // opening quote of the string literal, and `column` is a 1-based UTF-8 byte
 // offset. A wrong assumption fails safe — the position lands off the quote,
-// `string_literal_at` returns `None`, and the diagnostic is kept, never masked.
+// `string_literal_at` returns `None` (or no `StringLiteral` node starts at the
+// offset), and the diagnostic is kept, never masked.
 
 struct NoTemplateCurlyInStringFilter;
 
@@ -709,7 +723,13 @@ impl PostFilter for NoTemplateCurlyInStringFilter {
         let Some(content) = string_literal_at(src, diag.line, diag.column) else {
             return true;
         };
-        !has_backtick_before_placeholder(content)
+        if has_backtick_before_placeholder(content) {
+            return false;
+        }
+        let Some(offset) = byte_offset(src, diag.line, diag.column) else {
+            return true;
+        };
+        any_placeholder_resolves_to_binding(src, &diag.path, offset)
     }
 }
 
@@ -759,6 +779,103 @@ fn has_backtick_before_placeholder(content: &str) -> bool {
         return false;
     };
     content[..placeholder].contains('`')
+}
+
+/// Re-parse `src` and report whether any `${...}` placeholder in the string
+/// literal whose opening quote sits at byte `offset` references an in-scope
+/// binding (variable / parameter / import) at that location.
+///
+/// `true` (keep the diagnostic) means the placeholder *would* interpolate a real
+/// binding had backticks been used — the genuine forgot-backticks bug. `false`
+/// (drop) means no placeholder resolves to anything in scope, so the `${...}` is
+/// an intentional library-DSL literal placeholder. Failing safe: if the source
+/// is unreadable, the position does not land on a `StringLiteral`, or no
+/// placeholder holds a parseable leading identifier, returns `true` (keep).
+fn any_placeholder_resolves_to_binding(
+    src: &str,
+    path: &std::path::Path,
+    offset: usize,
+) -> bool {
+    use oxc_allocator::Allocator;
+    use oxc_ast::AstKind;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::GetSpan;
+
+    let allocator = Allocator::default();
+    let source_type = crate::oxc_helpers::source_type_for_path(path);
+    let parse_ret = Parser::new(&allocator, src, source_type).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+
+    // The smallest `StringLiteral` whose span covers the diagnostic offset is the
+    // one oxlint flagged; its span includes the opening quote, so the reported
+    // position lands at (or just inside) the literal. A position that resolves to
+    // no `StringLiteral` keeps the diagnostic — never a wrong drop.
+    let offset = offset as u32;
+    let Some(node) = semantic
+        .nodes()
+        .iter()
+        .filter(|node| matches!(node.kind(), AstKind::StringLiteral(_)))
+        .filter(|node| {
+            let span = node.kind().span();
+            span.start <= offset && offset < span.end
+        })
+        .min_by_key(|node| node.kind().span().size())
+    else {
+        return true;
+    };
+    let AstKind::StringLiteral(lit) = node.kind() else {
+        return true;
+    };
+
+    let scoping = semantic.scoping();
+    let scope_id = node.scope_id();
+    let mut saw_identifier = false;
+    for name in placeholder_leading_identifiers(lit.value.as_str()) {
+        saw_identifier = true;
+        if scoping
+            .find_binding(scope_id, oxc_str::Ident::from(name))
+            .is_some()
+        {
+            return true;
+        }
+    }
+    // No placeholder resolves to a binding: drop only when at least one carried a
+    // parseable identifier (a DSL placeholder). With no identifier at all there
+    // is nothing to judge, so keep.
+    !saw_identifier
+}
+
+/// Yields the leading identifier of each `${...}` placeholder in `value`, e.g.
+/// `email` from `${email}`, `user` from `${user.id}`. A placeholder whose
+/// expression does not start with an identifier (`${1 + 2}`, `${ }`) yields
+/// nothing. The leading identifier is what a template literal would resolve
+/// first, so it is the binding the forgot-backticks bug would interpolate.
+fn placeholder_leading_identifiers(value: &str) -> impl Iterator<Item = &str> {
+    let mut rest = value;
+    std::iter::from_fn(move || {
+        loop {
+            let start = rest.find("${")?;
+            let after = &rest[start + 2..];
+            let trimmed = after.trim_start();
+            let len = trimmed
+                .char_indices()
+                .take_while(|&(i, c)| {
+                    if i == 0 {
+                        c == '_' || c == '$' || c.is_alphabetic()
+                    } else {
+                        c == '_' || c == '$' || c.is_alphanumeric()
+                    }
+                })
+                .map(|(i, c)| i + c.len_utf8())
+                .last()
+                .unwrap_or(0);
+            rest = after;
+            if len > 0 {
+                return Some(&trimmed[..len]);
+            }
+        }
+    })
 }
 
 // ── no-new post-filter ──────────────────────────────────────────────────────
@@ -1323,17 +1440,51 @@ mod tests {
     #[test]
     fn tcs_keeps_genuine_meant_a_template_literal_bug() {
         // The real bug: a double-quoted string that should be a backtick
-        // template literal. No backtick precedes the `${name}` placeholder.
-        let src = "const s = \"Hi ${name}\";\n";
-        let d = tcs_diag("src/greet.ts", 1, 11);
+        // template literal. `name` is an in-scope binding the author meant to
+        // interpolate but forgot the backticks. No backtick precedes `${name}`.
+        let src = "const name = u.name; const s = \"Hi ${name}\";\n";
+        let col = src.find('"').unwrap() + 1;
+        let d = tcs_diag("src/greet.ts", 1, col);
         assert!(NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
     }
 
     #[test]
     fn tcs_keeps_single_quoted_genuine_bug() {
-        let src = "const s = 'total ${count} items';\n";
-        let d = tcs_diag("src/cart.ts", 1, 11);
+        let src = "const count = items.length; const s = 'total ${count} items';\n";
+        let col = src.find('\'').unwrap() + 1;
+        let d = tcs_diag("src/cart.ts", 1, col);
         assert!(NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn tcs_keeps_placeholder_resolving_to_a_parameter() {
+        // A parameter is an in-scope binding too — still the forgot-backticks bug.
+        let src = "function greet(name) { return \"Hi ${name}\"; }\n";
+        let col = src.find('"').unwrap() + 1;
+        let d = tcs_diag("src/greet.ts", 1, col);
+        assert!(NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn tcs_drops_onetable_dsl_placeholder_no_in_scope_binding() {
+        // DynamoDB OneTable schema DSL: `${email}` is the library's own runtime
+        // substitution syntax, not JS interpolation. `email` here is an object
+        // property key, not a binding — it resolves to nothing in scope, so
+        // backticks would interpolate nothing. Intentional literal placeholder.
+        let src = "const models = { User: { pk: { value: 'user#${email}' }, email: { required: true } } };\n";
+        let col = src.find('\'').unwrap() + 1;
+        let d = tcs_diag("test/mock.ts", 1, col);
+        assert!(!NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn tcs_drops_onetable_composite_key_placeholders() {
+        // Composite-key pattern `${pk}#${sk}` where neither `pk` nor `sk` is a
+        // binding in scope — both are DSL placeholders, so the diagnostic drops.
+        let src = "const schema = { value: '${pk}#${sk}' };\n";
+        let col = src.find('\'').unwrap() + 1;
+        let d = tcs_diag("test/schema.ts", 1, col);
+        assert!(!NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
     }
 
     #[test]
@@ -1345,10 +1496,18 @@ mod tests {
     #[test]
     fn tcs_keeps_backtick_after_placeholder_only() {
         // A trailing backtick that does not bracket the placeholder is not the
-        // code-as-data shape — keep the diagnostic.
-        let src = "const s = \"x ${y} `\";\n";
-        let d = tcs_diag("src/x.ts", 1, 11);
+        // code-as-data shape, and `y` is an in-scope binding — keep.
+        let src = "const y = 1; const s = \"x ${y} `\";\n";
+        let col = src.find("\"x ").unwrap() + 1;
+        let d = tcs_diag("src/x.ts", 1, col);
         assert!(NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn extracts_placeholder_leading_identifiers() {
+        let ids: Vec<&str> =
+            placeholder_leading_identifiers("user#${email}-${user.id}-${1 + 2}").collect();
+        assert_eq!(ids, vec!["email", "user"]);
     }
 
     // ── no-new filter tests ──────────────────────────────────────────────────
