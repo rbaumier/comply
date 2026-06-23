@@ -281,6 +281,16 @@ impl OxcCheck for Check {
                 if name_declares_no_throw(&name) {
                     continue;
                 }
+                // The test uses the Jest/Mocha `done` callback protocol: its
+                // callback declares a first parameter (the done callback) that
+                // is referenced in the body. Completion is the assertion — the
+                // test fails by timeout if `done()` is never reached and fails
+                // explicitly on `done(err)`.
+                if crate::rules::test_assertion_helpers::test_callback_uses_done_param(
+                    callback, semantic,
+                ) {
+                    continue;
+                }
                 // The test delegates to a caller-supplied callback (`it(name,
                 // () => fn())` inside a wrapper whose `fn` param carries the
                 // assertions) — the inline body legitimately has none.
@@ -635,15 +645,71 @@ mod tests {
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
-    // True positive guard: a bare `done(undefined)` where `done` is NOT the
-    // first parameter of a `new Promise(...)` executor does not count.
+    // Regression for #5859 — a Jest/Mocha `done`-callback test asserts via the
+    // callback protocol: the runner passes `done` positionally and fails the
+    // test by timeout if it is never called. The callback declares and invokes
+    // its first parameter, so the test does assert.
     #[test]
-    fn still_flags_when_done_is_not_promise_executor_param() {
+    fn allows_done_callback_invoked_directly() {
         let src = r#"
-            test("not a promise resolve", (done) => {
-              done(undefined);
+            test("calls done", (done) => {
+              done();
             });
         "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #5859 — `done()` reached inside a nested event handler. The
+    // test passes only when the event fires (and `done()` runs); completion is
+    // the assertion. The first parameter is referenced through a nested closure.
+    #[test]
+    fn allows_done_callback_invoked_in_nested_handler() {
+        let src = r#"
+            it("If the provider initialize function terminates normally, handlers MUST run", (done) => {
+              const provider = new MockProvider();
+              const client = OpenFeature.getClient(domain);
+              client.addHandler(ProviderEvents.Ready, () => {
+                done();
+              });
+              OpenFeature.setProvider(domain, provider);
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #5859 — the done callback is forwarded as a callback rather
+    // than invoked directly (`emitter.on('x', done)`). Passing the first
+    // parameter onward still references it, so the protocol is recognised.
+    #[test]
+    fn allows_done_callback_passed_as_callback() {
+        let src = r#"
+            test("emits ready", (done) => {
+              emitter.on("ready", done);
+              emitter.connect();
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #5859: a test whose callback declares a `done`
+    // parameter but never references it would hang in a real runner — it is not
+    // a working done-callback test, so it still flags as assertion-less.
+    #[test]
+    fn still_flags_done_param_declared_but_never_used() {
+        let src = r#"
+            test("declares but never uses done", (done) => {
+              const x = 1 + 1;
+            });
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Negative-space guard for #5859: a test with no declared callback parameter
+    // and no assertion still flags — the done-callback exemption requires a
+    // declared-and-referenced first parameter, not an empty body.
+    #[test]
+    fn still_flags_paramless_test_without_assertion_after_done_support() {
+        let src = r#"it("x", () => { const y = 1 + 1; });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 

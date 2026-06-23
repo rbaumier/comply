@@ -479,6 +479,47 @@ fn declaration_is_promise_executor_param(
     })
 }
 
+/// True when the test callback declares a first formal parameter (the
+/// Jest/Mocha `done` callback) that is referenced somewhere in its body. The
+/// runner passes that callback positionally, so completion is the assertion:
+/// the test fails by timeout if `done()` is never reached and fails explicitly
+/// on `done(err)`. A referenced first parameter — invoked (`done()`),
+/// forwarded (`emitter.on('x', done)`), or passed through nested handlers — is
+/// therefore the assertion mechanism:
+///
+/// ```ts
+/// test('emits ready', (done) => {
+///   client.on('ready', () => { done(); }); // referenced inside a nested handler
+///   client.connect();
+/// });
+/// ```
+///
+/// The signal is structural, not name-based: any used first parameter counts,
+/// matching how the runner supplies it positionally. A callback that declares
+/// the parameter but never references it would hang, so it is *not* matched and
+/// still flags as assertion-less. Destructured first parameters are not the
+/// done-callback shape and are not matched.
+pub(crate) fn test_callback_uses_done_param(
+    callback: &oxc_ast::ast::Argument,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let params = match callback {
+        oxc_ast::ast::Argument::ArrowFunctionExpression(f) => &f.params,
+        oxc_ast::ast::Argument::FunctionExpression(f) => &f.params,
+        _ => return false,
+    };
+    let Some(first) = params.items.first() else {
+        return false;
+    };
+    let BindingPattern::BindingIdentifier(id) = &first.pattern else {
+        return false;
+    };
+    let Some(sym_id) = id.symbol_id.get() else {
+        return false;
+    };
+    semantic.scoping().get_resolved_references(sym_id).next().is_some()
+}
+
 /// True when a call within `body_span` resolves to a same-file helper function
 /// (defined at module scope or any enclosing `describe`/function scope) whose
 /// own body asserts. The assertion may sit directly in that helper or, in turn,
