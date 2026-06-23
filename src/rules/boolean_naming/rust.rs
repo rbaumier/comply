@@ -67,17 +67,15 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if let Some(d) = check_node(node, ctx.source.as_bytes(), ctx.path) {
+        if let Some(d) = check_node(node, ctx) {
             diagnostics.push(d);
         }
     }
 }
 
-fn check_node(
-    node: tree_sitter::Node,
-    source: &[u8],
-    path: &std::path::Path,
-) -> Option<Diagnostic> {
+fn check_node(node: tree_sitter::Node, ctx: &CheckCtx) -> Option<Diagnostic> {
+    let source = ctx.source.as_bytes();
+    let path = ctx.path;
     if node.kind() != "let_declaration" && node.kind() != "parameter" {
         return None;
     }
@@ -98,6 +96,14 @@ fn check_node(
         return None;
     }
     if is_loop_iteration_toggle(node, name, source) {
+        return None;
+    }
+    if is_keyword_presence_accumulator(node, name, source)
+        && ctx
+            .project
+            .nearest_cargo_manifest(path)
+            .is_some_and(|m| m.is_proc_macro())
+    {
         return None;
     }
     if is_builder_setter_field_param(node, name, source) {
@@ -552,6 +558,119 @@ fn subtree_reassigns_to_bool_literal(
         stack.extend(current.children(&mut cursor));
     }
     false
+}
+
+/// True for the proc-macro keyword-presence accumulator idiom: a `let` binding
+/// named `<name>` initialized with a boolean literal whose value is set inside
+/// an `if`/`else if` branch guarded by a string-literal equality test against
+/// the literal `"<name>"` (`if kw == "adjacent" { adjacent = true; }`). In
+/// `syn`-based attribute parsers the local mirrors the keyword token it tracks
+/// 1:1: its name is dictated by the token vocabulary being matched, not chosen
+/// to describe an object's state, so a predicate prefix would diverge the local
+/// from the token literal it is compared against (and the same-named field it
+/// feeds). Caller-gated to proc-macro crates.
+///
+/// Anchored on the name AND the init-literal AND a same-named string-equality
+/// toggle, so it cannot widen into a name allowlist: the literal `"<name>"`
+/// must independently appear in the source as an `==` operand equal to the
+/// binding name and gate a `<name> = <bool>` assignment. An ordinary boolean
+/// local in a proc-macro (a real `disabled` flag with no such toggle) is
+/// unaffected and still requires a predicate prefix.
+fn is_keyword_presence_accumulator(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    if node.kind() != "let_declaration" || !initialized_with_boolean_literal(node, source) {
+        return false;
+    }
+    let Some(scope) = enclosing_function_body(node) else {
+        return false;
+    };
+    scope_has_keyword_string_toggle(scope, name, source)
+}
+
+/// True if `scope` contains an `if`/`else if` whose condition is a string-literal
+/// equality test against `"<name>"` and whose consequence reassigns `name` to a
+/// boolean literal.
+fn scope_has_keyword_string_toggle(
+    scope: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    let mut cursor = scope.walk();
+    let mut stack = vec![scope];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "if_expression"
+            && if_condition_tests_keyword_string(current, name, source)
+            && current
+                .child_by_field_name("consequence")
+                .is_some_and(|body| subtree_reassigns_to_bool_literal(body, name, source))
+        {
+            return true;
+        }
+        stack.extend(current.children(&mut cursor));
+    }
+    false
+}
+
+/// True if the `if_expression`'s condition is a `==` comparison with a string
+/// literal operand whose content equals `name` (`kw == "adjacent"`, either
+/// operand order). The string literal's content (between the quotes) must match
+/// the binding name exactly.
+fn if_condition_tests_keyword_string(
+    if_expr: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    let Some(condition) = if_expr.child_by_field_name("condition") else {
+        return false;
+    };
+    condition_tests_keyword_string(condition, name, source)
+}
+
+/// True if `node` is — or its outermost `&&` operand chain contains — a `==`
+/// comparison with a string literal operand equal to `name`. The leading
+/// `first &&` guard in `if first && kw == "options"` is handled by descending
+/// through `&&` (`binary_expression` with `&&` operator).
+fn condition_tests_keyword_string(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    if node.kind() != "binary_expression" {
+        return false;
+    }
+    let operator = node
+        .child_by_field_name("operator")
+        .and_then(|op| op.utf8_text(source).ok());
+    match operator {
+        Some("==") => {
+            let left = node.child_by_field_name("left");
+            let right = node.child_by_field_name("right");
+            string_literal_equals(left, name, source) || string_literal_equals(right, name, source)
+        }
+        Some("&&") => {
+            let left = node.child_by_field_name("left");
+            let right = node.child_by_field_name("right");
+            left.is_some_and(|l| condition_tests_keyword_string(l, name, source))
+                || right.is_some_and(|r| condition_tests_keyword_string(r, name, source))
+        }
+        _ => false,
+    }
+}
+
+/// True if `node` is a `string_literal` whose content (excluding the quotes)
+/// equals `name`.
+fn string_literal_equals(node: Option<tree_sitter::Node>, name: &str, source: &[u8]) -> bool {
+    let Some(node) = node else { return false };
+    if node.kind() != "string_literal" {
+        return false;
+    }
+    node.utf8_text(source)
+        .ok()
+        .and_then(|text| text.strip_prefix('"')?.strip_suffix('"'))
+        .is_some_and(|content| content == name)
 }
 
 fn extract_identifier<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
@@ -1183,5 +1302,113 @@ mod tests {
         // No `self` receiver — a free function named after its param is not a
         // builder setter; the param still flags.
         assert_eq!(run_on("fn scale(scale: bool) -> Self { }").len(), 1);
+    }
+
+    const PROC_MACRO_TOML: &str =
+        "[package]\nname = \"d\"\nversion = \"0.0.0\"\n[lib]\nproc-macro = true\n";
+    const PLAIN_LIB_TOML: &str = "[package]\nname = \"d\"\nversion = \"0.0.0\"\n";
+
+    fn run_in_proc_macro(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            PROC_MACRO_TOML,
+            source,
+            "src/lib.rs",
+        )
+    }
+
+    #[test]
+    fn allows_keyword_presence_accumulator_in_proc_macro() {
+        // syn-based attribute parser idiom: `let mut adjacent = false;` toggled by
+        // `if kw == "adjacent" { adjacent = true; }`. The local mirrors the parsed
+        // keyword token 1:1 and is dictated by the token vocabulary. (Closes #5736)
+        let src = "impl Parse for T {\n\
+                   fn parse(input: ParseStream) -> Result<Self> {\n\
+                       let mut adjacent = false;\n\
+                       let mut boxed = false;\n\
+                       loop {\n\
+                           let kw = input.parse::<Ident>()?;\n\
+                           if kw == \"adjacent\" { adjacent = true; }\n\
+                           else if kw == \"boxed\" { boxed = true; }\n\
+                       }\n\
+                   }\n}";
+        assert!(run_in_proc_macro(src).is_empty());
+    }
+
+    #[test]
+    fn allows_keyword_accumulator_behind_leading_and_guard() {
+        // `if seen_kw && kw == "private"` — the `&&`-guarded keyword equality still
+        // anchors the toggle (bpaf's `td.rs` shape uses a leading guard).
+        let src = "impl Parse for T {\n\
+                   fn parse(input: ParseStream) -> Result<Self> {\n\
+                       let mut private = false;\n\
+                       loop {\n\
+                           let kw = input.parse::<Ident>()?;\n\
+                           if seen_kw && kw == \"private\" { private = true; }\n\
+                       }\n\
+                   }\n}";
+        assert!(run_in_proc_macro(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_ordinary_boolean_local_in_proc_macro() {
+        // Strictness preserved inside proc-macro crates: a real adjective flag with
+        // no same-named keyword-string toggle still requires a predicate prefix.
+        let src = "impl Parse for T {\n\
+                   fn parse(input: ParseStream) -> Result<Self> {\n\
+                       let mut disabled = false;\n\
+                       if cfg.enabled() { disabled = true; }\n\
+                       Ok(())\n\
+                   }\n}";
+        let diags = run_in_proc_macro(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'disabled'"));
+    }
+
+    #[test]
+    fn still_flags_keyword_accumulator_outside_proc_macro() {
+        // The exemption is gated on the proc-macro crate kind; the same string-
+        // equality toggle in an ordinary library crate (a CLI dispatch loop) still
+        // requires a predicate prefix.
+        let src = "fn run() {\n\
+                   let mut verbose = false;\n\
+                   for kw in args() {\n\
+                       if kw == \"verbose\" { verbose = true; }\n\
+                   }\n}";
+        let diags = crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            PLAIN_LIB_TOML,
+            src,
+            "src/lib.rs",
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'verbose'"));
+    }
+
+    #[test]
+    fn still_flags_accumulator_when_string_literal_differs_from_name() {
+        // The toggle's string literal must equal the binding name; a flag toggled
+        // by a differently-named keyword is not the 1:1-mirror shape and flags.
+        let src = "impl Parse for T {\n\
+                   fn parse(input: ParseStream) -> Result<Self> {\n\
+                       let mut boxed = false;\n\
+                       let kw = input.parse::<Ident>()?;\n\
+                       if kw == \"on\" { boxed = true; }\n\
+                       Ok(())\n\
+                   }\n}";
+        let diags = run_in_proc_macro(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'boxed'"));
+    }
+
+    #[test]
+    fn still_flags_keyword_accumulator_param_in_proc_macro() {
+        // The exemption is `let`-binding-only; a `bool` parameter named after a
+        // keyword is an ordinary boolean param and still requires a prefix.
+        let src = "fn helper(adjacent: bool) {\n\
+                   if adjacent {}\n}";
+        let diags = run_in_proc_macro(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'adjacent'"));
     }
 }
