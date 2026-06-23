@@ -81,6 +81,24 @@ impl OxcCheck for Check {
         if member.property.name.as_str() != "click" {
             return;
         }
+        // `userEvent.click` is async and discards the synchronous boolean that
+        // `fireEvent.click` returns (`false` when a handler called
+        // `preventDefault`). When that return value is consumed — assigned or
+        // asserted — the boolean contract is what the test exercises, and
+        // `userEvent` cannot provide it. Only flag a `fireEvent.click(...)`
+        // whose value is discarded, i.e. a bare expression statement (#5756).
+        if !matches!(
+            semantic.nodes().parent_node(node.id()).kind(),
+            AstKind::ExpressionStatement(_)
+        ) {
+            return;
+        }
+        // A second init-options argument (e.g. `{ metaKey: true }`) models a
+        // modified click that `userEvent.click` cannot express as a single
+        // call, so leave it alone (#5756).
+        if call.arguments.len() >= 2 {
+            return;
+        }
         let path_str = ctx.path.to_string_lossy();
         if !TEST_MARKERS.iter().any(|m| path_str.contains(m)) {
             return;
@@ -297,5 +315,52 @@ mod tests {
             import { render, fireEvent } from '@testing-library/react'\n\
             it('clicks', () => { fireEvent.click(button) })\n";
         assert_eq!(run_on("components/__tests__/button.test.tsx", src).len(), 1);
+    }
+
+    #[test]
+    fn no_flag_when_return_value_assigned() {
+        // #5756 (back-link.test.tsx): the synchronous boolean return is the
+        // contract under test (false when preventDefault ran) — userEvent
+        // discards it, so an assigned fireEvent.click must not be flagged.
+        let src = "const notCancelled = fireEvent.click(screen.getByRole('link'));";
+        assert!(
+            run_on("components/__tests__/back-link.test.tsx", src).is_empty(),
+            "{:?}",
+            run_on("components/__tests__/back-link.test.tsx", src),
+        );
+    }
+
+    #[test]
+    fn no_flag_when_return_value_in_expect() {
+        // The return value asserted directly inside `expect(...)` is consumed,
+        // so it is not the discardable bare-click the rule targets.
+        let src = "expect(fireEvent.click(link)).toBe(false);";
+        assert!(
+            run_on("components/__tests__/back-link.test.tsx", src).is_empty(),
+            "{:?}",
+            run_on("components/__tests__/back-link.test.tsx", src),
+        );
+    }
+
+    #[test]
+    fn no_flag_when_second_init_arg() {
+        // #5756 (back-link.test.tsx): a modified click `{ metaKey: true }` that
+        // userEvent.click cannot express as a single call.
+        let src = "fireEvent.click(link, { metaKey: true });";
+        assert!(
+            run_on("components/__tests__/back-link.test.tsx", src).is_empty(),
+            "{:?}",
+            run_on("components/__tests__/back-link.test.tsx", src),
+        );
+    }
+
+    #[test]
+    fn still_flags_bare_single_arg_statement() {
+        // The genuine target: a bare, value-discarding single-argument click.
+        let src = "fireEvent.click(button);";
+        assert_eq!(
+            run_on("components/__tests__/button.test.tsx", src).len(),
+            1
+        );
     }
 }
