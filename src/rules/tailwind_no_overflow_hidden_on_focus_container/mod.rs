@@ -1,7 +1,9 @@
-//! tailwind-no-overflow-hidden-on-focus-container — `overflow-hidden`
-//! clips focus rings on children. Most a11y bugs trace back to this.
+//! tailwind-no-overflow-hidden-on-focus-container — `overflow-hidden` on a
+//! container clips the focus ring of a focusable descendant. Fires only when
+//! the element's JSX subtree holds a statically-focusable child, so image-crop
+//! and text-truncation containers (no focusable children) are left alone.
 
-mod typescript;
+mod oxc_typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -27,13 +29,13 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
         ],
     }
 }
