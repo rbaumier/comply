@@ -35,13 +35,17 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            let prefix_start = start.saturating_sub(2);
-            let with_prefix = &ctx.source[prefix_start..end];
-            if !with_prefix.starts_with("/*") {
+            // `@deprecated` is a JSDoc tag, which only lives in block comments.
+            // Use the comment kind rather than slicing back to the `/*` prefix:
+            // a preceding multi-byte codepoint would make `start - 2` land off a
+            // char boundary and panic.
+            if !comment.is_block() {
                 continue;
             }
 
-            let text = &ctx.source[start..end];
+            let Some(text) = ctx.source.get(start..end) else {
+                continue;
+            };
             let Some(dep_pos) = text.find("@deprecated") else {
                 continue;
             };
@@ -81,5 +85,50 @@ impl crate::rules::test_helpers::RunRule for Check {
         file: &crate::rules::file_ctx::FileCtx,
     ) -> Vec<crate::diagnostic::Diagnostic> {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_deprecated_without_message() {
+        let d = run_on("/**\n * @deprecated\n */\nexport function f() {}");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "deprecation-without-alternative");
+    }
+
+    #[test]
+    fn allows_deprecated_with_message() {
+        let d = run_on("/**\n * @deprecated use g() instead\n */\nexport function f() {}");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn no_panic_on_box_drawing_chars_before_comment() {
+        // #4695: box-drawing chars (U+2500, 3 bytes) preceding a `@deprecated`
+        // comment made `start - 2` land inside a multi-byte codepoint.
+        let src = "// ── section ──────────\n/**\n * @deprecated\n */\nexport const x = 1;";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn no_panic_on_emoji_and_cjk() {
+        let src = "// 🚀 配置 separator\n/**\n * @deprecated\n */\nexport const y = 2;";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn no_panic_on_multibyte_inside_deprecated_comment() {
+        let src = "/**\n * ── 配置 🚀\n * @deprecated\n */\nexport const z = 3;";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
     }
 }
