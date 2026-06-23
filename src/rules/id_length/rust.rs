@@ -67,6 +67,9 @@ impl AstCheck for Check {
         if is_conventional_short_binding(node, name) {
             return;
         }
+        if super::is_non_ascii_single_char(name) {
+            return;
+        }
         if CRYPTO_SINGLE_LETTER_NAMES.contains(&name)
             && is_crypto_binding_position(node)
             && in_crypto_context(state, ctx)
@@ -359,6 +362,14 @@ mod tests {
     #[test]
     fn flags_unconventional_single_letter_let() {
         assert!(!run_on("fn main() { let q = 1; }").is_empty());
+    }
+
+    // Regression for #5917: a single non-ASCII (Greek) identifier is deliberate
+    // scientific notation, not lazy shorthand — exempt. ASCII single chars stay
+    // flagged (see `flags_unconventional_single_letter_let`).
+    #[test]
+    fn allows_single_non_ascii_letter_binding() {
+        assert!(run_on("fn main() { let γ = 1.0; let _ = γ; }").is_empty());
     }
 
     #[test]

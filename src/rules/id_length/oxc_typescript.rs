@@ -240,6 +240,9 @@ impl OxcCheck for Check {
             if is_conventional_short_binding(name) {
                 continue;
             }
+            if super::is_non_ascii_single_char(name) {
+                continue;
+            }
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -353,6 +356,37 @@ mod tests {
     #[test]
     fn flags_short_param_with_concrete_annotation_despite_type_param() {
         let src = "function f<Q>(q: number): number { return q; }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #5917: single Greek-letter identifiers (`γ`, `α`, `β`) are
+    // deliberate scientific notation, not lazy shorthand — exempt as non-Latin.
+    #[test]
+    fn allows_single_greek_letter_identifiers() {
+        let src = "const α = 1.09929682680944; const β = 0.018053968510807;";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_single_greek_letter_param() {
+        let src = "const gamma = (γ = 1) => (t: number) => Math.pow(t, γ);";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative space for #5917: ASCII single-char names that are NOT conventional
+    // (the #5790/#5891/#5892/#5916 declines) must still be flagged.
+    #[test]
+    fn flags_ascii_single_char_names() {
+        let src = "function f() { const q = 1; const g = 2; return q + g; }";
+        // `q` (var) and `g` (var) flagged; `f` is conventional so exempt.
+        assert_eq!(run(src).len(), 2, "{:?}", run(src));
+    }
+
+    // Negative space for #5917: the exemption is non-ASCII only — a single `$`
+    // is ASCII, so it is still flagged.
+    #[test]
+    fn flags_single_dollar_identifier() {
+        let src = "function f() { const $ = 1; return $; }";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
