@@ -323,11 +323,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "`String` should be `string` — use primitive types.",
             "Use lowercase primitive: `string`, `number`, `boolean`.",
         ),
-        entry(
+        entry_with_filter(
             "no-invalid-void-type",
             "no-invalid-void-type",
             "`void` is only valid as a return type, not a variable type.",
             "Use `undefined` for variables, `void` only for returns.",
+            Some(Arc::new(NoInvalidVoidTypeFilter)),
         ),
         entry(
             "no-misused-new",
@@ -2382,6 +2383,162 @@ fn svr_is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
+// ── no-invalid-void-type post-filter ───────────────────────────────────────
+//
+// `no-invalid-void-type` flags `void` used outside the two positions the rule's
+// own message names as valid: a return type or a generic type argument. The
+// false positive: `void` as a union constituent in a *return-type* position —
+// `(get) => Cleanup | void | Promise<Cleanup | void>` (pmndrs/valtio, RTK
+// Query). `Cleanup | void` in a return type is the idiomatic "returns a cleanup
+// function or nothing" callback contract, and TypeScript accepts it. The `void`
+// nested in `Promise<…>` is a generic type argument, also valid.
+//
+// The delegated diagnostic arrives from oxlint with no AST, anchored on the
+// `void` keyword. The filter re-parses the file, finds the `TSVoidKeyword`
+// covering that position, and drops the diagnostic when an ancestor walk shows
+// the `void` sits in a function/callback return type or a generic type-argument
+// list. A `void` in a non-return position — `let x: string | void`, a parameter
+// annotation, a `<T extends void>` constraint — is still flagged. Failing safe:
+// an unreadable source or a position that does not resolve to a `void` keyword
+// keeps the diagnostic. (Closes #5609)
+
+struct NoInvalidVoidTypeFilter;
+
+impl PostFilter for NoInvalidVoidTypeFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        let Some(offset) = nivt_byte_offset(src, diag.line, diag.column) else {
+            return true;
+        };
+        !nivt_void_at_offset_is_valid_position(src, &diag.path, offset)
+    }
+}
+
+/// Byte offset of the `(line, column)` position (both 1-based) into `src`.
+fn nivt_byte_offset(src: &str, line: usize, column: usize) -> Option<usize> {
+    if line == 0 || column == 0 {
+        return None;
+    }
+    let mut offset = 0usize;
+    for (idx, l) in src.lines().enumerate() {
+        if idx + 1 == line {
+            return Some(offset + (column - 1).min(l.len()));
+        }
+        offset += l.len() + 1;
+    }
+    None
+}
+
+/// Re-parse `src` and report whether the `void` keyword covering byte `offset`
+/// sits in a position the rule explicitly permits: a function/callback return
+/// type, or a generic type-argument list. Returns `false` when no
+/// `TSVoidKeyword` covers the offset, so an unresolved position keeps the
+/// diagnostic.
+fn nivt_void_at_offset_is_valid_position(
+    src: &str,
+    path: &std::path::Path,
+    offset: usize,
+) -> bool {
+    use crate::oxc_helpers::with_oxc_parse;
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    with_oxc_parse(src, path, |semantic| {
+        let offset = offset as u32;
+        // The smallest `TSVoidKeyword` whose span contains the offset is the one
+        // oxlint flagged; `void` keywords never nest, so a single keyword resolves.
+        let target = semantic
+            .nodes()
+            .iter()
+            .filter(|node| matches!(node.kind(), AstKind::TSVoidKeyword(_)))
+            .find(|node| {
+                let span = node.kind().span();
+                span.start <= offset && offset < span.end
+            });
+        let Some(target) = target else {
+            return false;
+        };
+        let void_start = target.kind().span().start;
+        nivt_is_return_type_context(target, semantic, void_start)
+            || nivt_is_generic_type_arg(target, semantic)
+    })
+}
+
+/// True when `void` sits inside the return-type annotation of an enclosing
+/// function, arrow function, function type, constructor type, method signature,
+/// or call signature. Mirrors the native `ts-no-invalid-void-type` rule: the
+/// nearest such ancestor is the boundary, and the `void` must fall within its
+/// return-type span. A `void` in a parameter annotation reaches a
+/// `FormalParameter`/function boundary outside the return-type span and is not
+/// exempted.
+fn nivt_is_return_type_context(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    void_start: u32,
+) -> bool {
+    use oxc_ast::AstKind;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::Function(f) => {
+                return f.return_type.as_ref().is_some_and(|ret| {
+                    void_start >= ret.span.start && void_start < ret.span.end
+                });
+            }
+            AstKind::ArrowFunctionExpression(f) => {
+                return f.return_type.as_ref().is_some_and(|ret| {
+                    void_start >= ret.span.start && void_start < ret.span.end
+                });
+            }
+            AstKind::TSFunctionType(ft) => {
+                let ret = ft.return_type.span;
+                return void_start >= ret.start && void_start < ret.end;
+            }
+            AstKind::TSConstructorType(ct) => {
+                let ret = ct.return_type.span;
+                return void_start >= ret.start && void_start < ret.end;
+            }
+            AstKind::TSMethodSignature(ms) => {
+                return ms.return_type.as_ref().is_some_and(|ret| {
+                    void_start >= ret.span.start && void_start < ret.span.end
+                });
+            }
+            AstKind::TSCallSignatureDeclaration(cs) => {
+                return cs.return_type.as_ref().is_some_and(|ret| {
+                    void_start >= ret.span.start && void_start < ret.span.end
+                });
+            }
+            AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_) => {
+                return false;
+            }
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// True when `void` is a member of a generic type-argument list
+/// (`Promise<void>`, `Promise<Cleanup | void>`), stopping at the first
+/// function/class boundary so a `void` parameter of an inner callback is not
+/// mistaken for a type argument of an outer generic.
+fn nivt_is_generic_type_arg(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::TSTypeParameterInstantiation(_) => return true,
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Class(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3688,5 +3845,104 @@ function pick(x: unknown): unknown {
     fn us_keeps_when_source_missing() {
         let f = UnifiedSignaturesFilter;
         assert!(f.keep(&us_diag(Path::new("src/foo.ts"), 1), None));
+    }
+
+    // ── no-invalid-void-type ─────────────────────────────────────────────────
+
+    fn nivt_diag(path: &std::path::Path, line: usize, col: usize) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line,
+            column: col,
+            rule_id: Cow::Borrowed("no-invalid-void-type"),
+            message: String::new(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression for #5609: pmndrs/valtio WatchCallback — `void` as a union
+    // constituent in a callback return type must not fire.
+    #[test]
+    fn nivt_drops_void_in_callback_return_union() {
+        let src = "type WatchCallback = (get: WatchGet) => Cleanup | void;\n";
+        let path = write_temp("nivt_callback_return_union.ts", src);
+        let (line, col) = line_col_of(src, "void");
+        let src_content = source_for(&path);
+        let f = NoInvalidVoidTypeFilter;
+        assert!(!f.keep(&nivt_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // The `void` nested in `Promise<Cleanup | void>` is a generic type argument.
+    #[test]
+    fn nivt_drops_void_in_promise_generic_arg() {
+        let src = "type WatchCallback = (get: WatchGet) => Promise<Cleanup | void>;\n";
+        let path = write_temp("nivt_promise_generic_arg.ts", src);
+        let (line, col) = line_col_of(src, "void");
+        let src_content = source_for(&path);
+        let f = NoInvalidVoidTypeFilter;
+        assert!(!f.keep(&nivt_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn nivt_drops_void_in_arrow_return_union() {
+        let src = "const cb = (): Cleanup | void => undefined;\n";
+        let path = write_temp("nivt_arrow_return_union.ts", src);
+        let (line, col) = line_col_of(src, "void");
+        let src_content = source_for(&path);
+        let f = NoInvalidVoidTypeFilter;
+        assert!(!f.keep(&nivt_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // Negative space: `void` in a non-return union (variable annotation) stays.
+    #[test]
+    fn nivt_keeps_void_in_variable_union() {
+        let src = "let x: string | void;\n";
+        let path = write_temp("nivt_variable_union.ts", src);
+        let (line, col) = line_col_of(src, "void");
+        let src_content = source_for(&path);
+        let f = NoInvalidVoidTypeFilter;
+        assert!(f.keep(&nivt_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // Negative space: `void` in a parameter annotation of a callback type stays.
+    #[test]
+    fn nivt_keeps_void_in_callback_param() {
+        let src = "type Cb = (x: string | void) => number;\n";
+        let path = write_temp("nivt_callback_param.ts", src);
+        let (line, col) = line_col_of(src, "void");
+        let src_content = source_for(&path);
+        let f = NoInvalidVoidTypeFilter;
+        assert!(f.keep(&nivt_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // Negative space: `void` as a generic constraint (`<T extends void>`) is not
+    // a generic type argument and stays flagged.
+    #[test]
+    fn nivt_keeps_void_as_generic_constraint() {
+        let src = "type Fn<T extends void> = () => T;\n";
+        let path = write_temp("nivt_generic_constraint.ts", src);
+        let (line, col) = line_col_of(src, "void");
+        let src_content = source_for(&path);
+        let f = NoInvalidVoidTypeFilter;
+        assert!(f.keep(&nivt_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // Negative space: a bare `void` variable annotation stays flagged.
+    #[test]
+    fn nivt_keeps_bare_void_variable() {
+        let src = "let x: void;\n";
+        let path = write_temp("nivt_bare_void_variable.ts", src);
+        let (line, col) = line_col_of(src, "void");
+        let src_content = source_for(&path);
+        let f = NoInvalidVoidTypeFilter;
+        assert!(f.keep(&nivt_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // When the source cannot be read the filter keeps the diagnostic.
+    #[test]
+    fn nivt_keeps_when_source_missing() {
+        let f = NoInvalidVoidTypeFilter;
+        assert!(f.keep(&nivt_diag(Path::new("src/foo.ts"), 1, 1), None));
     }
 }
