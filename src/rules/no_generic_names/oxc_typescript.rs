@@ -198,6 +198,32 @@ fn for_each_segment(name: &str, mut f: impl FnMut(&str)) {
     }
 }
 
+/// Graph-domain entity nouns. In a graph/network library these are the
+/// fundamental modelled entities, not generic terms — so a `data` segment
+/// qualified by one of them (`NodeData`, `edgeData`, `NodeMetaData`) names a
+/// specific entity-data container, the established convention across graphlib,
+/// cytoscape, vis.js, and sigma.js.
+const GRAPH_ENTITY_NOUNS: &[&str] = &["node", "edge", "vertex", "graph", "cluster"];
+
+/// True when `name` is a graph-entity-data compound: its first word segment is a
+/// `GRAPH_ENTITY_NOUNS` primitive and its last word segment is `data`
+/// (`NodeData`, `edgeData`, `NodeMetaData`, `EdgeSingularData`). The leading
+/// graph entity qualifies the `data` into a specific payload, so the name is not
+/// the generic catch-all the rule targets. A `data` segment whose leading word
+/// is not a graph primitive (`UserData`, `updatedData`) is not exempted.
+fn is_graph_entity_data_compound(name: &str) -> bool {
+    let mut first: Option<&str> = None;
+    let mut last_is_data = false;
+    for_each_segment(name, |seg| {
+        if first.is_none() {
+            first = Some(seg);
+        }
+        last_is_data = seg.eq_ignore_ascii_case("data");
+    });
+    last_is_data
+        && first.is_some_and(|f| GRAPH_ENTITY_NOUNS.iter().any(|n| f.eq_ignore_ascii_case(n)))
+}
+
 /// The `BANNED_SEGMENTS` noun occurring as a standalone segment of `name`, after
 /// the exemptions that turn a domain-suffixed compound (`dataType`, `DATA_DIR`)
 /// into a specific name.
@@ -205,6 +231,12 @@ fn matched_banned_segment(name: &str) -> Option<&'static str> {
     // A domain-identifying suffix (`dataType`, `dataKey`, `dataJson`) makes the
     // compound a specific field, not a generic blob.
     if ends_with_descriptive_camel_suffix(name) {
+        return None;
+    }
+    // A graph-entity-data compound (`NodeData`, `edgeData`, `NodeMetaData`) names
+    // the data payload attached to a graph primitive — a specific entity
+    // container, not a generic `data` blob.
+    if is_graph_entity_data_compound(name) {
         return None;
     }
     // A SCREAMING_SNAKE_CASE constant whose tail is a descriptive suffix
@@ -2433,5 +2465,42 @@ mod tests {
         assert_eq!(run("function f() { const body = read(); return body; }").len(), 1);
         assert_eq!(run("function f() { const payload = build(); return payload; }").len(), 1);
         assert_eq!(run("function f() { const tmp = mk(); return tmp; }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_graph_entity_data_compound_issue_5732() {
+        // Regression for #5732 — in graph/network libraries (mermaid, cytoscape,
+        // graphlib) `Node`/`Edge`/`Vertex`/`Graph`/`Cluster` are the fundamental
+        // domain entities, so a `data` segment qualified by one of them names a
+        // specific entity-data payload, not a generic blob. Both PascalCase type
+        // names and camelCase locals are clean, as are `*MetaData`/`*SingularData`.
+        let src = r#"
+            export type NodeData = { id: string };
+            export type EdgeData = { startNode: string };
+            export type NodeMetaData = { id: string };
+            export type EdgeMetaData = { id: string };
+            export interface NodeSingularData { x: number }
+            export interface EdgeSingularData { x: number }
+            export type VertexData = { id: string };
+            export type GraphData = { nodes: number };
+            export type ClusterData = { members: string[] };
+        "#;
+        assert!(run(src).is_empty(), "graph-entity `*Data` compounds must NOT flag");
+        assert!(run("const nodeData = node.data();").is_empty());
+        assert!(run("const edgeData = edge.data();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_graph_data_compounds_issue_5732() {
+        // Negative space for #5732 — the exemption is scoped to graph-entity
+        // prefixes in the leading + trailing positions. A `data` segment led by a
+        // non-graph word (`UserData`, `updatedData`, `getUserData`), a graph noun
+        // whose `data` is not the trailing segment (`nodeDataResponse`), and a
+        // bare `data` all stay generic.
+        assert_eq!(run("export type UserData = { id: string };").len(), 1);
+        assert_eq!(run("const updatedData = 1;").len(), 1);
+        assert_eq!(run("function getUserData() { return 1; }").len(), 1);
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        assert_eq!(run("const nodeDataResponse = fetch();").len(), 1);
     }
 }
