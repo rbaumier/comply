@@ -39,6 +39,21 @@ pub const META: RuleMeta = RuleMeta {
     skip_in_relaxed_dir: false,
 };
 
+/// True for a single-character identifier whose sole character is non-ASCII —
+/// e.g. a Greek letter (`α`, `β`, `γ`). A non-ASCII single-char name is never a
+/// lazy keyboard default; it is a deliberate mathematical/scientific notation
+/// choice that already carries unambiguous meaning, which is exactly what the
+/// rule's length floor exists to guarantee. This is a Unicode property of the
+/// identifier, not a name allowlist; ASCII single chars (`q`, `_`, `$`) are
+/// unaffected.
+fn is_non_ascii_single_char(name: &str) -> bool {
+    let mut chars = name.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => !c.is_ascii(),
+        _ => false,
+    }
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
