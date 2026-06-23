@@ -85,6 +85,16 @@ impl OxcCheck for Check {
                 if is_generated_file(src) {
                     return None;
                 }
+                // A Flow-annotated source (`// @flow`, `/* @flow strict */`, …) is
+                // type-checked by Flow, not TypeScript. Its `.js` carries Flow-only
+                // syntax (variance sigils `<+T>`, `export type {X}`, etc.) the oxc
+                // TS/TSX parser cannot parse, so the extracted export set is empty
+                // or unreliable. Verifying a named import against it produces false
+                // positives for both value and type imports (Flow erases type
+                // exports entirely) — skip rather than report names as missing.
+                if is_flow_source(src) {
+                    return None;
+                }
                 let exports = index.get_exports(src);
                 // `export *` re-exports and a non-enumerable CJS
                 // `module.exports = <expr>` both leave the export set
@@ -180,6 +190,37 @@ fn is_generated_file(path: &std::path::Path) -> bool {
         end -= 1;
     }
     content[..end].contains("@generated")
+}
+
+/// True when the file opens with a Flow pragma comment (`// @flow`,
+/// `/* @flow strict */`, `/** @flow strict-local */`). Flow requires the pragma
+/// in the file's first comment, so only the leading window is scanned and the
+/// `@flow` token must sit on a comment line. A Flow source is checked by Flow,
+/// not TypeScript; the oxc TS/TSX parser fails on its Flow-only syntax, so its
+/// extracted export set is unreliable and `import-named` must not verify against
+/// it. Only `.js`/`.jsx` files qualify — `.ts`/`.tsx` are never Flow.
+fn is_flow_source(path: &std::path::Path) -> bool {
+    let is_js = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e, "js" | "jsx" | "mjs" | "cjs"));
+    if !is_js {
+        return false;
+    }
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    // Flow's pragma lives in the first comment. Scan only the leading lines and
+    // require `@flow` on a line that is itself a comment, so a stray `@flow` in
+    // a string or later prose does not match.
+    content
+        .lines()
+        .take(20)
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("//") || t.starts_with("/*") || t.starts_with('*')
+        })
+        .any(|l| l.contains("@flow"))
 }
 
 /// Outcome of looking for the type-only export names a non-declaration source
@@ -1046,5 +1087,97 @@ mod tests {
         let (_dir, diags) = run_with_package(pkg, &package_files, target);
         assert_eq!(diags.len(), 1, "absent name must still be flagged: {diags:?}");
         assert!(diags[0].message.contains("Nope"));
+    }
+
+    #[test]
+    fn no_fp_on_flow_type_import_from_flow_js_issue_5607() {
+        // Regression for #5607 — Recoil pattern: a `@flow`-annotated `.js` file
+        // imports `import type {Loadable} from './foo'`. The Flow source `foo.js`
+        // declares `Loadable` via Flow-only syntax (variance sigil `<+T>`,
+        // `export type {Loadable}`) that the oxc TS/TSX parser cannot parse, so
+        // its extracted export set is empty. import-named must skip verification
+        // against a Flow source rather than report the name as missing.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "adt/Recoil_Loadable.js",
+                "// @flow strict\n\
+                 class BaseLoadable<T> { contents: T; }\n\
+                 class ValueLoadable<T> extends BaseLoadable<T> {}\n\
+                 export type Loadable<+T> = ValueLoadable<T>;\n\
+                 export type {Loadable};\n",
+            ),
+            (
+                "core/Recoil_FunctionalCore.js",
+                "// @flow strict-local\n\
+                 import type {Loadable} from '../adt/Recoil_Loadable';\n\
+                 const x: Loadable = null;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "core/Recoil_FunctionalCore.js");
+        assert!(
+            diags.is_empty(),
+            "Flow type import from a @flow .js source must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_value_import_from_flow_js_issue_5607() {
+        // A plain VALUE named import from a `@flow` source is also a false
+        // positive — the Flow file's exports are unparseable, so its export set is
+        // unreliable. Skipping is keyed on the Flow source, not the import kind,
+        // so value imports are covered too.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "graph.js",
+                "/* @flow */\n\
+                 export opaque type NodeKey = string;\n\
+                 export function getNode(k: NodeKey): mixed { return k; }\n",
+            ),
+            (
+                "core.js",
+                "// @flow\nimport {getNode} from './graph';\nconst n = getNode('a');\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "core.js");
+        assert!(
+            diags.is_empty(),
+            "value import from a @flow .js source must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_missing_value_import_from_non_flow_js_issue_5607() {
+        // True positive preserved: the skip is gated on a `@flow` pragma. A plain
+        // `.js` source (no pragma) is parsed normally, so a genuinely-absent named
+        // import is still flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("utils.js", "export const add = 1;\n"),
+            ("app.js", "import { multiply } from './utils';\nconst x = multiply;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "app.js");
+        assert_eq!(
+            diags.len(),
+            1,
+            "absent import from a non-Flow .js must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("multiply"));
+    }
+
+    #[test]
+    fn still_flags_missing_ts_type_import_issue_5607() {
+        // True positive preserved: a TS `import type { Missing }` of a name the
+        // (parseable) TS module exports as neither value nor type is still
+        // flagged — the Flow guard must not weaken TS type-import checking.
+        let files: Vec<(&str, &str)> = vec![
+            ("foo.ts", "export type Foo = number;\nexport const v = 1;\n"),
+            ("app.ts", "import type { Missing } from './foo';\ntype B = Missing;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "app.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "absent TS type import must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("Missing"));
     }
 }
