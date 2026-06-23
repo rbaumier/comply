@@ -37,13 +37,19 @@ crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     });
 }
 
+/// Hungarian notation encodes the type of a *value* (variable, parameter,
+/// const, static). A function name is an operation verb, not a value, so a
+/// type-abbreviation prefix on a function name is the operation it performs
+/// (`dbl_in_place` = the doubling operation, `str_split` = split a string),
+/// not a type encoding. Excluding `function_item` keeps the Rust backend in
+/// step with the TypeScript one, which only inspects value bindings.
 fn is_declaration_site(node: tree_sitter::Node) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
     matches!(
         parent.kind(),
-        "let_declaration" | "parameter" | "function_item" | "const_item" | "static_item"
+        "let_declaration" | "parameter" | "const_item" | "static_item"
     )
 }
 
@@ -132,5 +138,22 @@ mod tests {
     #[test]
     fn flags_legacy_dbl_prefix() {
         assert_eq!(run_on("fn f() { let dbl_value = 3.14; }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_dbl_operation_function_name() {
+        // #5779: `dbl_in_place` is the doubling operation (left-shift by 1)
+        // in bignum/Montgomery arithmetic, parallel to `add_in_place` /
+        // `mul_in_place`. The `dbl` prefix is the verb, not a `double` type
+        // encoding on a value. Function names are operations, not typed values.
+        assert!(run_on("fn dbl_in_place(x: &mut u64) { *x <<= 1; }").is_empty());
+        assert!(run_on("fn dbl_in_place_large(r: &mut Repr) {}").is_empty());
+    }
+
+    #[test]
+    fn flags_dbl_prefixed_value_parameter() {
+        // The exclusion is for function *names* only — a value parameter that
+        // genuinely type-encodes is still flagged.
+        assert_eq!(run_on("fn f(dbl_value: f64) {}").len(), 1);
     }
 }
