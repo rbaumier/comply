@@ -85,6 +85,17 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // A name carrying a non-ASCII character cannot be expressed in
+            // `SCREAMING_SNAKE_CASE`: the convention is an ASCII one, and the
+            // uppercase of a Greek letter (`α` → `Α`) is not a form anyone
+            // writes. Such names mirror a published spec's symbol notation —
+            // `α`/`β` are the ITU-R BT.2020 transfer-function coefficients — so
+            // the convention does not apply (issue #5918). This is a pure
+            // Unicode property, not a per-symbol allowlist.
+            if name.chars().any(|c| !c.is_ascii()) {
+                continue;
+            }
+
             if super::is_screaming_snake(name) {
                 continue;
             }
@@ -250,5 +261,25 @@ mod tests {
     #[test]
     fn allows_screaming_snake() {
         assert!(run_on("const MAX_RETRIES = 5;").is_empty());
+    }
+
+    #[test]
+    fn allows_non_ascii_constant_names() {
+        // Regression for #5918: Greek-letter spec constants cannot be expressed
+        // in SCREAMING_SNAKE_CASE (the convention is ASCII-only), so they are
+        // exempt. `α`/`β` are the ITU-R BT.2020 transfer-function coefficients.
+        assert!(run_on("const \u{3b1} = 1.09929682680944;").is_empty());
+        assert!(run_on("const \u{3b2} = 0.018053968510807;").is_empty());
+    }
+
+    #[test]
+    fn flags_ascii_spec_names() {
+        // The ASCII spec names from #5918 (`kE`, `kCH`, `p`, `d0`) all have a
+        // valid SCREAMING_SNAKE_CASE form (`K_E`, `K_CH`, `P`, `D0`), so the
+        // convention still applies and they are correctly flagged.
+        assert_eq!(run_on("const kE = 1;").len(), 1);
+        assert_eq!(run_on("const kCH = 1;").len(), 1);
+        assert_eq!(run_on("const p = 134.034;").len(), 1);
+        assert_eq!(run_on("const d0 = 1.6295e-11;").len(), 1);
     }
 }
