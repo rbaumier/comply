@@ -161,8 +161,9 @@ fn root_object_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
 }
 
 /// True when the member-access chain is rooted at `this` (e.g. `this.x`,
-/// `this.ctx.counter`). Inside a constructor or setter body these writes are
-/// initialisation / intercepted-assignment, not mutation of a stable object.
+/// `this.ctx.counter`). Writing the object's own instance state is encapsulated
+/// state with no immutable form, not the external/shared mutation this rule
+/// targets.
 fn is_rooted_at_this(expr: &Expression) -> bool {
     match expr {
         Expression::ThisExpression(_) => true,
@@ -285,49 +286,6 @@ fn is_create_element_call(expr: &Expression) -> bool {
     method == "createElement" || method == "createElementNS"
 }
 
-/// True when `node` sits inside a `constructor()` body or a property `set`
-/// accessor body. Assigning `this.x = value` while the object is being
-/// constructed is initialisation, not mutation of an already-stable object —
-/// TypeScript even allows setting `readonly` fields here. A `set x(v)` accessor
-/// exists precisely to intercept assignment, so its body must mutate state and
-/// has no immutable alternative.
-fn is_inside_constructor_or_setter<'a>(
-    node: &oxc_semantic::AstNode<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    let mut ancestors = semantic.nodes().ancestors(node.id()).peekable();
-    let mut first = true;
-    while let Some(ancestor) = ancestors.next() {
-        if first {
-            first = false;
-            continue;
-        }
-        match ancestor.kind() {
-            AstKind::MethodDefinition(method) => {
-                return matches!(
-                    method.kind,
-                    MethodDefinitionKind::Constructor | MethodDefinitionKind::Set
-                );
-            }
-            AstKind::Function(_) => {
-                // The constructor/accessor body is wrapped in a Function node in OXC's AST.
-                if let Some(next) = ancestors.peek()
-                    && let AstKind::MethodDefinition(method) = next.kind()
-                {
-                    return matches!(
-                        method.kind,
-                        MethodDefinitionKind::Constructor | MethodDefinitionKind::Set
-                    );
-                }
-                return false;
-            }
-            AstKind::ArrowFunctionExpression(_) => return false,
-            _ => {}
-        }
-    }
-    false
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -396,8 +354,11 @@ impl OxcCheck for Check {
                         if prop_text == "current" { return; }
                         if obj_text == "document" && prop_text == "cookie" { return; }
                         if is_imperative_host_write(obj_text, prop_text) { return; }
-                        if is_rooted_at_this(&m.object)
-                            && is_inside_constructor_or_setter(node, semantic) { return; }
+                        // Mutating an object's own instance state (`this.out = sink`)
+                        // is encapsulated state, not the external/shared mutation this
+                        // rule targets — replacing the whole object is the only
+                        // "immutable" form, so there is nothing to suggest.
+                        if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
@@ -437,8 +398,8 @@ impl OxcCheck for Check {
                         if is_dispatch_table_element_write(m, semantic) { return; }
                         if let Expression::StringLiteral(key) = &m.expression
                             && is_imperative_host_write(obj_text, key.value.as_str()) { return; }
-                        if is_rooted_at_this(&m.object)
-                            && is_inside_constructor_or_setter(node, semantic) { return; }
+                        // Own instance state: `this.cache[id] = v` — see the static-member arm.
+                        if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
@@ -482,6 +443,8 @@ impl OxcCheck for Check {
                         { return; }
                         // Vue 3 reactive() object: `state.incrementedTimes++` is the idiomatic update.
                         if is_vue_reactive_object_target(m, semantic) { return; }
+                        // Own instance state: `this.count++` — see the AssignmentExpression arm.
+                        if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
@@ -503,6 +466,8 @@ impl OxcCheck for Check {
                     SimpleAssignmentTarget::ComputedMemberExpression(m) => {
                         // TypedArray element update `buf[i]++`: same in-place-write idiom.
                         if is_typed_array_element_object(&m.object, semantic) { return; }
+                        // Own instance state: `this.counts[k]++` — see the AssignmentExpression arm.
+                        if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
@@ -530,6 +495,8 @@ impl OxcCheck for Check {
                 }
                 match &unary.argument {
                     Expression::StaticMemberExpression(m) => {
+                        // Own instance state: `delete this.cache.key` — see the AssignmentExpression arm.
+                        if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
@@ -541,6 +508,8 @@ impl OxcCheck for Check {
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
+                        // Own instance state: `delete this.cache[id]` — see the AssignmentExpression arm.
+                        if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
@@ -779,13 +748,15 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_this_assignment_in_method() {
+    fn allows_this_assignment_in_method() {
+        // Mutating an object's own instance state inside a method is encapsulated
+        // state, not the external/shared mutation this rule targets.
         let src = r#"
             class Foo {
                 update() { this.value = 1; }
             }
         "#;
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty());
     }
 
     #[test]
@@ -819,14 +790,74 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_this_assignment_in_getter() {
-        // A getter should not mutate state; `this._x = 1` inside `get x()` is a
-        // genuine mutation and stays flagged.
+    fn allows_this_assignment_in_getter() {
+        // `this._x = 1` writes the object's own instance state regardless of the
+        // enclosing accessor; getter side effects are a separate concern.
         let src = r#"
             class Foo {
                 get x() {
                     this._x = 1;
                     return this._x;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // FRP stream-operator lifecycle state — issue #5854
+
+    #[test]
+    fn allows_frp_operator_lifecycle_this_state_issue_5854() {
+        // Regression for rbaumier/comply#5854 — xstream/most.js/bacon FRP stream
+        // operators store the downstream sink and clear it in their lifecycle
+        // methods (`_start`/`_stop`). These are writes to the operator's own
+        // instance state, which has no immutable alternative.
+        let src = r#"
+            class ThrottleOperator<T> implements Operator<T, T> {
+                public out: Stream<T> = null as any;
+                private id: any = null;
+                _start(out: Stream<T>): void {
+                    this.out = out;
+                    this.ins._add(this);
+                }
+                _stop(): void {
+                    this.ins._remove(this);
+                    this.out = null as any;
+                    this.id = null;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_frp_prototype_method_this_state_issue_5854() {
+        // most.js uses the prototype-method form; inside a `prototype.x = function`
+        // body `this` still refers to the operator's own instance state, so the
+        // lifecycle writes (`this.current = …`, `this.ended = true`) are not
+        // flagged. The two `SwitchSink.prototype.x = fn` method-attachment
+        // assignments themselves are a distinct pattern outside this issue.
+        let src = r#"
+            SwitchSink.prototype.event = function(t, stream) {
+                this.current = new Segment(t, Infinity, this, this.sink);
+                this.current.disposable = stream.source.run(this.current);
+            };
+            SwitchSink.prototype.end = function(t, x) {
+                this.ended = true;
+            };
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_param_sink_mutation_in_frp_method_issue_5854() {
+        // Negative space: the exemption is `this`-rooted. Mutating a handed-in
+        // sink/parameter (external, caller-owned state) inside the same lifecycle
+        // method stays flagged — that is the mutation the rule exists to catch.
+        let src = r#"
+            class Op {
+                _start(out) {
+                    out.active = true;
                 }
             }
         "#;
@@ -1203,7 +1234,9 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_delete_on_this_member_chain() {
+    fn allows_delete_on_this_member_chain() {
+        // Deleting from the object's own instance state is self-state management,
+        // not the external/shared mutation this rule targets.
         let src = r#"
             class Foo {
                 clear() {
@@ -1211,7 +1244,7 @@ mod tests {
                 }
             }
         "#;
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty());
     }
 
     // Array.reduce() accumulator — issue #2239
