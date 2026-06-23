@@ -282,6 +282,30 @@ fn strip_version_discriminator(stem: &str) -> &str {
     }
 }
 
+/// Strips a trailing Go-style `_test` / `_spec` test-file suffix from `stem`,
+/// returning the base name the convention is then validated against. The
+/// `<module>_test` / `<module>_spec` form is a conventional test-file marker
+/// (Go's `_test.go`, also used by older JS tooling — `migrator_test.js`,
+/// `api_test.js`), the underscore-separated sibling of the dotted `.test.` /
+/// `.spec.` infix. The suffix is removed so the base (e.g. `migrator`) flows
+/// through the ordinary convention checks, so a malformed base (`weird name_test`)
+/// still fails. Returns `stem` unchanged when there is no such suffix or when
+/// stripping it would leave an empty base.
+///
+/// Unlike the dashed `{subject}-test` form ([`is_test_subject_stem`]), a
+/// lowercase base + `_test` is indistinguishable from an ordinary snake_case
+/// production filename whose last segment is `test`, so the caller gates this on
+/// a test context (`.test.`/`.spec.` file, `regression/`, or a fixture dir).
+fn strip_test_suffix(stem: &str) -> &str {
+    let base = stem
+        .strip_suffix("_test")
+        .or_else(|| stem.strip_suffix("_spec"));
+    match base {
+        Some(base) if !base.is_empty() => base,
+        _ => stem,
+    }
+}
+
 /// Returns `true` when `path` is a test file by path alone: a `.test.`/`.spec.`
 /// filename infix or a `regression/` ancestor directory. The signal the
 /// regression-test-name allowance is gated on, so an `issue-NNNN-` stem in
@@ -467,6 +491,15 @@ impl TextCheck for Check {
         // marks a framework-internal/reactive value; validate the convention
         // against the name after the prefix.
         let mut convention_stem = strip_private_prefix(stem);
+        // In a test file, a trailing `_test` / `_spec` is the Go-style test-file
+        // marker (`migrator_test.js`), the underscore sibling of the dotted
+        // `.test.` / `.spec.` infix; strip it so the base name is validated as
+        // usual. Gated to a test context because a lowercase base + `_test` is
+        // otherwise indistinguishable from a snake_case production filename.
+        let in_test_context = is_test_context_path(ctx.path) || is_in_fixture_dir(ctx.path);
+        if in_test_context {
+            convention_stem = strip_test_suffix(convention_stem);
+        }
         // In test files, `<name>@<version>` names a suite after the dependency
         // major version it targets (`tailwind@3.test.ts`); strip the recognised
         // `@<version>` discriminator so the base name is validated as usual.
@@ -1140,6 +1173,62 @@ mod tests {
     #[test]
     fn flags_snake_subject_test_issue_3380() {
         assert_eq!(run("src/some_file-test.ts").len(), 1);
+    }
+
+    // Regression for #5791: the Go-style `<module>_test` / `<module>_spec`
+    // suffix is a conventional test-file marker; the base (`migrator`, `api`) is
+    // validated against the ordinary convention after the suffix is stripped.
+    #[test]
+    fn allows_underscore_test_suffix_js_issue_5791() {
+        assert!(run("test/migrator_test.js").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_test_suffix_nested_js_issue_5791() {
+        assert!(run("test/integration/api_test.js").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_test_suffix_ts_issue_5791() {
+        assert!(run("test/migration_test.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_spec_suffix_js_issue_5791() {
+        assert!(run("test/util_spec.js").is_empty());
+    }
+
+    // Guard (scope proof): the suffix only frees the `_test`/`_spec` segment —
+    // the base name is still validated, so a misnamed base still fires.
+    #[test]
+    fn flags_misnamed_base_underscore_test_issue_5791() {
+        assert_eq!(run("test/some__bad_test.js").len(), 1);
+    }
+
+    // Guard: a genuinely mis-cased NON-test file is unaffected by the suffix
+    // allowance and still fires.
+    #[test]
+    fn flags_non_test_snake_file_issue_5791() {
+        assert_eq!(run("src/user_profile.js").len(), 1);
+    }
+
+    // Guard (scope proof): the `_test` allowance is gated to a test context — a
+    // production file `foo_test.js` outside any test dir is still stray
+    // snake_case and still fires.
+    #[test]
+    fn flags_underscore_test_suffix_in_production_issue_5791() {
+        assert_eq!(run("src/foo_test.js").len(), 1);
+    }
+
+    // Unit: `strip_test_suffix` removes one recognised suffix and leaves
+    // everything else unchanged (no suffix, empty base, single pass).
+    #[test]
+    fn strip_test_suffix_unit_issue_5791() {
+        assert_eq!(strip_test_suffix("migrator_test"), "migrator");
+        assert_eq!(strip_test_suffix("util_spec"), "util");
+        assert_eq!(strip_test_suffix("foo_spec_test"), "foo_spec");
+        assert_eq!(strip_test_suffix("migrator"), "migrator");
+        assert_eq!(strip_test_suffix("_test"), "_test");
     }
 
     // Guard: a `someFile-test.ts` whose convention is already satisfied stays
