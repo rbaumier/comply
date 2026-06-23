@@ -58,11 +58,12 @@ pub fn register_all() -> Vec<RuleDef> {
         // `no-explicit-any` is enforced by the native oxc rule `ts-no-explicit-any`
         // (the canonical id); the syntactic `any` keyword needs no type program, so
         // the type-aware variant is not registered here (one finding, one id — #5768).
-        entry(
+        entry_with_filter(
             "no-unsafe-argument",
             "no-unsafe-argument",
             "Passing `any` to a typed parameter defeats type safety.",
             "Add a type assertion or fix the source of `any`.",
+            Some(Arc::new(TypeTestFileFilter)),
         ),
         entry_with_filter(
             "no-unsafe-assignment",
@@ -71,17 +72,19 @@ pub fn register_all() -> Vec<RuleDef> {
             "Add a type assertion or fix the source of `any`.",
             Some(Arc::new(NoUnsafeAssignmentFilter)),
         ),
-        entry(
+        entry_with_filter(
             "no-unsafe-call",
             "no-unsafe-call",
             "Calling a value typed as `any` is unsafe.",
             "Add proper types or use a type guard.",
+            Some(Arc::new(TypeTestFileFilter)),
         ),
-        entry(
+        entry_with_filter(
             "no-unsafe-member-access",
             "no-unsafe-member-access",
             "Accessing a member on `any` is unsafe.",
             "Add proper types or use a type guard.",
+            Some(Arc::new(TypeTestFileFilter)),
         ),
         entry(
             "no-unsafe-return",
@@ -638,6 +641,28 @@ fn is_test_path(path: &std::path::Path) -> bool {
         || lower.contains("/test/")
         || lower.starts_with("tests/")
         || lower.starts_with("test/")
+}
+
+// ── tsd type-test post-filter (no-unsafe-call / -argument / -member-access) ──
+//
+// tsd type-test files (`.test-d.ts`, `test-d/`, dtslint, etc.) assert type
+// relationships at the declaration level: `expectType<string>(api.method())`.
+// They are processed only by tsd's type-checker and never run — the file's
+// runtime output is discarded. Without the tsd tsconfig context, the type-aware
+// backend cannot resolve the asserted symbols, so they degrade to the `error`
+// type, which behaves like `any`; that makes the `no-unsafe-*` family fire on
+// every assertion. Since the operations exist solely to be type-checked, not
+// executed, drop the diagnostic. The signal is the tsd type-test convention via
+// the shared [`crate::rules::path_utils::is_type_test_file`] predicate — narrow
+// enough that ordinary `.test.`/`.spec.` runtime unit tests, where an unsafe
+// `any` is a genuine bug, still flag. (Closes #5741)
+
+struct TypeTestFileFilter;
+
+impl PostFilter for TypeTestFileFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, _source: Option<&str>) -> bool {
+        !crate::rules::path_utils::is_type_test_file(&diag.path)
+    }
 }
 
 // ── unbound-method post-filter ─────────────────────────────────────────────
@@ -3944,5 +3969,61 @@ function pick(x: unknown): unknown {
     fn nivt_keeps_when_source_missing() {
         let f = NoInvalidVoidTypeFilter;
         assert!(f.keep(&nivt_diag(Path::new("src/foo.ts"), 1, 1), None));
+    }
+
+    // ── tsd type-test file (no-unsafe-* family) ─────────────────────────────
+
+    fn unsafe_diag(path: &str, rule_id: &'static str) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(Path::new(path)),
+            line: 8,
+            column: 21,
+            rule_id: Cow::Borrowed(rule_id),
+            message: "Unsafe call of a(n) error type typed value.".into(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression for #5741: tsd `.test-d.ts` files assert types at compile time;
+    // `expectType<string>(api.method())` over an unresolved `error` type must not
+    // trip the no-unsafe-* family. The filter is path-based, so source is unused.
+    #[test]
+    fn drops_unsafe_family_in_tsd_test_d_file() {
+        let f = TypeTestFileFilter;
+        for rule in ["no-unsafe-call", "no-unsafe-argument", "no-unsafe-member-access"] {
+            assert!(
+                !f.keep(&unsafe_diag("index.test-d.ts", rule), None),
+                "{rule} in a .test-d.ts type-test file must be suppressed"
+            );
+        }
+    }
+
+    // `.test-d.tsx` and a `test-d/` directory are the same tsd convention.
+    #[test]
+    fn drops_unsafe_call_in_test_d_dir_and_tsx() {
+        let f = TypeTestFileFilter;
+        assert!(!f.keep(&unsafe_diag("test-d/components.ts", "no-unsafe-call"), None));
+        assert!(!f.keep(&unsafe_diag("src/Component.test-d.tsx", "no-unsafe-call"), None));
+    }
+
+    // Negative space: a plain `.test.ts` runtime unit test can carry a genuine
+    // unsafe-`any` bug, so the family must still flag there.
+    #[test]
+    fn keeps_unsafe_family_in_runtime_test_file() {
+        let f = TypeTestFileFilter;
+        for rule in ["no-unsafe-call", "no-unsafe-argument", "no-unsafe-member-access"] {
+            assert!(
+                f.keep(&unsafe_diag("src/api.test.ts", rule), None),
+                "{rule} in a runtime .test.ts unit test must still flag"
+            );
+        }
+    }
+
+    // Negative space: ordinary production source still flags.
+    #[test]
+    fn keeps_unsafe_call_in_production_file() {
+        let f = TypeTestFileFilter;
+        assert!(f.keep(&unsafe_diag("src/index.ts", "no-unsafe-call"), None));
     }
 }
