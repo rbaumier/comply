@@ -15,6 +15,21 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // `get_android` (bare name `android`) is still flagged.
     if name[4..].starts_with("and_") { return; }
 
+    // `get_or_<verb>` / `get_mut_or_<verb>` (e.g. `get_or_default`,
+    // `get_or_insert_with`, `get_mut_or_default`) is a compound retrieve-or-insert
+    // combinator — fetch the value AND initialize a fallback when absent —
+    // mirroring std's `OnceLock::get_or_init` / `Option::get_or_insert`. Here `get`
+    // names the first phase of a two-phase op, not a dispensable accessor prefix;
+    // stripping it yields the nonsensical `or_default()`. Matched on the `or_`
+    // segment, so `get_origin` (bare name `origin`) is still flagged.
+    {
+        let bare = &name[4..];
+        if bare.starts_with("or_") || bare.strip_prefix("mut_").is_some_and(|s| s.starts_with("or_"))
+        {
+            return;
+        }
+    }
+
     // A method inside `impl Trait for Type` takes its name verbatim from the
     // trait declaration; the implementor cannot rename it. Inherent impls
     // (`impl Type`) and free functions keep being flagged — the author owns
@@ -565,6 +580,27 @@ mod tests {
             fn get_and_reset_local_max_idle_duration(&self) -> Duration { todo!() }\n\
         }";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_or_compound_accessor_issue_5848() {
+        // `get_or_*` / `get_mut_or_*` are compound retrieve-or-insert combinators
+        // (fetch then initialize a fallback) mirroring std's `get_or_insert` —
+        // `get` is the first phase of a two-phase op, not a dispensable prefix.
+        let src = "impl Resources {\n\
+            pub fn get_or_default(&mut self) -> AtomicRef<T> { todo!() }\n\
+            pub fn get_or_insert_with(&mut self) -> AtomicRef<T> { todo!() }\n\
+            pub fn get_mut_or_default(&mut self) -> AtomicRefMut<T> { todo!() }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_or_substring_not_segment_issue_5848() {
+        // `get_origin` strips to `origin`, which does not start with the `or_`
+        // segment — it is a plain field accessor and must still flag.
+        let src = "impl Request {\n    fn get_origin(&self) -> &str { &self.origin }\n}";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
