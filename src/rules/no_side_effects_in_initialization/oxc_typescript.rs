@@ -8,6 +8,14 @@
 //!   usage and are never imported as library modules, so the tree-shaking
 //!   concern does not apply;
 //! - test files (path heuristic);
+//! - dtslint type-test fixtures (DefinitelyTyped/Recoil convention), identified
+//!   by the dtslint assertion comments `$ExpectType` / `$ExpectError` in the
+//!   source. dtslint loads these files only to exercise the type checker — the
+//!   top-level statements (`RecoilRoot({...})`) exist solely so the compiler
+//!   verifies the type next to the `// $ExpectType ...` comment, never running at
+//!   runtime — so the top-level calls are type assertions, not a tree-shaking
+//!   hazard. The `$Expect…` prefix is the dtslint marker (distinct from tsd's
+//!   `expectType<T>(...)` call form), so an ordinary runtime module never matches;
 //! - test-runner setup files matched by convention path/name (`*.setup.*`,
 //!   `setup.*`, `setup-*`, `*-setup`, `globalSetup`, `setupTests.*`, anything
 //!   under `test-helpers/`, any Cypress support file under `cypress/support/`,
@@ -359,6 +367,19 @@ fn is_cli_entry(path: &std::path::Path, source: &str) -> bool {
     }
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     matches!(name, "bin.ts" | "bin.mts" | "bin.js" | "bin.mjs")
+}
+
+/// True when the source is a dtslint type-test fixture, identified by the dtslint
+/// assertion comments `$ExpectType` / `$ExpectError` (DefinitelyTyped/Recoil
+/// convention). dtslint loads these files only to exercise the type checker — the
+/// top-level statements (`RecoilRoot({...})`, `useRecoilValue(sel)`) exist solely
+/// so the compiler verifies the type next to the `// $ExpectType ...` comment, and
+/// the file is never imported or bundled as a runtime module. So its top-level
+/// calls are type assertions, not a tree-shaking hazard. The `$Expect…` prefix is
+/// the dtslint marker (distinct from tsd's `expectType<T>(...)` call form), so an
+/// ordinary runtime module never matches.
+fn is_dtslint_type_test(source: &str) -> bool {
+    source.contains("$ExpectType") || source.contains("$ExpectError")
 }
 
 /// Benchmark and profiling harness scripts are standalone executables run
@@ -2109,6 +2130,7 @@ impl OxcCheck for Check {
         if ctx.file.path_segments.in_test_dir
             || is_test_file(ctx.path)
             || is_type_compilation_test_path(ctx.path)
+            || is_dtslint_type_test(ctx.source)
         {
             return Vec::new();
         }
@@ -2368,6 +2390,41 @@ mod tests {
             crate::rules::test_helpers::run_rule(&Check, src, "src/foo.ts").len(),
             2
         );
+    }
+
+    #[test]
+    fn skips_dtslint_type_test_by_expect_comments_issue5606() {
+        // Issue #5606: dtslint type-test fixtures (DefinitelyTyped/Recoil
+        // convention, e.g. `typescript/recoil-test.ts`) drive the type checker
+        // with top-level calls annotated by `$ExpectType` / `$ExpectError`
+        // comments. dtslint loads them only to type-check; they never run at
+        // runtime, so the top-level `RecoilRoot({...})` calls are type assertions,
+        // not a tree-shaking hazard.
+        let src = "\
+            import { RecoilRoot, useRecoilValue } from 'recoil';\n\
+            import * as React from 'react';\n\
+            // $ExpectType ReactElement<any, any> | null\n\
+            RecoilRoot({ children: React.createElement('div') });\n\
+            useRecoilValue(callbackSelector); // $ExpectError\n";
+        // The path uses the Recoil/DefinitelyTyped `typescript/` directory, which
+        // is NOT a name-heuristic match — the `$Expect…` comments are the signal.
+        for path in [
+            "typescript/recoil-test.ts",
+            "typescript/recoil-sync-test.ts",
+            "src/lib/api.ts",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
+        }
+        // The `$Expect…` comments are what grant the exemption: the same top-level
+        // calls in a genuine runtime module (no dtslint markers) still flag.
+        let prod_src = "\
+            import { RecoilRoot, useRecoilValue } from 'recoil';\n\
+            import * as React from 'react';\n\
+            RecoilRoot({ children: React.createElement('div') });\n\
+            useRecoilValue(callbackSelector);\n";
+        let prod = crate::rules::test_helpers::run_rule(&Check, prod_src, "typescript/runtime.ts");
+        assert_eq!(prod.len(), 2, "a runtime module without dtslint markers must still flag");
     }
 
     #[test]
