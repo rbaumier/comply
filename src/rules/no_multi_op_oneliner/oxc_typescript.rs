@@ -9,25 +9,71 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// True when `expr` is a single arithmetic computation: a tree built only
-/// from numeric literals, identifiers, unary `+`/`-`, and `+ - * / % **`
-/// binary operators (with grouping parens). Horner-form polynomial
-/// evaluation (`a + t * (b + t * (c + ...))`) is the canonical case — it is
-/// one mathematical formula, not a chain of nameable steps, so its operators
-/// collapse to a single operation for the density count.
-fn is_pure_arithmetic(expr: &Expression) -> bool {
+/// Number of function calls in `expr` if it is a single arithmetic formula,
+/// or `None` if it is not.
+///
+/// A formula is a tree built only from numeric literals, identifiers,
+/// member/index access (`opts.damping`, `old[j]`, `S[i * n + j]`), unary
+/// `+`/`-`, `+ - * / % **` binary operators (grouping parens transparent),
+/// and function calls whose arguments are themselves formulas. Member and
+/// index access are leaves: indexing/property access is addressing, not a
+/// nameable readability step, so the arithmetic inside an index does not
+/// break the formula.
+///
+/// Horner-form polynomial evaluation (`a + t * (b + t * (c + ...))`) and the
+/// affinity-propagation matrix update (`(1 - d) * (S[i] - max) + d * old[j]`)
+/// are the canonical cases — one mathematical formula, not a chain of
+/// nameable steps. Callers collapse such a span to a single operation, but
+/// only when the call count is at most one: a single wrapped builtin
+/// (`Math.min(0, sum - x)`) is cohesive, whereas several independent calls
+/// (`scale(b) + offset(x)`) are a dense chain that must stay flagged.
+fn arithmetic_call_count(expr: &Expression) -> Option<usize> {
     match expr.without_parentheses() {
-        Expression::NumericLiteral(_) | Expression::Identifier(_) => true,
-        Expression::UnaryExpression(unary) => {
-            unary.operator.is_arithmetic() && is_pure_arithmetic(&unary.argument)
+        Expression::NumericLiteral(_) | Expression::Identifier(_) => Some(0),
+        Expression::StaticMemberExpression(_)
+        | Expression::ComputedMemberExpression(_) => Some(0),
+        Expression::UnaryExpression(unary) if unary.operator.is_arithmetic() => {
+            arithmetic_call_count(&unary.argument)
         }
-        Expression::BinaryExpression(bin) => {
-            bin.operator.is_arithmetic()
-                && is_pure_arithmetic(&bin.left)
-                && is_pure_arithmetic(&bin.right)
+        Expression::BinaryExpression(bin) if bin.operator.is_arithmetic() => {
+            Some(arithmetic_call_count(&bin.left)? + arithmetic_call_count(&bin.right)?)
         }
-        _ => false,
+        Expression::CallExpression(call) => {
+            let mut calls = 1;
+            for arg in &call.arguments {
+                // A spread argument (`f(...xs)`) is not formula-arithmetic.
+                let inner = arg.as_expression()?;
+                calls += arithmetic_call_count(inner)?;
+            }
+            Some(calls)
+        }
+        _ => None,
     }
+}
+
+/// True when `expr` is a single arithmetic formula whose call count is within
+/// the single-call budget, i.e. collapsible to one operation.
+fn is_collapsible_formula(expr: &Expression) -> bool {
+    arithmetic_call_count(expr).is_some_and(|calls| calls <= 1)
+}
+
+/// True when the arithmetic span at `node` sits inside a call argument, rather
+/// than in the value position of its statement.
+///
+/// A formula in value position (`x = <formula>`, `return <formula>`) collapses
+/// to one operation. A formula sitting inside a call argument — `a - b` in
+/// `Math.hypot(a - b, c - d)`, or the inner term of a non-collapsing multi-call
+/// chain — is a separate step whose collapse would wrongly suppress a genuinely
+/// dense line; the enclosing call already accounts for it. A call that is part
+/// of a collapsing formula keeps its own maximal span, so its arguments are
+/// absorbed there rather than subtracted twice.
+fn is_buried_in_call(node_id: oxc_semantic::NodeId, semantic: &oxc_semantic::Semantic) -> bool {
+    semantic.nodes().ancestors(node_id).any(|ancestor| {
+        matches!(
+            ancestor.kind(),
+            AstKind::CallExpression(_) | AstKind::NewExpression(_)
+        )
+    })
 }
 
 impl OxcCheck for Check {
@@ -64,21 +110,38 @@ impl OxcCheck for Check {
             }
         }
 
-        // Spans of pure-arithmetic expressions: a binary-arithmetic tree over
-        // numeric literals and identifiers. Each one is a single mathematical
-        // formula, so its operators count as one operation rather than as many
-        // chained steps. Collect every such span, then keep only the maximal
+        // Spans of arithmetic formulas: a binary-arithmetic tree over numeric
+        // literals, identifiers, member/index access, and at most one wrapped
+        // call. Each one is a single mathematical formula, so its operators
+        // count as one operation rather than as many chained steps. A
+        // compound-arithmetic assignment (`x += <formula>`) is itself a formula
+        // root, so its whole span — including the left-hand index arithmetic —
+        // collapses too. Collect every such span, then keep only the maximal
         // ones (a nested sub-formula's operators must not be subtracted twice).
         let mut all_spans: Vec<(usize, usize)> = Vec::new();
         for node in semantic.nodes() {
-            let AstKind::BinaryExpression(bin) = node.kind() else {
-                continue;
-            };
-            if bin.operator.is_arithmetic()
-                && is_pure_arithmetic(&bin.left)
-                && is_pure_arithmetic(&bin.right)
-            {
-                all_spans.push((bin.span.start as usize, bin.span.end as usize));
+            match node.kind() {
+                AstKind::BinaryExpression(bin) if bin.operator.is_arithmetic() => {
+                    // The whole binary — both operands together — must be a
+                    // formula within the single-call budget, not just each
+                    // operand independently (`foo(a) + bar(b)` is two calls).
+                    let whole = arithmetic_call_count(&bin.left)
+                        .zip(arithmetic_call_count(&bin.right))
+                        .map(|(l, r)| l + r);
+                    if whole.is_some_and(|calls| calls <= 1)
+                        && !is_buried_in_call(node.id(), semantic)
+                    {
+                        all_spans.push((bin.span.start as usize, bin.span.end as usize));
+                    }
+                }
+                AstKind::AssignmentExpression(assign)
+                    if assign.operator.is_arithmetic()
+                        && is_collapsible_formula(&assign.right)
+                        && !is_buried_in_call(node.id(), semantic) =>
+                {
+                    all_spans.push((assign.span.start as usize, assign.span.end as usize));
+                }
+                _ => {}
             }
         }
         let formula_spans: Vec<(usize, usize)> = all_spans
@@ -239,6 +302,62 @@ mod tests {
         // and subtracted, or they would eat the trailing call chain's ops and
         // wrongly suppress a genuine dense one-liner.
         let src = "const out = aa + /*//////*/ bb; const q = ff(xx).gg(yy).hh(zz).ii(ww).jj(vv).kk(uu).ll(tt);";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn ignores_matrix_update_with_index_and_member_access() {
+        // Regression for issue #5729: the affinity-propagation responsibility
+        // update is one published formula. Index arithmetic (`i * n + j`) and
+        // property access (`opts.damping`, `old[j]`) are addressing, not
+        // nameable operations, so the whole RHS collapses to one operation.
+        let src = "R[i * n + j] = (1 - opts.damping) * (S[i * n + j] - max) + opts.damping * old[j];";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty(),
+            "got {:?}",
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+        );
+    }
+
+    #[test]
+    fn ignores_matrix_update_with_single_math_call() {
+        // Regression for issue #5729: the availability update wraps one
+        // `Math.min(...)` over arithmetic args. A single cohesive call inside a
+        // formula is part of the formula, so the RHS still collapses.
+        let src = "A[j * n + i] = (1 - opts.damping) * Math.min(0, sum - Rp[j]) + opts.damping * old[j];";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty(),
+            "got {:?}",
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+        );
+    }
+
+    #[test]
+    fn ignores_compound_assignment_formula() {
+        // Regression for issue #5729: a compound-assignment accumulator is a
+        // single formula root, no different from `x = x + ...`.
+        let src = "accumulator[k] += (1 - decay) * (sample[k] - mean[k]) * weight + bias[k];";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty(),
+            "got {:?}",
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+        );
+    }
+
+    #[test]
+    fn still_flags_mermaid_reduce_plus_gap_chain() {
+        // Issue #5729 defensible-flag case: a reduction closure plus a separate
+        // gap term is a dense chain of independent steps (a `reduce` over an
+        // arrow closure and a second `Math.max` call), not one formula.
+        let src = "const total = ids.reduce((s, id) => s + getWidth(id), 0) + nodeGap * Math.max(0, ids.length - 1);";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_multi_call_arithmetic_chain() {
+        // Two independent calls in one arithmetic span exceed the single-call
+        // budget, so the span does not collapse and the dense line still flags.
+        let src = "const score = computeBase(input) * factorWeight(x) + computeOffset(y) - penalty(z) / norm(w);";
         assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 }
