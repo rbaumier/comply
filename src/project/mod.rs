@@ -4231,6 +4231,22 @@ impl ProjectCtx {
         Some(arc)
     }
 
+    /// True when `path` is a Rust source file inside an mdBook documentation
+    /// project — an ancestor directory contains a `book.toml` (the mdBook
+    /// project marker, analogous to `Cargo.toml` for a crate). Such files are
+    /// tutorial example code rendered into a documentation site, not compiled
+    /// library code, so library-quality rules should not apply to them.
+    ///
+    /// Resolved by walking ancestors for the `book.toml` marker (memoized per
+    /// directory by the shared `manifest_dir_cache`), the same project-structure
+    /// detection used for `Cargo.toml` / `package.json`.
+    pub fn in_mdbook_project(&self, path: &Path) -> bool {
+        let Some(start_dir) = path.parent() else {
+            return false;
+        };
+        walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "book.toml").is_some()
+    }
+
     /// Resolve a `rust-version.workspace = true` inheritance: walk up from the
     /// member crate's directory looking for the workspace root `Cargo.toml`
     /// (the one carrying a `[workspace]` table) and read its
