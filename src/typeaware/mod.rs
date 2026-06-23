@@ -11,9 +11,15 @@
 //! so the standard run stays AstCheck-only and keeps its sub-60s budget. The
 //! sidecar phase accepts a much higher cost (building the program dominates).
 //!
-//! Graceful degradation: a missing `node` or `@typescript/native-preview`, a
-//! missing tsconfig, or a sidecar timeout prints a one-line notice to stderr
-//! and yields no diagnostics rather than failing the whole run.
+//! Failure handling splits by cause, because silently skipping a type-aware
+//! analysis that the user explicitly asked for makes a clean exit
+//! indistinguishable from "the toolchain wasn't there". When type-aware rules
+//! are enabled and there are TS files to analyze, an *environment-config*
+//! failure — `node` absent, `@typescript/native-preview` unresolved, the
+//! checker API failing to initialize, or the program snapshot failing — is a
+//! hard error (`Err`, non-zero exit) carrying an actionable message. A
+//! missing tsconfig (nothing to type-check) and a sidecar timeout (a hang, not
+//! a config gap) stay graceful: a one-line stderr notice and no diagnostics.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -72,10 +78,10 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     }
 
     if !node_available() {
-        eprintln!(
-            "comply: --type-aware needs Node.js on PATH — skipping type-aware rules."
+        anyhow::bail!(
+            "--type-aware needs Node.js on PATH to run the type-aware sidecar, but `node` was not \
+             found. Install Node.js, or pass --no-type-aware to skip type-aware rules."
         );
-        return Ok(vec![]);
     }
 
     let Some(tsconfig) = find_tsconfig(files) else {
@@ -124,8 +130,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     };
 
     if let Some(err) = response.error.as_deref() {
-        report_sidecar_error(err);
-        return Ok(vec![]);
+        return Err(sidecar_error(err));
     }
 
     Ok(map_diagnostics(
@@ -215,14 +220,23 @@ fn run_sidecar(project_dir: &Path, request: &str) -> Result<Option<SidecarRespon
     Ok(Some(response))
 }
 
-fn report_sidecar_error(err: &str) {
+/// Build the hard error for a sidecar-reported environment-config failure. The
+/// sidecar only reports `error` for `package-not-found`, `api-init-failed: …`,
+/// and `snapshot-failed: …` — all toolchain/config gaps that must fail loud so
+/// a clean exit is never confused with type-aware not having run.
+fn sidecar_error(err: &str) -> anyhow::Error {
     if err == "package-not-found" {
-        eprintln!(
-            "comply: --type-aware needs the typescript-go API — install it in the project with: \
-             npm install --save-dev @typescript/native-preview"
-        );
+        anyhow::anyhow!(
+            "--type-aware needs the typescript-go API, but @typescript/native-preview could not be \
+             resolved from the project. Install it with: npm install --save-dev \
+             @typescript/native-preview (or pass --no-type-aware to skip type-aware rules)."
+        )
     } else {
-        eprintln!("comply: type-aware sidecar error ({err}) — skipping type-aware rules.");
+        anyhow::anyhow!(
+            "the type-aware sidecar failed to initialize the TypeScript program ({err}). This is a \
+             type-aware analysis-environment error; fix the toolchain, or pass --no-type-aware to \
+             skip type-aware rules."
+        )
     }
 }
 
@@ -338,6 +352,27 @@ mod tests {
         }];
         let out = map_diagnostics(diags, &[m], default_static_config(), &canon);
         assert_eq!(out[0].path.to_string_lossy(), "/abs/unmapped.ts");
+    }
+
+    // ── fail-loud sidecar errors (#5941) ────────────────────────────────────
+
+    // A `package-not-found` cause is a hard, actionable error: it names the
+    // missing package and the install command.
+    #[test]
+    fn sidecar_error_package_not_found_is_actionable() {
+        let msg = format!("{:#}", sidecar_error("package-not-found"));
+        assert!(msg.contains("@typescript/native-preview"), "{msg}");
+        assert!(msg.contains("npm install"), "{msg}");
+        assert!(msg.contains("--no-type-aware"), "{msg}");
+    }
+
+    // An api-init / snapshot cause is a hard error that preserves the underlying
+    // cause string and points at the toolchain.
+    #[test]
+    fn sidecar_error_api_init_preserves_cause() {
+        let msg = format!("{:#}", sidecar_error("api-init-failed: boom"));
+        assert!(msg.contains("api-init-failed: boom"), "{msg}");
+        assert!(msg.contains("--no-type-aware"), "{msg}");
     }
 
     /// The custom type-aware rules are registered with `Backend::TypeAware` so

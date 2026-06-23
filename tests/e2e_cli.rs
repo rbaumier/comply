@@ -96,6 +96,39 @@ fn empty_directory_returns_clean() {
         .success();
 }
 
+// Regression for #5941: type-aware is on by default, but a project with no
+// tsconfig.json has nothing to type-check — that must stay a graceful skip,
+// never a hard failure. Only an explicit toolchain-config gap (missing node /
+// @typescript/native-preview) fails loud.
+//
+// The graceful no-tsconfig skip is only reached after the node-availability
+// check passes, so the contract has a node precondition: with `node` on PATH
+// the run prints the graceful no-tsconfig skip; without it, fail-loud
+// correctly bails with a message that names the node gap. Asserting on either
+// stderr message keeps the test robust to node-absence while still surfacing a
+// real regression (a no-tsconfig run failing for some *other* reason).
+#[test]
+fn no_tsconfig_does_not_fail_type_aware() {
+    let (_dir, path) = write_ts_file(
+        "no_tsconfig.ts",
+        "// comply-ignore: dead-export — isolated test file\n\
+         export const GREETING = \"hello\";\n",
+    );
+    std::fs::write(
+        path.with_file_name("no_tsconfig.test.ts"),
+        "test('ok', () => {});\n",
+    )
+    .unwrap();
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(&path)
+        .assert()
+        .stderr(
+            predicate::str::contains("found no tsconfig.json")
+                .or(predicate::str::contains("needs Node.js on PATH")),
+        );
+}
+
 #[test]
 fn output_format_matches_eslint_pattern() {
     let (_dir, path) = write_ts_file("err.ts", "function f() { throw 1; }\n");
