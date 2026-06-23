@@ -83,8 +83,10 @@ pub struct Cli {
     /// `no-unused-type`, `no-duplicate-type-definition`,
     /// `no-redundant-nullish-coalescing-null`. Both require the resolved
     /// TypeScript program, so they accept a much higher per-run cost. A
-    /// missing Node, tsconfig, or sidecar degrades gracefully to no
-    /// type-aware diagnostics rather than failing the run.
+    /// missing tsconfig or a sidecar timeout degrades gracefully to no
+    /// type-aware diagnostics; a missing Node or an unresolved
+    /// `@typescript/native-preview` fails the run with an actionable message —
+    /// pass `--no-type-aware` to skip type-aware rules instead.
     #[arg(long = "no-type-aware", action = clap::ArgAction::SetFalse)]
     pub type_aware: bool,
 

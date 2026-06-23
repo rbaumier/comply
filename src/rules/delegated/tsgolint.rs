@@ -63,34 +63,47 @@ pub fn register_all() -> Vec<RuleDef> {
             "no-unsafe-argument",
             "Passing `any` to a typed parameter defeats type safety.",
             "Add a type assertion or fix the source of `any`.",
-            Some(Arc::new(TypeTestFileFilter)),
+            Some(Arc::new(CompositeFilter(vec![
+                Arc::new(ErrorTypeFilter),
+                Arc::new(TypeTestFileFilter),
+            ]))),
         ),
         entry_with_filter(
             "no-unsafe-assignment",
             "no-unsafe-assignment",
             "Assigning `any` to a typed variable defeats type safety.",
             "Add a type assertion or fix the source of `any`.",
-            Some(Arc::new(NoUnsafeAssignmentFilter)),
+            Some(Arc::new(CompositeFilter(vec![
+                Arc::new(ErrorTypeFilter),
+                Arc::new(NoUnsafeAssignmentFilter),
+            ]))),
         ),
         entry_with_filter(
             "no-unsafe-call",
             "no-unsafe-call",
             "Calling a value typed as `any` is unsafe.",
             "Add proper types or use a type guard.",
-            Some(Arc::new(TypeTestFileFilter)),
+            Some(Arc::new(CompositeFilter(vec![
+                Arc::new(ErrorTypeFilter),
+                Arc::new(TypeTestFileFilter),
+            ]))),
         ),
         entry_with_filter(
             "no-unsafe-member-access",
             "no-unsafe-member-access",
             "Accessing a member on `any` is unsafe.",
             "Add proper types or use a type guard.",
-            Some(Arc::new(TypeTestFileFilter)),
+            Some(Arc::new(CompositeFilter(vec![
+                Arc::new(ErrorTypeFilter),
+                Arc::new(TypeTestFileFilter),
+            ]))),
         ),
-        entry(
+        entry_with_filter(
             "no-unsafe-return",
             "no-unsafe-return",
             "Returning `any` from a typed function defeats type safety.",
             "Add a type assertion or fix the source of `any`.",
+            Some(Arc::new(ErrorTypeFilter)),
         ),
         entry(
             "no-unsafe-declaration-merging",
@@ -663,6 +676,90 @@ struct TypeTestFileFilter;
 impl PostFilter for TypeTestFileFilter {
     fn keep(&self, diag: &crate::diagnostic::Diagnostic, _source: Option<&str>) -> bool {
         !crate::rules::path_utils::is_type_test_file(&diag.path)
+    }
+}
+
+// ── no-unsafe-* error-type post-filter ─────────────────────────────────────
+//
+// The `no-unsafe-{assignment,return,argument,member-access,call}` family fires
+// whenever a value's type is `any`. tsgolint renders an `any` finding with the
+// `any` token, but when its type-aware program fails to resolve a symbol
+// (cross-file `declare module` augmentation, generated route trees, an analysis
+// init race) the type degrades to TypeScript's intrinsic `error` type, which
+// behaves like `any` — so the family fires with the `error` token instead. An
+// unresolved type is an analysis-environment gap, never evidence of unsafe
+// code, so drop those diagnostics. The signal is the rendered type slot of the
+// diagnostic message: the family's templates put the offending type as a bare
+// `error` token (with or without backticks depending on the rule), e.g.
+// `Unsafe return of a value of type error.`,
+// `Unsafe member access .x on an `error` typed value.`,
+// `Unsafe call of a(n) `error` type typed value.`. Genuine `any` findings
+// (token `any`) and findings on a real type whose name merely contains
+// "error" (`MyError`, `TypeError`) are kept — the match is on the delimited
+// lowercase `error` token only.
+//
+// Known limitation: a user type literally named lowercase `error`
+// (`type error = …` / `class error {}`) would also be dropped. That is
+// accepted — such a name violates type-naming conventions and is vanishingly
+// rare. (Closes #5941)
+
+struct ErrorTypeFilter;
+
+impl PostFilter for ErrorTypeFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, _source: Option<&str>) -> bool {
+        !message_reports_intrinsic_error_type(&diag.message)
+    }
+}
+
+// Whether a no-unsafe-* diagnostic message renders the offending type as the
+// TS intrinsic `error` type. The token is matched as a delimited lowercase
+// `error` word in a type slot: preceded by start-of-string, a space, or a
+// backtick, and followed by a space, a backtick, a `.`, or end-of-string. This
+// keeps `MyError`/`TypeError` (different boundary), `errorlike`/`error_foo`
+// (different trailing char), and string-literal union members like `"error"`
+// (quote-delimited, not space/backtick-delimited).
+fn message_reports_intrinsic_error_type(message: &str) -> bool {
+    let bytes = message.as_bytes();
+    let mut search_from = 0usize;
+    while let Some(rel) = message[search_from..].find("error") {
+        let start = search_from + rel;
+        let end = start + "error".len();
+        search_from = end;
+
+        let preceded_ok = start == 0
+            || matches!(bytes[start - 1], b' ' | b'`');
+        let followed_ok = end == bytes.len()
+            || matches!(bytes[end], b' ' | b'`' | b'.');
+        if preceded_ok && followed_ok {
+            return true;
+        }
+    }
+    false
+}
+
+// ── generic AND-composite post-filter ──────────────────────────────────────
+//
+// A rule may carry more than one false-positive narrowing concern (e.g. the
+// no-unsafe-* family combines the intrinsic-`error`-type drop with a
+// rule-specific path/source check). The delegated-filter wiring attaches one
+// filter per rule, so compose the concerns here: the diagnostic is kept only
+// when every inner filter keeps it — the same `all()` semantics the dispatcher
+// applies across rules, applied within one rule.
+
+struct CompositeFilter(Vec<Arc<dyn PostFilter>>);
+
+impl PostFilter for CompositeFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        self.0.iter().all(|f| f.keep(diag, source))
+    }
+
+    fn keep_with_project(
+        &self,
+        diag: &crate::diagnostic::Diagnostic,
+        source: Option<&str>,
+        project: &crate::project::ProjectCtx,
+    ) -> bool {
+        self.0.iter().all(|f| f.keep_with_project(diag, source, project))
     }
 }
 
@@ -4249,6 +4346,104 @@ function pick(x: unknown): unknown {
     fn keeps_unsafe_call_in_production_file() {
         let f = TypeTestFileFilter;
         assert!(f.keep(&unsafe_diag("src/index.ts", "no-unsafe-call"), None));
+    }
+
+    // ── no-unsafe-* intrinsic error-type drop (#5941) ───────────────────────
+
+    fn unsafe_msg_diag(rule_id: &'static str, message: &str) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(Path::new("src/app/route.tsx")),
+            line: 8,
+            column: 21,
+            rule_id: Cow::Borrowed(rule_id),
+            message: message.to_string(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression for #5941: each no-unsafe-* template rendering the offending
+    // type as the intrinsic `error` token (the wording differs per rule — bare
+    // `error`, ``error`` typed, ``error`` type) must be dropped, since an
+    // unresolved type is an analysis gap, not unsafe code. Source is unused.
+    #[test]
+    fn drops_no_unsafe_intrinsic_error_type() {
+        let f = ErrorTypeFilter;
+        let cases = [
+            ("no-unsafe-return", "Unsafe return of a value of type error."),
+            ("no-unsafe-member-access", "Unsafe member access .cabinetId on an `error` typed value."),
+            ("no-unsafe-call", "Unsafe call of a(n) `error` type typed value."),
+            ("no-unsafe-assignment", "Unsafe assignment of an error typed value."),
+            (
+                "no-unsafe-argument",
+                "Unsafe argument of type error typed assigned to a parameter of type Foo.",
+            ),
+        ];
+        for (rule, message) in cases {
+            assert!(
+                !f.keep(&unsafe_msg_diag(rule, message), None),
+                "{rule} on an intrinsic `error` type must be suppressed: {message}"
+            );
+        }
+    }
+
+    // Negative space: a genuine `any` finding (token `any`, with or without
+    // backticks per rule) is real and must be kept.
+    #[test]
+    fn keeps_no_unsafe_any_type() {
+        let f = ErrorTypeFilter;
+        let cases = [
+            ("no-unsafe-assignment", "Unsafe assignment of an any value."),
+            (
+                "no-unsafe-member-access",
+                "Unsafe member access .search on an `any` value.",
+            ),
+            ("no-unsafe-call", "Unsafe call of a(n) `any` typed value."),
+        ];
+        for (rule, message) in cases {
+            assert!(
+                f.keep(&unsafe_msg_diag(rule, message), None),
+                "{rule} on a genuine `any` type must still flag: {message}"
+            );
+        }
+    }
+
+    // Negative space: a real type whose name merely contains "error"
+    // (`MyError`, `TypeError`, a `"error"` string-literal union member) is not
+    // the intrinsic error type — keep the finding.
+    #[test]
+    fn keeps_no_unsafe_named_type_containing_error() {
+        let f = ErrorTypeFilter;
+        let cases = [
+            "Unsafe argument of type `MyError` assigned to a parameter of type `Foo`.",
+            "Unsafe return of a value of type TypeError.",
+            "Unsafe assignment of type \"error\" | \"ok\" to a variable of type Status.",
+        ];
+        for message in cases {
+            assert!(
+                f.keep(&unsafe_msg_diag("no-unsafe-argument", message), None),
+                "a type named like an error is not the intrinsic error type: {message}"
+            );
+        }
+    }
+
+    // The composite that the no-unsafe-* family is wired with drops on the
+    // intrinsic `error` type even in production source where the inner
+    // path/source filter alone would keep the finding.
+    #[test]
+    fn composite_drops_intrinsic_error_in_production() {
+        let f = CompositeFilter(vec![Arc::new(ErrorTypeFilter), Arc::new(TypeTestFileFilter)]);
+        let d = unsafe_msg_diag("no-unsafe-call", "Unsafe call of a(n) `error` type typed value.");
+        assert!(!f.keep(&d, None), "composite must drop the intrinsic error-type finding");
+    }
+
+    // The composite keeps a genuine `any` finding in production source (both
+    // inner filters keep it).
+    #[test]
+    fn composite_keeps_any_in_production() {
+        let f = CompositeFilter(vec![Arc::new(ErrorTypeFilter), Arc::new(TypeTestFileFilter)]);
+        let d = unsafe_msg_diag("no-unsafe-call", "Unsafe call of a(n) `any` typed value.");
+        assert!(f.keep(&d, None), "composite must keep a genuine any-type finding");
     }
 
     // ── no-implied-eval ─────────────────────────────────────────────────────
