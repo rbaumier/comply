@@ -152,4 +152,46 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("bad_name"));
     }
+
+    // Regression for rbaumier/comply#5787 — node-pg-migrate is a SQL migration
+    // generator; its `.spec.ts` files assert that generated SQL matches expected
+    // template-literal fixtures. The constraint names in those fixtures are the
+    // generator's output being verified, never executed against a database, so
+    // the engine's `skip_in_test_dir` gate suppresses the rule for test files.
+    #[test]
+    fn gated_no_fp_on_test_fixture_constraint_string() {
+        let src = r#"
+            [
+              'should check table references work correctly',
+              options,
+              `CREATE TABLE "myTableName" (
+                CONSTRAINT "myTableName_fk_colA_colB" FOREIGN KEY ("colA") REFERENCES otherTable (A)
+              );`,
+            ]
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "test/operations/tables/createTable.spec.ts",
+            )
+            .is_empty(),
+            "skip_in_test_dir must suppress the rule for test-directory files"
+        );
+    }
+
+    // A misnamed constraint in real (non-test) source still fires through the
+    // production gate — the test-file exemption must not relax enforcement on
+    // shipped migration/query code.
+    #[test]
+    fn gated_still_flags_bad_constraint_in_production() {
+        let src = r#"const m = await sql`ALTER TABLE t ADD CONSTRAINT bad_name UNIQUE (email)`.execute(db);"#;
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "src/db/schema.ts",
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("bad_name"));
+    }
 }

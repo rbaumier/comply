@@ -17,7 +17,11 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["database", "sql"],
 
-    skip_in_test_dir: false,
+    // SQL strings in test files are assertion fixtures — the expected output of
+    // a SQL generator being verified (e.g. node-pg-migrate / Sequelize
+    // query-generator snapshots), not enforceable constraint definitions a
+    // developer would rename. The engine skips the rule for any test-dir file.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
