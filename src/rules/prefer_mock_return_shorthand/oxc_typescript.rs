@@ -97,19 +97,40 @@ impl OxcCheck for Check {
             return;
         };
 
-        let expr = match arg_expr {
-            Expression::ArrowFunctionExpression(arrow) => {
-                single_return_expr(&arrow.body, arrow.expression)
-            }
-            Expression::FunctionExpression(func) => {
-                func.body.as_ref().and_then(|b| single_return_expr(b, false))
-            }
-            _ => None,
+        let (is_async, has_params, expr) = match arg_expr {
+            Expression::ArrowFunctionExpression(arrow) => (
+                arrow.r#async,
+                !arrow.params.items.is_empty() || arrow.params.rest.is_some(),
+                single_return_expr(&arrow.body, arrow.expression),
+            ),
+            Expression::FunctionExpression(func) => (
+                func.r#async,
+                !func.params.items.is_empty() || func.params.rest.is_some(),
+                func.body.as_ref().and_then(|b| single_return_expr(b, false)),
+            ),
+            _ => return,
         };
 
         let Some(expr) = expr else {
             return;
         };
+
+        // `mockReturnValue(x)` is equivalent to `mockImplementation(() => x)`
+        // only for a constant, parameter-free, synchronous body. Three shapes
+        // the shorthand cannot express are not candidates (#5760):
+        //
+        // 1. An `async` callback: its shorthand is `mockResolvedValue`, not
+        //    `mockReturnValue` (which returns the value unwrapped, breaking the
+        //    promise contract).
+        // 2. A callback declaring parameters: the return typically depends on
+        //    the call arguments (`(input) => ({ id: input.id })`), which a
+        //    frozen `mockReturnValue` cannot reproduce.
+        // 3. A body constructing a fresh instance per call (`new Promise(...)`,
+        //    `new Date()`): `mockReturnValue` would share one frozen instance
+        //    across calls, breaking tests that rely on per-call identity/state.
+        if is_async || has_params || matches!(expr, Expression::NewExpression(_)) {
+            return;
+        }
 
         if is_promise_settle(expr) {
             return;
@@ -205,5 +226,39 @@ mod tests {
     #[test]
     fn allows_unrelated_call() {
         assert!(run("foo(() => 42);").is_empty());
+    }
+
+    #[test]
+    fn allows_async_implementation_reading_param() {
+        // #5760 firing site (use-action-mutation.test.tsx): an async impl whose
+        // return depends on the call argument — `mockReturnValue` can express
+        // neither the per-call input nor the promise wrapping.
+        let src = "fn.mockImplementation(async (input) => ({ id: input.id, ok: true }));";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_implementation_reading_param_sync() {
+        // A sync impl that reads its argument is input-dependent — not a
+        // constant `mockReturnValue` candidate.
+        let src = "fn.mockImplementation((input) => input.id);";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_implementation_returning_fresh_promise_per_call() {
+        // #5760 firing site: a fresh pending promise must be constructed per
+        // call (a frozen `mockReturnValue` would share one instance and break
+        // a no-overlap assertion).
+        let src = "fn.mockImplementation(() => new Promise(() => {}));";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_async_constant_implementation() {
+        // Even a parameter-free async constant is not a `mockReturnValue` case:
+        // the right shorthand is `mockResolvedValue`.
+        let src = "fn.mockImplementation(async () => 42);";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
