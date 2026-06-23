@@ -76,3 +76,63 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, src, path)
+    }
+
+    #[test]
+    fn flags_up_without_down_in_migration() {
+        let src = "exports.up = function () {};";
+        assert_eq!(run_on(src, "migrations/001-init.js").len(), 1);
+    }
+
+    #[test]
+    fn allows_up_with_down_in_migration() {
+        let src = "exports.up = function () {}; exports.down = function () {};";
+        assert!(run_on(src, "migrations/001-init.js").is_empty());
+    }
+
+    /// Regression for #5786: a migration runner's own integration test
+    /// defines `up` stubs and calls `dbmigrate.up()` without being a real
+    /// migration. The repo dir name (`node-db-migrate`) makes every path a
+    /// migration path, so the test-dir skip is what keeps it quiet.
+    #[test]
+    fn does_not_flag_up_stub_in_migration_runner_test() {
+        let src = "function up() {} module.exports = { up };";
+        assert!(
+            run_on(src, "node-db-migrate/test/integration/api_test.js").is_empty(),
+            "an `up` stub in a migration runner's test file must not be flagged"
+        );
+    }
+
+    #[test]
+    fn still_flags_real_migration_missing_down() {
+        let src = "exports.up = function () {};";
+        assert_eq!(
+            run_on(src, "node-db-migrate/migrations/20240101-add-users.js").len(),
+            1,
+            "a real migration missing its `down` is still flagged"
+        );
+    }
+}

@@ -4,7 +4,9 @@
 //! `down` / `rollback`. Walks function-like AST nodes (declarations,
 //! methods, object pairs, `exports.up =` assignments) so identifiers
 //! containing the substring `up` (`setup`, `lookup`, …) cannot trigger
-//! the rule.
+//! the rule. Test files are skipped (`skip_in_test_dir`): a migration
+//! runner's own test suite calls `dbmigrate.up()` and defines `up`
+//! stubs without being real migrations.
 
 mod oxc_typescript;
 mod rust;
@@ -23,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["database", "migrations"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
