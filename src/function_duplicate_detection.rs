@@ -40,6 +40,32 @@ fn is_comment_kind(kind: &str) -> bool {
     matches!(kind, "comment" | "line_comment" | "block_comment")
 }
 
+/// Whether two files belong to different npm packages, i.e. their nearest
+/// `package.json` directories are both known and distinct. Two files with no
+/// manifest, or sharing one, are treated as the same package (the conservative
+/// default keeps the duplicate reportable).
+fn are_different_packages(a: Option<&std::path::Path>, b: Option<&std::path::Path>) -> bool {
+    matches!((a, b), (Some(a), Some(b)) if a != b)
+}
+
+/// Whether the declaration at `decl` is `export`ed: a TS/JS `export` keyword
+/// wraps the declaration in an `export_statement` ancestor. Walks up because a
+/// `const` binding sits two levels under the `export_statement` (via its
+/// `lexical_declaration`). A detached re-export (`export { foo }`) reads as
+/// private here; the cross-package exemption then errs toward exempting, never
+/// toward a missed duplicate.
+fn is_exported(decl: Node) -> bool {
+    let mut cur = decl.parent();
+    while let Some(node) = cur {
+        match node.kind() {
+            "export_statement" => return true,
+            "lexical_declaration" | "variable_declaration" => cur = node.parent(),
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// A named function eligible to be compared against others.
 struct FnEntry {
     file_idx: usize,
@@ -47,6 +73,10 @@ struct FnEntry {
     line: usize,
     column: usize,
     span: (usize, usize),
+    /// Whether the declaration is `export`ed. A file-private (unexported) helper
+    /// has no importable surface, so the "extract to a shared module" remedy does
+    /// not apply across a package boundary.
+    is_exported: bool,
     /// Exact fingerprint of the parameter list, return-type annotation, and
     /// body: each leaf token's `(kind_id, text)`, in order. Two functions are
     /// duplicates iff their signatures are byte-equal.
@@ -71,6 +101,19 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
     if files.len() < 2 {
         return vec![];
     }
+
+    // The nearest `package.json` directory of each file, for the cross-package
+    // exemption below. Computed once per file (one walk-up) so the report loop
+    // is a pointer compare. This runs concurrently with `ProjectCtx::load`, so
+    // it cannot use the project's cached accessor.
+    let package_dirs: Vec<Option<std::path::PathBuf>> = files
+        .iter()
+        .map(|f| {
+            f.path
+                .parent()
+                .and_then(|dir| crate::project::walk_up_finding(dir, "package.json"))
+        })
+        .collect();
 
     // Cross-language rule: its single knob lives in a non-per-language
     // `[rules.<id>]` block, so the `Language` passed to the lookup is immaterial.
@@ -134,6 +177,23 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
                 &files[entry.file_idx].path,
                 &files[canonical.file_idx].path,
             ) {
+                continue;
+            }
+            // A file-private helper copied into a *different* npm package
+            // (different nearest `package.json`) is often deliberate: extracting
+            // it into a shared package would either expose an internal helper as
+            // public API or create a dependency cycle the packages avoid by
+            // staying self-contained. With no importable surface, "extract and
+            // import" is not actionable. Exported duplicates still flag — there
+            // hoisting to a shared package is the right fix — and same-package
+            // private duplicates still flag, where a local import is trivial.
+            if !entry.is_exported
+                && !canonical.is_exported
+                && are_different_packages(
+                    package_dirs[entry.file_idx].as_deref(),
+                    package_dirs[canonical.file_idx].as_deref(),
+                )
+            {
                 continue;
             }
             diags.push(Diagnostic {
@@ -277,6 +337,7 @@ fn build_entry(
         line: pos.row + 1,
         column: pos.column + 1,
         span: (decl.start_byte(), decl.end_byte() - decl.start_byte()),
+        is_exported: is_exported(decl),
         signature,
     })
 }
@@ -334,6 +395,23 @@ mod tests {
     fn run(files: &[&SourceFile]) -> Vec<Diagnostic> {
         lint_files(files, &Config::default())
     }
+
+    /// Drop a `package.json` (so a file under it resolves to that package root)
+    /// at `dir/rel/package.json` with the given npm `name`.
+    fn write_pkg(dir: &tempfile::TempDir, rel: &str, name: &str) {
+        let path = dir.path().join(rel).join("package.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("{{ \"name\": \"{name}\" }}")).unwrap();
+    }
+
+    // A file-private helper (unexported), mirroring tonal's `ascR`/`descR`.
+    const PRIVATE_HELPER: &str = "\
+function ascR(b: number, n: number): number[] {
+  const a = [];
+  for (; n--; a[n] = n + b);
+  return a;
+}
+";
 
     // The exact copy-paste from saurenya MR 1292.
     const CELL_TO_STRING: &str = "\
@@ -655,5 +733,51 @@ function toOption(e: ScopeEntity): Option {
             language: Language::TypeScript,
         };
         assert!(run(&[&f]).is_empty());
+    }
+
+    #[test]
+    fn private_helper_across_packages_not_flagged() {
+        // Issue #5777 (tonaljs/tonal): a file-private helper (`ascR`) is copied
+        // into two separate published npm packages to stay self-contained and
+        // avoid a cross-package dependency cycle. There is no importable surface
+        // to share, so it must not be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        write_pkg(&dir, "packages/collection", "@tonaljs/collection");
+        write_pkg(&dir, "packages/array", "@tonaljs/array");
+        let a = write(&dir, "packages/collection/index.ts", PRIVATE_HELPER);
+        let b = write(&dir, "packages/array/index.ts", PRIVATE_HELPER);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "a file-private helper copied across npm packages is exempt"
+        );
+    }
+
+    #[test]
+    fn private_helper_same_package_still_flagged() {
+        // Within one package a file-private helper is trivially extractable to a
+        // local module and imported, so the duplicate is still a smell.
+        let dir = tempfile::tempdir().unwrap();
+        write_pkg(&dir, "packages/array", "@tonaljs/array");
+        let a = write(&dir, "packages/array/asc.ts", PRIVATE_HELPER);
+        let b = write(&dir, "packages/array/range.ts", PRIVATE_HELPER);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "intra-package private duplicates are still flagged");
+        assert!(diags[0].message.contains("`ascR`"));
+    }
+
+    #[test]
+    fn exported_function_across_packages_still_flagged() {
+        // An *exported* function duplicated across packages is genuinely
+        // hoistable into a shared package, so cross-package alone does not exempt
+        // it — the export gives an importable surface.
+        let dir = tempfile::tempdir().unwrap();
+        write_pkg(&dir, "packages/collection", "@tonaljs/collection");
+        write_pkg(&dir, "packages/array", "@tonaljs/array");
+        let exported = format!("export {PRIVATE_HELPER}");
+        let a = write(&dir, "packages/collection/index.ts", &exported);
+        let b = write(&dir, "packages/array/index.ts", &exported);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "exported cross-package duplicates are still flagged");
+        assert!(diags[0].message.contains("`ascR`"));
     }
 }
