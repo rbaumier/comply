@@ -844,9 +844,14 @@ fn comment_has_panics_heading(text: &str) -> bool {
 
 /// True if `node` is preceded by a `// SAFETY:` / `// Safety:` comment on the
 /// lines directly above it. Scans upward from the node's start row, skipping
-/// blank lines and other comment lines, and stops at the first line of real
-/// code. tree-sitter doesn't attach comments to the items they document, so the
-/// scan is by source text rather than by AST sibling.
+/// blank lines, other comment lines, and outer/inner attributes (`#[cfg(...)]`,
+/// `#[allow(...)]`, …), and stops at the first line of real code. tree-sitter
+/// doesn't attach comments to the items they document, so the scan is by source
+/// text rather than by AST sibling.
+///
+/// Skipping attribute lines matters for platform-conditional impls — a
+/// `// SAFETY:` comment routinely sits above one or more `#[cfg(...)]`
+/// attributes that gate the `unsafe impl`, and the comment still documents it.
 ///
 /// A documented `unsafe` assertion is the convention `rust-undocumented-unsafe`
 /// and `rust-unsafe-impl-without-comment` enforce; rules that flag a *kind* of
@@ -870,6 +875,9 @@ pub fn has_adjacent_safety_comment(node: Node, source: &str) -> bool {
             if trimmed.contains("SAFETY:") || trimmed.contains("Safety:") {
                 return true;
             }
+            continue;
+        }
+        if trimmed.starts_with("#[") || trimmed.starts_with("#![") {
             continue;
         }
         break;

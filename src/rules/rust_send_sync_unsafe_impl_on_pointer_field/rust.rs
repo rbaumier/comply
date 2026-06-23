@@ -409,4 +409,44 @@ mod tests {
                    unsafe impl Sync for S {}";
         assert_eq!(run_on(src).len(), 1);
     }
+
+    #[test]
+    fn allows_safety_comment_above_cfg_attribute() {
+        // embassy-sync AtomicWaker: the `// SAFETY:` comment sits above a
+        // `#[cfg(...)]` gating the `unsafe impl`. The comment still documents it.
+        let src = "struct AtomicWaker { waker: UnsafeCell<u32> }\n\
+                   // SAFETY: access to the cell is serialized through the state machine.\n\
+                   #[cfg(target_has_atomic = \"32\")]\n\
+                   unsafe impl Send for AtomicWaker {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_safety_comment_above_stacked_attributes() {
+        let src = "struct AtomicWaker { waker: UnsafeCell<u32> }\n\
+                   // SAFETY: access to the cell is serialized through the state machine.\n\
+                   #[cfg(target_has_atomic = \"32\")]\n\
+                   #[allow(clippy::non_send_fields_in_send_ty)]\n\
+                   unsafe impl Sync for AtomicWaker {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_cfg_attribute_without_safety_comment() {
+        // Only a `#[cfg]`, no SAFETY comment anywhere above — stays flagged.
+        let src = "struct AtomicWaker { waker: UnsafeCell<u32> }\n\
+                   #[cfg(target_has_atomic = \"32\")]\n\
+                   unsafe impl Send for AtomicWaker {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_safety_comment_above_cfg_attribute() {
+        // A plain comment above the attribute is not a SAFETY justification.
+        let src = "struct AtomicWaker { waker: UnsafeCell<u32> }\n\
+                   // just a normal comment\n\
+                   #[cfg(target_has_atomic = \"32\")]\n\
+                   unsafe impl Send for AtomicWaker {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
 }
