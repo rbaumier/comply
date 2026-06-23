@@ -27,6 +27,17 @@
 //! shape across `RustCrypto/block-ciphers`. The arg must be a `&Key<…>`-typed
 //! parameter; `new_from_slice` on an arbitrary `&[u8]` still flags.
 //!
+//! Checked-arithmetic `.unwrap()` is exempted — `a.checked_mul(b).unwrap()`,
+//! `a.checked_add(b).unwrap()`, etc. The `checked_*` integer methods return
+//! `None` only when the operation has no valid result (overflow, and for
+//! `checked_div`/`checked_rem` a zero divisor), so unwrapping them is a
+//! deliberate "this can't overflow" assertion — strictly safer than the plain
+//! `a * b` / `a + b` operator (which the rule does not flag and which silently
+//! wraps in release builds). The `None` being unwrapped is an "impossible by
+//! invariant" condition, the legitimate use of a panic, not careless
+//! error-swallowing of a fallible Result/Option. Only `.unwrap()` on a
+//! `checked_<arith>` receiver is exempt.
+//!
 //! Constant-bounds `try_into().unwrap()` is exempted — `slice[0..4].try_into()`
 //! converting a slice into a fixed-size array is infallible by construction when
 //! the index is a range with a constant length (`a[LIT..LIT]` or `a[..LIT]`), so
@@ -55,6 +66,33 @@ use crate::rules::rust_helpers::{
 };
 
 const KINDS: &[&str] = &["call_expression"];
+
+/// Integer `checked_<arith>` methods whose `.unwrap()` is a deliberate overflow
+/// assertion (returns `None` only on overflow), not careless error handling.
+const CHECKED_ARITH_METHODS: &[&str] = &[
+    "checked_add",
+    "checked_add_signed",
+    "checked_add_unsigned",
+    "checked_sub",
+    "checked_sub_signed",
+    "checked_sub_unsigned",
+    "checked_mul",
+    "checked_div",
+    "checked_div_euclid",
+    "checked_rem",
+    "checked_rem_euclid",
+    "checked_pow",
+    "checked_neg",
+    "checked_abs",
+    "checked_isqrt",
+    "checked_ilog",
+    "checked_ilog2",
+    "checked_ilog10",
+    "checked_shl",
+    "checked_shr",
+    "checked_next_power_of_two",
+    "checked_next_multiple_of",
+];
 
 #[derive(Debug)]
 pub struct Check;
@@ -123,6 +161,13 @@ impl AstCheck for Check {
                     "read" | "write" | "lock" | "try_lock" | "try_read" | "try_write"
                 )
             {
+                return;
+            }
+            // `a.checked_mul(b).unwrap()` / `a.checked_add(b).unwrap()` etc.:
+            // the `checked_*` integer methods return `None` only on overflow, so
+            // the unwrap is a deliberate overflow assertion, not careless error
+            // handling — and strictly safer than the unchecked `*`/`+` operator.
+            if field_text == "unwrap" && CHECKED_ARITH_METHODS.contains(&method) {
                 return;
             }
             // `slice[LIT..LIT].try_into().unwrap()` parsing a fixed-length byte
@@ -704,6 +749,52 @@ mod tests {
         Ok(self.get(k).unwrap())
     }
 }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_unwrap_on_checked_mul() {
+        // #5934: `data.len().checked_mul(8).unwrap()` for a `Vec::with_capacity`
+        // is a deliberate overflow assertion, not careless error handling.
+        let source =
+            "fn f(data: &[u8]) -> usize { data.len().checked_mul(8).unwrap() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_on_checked_add() {
+        // #5934: chained `checked_mul(...).unwrap().checked_add(...).unwrap()`.
+        let source = "fn f(text: &str) -> usize { text.len().checked_mul(3).unwrap().checked_add(text.len().div_ceil(3)).unwrap() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unwrap_on_parse_result() {
+        // A careless unwrap on a genuinely fallible parse still flags.
+        let source = r#"fn f(s: &str) -> u32 { s.parse::<u32>().unwrap() }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_on_file_open() {
+        // A careless unwrap on a fallible I/O call still flags.
+        let source = r#"fn f(p: &str) -> File { File::open(p).unwrap() }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_on_map_get() {
+        // A careless unwrap on an `Option` from a map lookup still flags.
+        let source = "fn f(map: &HashMap<u32, u32>, k: u32) -> u32 { *map.get(&k).unwrap() }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_expect_on_checked_mul() {
+        // `.expect()` is itself flagged; the checked-arith exemption is
+        // `.unwrap()`-only, so `checked_mul(...).expect(...)` still flags.
+        let source =
+            r#"fn f(a: usize, b: usize) -> usize { a.checked_mul(b).expect("overflow") }"#;
         assert_eq!(run_on(source).len(), 1);
     }
 
