@@ -142,6 +142,9 @@ impl AstCheck for Check {
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
+        if ctx.project.in_mdbook_project(ctx.path) {
+            return;
+        }
         if crate::rules::path_utils::is_rust_build_script(ctx.path) {
             return;
         }
@@ -466,6 +469,18 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, &src_path)
     }
 
+    /// Run on `rel_path` inside a temp mdBook project: a `book.toml` marker at
+    /// the project root and the source at `src/<rel_path>`, so the
+    /// `in_mdbook_project` ancestor-walk finds the marker.
+    fn run_in_mdbook(rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("book.toml"), "[book]\ntitle = \"Guide\"\n").unwrap();
+        let src_path = dir.path().join("src").join(rel_path);
+        fs::create_dir_all(src_path.parent().unwrap()).unwrap();
+        fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
+    }
+
     const LIB_CARGO_TOML: &str = r#"
 [package]
 name = "mylib"
@@ -605,6 +620,17 @@ tracing = "0.1"
     fn flags_eprintln_in_library_file() {
         let source = "fn f() { eprintln!(\"oops\"); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #5846 (leudz/shipyard
+    /// `guide/master/src/going-further/custom_views_original.rs`): a `.rs` file
+    /// under an mdBook documentation project (an ancestor `book.toml`) is
+    /// tutorial example code, not compiled library code, so its `eprintln!`
+    /// is exempt.
+    #[test]
+    fn allows_eprintln_in_mdbook_example() {
+        let source = "fn handle_events(e: Event) { eprintln!(\"unhandled event: {:?}\", e); }";
+        assert!(run_in_mdbook("going-further/custom_views_original.rs", source).is_empty());
     }
 
     /// Regression for #4465: `grpc-protobuf-build` (like `prost-build` /

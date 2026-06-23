@@ -135,6 +135,12 @@ impl AstCheck for Check {
         if returns_computed_bool(node) {
             return;
         }
+        // mdBook tutorial example code (an ancestor `book.toml`) is
+        // documentation, not library API — its simplified examples
+        // intentionally return `bool` and are exempt.
+        if ctx.project.in_mdbook_project(ctx.path) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -385,6 +391,20 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
+    /// Run on a `.rs` file inside a temp mdBook project: a `book.toml` marker at
+    /// the project root and the source at `src/<rel_path>`, so the
+    /// `in_mdbook_project` ancestor-walk finds the marker.
+    fn run_in_mdbook(rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("book.toml"), "[book]\ntitle = \"Guide\"\n").unwrap();
+        let src_path = dir.path().join("src").join(rel_path);
+        fs::create_dir_all(src_path.parent().unwrap()).unwrap();
+        fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
+    }
+
     #[test]
     fn flags_save_returning_bool() {
         assert_eq!(run_on("fn save_user(u: &User) -> bool { true }").len(), 1);
@@ -398,6 +418,25 @@ mod tests {
     #[test]
     fn allows_save_returning_result() {
         assert!(run_on("fn save_user(u: &User) -> Result<(), MyError> { Ok(()) }").is_empty());
+    }
+
+    /// Regression for #5846 (leudz/shipyard
+    /// `guide/master/src/going-further/custom_views_original.rs`): a fallible
+    /// action returning `bool` inside an mdBook documentation project (an
+    /// ancestor `book.toml`) is tutorial example code, not library API, so it
+    /// is exempt.
+    #[test]
+    fn allows_bool_action_in_mdbook_example() {
+        let source = "fn process_events(&mut self) -> bool { side_effect(); true }";
+        assert!(run_in_mdbook("going-further/custom_views_original.rs", source).is_empty());
+    }
+
+    /// The same construct in an ordinary library file (no `book.toml` ancestor)
+    /// stays flagged — the exemption is mdBook-scoped, not universal.
+    #[test]
+    fn flags_bool_action_outside_mdbook() {
+        let source = "fn process_events(&mut self) -> bool { side_effect(); true }";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
