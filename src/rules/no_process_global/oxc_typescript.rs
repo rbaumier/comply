@@ -92,6 +92,13 @@ impl OxcCheck for Check {
         if !semantic.is_reference_to_global_variable(ident) {
             return;
         }
+        // CLI executable entry points (a `#!` shebang, or a `bin/` directory in a
+        // package that declares a `bin` field) are invoked directly by Node, where
+        // pervasive `process.argv`/`process.env`/`process.exit()` is the entry
+        // point's job — the browser/edge/Deno portability concern does not apply.
+        if super::is_cli_entry_point(ctx.path, ctx.source, ctx.project) {
+            return;
+        }
         // `process.env.NODE_ENV` is a build-time constant that bundlers
         // (Vite/webpack/Rollup) statically replace; it never reaches the
         // runtime as a real `process` object, so it is browser-safe and must
@@ -142,9 +149,34 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    /// Run on a source file written under a package root whose `package.json`
+    /// content is `pkg_json`, resolving the manifest via `nearest_package_json`
+    /// so the production `bin/` + `bin`-field entry-point detection is exercised.
+    fn run_in_package(pkg_json: &str, rel_src: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("package.json"), pkg_json).expect("write package.json");
+        let src_path = dir.path().join(rel_src);
+        fs::create_dir_all(src_path.parent().expect("src parent")).expect("create src dir");
+        fs::write(&src_path, source).expect("write source");
+        let canon = fs::canonicalize(&src_path).expect("canon src");
+        let file = SourceFile { path: canon.clone(), language: Language::TypeScript };
+        let refs = [&file];
+        let project = ProjectCtx::for_test_with_files(&refs);
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
     }
 
     // --- Invalid cases (mirrors Biome's invalid.js) ---
@@ -331,6 +363,49 @@ mod tests {
     fn ignores_property_named_process() {
         // An object property key named `process` is not a global reference.
         assert!(run_on("const obj = { process: 1 };").is_empty());
+    }
+
+    // --- CLI entry-point skip (is_cli_entry_point) ---
+
+    #[test]
+    fn allows_process_in_shebang_cli_entry() {
+        // A `#!` shebang marks a directly-executed script — pervasive
+        // `process.argv`/`process.exit()` is the entry point's job.
+        let src = "#!/usr/bin/env node\n\
+                   const argv = process.argv.slice(2);\n\
+                   process.on('uncaughtException', () => process.exit(1));";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Regression: issue #5795 (salsita/node-pg-migrate `bin/node-pg-migrate.ts`)
+    // — a CLI entry point under a `bin/` directory of a package that declares a
+    // `bin` field uses `process.argv`/`process.env`/`process.exit` pervasively;
+    // that is the entry point's purpose, not a portability hazard.
+    #[test]
+    fn allows_process_in_bin_dir_of_cli_package() {
+        let pkg = r#"{ "name": "node-pg-migrate", "bin": { "node-pg-migrate": "bin/node-pg-migrate.js" } }"#;
+        let src = "const argv = process.argv.slice(2);\n\
+                   const env = process.env;\n\
+                   process.on('uncaughtException', () => process.exit(1));";
+        assert!(run_in_package(pkg, "bin/node-pg-migrate.ts", src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_process_in_bin_dir_without_bin_field() {
+        // A `bin/` directory in a package that declares NO `bin` field is not a
+        // published CLI entry point — `process.env` access stays flagged.
+        let pkg = r#"{ "name": "lib" }"#;
+        let src = "const env = process.env;";
+        assert_eq!(run_in_package(pkg, "bin/helper.ts", src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_process_in_non_entry_app_file() {
+        // A regular library/app module (no shebang, not under `bin/`) using
+        // `process.env` is still flagged.
+        let pkg = r#"{ "name": "app", "bin": { "app": "bin/cli.js" } }"#;
+        let src = "export const env = process.env;";
+        assert_eq!(run_in_package(pkg, "src/service.ts", src).len(), 1);
     }
 
     // --- Test-context skip (skip_in_test_dir) ---
