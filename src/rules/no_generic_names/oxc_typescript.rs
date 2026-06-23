@@ -212,16 +212,17 @@ const GRAPH_ENTITY_NOUNS: &[&str] = &["node", "edge", "vertex", "graph", "cluste
 /// the generic catch-all the rule targets. A `data` segment whose leading word
 /// is not a graph primitive (`UserData`, `updatedData`) is not exempted.
 fn is_graph_entity_data_compound(name: &str) -> bool {
-    let mut first: Option<&str> = None;
+    let mut seen_first = false;
+    let mut first_is_graph_noun = false;
     let mut last_is_data = false;
     for_each_segment(name, |seg| {
-        if first.is_none() {
-            first = Some(seg);
+        if !seen_first {
+            seen_first = true;
+            first_is_graph_noun = GRAPH_ENTITY_NOUNS.iter().any(|n| seg.eq_ignore_ascii_case(n));
         }
         last_is_data = seg.eq_ignore_ascii_case("data");
     });
-    last_is_data
-        && first.is_some_and(|f| GRAPH_ENTITY_NOUNS.iter().any(|n| f.eq_ignore_ascii_case(n)))
+    last_is_data && first_is_graph_noun
 }
 
 /// The `BANNED_SEGMENTS` noun occurring as a standalone segment of `name`, after
