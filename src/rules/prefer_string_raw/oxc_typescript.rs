@@ -21,6 +21,35 @@ fn count_escaped_backslashes(s: &str) -> usize {
     count
 }
 
+/// `String.raw` reproduces a literal's text byte-for-byte; an escape sequence
+/// whose cooked value differs from its source spelling cannot be converted
+/// without changing the string's value. Returns true if the literal body
+/// (between the delimiters) contains such an escape.
+///
+/// JS drops the backslash for *every* unrecognized single-backslash escape
+/// (`\d` → `d`, `\8` → `8`, `\.` → `.`) and rewrites the recognized control /
+/// numeric / unicode ones (`\n`, `\xNN`, `\uNNNN`, …) to a different character.
+/// The only lone escapes whose cooked value equals their raw spelling are the
+/// escaped backslash (`\\` → `\`) and the quote escapes (`\"`, `\'`), which
+/// render as a bare quote that needs no escaping inside a backtick template.
+fn has_non_raw_preservable_escape(body: &str) -> bool {
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        match bytes.get(i + 1) {
+            // Lone trailing backslash: handled separately by the caller.
+            None => return false,
+            Some(b'\\') | Some(b'"') | Some(b'\'') => i += 2,
+            Some(_) => return true,
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::StringLiteral]
@@ -59,7 +88,15 @@ impl OxcCheck for Check {
         if raw.len() < 2 {
             return;
         }
-        if raw[1..raw.len() - 1].ends_with('\\') {
+        let body = &raw[1..raw.len() - 1];
+        if body.ends_with('\\') {
+            return;
+        }
+
+        // `String.raw` reproduces source text verbatim, so a string carrying any
+        // escape whose cooked value differs from its spelling (`\n`, `\xNN`, a
+        // lone `\d`, …) would silently change value under the rewrite — skip it.
+        if has_non_raw_preservable_escape(body) {
             return;
         }
 
@@ -127,5 +164,36 @@ mod tests {
     fn no_panic_on_short_string() {
         assert!(run_on(r#"const a = "";"#).is_empty());
         assert!(run_on(r#"const b = "x";"#).is_empty());
+    }
+
+    // Regression for #6029: strings carrying a control/numeric/unicode escape
+    // must not be rewritten to `String.raw` — raw reproduces `\n`/`\r`/… as the
+    // literal two-character sequence, silently changing the value.
+    #[test]
+    fn ignores_control_escapes() {
+        // newline + carriage-return escapes alongside escaped backslashes
+        assert!(run_on(r#"const x = "(\\101\\\r\n\\102\\\r\\103)";"#).is_empty());
+        // tab + vertical-tab escapes
+        assert!(run_on(r#"const x = "\\a\tb\\c\v";"#).is_empty());
+        // hex escape
+        assert!(run_on(r#"const x = "\\x\x41\\y";"#).is_empty());
+        // unicode escapes (4-digit and code-point forms)
+        assert!(run_on(r#"const x = "\\a\u0041\\b";"#).is_empty());
+        assert!(run_on(r#"const x = "\\a\u{1F600}\\b";"#).is_empty());
+        // null / octal escape
+        assert!(run_on(r#"const x = "\\a\0\\b";"#).is_empty());
+        // lone unrecognized escape: JS drops the backslash (`\d` -> `d`), so
+        // raw (`\a\d\b`) differs from the cooked value (`\ad\b`).
+        assert!(run_on(r#"const x = "\\a\d\\b";"#).is_empty());
+        assert!(run_on(r#"const x = "\\a\8\\b";"#).is_empty());
+    }
+
+    // Strings whose only escapes are value-preserving under raw must still flag.
+    #[test]
+    fn flags_pure_backslash_strings() {
+        // regex-like double backslashes
+        assert_eq!(run_on(r#"const re = "\\d+\\w+";"#).len(), 1);
+        // Windows path
+        assert_eq!(run_on(r#"const p = "C:\\foo\\bar";"#).len(), 1);
     }
 }
