@@ -109,9 +109,51 @@ fn is_axis_suffix(suffix: &str) -> bool {
     )
 }
 
+/// Geometric axis suffixes that, appended to a shared stem, name one of a set
+/// of co-occurring coordinate or dimension quantities rather than a mutually-
+/// exclusive variant: spatial axes (`X`/`Y`/`Z`) and box dimensions
+/// (`Width`/`Height`/`Depth`).
+const GEOMETRIC_AXIS_SUFFIXES: [&str; 6] = ["Width", "Height", "Depth", "X", "Y", "Z"];
+
+/// Strip a trailing geometric axis suffix from `name`, returning its stem.
+/// The suffix must be a recognized geometric axis sitting at a camelCase
+/// boundary: it follows a lowercase letter, so a single-letter axis is not
+/// torn off a mid-word capital and the stem stays a real word (`pageX` → `page`,
+/// `parentWidth` → `parent`; `index` keeps its lowercase `x`). Returns `None`
+/// when no recognized suffix follows a lowercase letter.
+fn split_geometric_axis(name: &str) -> Option<&str> {
+    for suffix in GEOMETRIC_AXIS_SUFFIXES {
+        if let Some(stem) = name.strip_suffix(suffix) {
+            let preceded_by_lowercase =
+                stem.chars().next_back().is_some_and(|c| c.is_ascii_lowercase());
+            if preceded_by_lowercase {
+                return Some(stem);
+            }
+        }
+    }
+    None
+}
+
+/// Whether `name` is one of a geometric axis-pair group in `names`: it ends
+/// in a recognized geometric axis suffix and a sibling shares its stem with
+/// a *different* geometric axis suffix (`pageX`/`pageY`,
+/// `parentWidth`/`parentHeight`). Such fields are co-occurring coordinate or
+/// dimension quantities, not mutually-exclusive variant states, so they must
+/// not contribute to a variant cluster. A lone suffixed field with no
+/// matching-stem sibling (`pageX` alone) is not a pair and still counts.
+fn is_in_geometric_axis_pair(name: &str, names: &[&str]) -> bool {
+    let Some(stem) = split_geometric_axis(name) else {
+        return false;
+    };
+    names.iter().any(|other| {
+        *other != name && split_geometric_axis(other).is_some_and(|other_stem| other_stem == stem)
+    })
+}
+
 /// Count the bucket members that still look like a discriminated-union
 /// state cluster, i.e. the members that are neither part of a CSS-inspired
-/// shorthand + per-axis family nor in a base + elaboration prefix pair.
+/// shorthand + per-axis family, nor in a base + elaboration prefix pair, nor
+/// in a geometric axis-pair group.
 ///
 /// A shorthand + per-axis family is a bare base field `F` (the shorthand,
 /// e.g. `translate`, `extrapolate`) together with the siblings formed by
@@ -130,13 +172,23 @@ fn is_axis_suffix(suffix: &str) -> bool {
 /// A genuine variant (`cancelledAt`/`cancelledReason`) shares a stem but
 /// neither name is a prefix of the other, so every member still counts.
 ///
+/// A geometric axis-pair group is two or more members sharing a stem and
+/// differing only by a geometric axis suffix (`pageX`/`pageY`,
+/// `parentWidth`/`parentHeight`). They are co-occurring coordinate or
+/// dimension quantities, idiomatically optional together, not mutually-
+/// exclusive variants — so they are excluded from the count.
+///
 /// Members sharing the prefix but belonging to no family (e.g. `transform`
 /// alongside the `translate*` family in the `tran` bucket) keep counting,
 /// so an unrelated state cluster is not masked by an adjacent family.
 fn variant_field_count(names: &[&str]) -> usize {
     names
         .iter()
-        .filter(|name| !is_in_shorthand_axis_family(name, names) && !is_in_elaboration_pair(name, names))
+        .filter(|name| {
+            !is_in_shorthand_axis_family(name, names)
+                && !is_in_elaboration_pair(name, names)
+                && !is_in_geometric_axis_pair(name, names)
+        })
         .count()
 }
 
@@ -413,12 +465,14 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_axis_siblings_without_shorthand_base() {
-        // Per-axis siblings with no bare shorthand base (`translateX`/
-        // `translateY`/`translateZ`, no bare `translate`) lack the shorthand
-        // signature, so the cluster is not exempt.
+    fn allows_geometric_axis_siblings_without_shorthand_base() {
+        // Regression for #4862: per-axis siblings sharing a stem and differing
+        // only by an `X`/`Y`/`Z` suffix (`translateX`/`translateY`/`translateZ`)
+        // are a geometric axis-pair group — co-occurring coordinate quantities,
+        // not mutually-exclusive variants — so they are exempt even with no
+        // bare `translate` shorthand base.
         let src = "type T = { translateX?: number; translateY?: number; translateZ?: number };";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -629,6 +683,75 @@ mod tests {
         // the `visi` bucket (`visibleFrom?: Date`/`visitedAt?: Date`) is a
         // genuine optional-flag smell and stays flagged.
         let src = "interface Page { visibleFrom?: Date; visitedAt?: Date; visualMode?: string }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_coordinate_axis_pair() {
+        // Regression for #4862: independent optional coordinate axes
+        // (`pageX`/`pageY`, bucket `page`) are co-occurring geometric
+        // quantities, not mutually-exclusive variant states.
+        let src = "interface Pos { pageX?: number; pageY?: number }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_dimension_axis_pair() {
+        // Regression for #4862: `parentWidth`/`parentHeight` (bucket `pare`)
+        // share a stem and differ only by a geometric dimension suffix —
+        // co-occurring quantities, not a state machine.
+        let src = "interface Box { parentWidth?: number; parentHeight?: number }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_offset_axis_pair() {
+        // Regression for #4862: `offsetX`/`offsetY` (bucket `offs`) is an
+        // axis pair keyed off the `X`/`Y` suffix vocabulary, not a hardcoded
+        // field-name list.
+        let src = "interface E { offsetX?: number; offsetY?: number }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_short_width_height_pair() {
+        // Regression for #4862: bare `width`/`height` are geometric
+        // dimensions. (They land in distinct prefix buckets so already do
+        // not cluster, but the axis-pair shape must still hold.)
+        let src = "interface Size { width?: number; height?: number }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_mutually_exclusive_cluster() {
+        // Negative-space guard for #4862: a real mutually-exclusive status
+        // cluster sharing a 4-char prefix (`loadingState`/`loadedState`/
+        // `loadFailedState`, bucket `load`) is unaffected by the axis-pair
+        // exemption — none of these end in a geometric axis suffix.
+        let src = r#"interface State {
+  loadingState?: boolean;
+  loadedState?: boolean;
+  loadFailedState?: boolean;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_data_variant_cluster_sharing_stem() {
+        // Negative-space guard for #4862: `skipA`/`skipB`/`skipC` (bucket
+        // `skip`) share a stem but the trailing tokens (`A`/`B`/`C`) are not
+        // geometric axis suffixes, so the cluster is not exempt.
+        let src = "type Cfg = { skipA?: string; skipB?: string; skipC?: string };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn does_not_mis_strip_uppercase_axis_suffix() {
+        // Guardrail for #4862: an axis token is only stripped when it is the
+        // trailing camelCase segment. `boxShadow`/`boxSizing` (bucket `boxs`)
+        // end in lowercase letters, so neither is mistaken for an axis pair
+        // and this genuine cluster stays flagged.
+        let src = "interface S { boxShadow?: string; boxSizing?: string }";
         assert_eq!(run_on(src).len(), 1);
     }
 
