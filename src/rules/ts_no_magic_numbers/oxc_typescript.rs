@@ -122,6 +122,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The radix argument of `parseInt(str, 10)` / `Number.parseInt(str, 16)`
+        // is the parsing base — a defined parameter of a standard-library
+        // function, named by the builtin it is passed to. `parseInt(s, 10)` is
+        // the canonical decimal-parse idiom every style guide and the `radix`
+        // lint recommend; the radix (2/8/10/16) is a parse base, not a magic
+        // application constant.
+        if is_parse_int_radix_argument(node.id(), semantic) {
+            return;
+        }
+
         // A literal participating in modular arithmetic (`n % 10`, `n % 100 === 11`)
         // is self-documenting: the `%` operation gives the modulus and residue
         // their meaning. This is the structural shape of CLDR/Unicode plural rules
@@ -567,6 +577,54 @@ fn is_date_component_argument(
             };
             ident.name == "Date"
                 && new_expr.arguments.iter().any(|a| a.span() == arg_span)
+        }
+        _ => false,
+    }
+}
+
+/// True when this literal is the second (radix) argument of a call to the
+/// builtin `parseInt(...)` or `Number.parseInt(...)` — `parseInt(s, 10)`,
+/// `Number.parseInt(s, 16)`. The radix names the parsing base of a
+/// standard-library function whose parameter position is fixed by the spec, so
+/// the literal is a parse base, not an application magic number. Anchored
+/// tightly: only the `parseInt`/`Number.parseInt` callee and only the 2nd
+/// argument, so a `10` in any other call or position (`foo(x, 10)`,
+/// `setTimeout(fn, 10)`, the first argument) is unaffected.
+fn is_parse_int_radix_argument(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let arg_span = nodes.get_node(node_id).kind().span();
+
+    let call_id = nodes.parent_id(node_id);
+    if call_id == node_id {
+        return false;
+    }
+    let AstKind::CallExpression(call) = nodes.get_node(call_id).kind() else {
+        return false;
+    };
+    if !is_parse_int_callee(&call.callee) {
+        return false;
+    }
+    // The literal must be the second argument (the radix), matched by span so a
+    // literal nested inside the first argument never qualifies.
+    call.arguments
+        .get(1)
+        .is_some_and(|second| second.span() == arg_span)
+}
+
+/// True when a call expression's callee is the builtin `parseInt` — the global
+/// identifier `parseInt` or the member access `Number.parseInt`.
+fn is_parse_int_callee(callee: &Expression<'_>) -> bool {
+    match callee {
+        Expression::Identifier(id) => id.name == "parseInt",
+        Expression::StaticMemberExpression(member) => {
+            member.property.name == "parseInt"
+                && matches!(
+                    &member.object,
+                    Expression::Identifier(obj) if obj.name == "Number"
+                )
         }
         _ => false,
     }
@@ -2005,6 +2063,50 @@ mod tests {
         // A one-property object is not an enumeration; a lone `{ timeout: 5000 }`
         // is the classic config-object magic number this rule must keep catching.
         let src = r#"function f() { return { timeout: 5000 }; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5957: `parseInt(str, 10)` is the canonical
+    // decimal-parse idiom (accounting.js). The radix argument is the parsing
+    // base of a standard-library function, named by the builtin it is passed to,
+    // not a magic number.
+    #[test]
+    fn allows_parse_int_radix_argument() {
+        let src = r#"
+            function f(s: string) {
+                const a = parseInt(s, 10);
+                const b = parseInt(s, 16);
+                const c = Number.parseInt(s, 2);
+                return a + b + c;
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "the radix argument of parseInt / Number.parseInt must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_parse_int_first_argument_literal() {
+        // Only the radix (2nd argument) is the parse base; a numeric first
+        // argument is the value being parsed and stays flagged.
+        let src = r#"function f() { return parseInt(86400, 10); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_second_argument_of_other_call() {
+        // The exemption is anchored on the `parseInt` callee; the same literal as
+        // the 2nd argument of an unrelated call is still a magic number.
+        let src = r#"function f(fn: () => void) { setTimeout(fn, 10); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_ten_in_arithmetic_context() {
+        // The exemption does not blanket-allow `10`; an arithmetic operand is
+        // still a magic number.
+        let src = r#"function f(x: number) { return x * 10; }"#;
         assert_eq!(run(src).len(), 1);
     }
 }
