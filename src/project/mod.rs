@@ -104,6 +104,10 @@ pub struct PackageJson {
     /// the tool's own command framework wires up internal modules dynamically, so
     /// their exports have no static importer.
     pub has_bin: bool,
+    /// True if the package declares a `main` field — its application/library
+    /// entry point. Used together with an `electron` dependency to recognize an
+    /// Electron app: the `main` field names the Electron main-process entry file.
+    pub has_main: bool,
     /// True if the package declares `"private": true` — it is never published to
     /// npm. The `dependencies`/`devDependencies` distinction only matters for
     /// published packages whose consumers `npm install` them and need runtime
@@ -213,6 +217,7 @@ impl PackageJson {
                 || json.get("module").is_some()
                 || json.get("publishConfig").is_some(),
             has_bin: json.get("bin").is_some(),
+            has_main: json.get("main").is_some(),
             is_private: parse_private(&json),
             workspaces: parse_workspaces(&json),
             script_entry_files: json
@@ -301,6 +306,33 @@ impl PackageJson {
         // own; the broader `parser` keyword requires a CLI marker too so a
         // generic parser package is not classified as a CLI tool.
         has(ARG_PARSING) || (has(CLI_MARKER) && self.keywords.contains("parser"))
+    }
+
+    /// True when this manifest is an Electron application. Electron apps ship
+    /// the `electron` package only in `devDependencies` (it downloads the
+    /// Electron binary at build time and would add hundreds of MB if bundled);
+    /// the Electron runtime itself provides the `electron` module to the main and
+    /// renderer processes at runtime. Recognized by a structural packaging
+    /// signal so importing the runtime-provided `electron` module is treated as
+    /// available, not as an extraneous devDependency:
+    /// - `electron-builder` declared in any dep section (the dominant packager),
+    /// - any `@electron-forge/*` package or `electron-forge` declared (Electron
+    ///   Forge), or
+    /// - `electron` declared together with a `main` field (the entry pointing at
+    ///   the Electron main-process file), the minimal Electron-app manifest shape.
+    pub fn is_electron_app(&self) -> bool {
+        let declares = |name: &str| {
+            self.dependencies.contains_key(name)
+                || self.dev_dependencies.contains_key(name)
+                || self.optional_dependencies.contains_key(name)
+        };
+        let has_forge = self
+            .dependencies
+            .keys()
+            .chain(self.dev_dependencies.keys())
+            .chain(self.optional_dependencies.keys())
+            .any(|name| name == "electron-forge" || name.starts_with("@electron-forge/"));
+        declares("electron-builder") || has_forge || (declares("electron") && self.has_main)
     }
 
     /// Minimum supported Node.js version (`major`, `minor`) parsed from the
