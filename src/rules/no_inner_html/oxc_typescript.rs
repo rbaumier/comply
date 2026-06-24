@@ -12,11 +12,16 @@
 //! Assignments inside a Playwright/Puppeteer injection callback
 //! (`page.evaluate(() => { el.innerHTML = ... })`) are also exempt: the callback
 //! runs in a controlled automation browser, not an application XSS sink.
+//!
+//! An assignment whose target is a provable `<template>` element is exempt: a
+//! template's content is an inert, off-document fragment that never executes
+//! scripts, so `template.innerHTML = html` is the standard safe HTML parser, not
+//! a live-DOM sink (see `html_sink_helpers::lhs_object_is_template_element`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_browser_injection_callback};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use crate::rules::html_sink_helpers::is_numeric_only_template;
+use crate::rules::html_sink_helpers::{is_numeric_only_template, lhs_object_is_template_element};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
@@ -50,6 +55,12 @@ impl OxcCheck for Check {
             return;
         }
         if is_numeric_only_template(&assign.right) {
+            return;
+        }
+        // Writing to a `<template>` element's `.innerHTML` is an inert HTML parse
+        // (its content is an off-document fragment that never runs scripts), not
+        // an XSS sink. Only provable `<template>` targets are exempt.
+        if lhs_object_is_template_element(&member.object, semantic) {
             return;
         }
         if is_inside_browser_injection_callback(node, semantic) {
@@ -169,6 +180,74 @@ mod tests {
     #[test]
     fn flags_inner_html_outside_injection_callback() {
         let src = "function f(html) { el.innerHTML = `<div>${html}</div>`; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Repro for #5960: setting `.innerHTML` on a `<template>` element is an inert
+    // HTML parse (off-document fragment, no script execution), not an XSS sink.
+    #[test]
+    fn allows_template_from_create_element_ns() {
+        let src = "function f(html, ns) { const parser = (parsers[ns] ||= document.createElementNS(ns, \"template\")); parser.innerHTML = html; return parser.content; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_template_from_create_element() {
+        let src = "function f(x) { const t = document.createElement(\"template\"); t.innerHTML = x; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_template_typed_binding() {
+        let src = "function f(t: HTMLTemplateElement, x) { t.innerHTML = x; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_template_as_cast_target() {
+        let src = "function f(el, x) { (el as HTMLTemplateElement).innerHTML = x; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Strong negatives: any non-template element keeps flagging.
+    #[test]
+    fn flags_div_from_create_element() {
+        let src = "function f(x) { const d = document.createElement(\"div\"); d.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_script_from_create_element() {
+        let src = "function f(x) { const s = document.createElement(\"script\"); s.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unknown_param_element() {
+        let src = "function f(el, x) { el.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Name-only evidence is never enough: a binding called `template` but created
+    // as a `<div>` still flags.
+    #[test]
+    fn flags_div_named_template() {
+        let src = "function f(x) { const template = document.createElement(\"div\"); template.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A `let` initialised from a `<template>` can be reassigned to a live-DOM
+    // element, so the initializer proof must fail closed for non-`const` bindings.
+    #[test]
+    fn flags_reassignable_template_binding() {
+        let src = "function f(x) { let t = document.createElement(\"template\"); t = document.createElement(\"div\"); t.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A member-chain receiver is never a provable `<template>`.
+    #[test]
+    fn flags_member_chain_receiver() {
+        let src = "function f(x) { this.tmpl.innerHTML = x; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }

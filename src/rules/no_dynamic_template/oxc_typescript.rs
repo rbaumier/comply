@@ -3,16 +3,18 @@
 //! the dangerouslySetInnerHTML JSX attribute.
 //!
 //! Exemptions on innerHTML/outerHTML assignments: a compile-time-constant string
-//! (a StringLiteral or a TemplateLiteral with no expressions), and a template
+//! (a StringLiteral or a TemplateLiteral with no expressions), a template
 //! literal whose every `${...}` is provably numeric (numbers cannot carry HTML
-//! markup). Assignments and HTML-construction calls inside a Playwright/Puppeteer
+//! markup), and a write to a provable `<template>` element (its content is an
+//! inert off-document fragment, the standard safe HTML parser, not a live-DOM
+//! sink). Assignments and HTML-construction calls inside a Playwright/Puppeteer
 //! injection callback (`page.evaluate(...)`) are also exempt: they run in a
 //! controlled automation browser, not the application DOM.
 
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_browser_injection_callback};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use crate::rules::html_sink_helpers::is_numeric_only_template;
+use crate::rules::html_sink_helpers::{is_numeric_only_template, lhs_object_is_template_element};
 use oxc_ast::ast::{AssignmentTarget, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -84,12 +86,12 @@ impl OxcCheck for Check {
         }
         match node.kind() {
             AstKind::AssignmentExpression(assign) => {
-                let lhs_text = match &assign.left {
+                let (lhs_text, lhs_object) = match &assign.left {
                     AssignmentTarget::StaticMemberExpression(member) => {
-                        span_text(ctx.source, member.span)
+                        (span_text(ctx.source, member.span), &member.object)
                     }
                     AssignmentTarget::ComputedMemberExpression(member) => {
-                        span_text(ctx.source, member.span)
+                        (span_text(ctx.source, member.span), &member.object)
                     }
                     _ => return,
                 };
@@ -105,6 +107,11 @@ impl OxcCheck for Check {
                         // A template whose every interpolation is provably numeric cannot
                         // carry HTML markup, so it is not a dynamic-HTML sink.
                         if is_numeric_only_template(&assign.right) {
+                            return;
+                        }
+                        // Writing to a `<template>` element's `.innerHTML` is an inert HTML
+                        // parse (off-document fragment, no script execution), not a sink.
+                        if lhs_object_is_template_element(lhs_object, semantic) {
                             return;
                         }
                         emit(ctx, assign.span.start, prop, diagnostics);
@@ -261,6 +268,66 @@ mod tests {
     #[test]
     fn flags_inner_html_outside_injection_callback() {
         let src = "function f(html) { el.innerHTML = `<div>${html}</div>`; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Repro for #5960: `.innerHTML` on a `<template>` element is an inert HTML
+    // parse, not a dynamic-HTML sink.
+    #[test]
+    fn allows_template_from_create_element_ns() {
+        let src = "function f(html, ns) { const parser = (parsers[ns] ||= document.createElementNS(ns, \"template\")); parser.innerHTML = html; return parser.content; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_template_from_create_element() {
+        let src = "function f(x) { const t = document.createElement(\"template\"); t.innerHTML = x; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_template_typed_binding() {
+        let src = "function f(t: HTMLTemplateElement, x) { t.innerHTML = x; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_template_as_cast_target() {
+        let src = "function f(el, x) { (el as HTMLTemplateElement).innerHTML = x; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Strong negatives: any non-template element keeps flagging.
+    #[test]
+    fn flags_div_from_create_element() {
+        let src = "function f(x) { const d = document.createElement(\"div\"); d.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unknown_param_element() {
+        let src = "function f(el, x) { el.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_div_named_template() {
+        let src = "function f(x) { const template = document.createElement(\"div\"); template.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A `let` initialised from a `<template>` can be reassigned to a live-DOM
+    // element, so the initializer proof must fail closed for non-`const` bindings.
+    #[test]
+    fn flags_reassignable_template_binding() {
+        let src = "function f(x) { let t = document.createElement(\"template\"); t = document.createElement(\"div\"); t.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A member-chain receiver is never a provable `<template>`.
+    #[test]
+    fn flags_member_chain_receiver() {
+        let src = "function f(x) { this.tmpl.innerHTML = x; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
