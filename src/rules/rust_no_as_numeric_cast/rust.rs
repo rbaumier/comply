@@ -103,6 +103,11 @@ enum NumericKind {
 struct NumericType {
     kind: NumericKind,
     bits: u16,
+    /// `true` for `usize`/`isize`, whose width is platform-dependent. `bits`
+    /// carries the host width for in-range checks, but two platform-width types
+    /// (or a platform-width and a fixed-width type) cannot be proven "same width"
+    /// across targets, so the same-width reinterpret carve-out must skip them.
+    platform_width: bool,
 }
 
 impl AstCheck for Check {
@@ -291,7 +296,8 @@ fn cast_is_pointer_sized_widening(node: tree_sitter::Node, source: &[u8], target
 }
 
 fn numeric_type(type_text: &str) -> Option<NumericType> {
-    let (kind, bits) = match type_text.trim() {
+    let trimmed = type_text.trim();
+    let (kind, bits) = match trimmed {
         "u8" => (NumericKind::Unsigned, 8),
         "u16" => (NumericKind::Unsigned, 16),
         "u32" => (NumericKind::Unsigned, 32),
@@ -308,7 +314,7 @@ fn numeric_type(type_text: &str) -> Option<NumericType> {
         "f64" => (NumericKind::Float, 64),
         _ => return None,
     };
-    Some(NumericType { kind, bits })
+    Some(NumericType { kind, bits, platform_width: matches!(trimmed, "usize" | "isize") })
 }
 
 /// Whether `<target as float>::from(<source>)` compiles.
@@ -332,6 +338,23 @@ fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
     match (source.kind, target.kind) {
         (_, NumericKind::Float) | (NumericKind::Float, _) => true,
         (k, k2) if k == k2 => target.bits < source.bits,
+        // Same-width signed↔unsigned (`u8 as i8`, `i32 as u32`, …) preserves
+        // every bit — only the sign bit's interpretation changes via two's
+        // complement — so it is a lossless reinterpretation, not a narrowing.
+        // `as` is the only conversion that performs it: there is no
+        // `From`/`TryFrom` for the full range (`i8::from(u8)` does not exist,
+        // and `200_u8.try_into::<i8>()` errors though the intended result is the
+        // bit pattern `-56_i8`), so the rule's `from`/`try_from` remediation is
+        // inapplicable. A `usize`/`isize` operand is excluded: its width is
+        // platform-dependent, so "same width" as a fixed-width target cannot be
+        // proven across targets (e.g. `usize as i64` is a sign change that widens
+        // on a 32-bit target), and that case stays flagged.
+        _ if source.bits == target.bits && !source.platform_width && !target.platform_width => {
+            false
+        }
+        // Cross-signedness of different widths stays lossy: unsigned→narrower
+        // signed (`u16 as i8`) discards bits, and signed→narrower unsigned
+        // (`i32 as u16`) both narrows and may wrap a negative value.
         _ => source.bits >= target.bits,
     }
 }
@@ -521,8 +544,12 @@ name = "normal_lib"
     }
 
     #[test]
-    fn flags_signed_to_unsigned() {
-        assert_eq!(run_on("fn f(x: i32) -> u32 { x as u32 }").len(), 1);
+    fn allows_same_width_signed_to_unsigned() {
+        // `i32 as u32` is a same-width bit reinterpretation (#5972): every bit is
+        // preserved and `as` is the only conversion that performs it, so the rule
+        // does not flag it. A different-width sign change (`i32 as u16`) stays
+        // flagged (see `test_flags_dangerous_narrowing_i32_to_u16`).
+        assert!(run_on("fn f(x: i32) -> u32 { x as u32 }").is_empty());
     }
 
     #[test]
@@ -1217,9 +1244,14 @@ name = "normal_lib"
     }
 
     #[test]
-    fn repro_5262_unguarded_signed_to_unsigned_still_flagged() {
-        // No non-negativity guard — the signed value can be negative and wrap.
-        assert_eq!(run_on("fn f(x: i32) -> u32 { x as u32 }").len(), 1);
+    fn repro_5262_unresolved_unguarded_signed_to_unsigned_still_flagged() {
+        // A same-width signed→unsigned cast whose source resolves is now exempt as
+        // a bit reinterpretation (#5972); the guard path still governs an
+        // *unresolved* source — a match-arm binding with no annotation and no
+        // non-negativity proof stays flagged.
+        let src = "fn f(o: Option<i64>) -> Option<u64> { \
+                   match o { Some(diff) => Some(diff as u64), _ => None } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
@@ -1381,9 +1413,11 @@ name = "normal_lib"
 
     #[test]
     fn repro_5593_non_from_bits_call_arg_still_flagged() {
-        // A same-width sign-changing cast feeding an ordinary call is not a
-        // bit-reinterpretation sink, so it stays flagged.
-        let src = "fn f(p: i32) -> u32 { consume(p as u32) }";
+        // A genuinely-narrowing cast feeding an ordinary call is not a
+        // bit-reinterpretation sink, so the `from_bits` anchor must not exempt it:
+        // `i64 as u32` discards 32 bits. (A *same-width* `i32 as u32` is exempt as
+        // a bit reinterpretation regardless of the sink — see #5972.)
+        let src = "fn f(p: i64) -> u32 { consume(p as u32) }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -1485,6 +1519,50 @@ name = "normal_lib"
         let src = "fn f(i: usize) -> Member { \
                    Member::Unnamed(Index { index: i as u32, span: s }) }";
         assert!(run_on_with_cargo(PROC_MACRO_CARGO_TOML, src).is_empty());
+    }
+
+    #[test]
+    fn repro_5972_u8_as_i8_same_width_reinterpret_not_flagged() {
+        // Issue #5972 (fancy-regex prev_codepoint_ix): `u8 as i8` is a same-width
+        // two's-complement bit reinterpretation for UTF-8 continuation-byte
+        // detection — no bits are lost, and `as` is the only conversion that
+        // performs it (`i8::from(u8)` does not exist).
+        assert!(run_on("fn f(b: u8) -> i8 { b as i8 }").is_empty());
+        assert!(run_on("fn f(b: i8) -> u8 { b as u8 }").is_empty());
+        assert!(run_on("fn f(n: u16) -> i16 { n as i16 }").is_empty());
+        assert!(run_on("fn f(n: i32) -> u32 { n as u32 }").is_empty());
+        assert!(run_on("fn f(n: u64) -> i64 { n as i64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5972_as_bytes_index_as_i8_not_flagged() {
+        // The issue's exact shape: `let bytes = s.as_bytes(); (bytes[ix] as i8)`.
+        // `.as_bytes()` returns `&[u8]`, so the indexed element is `u8` and the
+        // cast to `i8` is the same-width reinterpretation above.
+        let src = "fn f(s: &str, ix: usize) -> bool { \
+                   let bytes = s.as_bytes(); (bytes[ix] as i8) >= -0x40 }";
+        assert!(run_on(src).is_empty());
+        // Direct `.as_bytes()[ix]` base, without the intermediate binding.
+        assert!(run_on("fn f(s: &str, ix: usize) -> i8 { s.as_bytes()[ix] as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5972_cross_width_signed_unsigned_still_flagged() {
+        // Different widths stay lossy — the same-width carve-out must not leak:
+        // `u16 as u8` and `i32 as i16` discard bits, `u16 as i8` discards bits
+        // and may wrap. (axum's `i32 as u32` etc. are same-width and now exempt.)
+        assert_eq!(run_on("fn f(x: u16) -> u8 { x as u8 }").len(), 1);
+        assert_eq!(run_on("fn f(x: u32) -> u16 { x as u16 }").len(), 1);
+        assert_eq!(run_on("fn f(x: i32) -> i16 { x as i16 }").len(), 1);
+        assert_eq!(run_on("fn f(x: u16) -> i8 { x as i8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5972_as_bytes_index_narrowing_still_flagged() {
+        // The `.as_bytes()` resolution yields `u8`, so a narrowing to a smaller-
+        // than-`u8` target is impossible; but a non-`as_bytes` method base stays
+        // unresolved and a genuine narrowing keeps flagging.
+        assert_eq!(run_on("fn f(s: &str, ix: usize) -> u8 { s.chunks()[ix] as u8 }").len(), 1);
     }
 
     #[test]

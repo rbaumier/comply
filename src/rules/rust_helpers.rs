@@ -1741,9 +1741,9 @@ fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool
         .any(|child| pattern_contains_identifier(child, name, source))
 }
 
-/// If `cast`'s operand is an index expression `base[idx]` whose `base` is a local
-/// binding declared as a slice/array/Vec/Box-slice of a fixed-width integer,
-/// return that element type's name (`"u8"`, `"i32"`, …); otherwise `None`.
+/// If `cast`'s operand is an index expression `base[idx]` whose `base` resolves to
+/// a slice/array/Vec/Box-slice of a fixed-width integer, return that element
+/// type's name (`"u8"`, `"i32"`, …); otherwise `None`.
 ///
 /// This lets the numeric-cast rules resolve the source type of the idiomatic
 /// byte-buffer assembly `(buf[0] as u32) | (buf[1] as u32) << 8 | …` where
@@ -1751,11 +1751,18 @@ fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool
 /// provable widening. Without this, the index operand resolves to no source type
 /// and both rules flag it conservatively.
 ///
-/// Resolution is intentionally narrow — only a bare `identifier` base whose
-/// declared type is locally annotated as one of the recognized container shapes
-/// of a known fixed-width integer is resolved. A base from a method return, an
-/// inferred binding, or a non-integer element type yields `None`, so genuinely
-/// unresolvable casts stay flagged.
+/// Two base shapes are resolved:
+///
+/// - a bare `identifier` whose local binding either is annotated with one of the
+///   recognized container shapes of a known fixed-width integer (`buf: &[u8; N]`)
+///   or is a `let` initialized by an `.as_bytes()` call (`let bytes =
+///   s.as_bytes();`) — `str`/`String`/`OsStr`/`CStr::as_bytes` all return
+///   `&[u8]`, so `bytes[i]` is `u8`;
+/// - a direct `.as_bytes()` call (`s.as_bytes()[i]`), likewise `u8`.
+///
+/// Resolution is otherwise narrow — a base from any other method return, an
+/// un-annotated binding of an unknown shape, or a non-integer element type yields
+/// `None`, so genuinely unresolvable casts stay flagged.
 ///
 /// The returned type name is fed back through each rule's own width/signedness
 /// table, so signedness and the widening/narrowing decision are not re-derived
@@ -1768,12 +1775,78 @@ pub fn cast_operand_indexed_element_type(cast: Node, source: &[u8]) -> Option<St
     // tree-sitter exposes the indexed container as the first named child; the
     // remaining children are the bracket tokens and the index expression.
     let base = value.named_child(0)?;
-    if base.kind() != "identifier" {
-        return None;
+    match base.kind() {
+        // `s.as_bytes()[i]` — the element of a `&[u8]` is `u8`.
+        "call_expression" if call_is_as_bytes(base, source) => Some("u8".to_string()),
+        "identifier" => {
+            let name = base.utf8_text(source).ok()?;
+            // A binding annotated with a recognized integer-container type.
+            if let Some(declared) = find_identifier_type(cast, name, source) {
+                return element_int_type(&declared).map(str::to_string);
+            }
+            // A binding initialized by `.as_bytes()` (`let bytes = s.as_bytes();`),
+            // whose type is inferred rather than annotated.
+            local_binding_is_as_bytes(cast, name, source).then(|| "u8".to_string())
+        }
+        _ => None,
     }
-    let name = base.utf8_text(source).ok()?;
-    let declared = find_identifier_type(cast, name, source)?;
-    element_int_type(&declared).map(str::to_string)
+}
+
+/// True when `call` is a zero-argument `.as_bytes()` method call (the receiver is
+/// not inspected — `str`, `String`, `OsStr`, and `CStr` all return `&[u8]`).
+fn call_is_as_bytes(call: Node, source: &[u8]) -> bool {
+    if call
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return false;
+    }
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    function.kind() == "field_expression"
+        && function
+            .child_by_field_name("field")
+            .and_then(|field| field.utf8_text(source).ok())
+            == Some("as_bytes")
+}
+
+/// True when `name` resolves to a local `let` binding (in scope before `node`)
+/// whose initializer is an `.as_bytes()` call, so the binding holds a `&[u8]`.
+fn local_binding_is_as_bytes(node: Node, name: &str, source: &[u8]) -> bool {
+    let mut current = Some(node);
+    while let Some(n) = current {
+        if matches!(
+            n.kind(),
+            "function_item" | "closure_expression" | "block" | "source_file"
+        ) && find_as_bytes_binding_before(n, node.start_byte(), name, source)
+        {
+            return true;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// Walk `node`'s subtree (positions before `limit`) for a `let <name> =
+/// <expr>.as_bytes();` declaration.
+fn find_as_bytes_binding_before(node: Node, limit: usize, name: &str, source: &[u8]) -> bool {
+    if node.start_byte() >= limit {
+        return false;
+    }
+    if node.kind() == "let_declaration"
+        && node
+            .child_by_field_name("pattern")
+            .is_some_and(|pattern| pattern_contains_identifier(pattern, name, source))
+        && node.child_by_field_name("value").is_some_and(|value| {
+            value.kind() == "call_expression" && call_is_as_bytes(value, source)
+        })
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| find_as_bytes_binding_before(child, limit, name, source))
 }
 
 /// Extract the element type name from a container type that is a slice, array,
