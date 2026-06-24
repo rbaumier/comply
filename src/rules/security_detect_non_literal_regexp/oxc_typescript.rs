@@ -214,6 +214,38 @@ mod tests {
     }
 
     #[test]
+    fn skips_dynamic_regexp_in_test_file() {
+        // Regression for rbaumier/comply#6059 — `new RegExp(f.exception)` used as
+        // the error-matcher argument to `assert.throws()` in a `.spec.ts` test.
+        // The pattern is fixture-derived and never reaches a running service, so
+        // the ReDoS / injection vector is absent. Production-only harm → the
+        // central `skip_in_test_dir` gate suppresses it in test files.
+        let src = r#"
+            fixtures.invalid.forEach(f => {
+              it('throws', () => {
+                assert.throws(() => baddress.fromBase58Check(f.address),
+                  new RegExp(f.address + ' ' + f.exception));
+              });
+            });
+        "#;
+        let diags =
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "test/address.spec.ts");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_dynamic_regexp_in_production_source() {
+        // The test-dir skip is scoped to test files only — a dynamic regex in
+        // production source can still be driven by attacker input and is flagged.
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "const r = new RegExp(req.query.pattern);",
+            "src/router.ts",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
     fn allows_numeric_param_in_template() {
         // Issue #3374 pattern 1: number param interpolated into a template literal.
         let src = r#"

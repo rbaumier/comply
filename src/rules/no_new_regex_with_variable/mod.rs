@@ -1,4 +1,12 @@
 //! no-new-regex-with-variable — ReDoS risk.
+//!
+//! ReDoS is exploitable only when a running service feeds attacker-controlled
+//! input to the regex (a crafted pattern freezes the event loop via exponential
+//! backtracking). Test files (`skip_in_test_dir`) have no such attack surface:
+//! a dynamic regex there matches a fixture-derived error message and never
+//! ships, so the harm is production-only — mirroring the Rust backend, which
+//! already exempts `tests/` and `#[test]` code. Production `new RegExp(variable)`
+//! in its own (non-test) file is still flagged.
 
 mod oxc_typescript;
 mod rust;
@@ -19,7 +27,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["code-quality"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
