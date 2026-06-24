@@ -111,7 +111,7 @@ fn is_conventional_short_binding(name: &str) -> bool {
     matches!(
         name,
         "i" | "j" | "k" | "n" | "x" | "y" | "z" | "s" | "f" | "v" | "e" | "w" | "r"
-            | "a" | "b" | "c" | "d" | "m" | "p" | "h" | "l" | "o"
+            | "g" | "a" | "b" | "c" | "d" | "m" | "p" | "h" | "l" | "o"
     )
 }
 
@@ -374,12 +374,23 @@ mod tests {
     }
 
     // Negative space for #5917: ASCII single-char names that are NOT conventional
-    // (the #5790/#5891/#5892/#5916 declines) must still be flagged.
+    // (the #5790/#5891/#5892 declines) must still be flagged.
     #[test]
     fn flags_ascii_single_char_names() {
-        let src = "function f() { const q = 1; const g = 2; return q + g; }";
-        // `q` (var) and `g` (var) flagged; `f` is conventional so exempt.
+        let src = "function f() { const q = 1; const u = 2; return q + u; }";
+        // `q` (var) and `u` (var) flagged; `f` is conventional so exempt.
         assert_eq!(run(src).len(), 2, "{:?}", run(src));
+    }
+
+    // Regression for #5916: `g` (RGB green channel) is conventional in color
+    // libraries — `r` and `b` were already exempt, so accepting `g` completes
+    // the RGB trio and matches CONVENTIONAL_RUST_NAMES (Rust↔JS/TS parity).
+    #[test]
+    fn allows_rgb_green_channel_binding() {
+        let src = "const { r, g, b, a } = roundRgba(rgba);";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+        let src2 = "function hex2rgb(value) { const g = (value >> 8) & 0xff; return g; }";
+        assert!(run(src2).is_empty(), "{:?}", run(src2));
     }
 
     // Negative space for #5917: the exemption is non-ASCII only — a single `$`
