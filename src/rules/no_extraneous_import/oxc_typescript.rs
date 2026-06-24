@@ -149,6 +149,20 @@ impl OxcCheck for Check {
         }
 
         let root = package_root(specifier);
+
+        // The `electron` module (and its subpaths like `electron/main`,
+        // `electron/renderer`) is provided by the Electron runtime to the main
+        // and renderer processes at runtime — analogous to a Node built-in. By
+        // the official packaging convention the `electron` package is declared
+        // only in `devDependencies` (it downloads the Electron binary at build
+        // time and would add hundreds of MB if bundled), so the rule's premise
+        // "devDependency ⇒ unavailable at runtime" is false for it. Exempt only
+        // when the project is structurally an Electron app (issue #5739); a
+        // non-Electron project importing `electron` still flags.
+        if root == "electron" && pkg.is_electron_app() {
+            return;
+        }
+
         let in_runtime = pkg.dependencies.contains_key(root)
             || pkg.peer_dependencies.contains_key(root)
             || pkg.optional_dependencies.contains_key(root);
@@ -1771,5 +1785,95 @@ export default autoRoutes({
         let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
         assert_eq!(d.len(), 1, "node-engine package should still flag: {d:?}");
         assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
+    fn allows_electron_import_in_electron_builder_app() {
+        // Issue #5739: vercel/hyper declares `electron` in devDependencies and
+        // `electron-builder` as its packager. The Electron runtime provides the
+        // `electron` module to renderer/main code at runtime, so importing
+        // `ipcRenderer`/`clipboard` from production renderer code is correct. A
+        // regular devDependency (`plist`) in the same file must still flag.
+        let pkg = r#"{
+            "name": "hyper",
+            "dependencies": {"react": "^19"},
+            "devDependencies": {
+                "electron": "^31",
+                "electron-builder": "^24",
+                "plist": "^3"
+            }
+        }"#;
+        let src = r#"
+import {ipcRenderer, clipboard} from 'electron';
+import plist from 'plist';
+"#;
+        let d = run_with_pkg_at_path(pkg, "lib/utils/paste.ts", src);
+        assert_eq!(d.len(), 1, "only plist should flag in an electron app: {d:?}");
+        assert!(d[0].message.contains("plist"));
+        assert!(!d.iter().any(|x| x.message.contains("electron")));
+    }
+
+    #[test]
+    fn allows_electron_subpath_import_in_electron_app() {
+        // Issue #5739: subpaths of the runtime-provided module (`electron/main`,
+        // `electron/renderer`) resolve to the same `electron` package root and
+        // must also be exempt in an Electron app.
+        let pkg = r#"{
+            "name": "my-electron-app",
+            "main": "dist/main.js",
+            "devDependencies": {"electron": "^31"}
+        }"#;
+        let src = r#"
+import { app } from 'electron/main';
+import { ipcRenderer } from 'electron/renderer';
+"#;
+        let d = run_with_pkg_at_path(pkg, "src/main.ts", src);
+        assert!(d.is_empty(), "electron subpaths should not flag in an electron app: {d:?}");
+    }
+
+    #[test]
+    fn allows_electron_import_in_electron_forge_app() {
+        // Issue #5739: Electron Forge projects declare `@electron-forge/*`
+        // packages; the same runtime-provided-module reasoning applies.
+        let pkg = r#"{
+            "name": "forge-app",
+            "devDependencies": {
+                "electron": "^31",
+                "@electron-forge/cli": "^7"
+            }
+        }"#;
+        let src = r#"import { BrowserWindow } from 'electron';"#;
+        let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
+        assert!(d.is_empty(), "electron should not flag in a forge app: {d:?}");
+    }
+
+    #[test]
+    fn allows_electron_import_with_main_field_only() {
+        // Issue #5739: an Electron app using neither builder nor forge is still
+        // recognized when `electron` is declared together with a `main` entry.
+        let pkg = r#"{
+            "name": "minimal-electron",
+            "main": "main.js",
+            "devDependencies": {"electron": "^31"}
+        }"#;
+        let src = r#"import { ipcMain } from 'electron';"#;
+        let d = run_with_pkg_at_path(pkg, "main.ts", src);
+        assert!(d.is_empty(), "electron should not flag in a main+electron app: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_electron_in_non_electron_project() {
+        // Negative-space guard for #5739: a project that is not an Electron app
+        // (no electron-builder/forge, no `main`+`electron` shape) importing
+        // `electron` from production code is a genuine extraneous import and must
+        // still flag — the exemption must not blanket-exempt `electron`.
+        let pkg = r#"{
+            "name": "some-web-app",
+            "devDependencies": {"electron": "^31"}
+        }"#;
+        let src = r#"import { app } from 'electron';"#;
+        let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
+        assert_eq!(d.len(), 1, "electron in a non-electron project should flag: {d:?}");
+        assert!(d[0].message.contains("electron"));
     }
 }
