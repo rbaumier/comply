@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, TSType};
 use std::sync::Arc;
 
 pub struct Check;
@@ -42,6 +42,16 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // `: never` throw-helper bridge: a function explicitly annotated to
+        // return `never` (e.g. `function throwValidationError(...): never { ... }`)
+        // exists solely to throw — TypeScript guarantees it never returns
+        // normally, so `return Result.err(...)` is structurally impossible
+        // there. These are the typed-error throw-helpers Amadeo's handlers use
+        // to bridge a domain failure to the error-handler middleware; the
+        // throw is the helper's contract, not an escape hatch (#40).
+        if enclosing_function_returns_never(node, semantic) {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, throw.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -78,6 +88,30 @@ fn inside_result_try_callback<'a>(
                     return true;
                 }
             }
+    }
+    false
+}
+
+/// Walk ancestors to the nearest enclosing function and report whether its
+/// declared return type is the `never` keyword. A `: never`-annotated function
+/// can only diverge (throw or loop forever); it cannot `return Result.err(...)`
+/// without violating its own signature, so the no-throw remediation does not
+/// apply. Recognising this shape exempts the typed-error throw-helpers used to
+/// bridge a domain failure into a thrown `ApiError` (#40).
+fn enclosing_function_returns_never<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        let return_type = match ancestor.kind() {
+            AstKind::Function(func) => func.return_type.as_ref(),
+            AstKind::ArrowFunctionExpression(arrow) => arrow.return_type.as_ref(),
+            _ => continue,
+        };
+        return matches!(
+            return_type.map(|ann| &ann.type_annotation),
+            Some(TSType::TSNeverKeyword(_))
+        );
     }
     false
 }
@@ -138,6 +172,81 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_in_never_returning_throw_helper() {
+        // Regression for rbaumier/comply#40 (reopened) — a `: never`
+        // throw-helper that throws a typed `ApiError` subclass is the
+        // documented Result→throw bridge. The `: never` annotation makes
+        // `return Result.err(...)` impossible, so the throw is its contract.
+        // Real firing site: validate-new-password.ts:140.
+        let src = r#"
+            import { Result, TaggedError } from "better-result";
+            function throwPasswordValidationError(message: string): never {
+              throw new ValidationError({ errors: [], cause: null });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_in_never_returning_arrow_helper() {
+        // The bridge shape also applies to an arrow annotated `: never`.
+        let src = r#"
+            import { Result } from "better-result";
+            const fail = (message: string): never => {
+              throw new ValidationError({ message });
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_throw_in_value_returning_function() {
+        // True positive preserved — a function that returns a value (no
+        // `: never` annotation) must still return Result.err(...) instead of
+        // throwing. This is the ordinary careless throw the rule targets.
+        let src = r#"
+            import { Result } from "better-result";
+            function loadConfig(): Config {
+              throw new ValidationError({ message: "bad config" });
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_throw_in_never_returning_method() {
+        // A class method annotated `: never` is the same throw-helper bridge.
+        // oxc represents a method body as a `Function` node carrying the
+        // method's return type, so it is covered by the same ancestor walk.
+        let src = r#"
+            import { Result } from "better-result";
+            class ErrorHelper {
+              fail(message: string): never {
+                throw new ValidationError({ message });
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_throw_in_nested_value_returning_closure() {
+        // The exemption is scoped to the *nearest* enclosing function. A bare
+        // throw inside an inner closure that itself returns a value must stay
+        // flagged even when wrapped in an outer `: never` helper.
+        let src = r#"
+            import { Result } from "better-result";
+            function outer(): never {
+              const inner = (): Config => {
+                throw new ValidationError({ message: "bad" });
+              };
+              return inner();
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
