@@ -135,6 +135,13 @@ impl AstCheck for Check {
         if returns_computed_bool(node) {
             return;
         }
+        // A continuation predicate driving a `while` loop
+        // (`while self.NAME() {}` / `while NAME() {}`): the bool encodes
+        // iteration state (`true` = keep going, `false` = done), not
+        // success/failure. The call site proves there is no error path.
+        if drives_while_loop(node, name, source_bytes) {
+            return;
+        }
         // mdBook tutorial example code (an ancestor `book.toml`) is
         // documentation, not library API — its simplified examples
         // intentionally return `bool` and are exempt.
@@ -366,6 +373,62 @@ fn has_predicate_doc_comment(func: tree_sitter::Node, source: &[u8]) -> bool {
         sibling = s.prev_named_sibling();
     }
     false
+}
+
+/// True if `name` is invoked as the condition of a `while` loop anywhere in
+/// the same file — the continuation-predicate pattern (`while self.NAME() {}`
+/// / `while NAME() {}`). Such a `bool` drives iteration (`true` = continue,
+/// `false` = done), so it carries loop state, not an operation's success.
+///
+/// The whole tree is scanned from the file root because the loop call site can
+/// be in a sibling method (`build`) of the same impl, not in `NAME`'s own body.
+/// This runs only when the function is otherwise about to be flagged, so the
+/// per-flag walk is rare.
+fn drives_while_loop(func: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut root = func;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "while_expression"
+            && let Some(cond) = node.child_by_field_name("condition")
+            && while_condition_calls(cond, name, source)
+        {
+            return true;
+        }
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if `cond` is a call whose callee names `name`: either a free call
+/// (`NAME()` → `function` is an `identifier`) or a method/path call
+/// (`self.NAME()` / `Type::NAME()` → `function` is a `field_expression` whose
+/// `field` is `NAME`, or a `scoped_identifier` ending in `NAME`).
+fn while_condition_calls(cond: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if cond.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = cond.child_by_field_name("function") else {
+        return false;
+    };
+    let callee = match function.kind() {
+        "identifier" => function,
+        "field_expression" => match function.child_by_field_name("field") {
+            Some(field) => field,
+            None => return false,
+        },
+        "scoped_identifier" => match function.child_by_field_name("name") {
+            Some(seg) => seg,
+            None => return false,
+        },
+        _ => return false,
+    };
+    callee.utf8_text(source).is_ok_and(|text| text == name)
 }
 
 #[cfg(test)]
@@ -720,6 +783,52 @@ mod tests {
         assert!(!looks_like_predicate("parse_island_data"));
         // An action prefix + `island` still flags (it is not a predicate).
         let src = "fn create_island_index() -> bool { do_thing(); true }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #4701: continuation-predicate driving a `while` loop ---
+
+    #[test]
+    fn allows_method_driving_while_loop() {
+        // georust/geo `MonoPolyBuilder::process_next_pt` — the bool encodes
+        // iteration state (`true` = continue, `false` = done), not success.
+        // The `while self.process_next_pt() {}` call site proves it is a
+        // continuation predicate with no error path.
+        let src = "\
+            impl Builder {\n\
+                pub fn build(mut self) -> Vec<MonoPoly> {\n\
+                    while self.process_next_pt() {}\n\
+                    self.outputs\n\
+                }\n\
+                fn process_next_pt(&mut self) -> bool { do_step(); true }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_free_fn_driving_while_loop() {
+        // `while advance_state() {}` — bare-identifier call site.
+        let src = "\
+            fn drive() { while advance_state() {} }\n\
+            fn advance_state() -> bool { do_step(); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #4701: negative space — a `-> bool` action with NO while-condition
+    // caller stays flagged ---
+
+    #[test]
+    fn flags_action_called_in_if_not_while() {
+        // `if save_config() {}` is not a continuation predicate.
+        let src = "\
+            fn setup() { if save_config() { log(); } }\n\
+            fn save_config(&self) -> bool { write(); true }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_action_with_no_caller() {
+        let src = "fn save_config(&self) -> bool { write(); true }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
