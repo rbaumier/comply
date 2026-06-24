@@ -3,7 +3,8 @@
 //! Three Three.js/react-three-fiber imperative-write categories are exempt, as
 //! each mutates a stateful renderer-managed instance with no immutable form:
 //! the `onBeforeCompile` material hook, browser host-object writes
-//! (Location/History), and in-place scene-object mutation inside a `useFrame`
+//! (Location/History, DOM `.style`/`.dataset` chains, `on<event>` handler
+//! registration), and in-place scene-object mutation inside a `useFrame`
 //! animation callback (`mesh.current.position.y`, `state.camera.position.x`).
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -277,6 +278,31 @@ fn is_imperative_host_write(obj_text: &str, prop_text: &str) -> bool {
     false
 }
 
+/// True when the assignment registers a DOM-style event handler: the property
+/// name has the `on<event>` shape (`onerror`, `onsuccess`, `onupgradeneeded`,
+/// `onclick`, …) and the assigned value is a function (or `null` to deregister).
+/// Assigning `obj.on<event> = fn` is the canonical imperative event-registration
+/// API for browser host objects (`IDBRequest`, `IDBTransaction`, `WebSocket`,
+/// `XMLHttpRequest`, DOM elements) — event REGISTRATION, not the object-state
+/// mutation this rule targets, and there is no immutable alternative.
+///
+/// Gating on a function value keeps the exemption tight: a plain state write
+/// like `config.onTimeout = 5000` assigns a non-function and stays flagged.
+fn is_event_handler_registration(prop_text: &str, value: &Expression) -> bool {
+    let is_on_event = prop_text.len() > 2
+        && prop_text.starts_with("on")
+        && prop_text.as_bytes()[2].is_ascii_lowercase();
+    if !is_on_event {
+        return false;
+    }
+    matches!(
+        value,
+        Expression::ArrowFunctionExpression(_)
+            | Expression::FunctionExpression(_)
+            | Expression::NullLiteral(_)
+    )
+}
+
 fn is_create_element_call(expr: &Expression) -> bool {
     let Expression::CallExpression(call) = expr else { return false };
     let Expression::StaticMemberExpression(member) = &call.callee else { return false };
@@ -354,6 +380,9 @@ impl OxcCheck for Check {
                         if prop_text == "current" { return; }
                         if obj_text == "document" && prop_text == "cookie" { return; }
                         if is_imperative_host_write(obj_text, prop_text) { return; }
+                        // `request.onerror = () => …`, `el.onclick = fn` — DOM-style
+                        // event-handler registration, not object-state mutation.
+                        if is_event_handler_registration(prop_text, &assign.right) { return; }
                         // Mutating an object's own instance state (`this.out = sink`)
                         // is encapsulated state, not the external/shared mutation this
                         // rule targets — replacing the whole object is the only
@@ -1142,6 +1171,81 @@ mod tests {
         // History properties is a genuine (and invalid) mutation, stays flagged.
         let src = r#"
             history.length = 0;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // DOM-style event-handler registration — issue #6063
+
+    #[test]
+    fn skips_indexeddb_event_handler_registration_issue_6063() {
+        // Assigning `on<event>` handlers is the canonical imperative IndexedDB /
+        // DOM event-registration API — there is no immutable alternative.
+        let src = r#"
+            const getRequestPromise = <T>(request: IDBRequest<T>): Promise<T> => {
+                return new Promise((resolve, reject) => {
+                    request.onerror = () => {
+                        reject(request.error);
+                    };
+                    request.onsuccess = () => {
+                        resolve(request.result);
+                    };
+                });
+            };
+            const req = indexedDB.open(DB_NAME, 1);
+            req.onupgradeneeded = () => {
+                req.result.createObjectStore(ENTRIES_STORE_NAME);
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_event_handler_function_expression_and_null_deregister_6063() {
+        // A `function` expression handler and `null` (deregistration) are both
+        // event-registration forms.
+        let src = r#"
+            function wire(socket, el) {
+                socket.onmessage = function (e) { handle(e); };
+                el.onclick = null;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_function_on_prefixed_property_write_6063() {
+        // Negative space: an `on`-prefixed property assigned a non-function value
+        // is a plain state write (a config flag), not handler registration.
+        let src = r#"
+            function configure(config) {
+                config.onTimeout = 5000;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ordinary_state_mutation_6063() {
+        // Negative space: ordinary property mutations stay flagged — the
+        // exemption is scoped to the `on<event>`-handler shape.
+        let src = r#"
+            function update(obj, x) {
+                obj.count = 5;
+                obj.value = x;
+            }
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_on_prefixed_capitalized_property_write_6063() {
+        // Negative space: `on` followed by an uppercase letter (`onState`) is not
+        // the lowercase `on<event>` DOM convention — a state write, stays flagged.
+        let src = r#"
+            function set(obj, fn) {
+                obj.onState = fn;
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
