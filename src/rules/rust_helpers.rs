@@ -1842,13 +1842,18 @@ fn is_fixed_width_int(name: &str) -> bool {
 ///   recursively);
 /// - a `parenthesized_expression` wrapping any of the above (peeled, so
 ///   `(3 > 2) as u8` is covered);
-/// - a method `call_expression` whose method name follows the established
-///   bool-returning convention: an `is_`/`has_` prefix, or exactly `contains`,
-///   `starts_with`, or `ends_with` (covers `value.is_some() as u8`);
+/// - a `call_expression` proven `bool` either by the bool-returning method-name
+///   convention — an `is_`/`has_` prefix, or exactly `contains`, `starts_with`,
+///   or `ends_with` (covers `value.is_some() as u8`) — or by resolving the callee
+///   (a method, free function, or path) to a `function_item` defined in the same
+///   file whose declared return type is `bool` (covers `self.get_random_bit() as
+///   u8` where `fn get_random_bit(&self) -> bool`);
 /// - a bare `identifier` whose local binding is annotated `bool` (`b as u8`).
 ///
 /// The method-name set is a deliberately narrow heuristic; it must not be
-/// broadened, since an arbitrary method may return any integer type.
+/// broadened, since an arbitrary method may return any integer type. The
+/// same-file signature resolution is the safe generalization: a call whose
+/// callee cannot be resolved to a `-> bool` definition in the file stays flagged.
 ///
 /// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
 /// otherwise flag `bool as u8` because the operand type is not resolved from the
@@ -1888,7 +1893,7 @@ pub fn operand_is_bool(node: Node, source: &[u8]) -> bool {
                     .named_child(0)
                     .is_some_and(|operand| operand_is_bool(operand, source))
         }
-        "call_expression" => call_method_returns_bool(node, source),
+        "call_expression" => call_returns_bool(node, source),
         "identifier" => node
             .utf8_text(source)
             .ok()
@@ -1898,24 +1903,83 @@ pub fn operand_is_bool(node: Node, source: &[u8]) -> bool {
     }
 }
 
-/// True if `call` is a method call (`<receiver>.method(...)`) whose method name
-/// follows the bool-returning convention: an `is_`/`has_` prefix, or exactly
-/// `contains` / `starts_with` / `ends_with`.
-fn call_method_returns_bool(call: Node, source: &[u8]) -> bool {
+/// True if `call` is a call expression whose result is provably `bool`, by either
+/// the bool-returning method-name convention or a same-file function definition
+/// whose declared return type is `bool`.
+///
+/// The name convention recognizes a method call (`<receiver>.method(...)`) whose
+/// method name has an `is_`/`has_` prefix, or is exactly `contains` /
+/// `starts_with` / `ends_with`. When the name does not match, the callee — a
+/// method (`self.get_random_bit()`), a free function (`f()`), or a path
+/// (`module::f()`) — is resolved to a `function_item` defined in the same file
+/// whose `return_type` is `bool`.
+fn call_returns_bool(call: Node, source: &[u8]) -> bool {
     const BOOL_METHODS: &[&str] = &["contains", "starts_with", "ends_with"];
 
     let Some(function) = call.child_by_field_name("function") else {
         return false;
     };
-    if function.kind() != "field_expression" {
+    let Some(callee_name) = callee_name(function, source) else {
         return false;
+    };
+    if callee_name.starts_with("is_") || callee_name.starts_with("has_") {
+        return true;
     }
-    function
-        .child_by_field_name("field")
-        .and_then(|field| field.utf8_text(source).ok())
-        .is_some_and(|name| {
-            name.starts_with("is_") || name.starts_with("has_") || BOOL_METHODS.contains(&name)
-        })
+    if function.kind() == "field_expression" && BOOL_METHODS.contains(&callee_name) {
+        return true;
+    }
+    // No name convention matched — resolve the callee to a same-file function
+    // definition and check its declared return type. An out-of-file callee or an
+    // unresolved name yields `None`, so the cast stays conservatively flagged.
+    fn_returns_bool_in_file(call, callee_name, source)
+}
+
+/// The bare name of a call's callee: the `field` of a method call's
+/// `field_expression` (`self.get_random_bit` → `get_random_bit`), the last
+/// segment of a `scoped_identifier` path (`module::f` → `f`), or a plain
+/// `identifier` (`f` → `f`). Other callee shapes yield `None`.
+fn callee_name<'a>(function: Node, source: &'a [u8]) -> Option<&'a str> {
+    let name_node = match function.kind() {
+        "field_expression" => function.child_by_field_name("field")?,
+        "scoped_identifier" => function.child_by_field_name("name")?,
+        "identifier" => function,
+        _ => return None,
+    };
+    name_node.utf8_text(source).ok()
+}
+
+/// True if a `function_item` named `name` defined anywhere in the same file has a
+/// `return_type` of exactly `bool`. Walks to the `source_file` root and scans all
+/// descendant function items (free functions and `impl`/`trait` methods). The
+/// match is by name only — same-file resolution does not model receiver types, so
+/// a name collision across `impl` blocks would conservatively report the first
+/// `bool`-returning definition; an unresolved name keeps the cast flagged.
+fn fn_returns_bool_in_file(node: Node, name: &str, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    fn_with_name_returns_bool(root, name, source)
+}
+
+/// Recursively search `node`'s subtree for a `function_item` named `name` whose
+/// `return_type` is `bool`.
+fn fn_with_name_returns_bool(node: Node, name: &str, source: &[u8]) -> bool {
+    if node.kind() == "function_item"
+        && node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            == Some(name)
+        && node
+            .child_by_field_name("return_type")
+            .and_then(|rt| rt.utf8_text(source).ok())
+            .is_some_and(|rt| rt.trim() == "bool")
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| fn_with_name_returns_bool(child, name, source))
 }
 
 /// True when the operand of `cast` (a `type_cast_expression`) is a `char`: a
@@ -5442,6 +5506,21 @@ mod tests {
             ("fn f(s: &str) -> u8 { s.contains(\"x\") as u8 }", true),
             ("fn f(s: &str) -> u8 { s.starts_with(\"x\") as u8 }", true),
             ("fn f(s: &str) -> u8 { s.ends_with(\"x\") as u8 }", true),
+            // Method call resolved to a same-file `-> bool` definition (#5886).
+            (
+                "fn get_random_bit(&self) -> bool { true } \
+                 fn f(&self) -> u8 { self.get_random_bit() as u8 }",
+                true,
+            ),
+            // Free function call resolved to a same-file `-> bool` definition.
+            ("fn g() -> bool { true } fn f() -> u8 { g() as u8 }", true),
+            // Same-file callee returning a non-bool numeric — not bool.
+            (
+                "fn tally(&self) -> u32 { 0 } fn f(&self) -> u8 { self.tally() as u8 }",
+                false,
+            ),
+            // Callee not defined in the file — unresolved, stays flagged.
+            ("fn f(s: S) -> u8 { s.unknown() as u8 }", false),
             // Identifier whose binding is annotated bool.
             ("fn f(b: bool) -> u8 { b as u8 }", true),
             // A plain integer cast is not a bool operand.
