@@ -24,6 +24,11 @@
 //! an uninterruptible operation and defused on success via `mem::forget`,
 //! a sibling call this `Drop`-scoped walk cannot see, so the panic fires
 //! only when the operation was abandoned, where aborting is intended.
+//!
+//! A `.unwrap()` / `.expect(...)` whose receiver is proven non-empty by an
+//! enclosing `if <recv>.is_some() { … }` / `if <recv>.is_ok() { … }` guard on
+//! the same receiver is exempt: the branch body runs only when the value is
+//! `Some`/`Ok`, so the unwrap is infallible there and cannot panic.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -130,6 +135,82 @@ fn is_bare_panicking_call(expr: tree_sitter::Node, source: &[u8]) -> bool {
         _ => return false,
     };
     last_segment == "panicking"
+}
+
+/// True when `call` is an `<recv>.unwrap()` / `.expect(...)` whose receiver is
+/// proven non-empty by an enclosing `if <recv>.is_some() { … }` /
+/// `if <recv>.is_ok() { … }` guard on the *same* receiver text, walking
+/// ancestors up to `body` (the `drop` body). The call must sit in the guard's
+/// `consequence`: the `else` branch is the negated case (`None`/`Err`), where
+/// the unwrap would still panic. Matching is on the receiver's source text
+/// (`self.itr`), so a guard on a different receiver does not exempt the unwrap.
+fn is_guarded_by_some_or_ok(
+    call: tree_sitter::Node,
+    body: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Some(receiver) = unwrap_receiver(call) else {
+        return false;
+    };
+    let Ok(receiver_text) = receiver.utf8_text(source) else {
+        return false;
+    };
+    let mut cur = call;
+    while let Some(parent) = cur.parent() {
+        if parent == body {
+            return false;
+        }
+        if parent.kind() == "if_expression"
+            && let Some(consequence) = parent.child_by_field_name("consequence")
+            && consequence == cur
+            && let Some(condition) = parent.child_by_field_name("condition")
+            && condition_is_some_or_ok_on(condition, receiver_text, source)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// The receiver of an `<recv>.unwrap()` / `.expect(...)` call — the `value`
+/// field of the method's `field_expression` callee (`self.itr` in
+/// `self.itr.unwrap()`). `None` when `call` is not a method call.
+fn unwrap_receiver(call: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let func = call.child_by_field_name("function")?;
+    if func.kind() != "field_expression" {
+        return None;
+    }
+    func.child_by_field_name("value")
+}
+
+/// True when `condition` is `<recv>.is_some()` / `<recv>.is_ok()` whose receiver
+/// source text equals `receiver`. Bounded to a single method call — a compound
+/// condition (`x.is_some() && y`) is not matched, since the body then runs under
+/// a broader condition this narrow check does not model.
+fn condition_is_some_or_ok_on(
+    condition: tree_sitter::Node,
+    receiver: &str,
+    source: &[u8],
+) -> bool {
+    if condition.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = condition.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    let method_matches = func
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|name| name == "is_some" || name == "is_ok");
+    let receiver_matches = func
+        .child_by_field_name("value")
+        .and_then(|v| v.utf8_text(source).ok())
+        .is_some_and(|text| text == receiver);
+    method_matches && receiver_matches
 }
 
 /// True when the first `function_item` enclosing `node` is diverging — its
@@ -253,6 +334,7 @@ impl AstCheck for Check {
                         let name = field.utf8_text(source_bytes).unwrap_or("");
                         if (name == "unwrap" || name == "expect")
                             && !is_guarded_by_not_panicking(n, body, source_bytes)
+                            && !is_guarded_by_some_or_ok(n, body, source_bytes)
                         {
                             diagnostics.push(Diagnostic::at_node(
                                 std::sync::Arc::clone(&ctx.path_arc),
@@ -508,6 +590,55 @@ mod tests {
         // that can accidentally panic.
         let source = "struct MutexGuard; impl Drop for MutexGuard { \
                       fn drop(&mut self) { self.h.unwrap(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_unwrap_guarded_by_is_some_same_receiver() {
+        // rust-htslib src/bam/mod.rs:1033 — `self.itr.unwrap()` inside
+        // `if self.itr.is_some() { … }` is infallible there.
+        let source = "struct R; impl Drop for R { fn drop(&mut self) { unsafe { \
+                      if self.itr.is_some() { f(self.itr.unwrap()); } } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_guarded_by_is_ok_same_receiver() {
+        let source = "struct R; impl Drop for R { fn drop(&mut self) { \
+                      if self.h.is_ok() { let _ = self.h.unwrap(); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unguarded_unwrap_in_drop_still() {
+        let source = "struct R; impl Drop for R { fn drop(&mut self) { \
+                      let _ = self.itr.unwrap(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_guarded_by_is_some_on_different_receiver() {
+        // The guard checks `self.other`, not `self.itr` — `self.itr.unwrap()`
+        // can still be `None` and panic.
+        let source = "struct R; impl Drop for R { fn drop(&mut self) { \
+                      if self.other.is_some() { let _ = self.itr.unwrap(); } } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_outside_is_some_guard_block() {
+        // The `is_some` guard's body ends; the unwrap is a sibling statement
+        // after the `if`, so the guard does not reach it.
+        let source = "struct R; impl Drop for R { fn drop(&mut self) { \
+                      if self.itr.is_some() { g(); } let _ = self.itr.unwrap(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_in_else_of_is_some_guard() {
+        // The `else` branch runs when the value is `None`/`Err` — unwrap panics.
+        let source = "struct R; impl Drop for R { fn drop(&mut self) { \
+                      if self.itr.is_some() { g(); } else { let _ = self.itr.unwrap(); } } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
