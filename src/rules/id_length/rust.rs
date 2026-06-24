@@ -67,6 +67,9 @@ impl AstCheck for Check {
         if is_conventional_short_binding(node, name) {
             return;
         }
+        if is_family_root_method(node, name, source_bytes) {
+            return;
+        }
         if super::is_non_ascii_single_char(name) {
             return;
         }
@@ -184,6 +187,45 @@ fn is_fmt_param(node: tree_sitter::Node, source: &[u8]) -> bool {
     func.child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .is_some_and(|name| name == "fmt")
+}
+
+/// True when `node` is a single-char `function_item` name that is the prefix
+/// root of a coherent same-prefix method family in its `impl` block: at least
+/// two sibling `function_item`s named `<name>_…` live in the same
+/// `declaration_list`. The root entry point of a recursive-descent dispatcher
+/// (e.g. `c` alongside `c_empty`/`c_literal`/`c_repetition`, where `c` is the
+/// shared `compile` prefix) is self-explanatory through that family, so the
+/// length floor is already satisfied structurally.
+///
+/// This is a sibling-relationship property, not a name allowlist: any single
+/// char qualifies *iff* the `<char>_…` family exists, and a lone single-char
+/// method with no such siblings stays flagged.
+fn is_family_root_method(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if name.chars().count() != 1 {
+        return false;
+    }
+    let Some(func) = node.parent() else {
+        return false;
+    };
+    if func.kind() != "function_item" || !field_matches(func, "name", node) {
+        return false;
+    }
+    let Some(body) = func.parent().filter(|b| b.kind() == "declaration_list") else {
+        return false;
+    };
+    if body.parent().map(|p| p.kind()) != Some("impl_item") {
+        return false;
+    }
+    let prefix = format!("{name}_");
+    let mut cursor = body.walk();
+    let siblings = body
+        .named_children(&mut cursor)
+        .filter(|sibling| sibling.kind() == "function_item")
+        .filter_map(|sibling| sibling.child_by_field_name("name"))
+        .filter_map(|sibling_name| sibling_name.utf8_text(source).ok())
+        .filter(|sibling_name| sibling_name.starts_with(&prefix))
+        .count();
+    siblings >= 2
 }
 
 /// Single-letter names idiomatic in Rust: loop indices, counts, math
@@ -534,5 +576,60 @@ mod tests {
         let diags = run_on_path("fn r() -> u8 { 0 }", "src/app/router.rs");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("`r`"));
+    }
+
+    // Regression for #5979: the root dispatch method of a recursive-descent
+    // compiler (`c` = "compile") is exempt when it heads a coherent `c_*`
+    // sibling family in the same impl block.
+    #[test]
+    fn allows_family_root_method() {
+        let src = "impl X { fn c(&self) {} fn c_empty(&self) {} fn c_literal(&self) {} }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Load-bearing: a lone single-char method with no `<char>_*` siblings is
+    // still flagged — the exemption requires the structural family.
+    #[test]
+    fn flags_lone_single_char_method() {
+        let diags = run_on("impl X { fn c(&self) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`c`"));
+    }
+
+    // Load-bearing: a single same-prefix sibling is not a family (needs >= 2).
+    #[test]
+    fn flags_single_char_method_with_one_sibling() {
+        let diags = run_on("impl X { fn c(&self) {} fn c_empty(&self) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`c`"));
+    }
+
+    // Load-bearing: the gate is structural, not a `c` allowlist — any single
+    // char heading a `<char>_*` family qualifies.
+    #[test]
+    fn allows_family_root_method_other_letter() {
+        let src = "impl X { fn z(&self) {} fn z_first(&self) {} fn z_second(&self) {} }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Load-bearing: a free single-char function with `<char>_*` siblings at the
+    // file top level (not an impl block) is still flagged — the family must be
+    // sibling methods in one `impl`.
+    #[test]
+    fn flags_free_single_char_fn_with_top_level_family() {
+        let src = "fn c() {} fn c_empty() {} fn c_literal() {}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`c`"));
+    }
+
+    // Load-bearing: a `<char>_*` family inside a plain `mod` (not an `impl`) is
+    // still flagged — the gate targets impl-block method families only.
+    #[test]
+    fn flags_single_char_fn_with_mod_level_family() {
+        let src = "mod m { fn c() {} fn c_empty() {} fn c_literal() {} }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`c`"));
     }
 }
