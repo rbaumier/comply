@@ -118,6 +118,15 @@ pub struct PackageJson {
     /// `scripts` field (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
     /// Stored with forward slashes and without a leading `./`.
     pub script_entry_files: Vec<String>,
+    /// Manifest-dir-relative path tokens this manifest references as a CLI tool's
+    /// config file — consumed by the tool by path, never `import`-ed by a module:
+    /// the `.ts`/`.mjs`/… tokens in every `scripts` command, the path entries in
+    /// `eslintConfig.extends`, and the path tokens in every `lint-staged` command.
+    /// A leading `./` is stripped but `../` segments are preserved, so a monorepo
+    /// package's `"build": "rollup -c ../../scripts/rollup/config.mjs"` keeps the
+    /// hop back to the shared config; resolution against the declaring manifest's
+    /// directory happens at the call site.
+    pub config_referenced_files: Vec<String>,
     /// Test-runner binaries invoked as a command by any `scripts` entry
     /// (e.g. `vitest` from `"test": "vitest run"`). A dependency listed in
     /// `devDependencies` alone does not appear here — only binaries actually
@@ -230,6 +239,7 @@ impl PackageJson {
                         .collect()
                 })
                 .unwrap_or_default(),
+            config_referenced_files: collect_config_referenced_files(&json),
             script_test_runners: json
                 .get("scripts")
                 .and_then(|node| node.as_object())
@@ -489,6 +499,77 @@ fn extract_script_entry_files(cmd: &str) -> Vec<String> {
         .filter(|token| SOURCE_EXTS.iter().any(|ext| token.ends_with(ext)))
         .map(|token| token.strip_prefix("./").unwrap_or(token).to_string())
         .collect()
+}
+
+/// Source extensions a CLI tool's config file carries when referenced by path.
+const CONFIG_REFERENCE_EXTS: &[&str] = &[".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
+
+/// True when `token` looks like a manifest-relative path to a source-extension
+/// config file (it ends in a known extension and is not an npm package
+/// specifier). A bare `eslint:recommended` / `prettier` extends entry, or a
+/// `@scope/preset` package name, is not a path and is dropped — only an explicit
+/// relative/absolute path (`./scripts/eslint/preset.js`, `../shared/config.mjs`)
+/// names a file in the repo.
+fn is_config_reference_token(token: &str) -> bool {
+    if !CONFIG_REFERENCE_EXTS.iter().any(|ext| token.ends_with(ext)) {
+        return false;
+    }
+    token.starts_with("./") || token.starts_with("../") || token.starts_with('/')
+}
+
+/// Normalize a config-reference path token to the form stored in
+/// `config_referenced_files`: strip a single leading `./`, keep `../` hops and
+/// the rest verbatim. Resolution against the declaring manifest's directory is
+/// the caller's job.
+fn normalize_config_reference(token: &str) -> String {
+    token.strip_prefix("./").unwrap_or(token).to_string()
+}
+
+/// Collect every manifest-relative path token a CLI tool consumes by path rather
+/// than through a module `import`: the source-extension tokens of each `scripts`
+/// command, the path entries of `eslintConfig.extends`, and the path tokens of
+/// each `lint-staged` command. Each is a config file a build/lint tool loads by
+/// path (`rollup -c …/config.mjs`, `extends: ["./preset.js"]`,
+/// `"*.ts": "eslint -c …/preset.js --fix"`), so its exports have no in-repo
+/// importer yet are live. Package-name `extends` entries (`eslint:recommended`,
+/// `@scope/preset`) are not paths and are dropped.
+fn collect_config_referenced_files(json: &serde_json::Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+
+    let from_commands = |key: &str| -> Vec<String> {
+        json.get(key)
+            .and_then(|node| node.as_object())
+            .map(|obj| {
+                obj.values()
+                    .filter_map(|v| v.as_str())
+                    .flat_map(|cmd| cmd.split_whitespace())
+                    .filter(|token| is_config_reference_token(token))
+                    .map(normalize_config_reference)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    out.extend(from_commands("scripts"));
+    out.extend(from_commands("lint-staged"));
+
+    // `eslintConfig.extends`: a single string or an array of strings, each a
+    // path or a package specifier. Keep only the path entries.
+    if let Some(extends) = json.get("eslintConfig").and_then(|c| c.get("extends")) {
+        let entries: Vec<&str> = match extends {
+            serde_json::Value::String(s) => vec![s.as_str()],
+            serde_json::Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect(),
+            _ => Vec::new(),
+        };
+        out.extend(
+            entries
+                .into_iter()
+                .filter(|token| is_config_reference_token(token))
+                .map(normalize_config_reference),
+        );
+    }
+
+    out
 }
 
 /// Test-runner binaries (`vitest`, `jest`) invoked as a command by a script.
@@ -3575,6 +3656,36 @@ impl ProjectCtx {
         pkg.script_entry_files
             .iter()
             .any(|entry| manifest_dir.join(entry) == path)
+    }
+
+    /// True when `path` is a CLI tool's config file referenced by path from a
+    /// `package.json` — a build/lint tool loads it by path (`rollup -c
+    /// scripts/rollup/config.mjs`, `eslintConfig.extends: ["./preset.js"]`,
+    /// `lint-staged`'s `"eslint -c scripts/eslint/preset.js"`), never through a
+    /// module `import`, so its exports have no in-repo importer yet are live.
+    ///
+    /// Unlike [`is_script_entry_file`], which consults only the file's *nearest*
+    /// manifest, this scans the root manifest and every workspace-root manifest:
+    /// in a monorepo a shared config is referenced from sibling packages by a
+    /// `../../scripts/…` path, so the referencing manifest is not an ancestor of
+    /// the config file. Each manifest's stored tokens are resolved against that
+    /// manifest's directory and lexically normalized (collapsing the `../` hops)
+    /// before comparing to `path`. `path` must be absolute.
+    ///
+    /// [`is_script_entry_file`]: ProjectCtx::is_script_entry_file
+    pub fn is_config_referenced_entry_file(&self, path: &Path) -> bool {
+        let target = lexical_normalize(path);
+        self.project_root
+            .iter()
+            .chain(self.workspace_roots.iter())
+            .filter_map(|dir| {
+                load_manifest_at(dir, "package.json", PackageJson::parse).map(|pkg| (dir, pkg))
+            })
+            .any(|(dir, pkg)| {
+                pkg.config_referenced_files
+                    .iter()
+                    .any(|entry| lexical_normalize(&dir.join(entry)) == target)
+            })
     }
 
     /// True when `path` lives in a subdirectory that houses a `package.json`

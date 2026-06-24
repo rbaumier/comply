@@ -639,4 +639,95 @@ mod tests {
             "a party/ class extending an unrelated *.Server must still be flagged, got: {diags:?}"
         );
     }
+
+    // Regression for #6081 (urql-graphql/urql) — an ESLint shareable-config file
+    // referenced by path from `package.json#eslintConfig.extends` is loaded by
+    // ESLint's config system by path, never through a module `import`, so its
+    // named exports (`parser`, `parserOptions`, `extends`, …) have no in-repo
+    // importer yet are live. The whole file is a config entry point.
+    #[test]
+    fn no_fp_for_eslint_preset_referenced_via_eslint_config_extends_issue_6081() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{ "name": "app", "eslintConfig": { "root": true, "extends": ["./scripts/eslint/preset.js"] } }"#,
+            ),
+            (
+                "scripts/eslint/preset.js",
+                "module.exports = {\n\
+                   parser: '@typescript-eslint/parser',\n\
+                   parserOptions: { project: true },\n\
+                   ignorePatterns: ['dist/'],\n\
+                   extends: ['eslint:recommended'],\n\
+                 };\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "scripts/eslint/preset.js");
+        assert!(
+            diags.is_empty(),
+            "an eslint preset referenced via eslintConfig.extends must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    // Regression for #6081 — a shared Rollup config referenced from a sibling
+    // workspace package's build script by a `../../scripts/…` path. The
+    // referencing manifest is not an ancestor of the config file, so recognition
+    // must scan workspace-root manifests, not just the file's nearest one. Rollup
+    // loads the config by path (`rollup -c …/config.mjs`), never through an
+    // import, so its `export default` is live.
+    #[test]
+    fn no_fp_for_shared_rollup_config_referenced_from_sibling_package_issue_6081() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{ "name": "monorepo", "private": true, "workspaces": ["packages/*"] }"#,
+            ),
+            (
+                "packages/core/package.json",
+                r#"{ "name": "@app/core", "scripts": { "build": "rollup -c ../../scripts/rollup/config.mjs" } }"#,
+            ),
+            (
+                "packages/core/src/index.ts",
+                "export const core = 1;\n",
+            ),
+            (
+                "scripts/rollup/config.mjs",
+                "export default [\n  { input: 'src/index.ts', output: { file: 'dist/index.js' } },\n];\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "scripts/rollup/config.mjs");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("default")),
+            "a shared rollup config referenced from a sibling package must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #6081 — a genuinely-unused internal export in an
+    // ordinary module of a project that DOES reference config files by path must
+    // still be flagged. The exemption is scoped to the referenced config files,
+    // not the whole project.
+    #[test]
+    fn still_flags_dead_export_in_ordinary_module_with_config_references_issue_6081() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{ "name": "app", "eslintConfig": { "extends": ["./scripts/eslint/preset.js"] } }"#,
+            ),
+            (
+                "scripts/eslint/preset.js",
+                "module.exports = { parser: 'x' };\n",
+            ),
+            (
+                "src/orphan.ts",
+                "export function deadHelper() {}\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/orphan.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("deadHelper")),
+            "a dead export in an ordinary module must still be flagged, got: {diags:?}"
+        );
+    }
 }
