@@ -411,6 +411,18 @@ fn is_bundled_artifact(head: &str) -> bool {
     {
         return true;
     }
+    // wasm-bindgen ESM glue (`*_bg.js`) opens by binding the compiled binary to a
+    // `wasm` namespace: `import * as wasm from './<name>_bg.wasm';`. In the older
+    // module style (free helper functions, no class wrappers), the `__wbindgen_`
+    // runtime exports sit past the scanned head and there is no `__wbg_ptr`, so
+    // this opening import is the only marker near the top. A namespace import of a
+    // `.wasm` binary module is itself the codegen signature — no hand-written file
+    // wildcard-imports a WebAssembly artifact into a bare `wasm` binding.
+    if head.contains("import * as wasm from")
+        && (head.contains(".wasm'") || head.contains(".wasm\""))
+    {
+        return true;
+    }
     // Generic UMD wrapper (Rollup/Browserify and hand-rolled bundlers): the
     // CommonJS, AMD, and global-assignment branches co-occur in the wrapper
     // head. Requiring all three markers — not just one — keeps a file that
@@ -1636,6 +1648,39 @@ mod tests {
         // `prefer-immediate-return` skip its `const ret = wasm.fn(); return ret;`.
         let src = "export class Foo {\n    static __wrap(ptr) {\n        const obj = Object.create(Foo.prototype);\n        obj.__wbg_ptr = ptr;\n        return obj;\n    }\n}\nexport function echo_f32(a) {\n    const ret = wasm.echo_f32(a);\n    return ret;\n}\n";
         assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn wasm_bindgen_esm_glue_is_generated_issue6034() {
+        // Issue #6034: wasm-pack's `*_bg.js` ESM glue (older module style: free
+        // `getStringFromWasm0`/`addHeapObject`/`takeObject` helpers, no class
+        // wrappers) opens with `import * as wasm from './<name>_bg.wasm';`. Its
+        // `__wbindgen_` exports sit past the scanned head and it has no
+        // `__wbg_ptr`, so the opening namespace import is the marker — without it
+        // the codegen `ptr`/`idx`/`obj`/`ret` names get flagged by
+        // `no-generic-names`.
+        let src = "import * as wasm from './playground_bg.wasm';\n\nfunction getStringFromWasm0(ptr, len) {\n    return cachedTextDecoder.decode(getUint8Memory0().subarray(ptr, ptr + len));\n}\nfunction addHeapObject(obj) {\n    const idx = heap_next;\n    heap[idx] = obj;\n    return idx;\n}\n";
+        assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn handwritten_generic_names_without_wasm_import_stay_linted_issue6034() {
+        // Strong positive: a hand-written module using the same generic names
+        // (`ptr`/`obj`/`idx`/`ret`) but with no wasm-bindgen import marker is NOT
+        // generated, so `no-generic-names` still flags those identifiers.
+        assert!(!is_generated_content(
+            "function getObject(idx) { return heap[idx]; }\nfunction store(obj) { const ptr = alloc(); const ret = obj; return ret; }\n"
+        ));
+    }
+
+    #[test]
+    fn handwritten_wasm_fetch_loader_is_not_generated_issue6034() {
+        // Guard: a hand-written loader that fetches a `.wasm` URL but does not
+        // wildcard-import it into a bare `wasm` binding lacks the codegen signature
+        // and stays linted.
+        assert!(!is_generated_content(
+            "const url = new URL('./module.wasm', import.meta.url);\nexport async function load() { return WebAssembly.instantiateStreaming(fetch(url)); }\n"
+        ));
     }
 
     #[test]
