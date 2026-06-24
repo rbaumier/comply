@@ -25,10 +25,17 @@ fn is_iso_date(value: &str) -> bool {
         && bytes[8..10].iter().all(u8::is_ascii_digit)
 }
 
-/// A flaggable string operand: a string literal that is not an ISO date.
+/// A flaggable string operand: a string literal that is neither an ISO date
+/// nor a single character.
+///
+/// A single-character literal makes the relational comparison a character-range
+/// test (`c >= '0' && c <= '9'`), where lexicographic order equals codepoint
+/// order and is exactly the intent — the standard hand-written-parser idiom.
 fn is_flaggable_string_literal(expr: &Expression) -> bool {
     match expr {
-        Expression::StringLiteral(lit) => !is_iso_date(&lit.value),
+        Expression::StringLiteral(lit) => {
+            !is_iso_date(&lit.value) && lit.value.chars().count() != 1
+        }
         _ => false,
     }
 }
@@ -116,6 +123,31 @@ mod tests {
     #[test]
     fn allows_both_iso_dates() {
         assert!(run_on(r#"if ("2020-12-06" < "2026-04-06") {}"#).is_empty());
+    }
+
+    #[test]
+    fn allows_single_char_digit_range() {
+        assert!(run_on(r#"function f(c) { return c >= '0' && c <= '9'; }"#).is_empty());
+    }
+
+    #[test]
+    fn allows_single_char_lower_alpha_range() {
+        assert!(run_on(r#"function f(c) { return c >= 'a' && c <= 'z'; }"#).is_empty());
+    }
+
+    #[test]
+    fn flags_multi_char_version_comparison() {
+        assert_eq!(run_on(r#"if (version >= "1.2.0") {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_multi_char_word_comparison() {
+        assert_eq!(run_on(r#"if (name >= "abc") {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_string_comparison() {
+        assert_eq!(run_on(r#"if (s > "") {}"#).len(), 1);
     }
 
     #[test]
