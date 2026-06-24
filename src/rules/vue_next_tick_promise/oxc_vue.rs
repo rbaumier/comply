@@ -58,7 +58,15 @@ mod tests {
 
     #[test]
     fn flags_this_next_tick_callback_in_script() {
-        let src = "<script>\nexport default {\n  mounted() {\n    this.$nextTick(() => {\n      updateDom();\n    });\n  },\n};\n</script>";
+        let src = "<script>\nexport default {\n  async mounted() {\n    this.$nextTick(() => {\n      updateDom();\n    });\n  },\n};\n</script>";
         assert_eq!(run(src).len(), 1);
+    }
+
+    /// `nextTick(cb)` inside a non-`async` method (`setup` here) must not fire —
+    /// `await` is unavailable, mirroring the `.ts` composable FP (#4697).
+    #[test]
+    fn allows_callback_in_sync_method_in_script() {
+        let src = "<script>\nimport { nextTick } from \"vue\";\nexport default {\n  setup() {\n    nextTick(() => {\n      updateDom();\n    });\n  },\n};\n</script>";
+        assert!(run(src).is_empty());
     }
 }
