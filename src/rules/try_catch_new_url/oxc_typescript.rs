@@ -93,9 +93,7 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
     };
     match arg {
         Expression::StringLiteral(_) => true,
-        Expression::TemplateLiteral(tpl) => {
-            tpl.expressions.iter().all(expr_roots_in_trusted_config)
-        }
+        Expression::TemplateLiteral(tpl) => template_origin_is_trusted(tpl),
         // A WHATWG `Request`'s `.url` getter always returns a well-formed
         // absolute URL, so `new URL(request.url)` cannot throw. Covers
         // `request.url`, `req.url`, and `event.request.url`.
@@ -224,6 +222,104 @@ fn receiver_is_request_call(call: &oxc_ast::ast::CallExpression) -> bool {
         return false;
     };
     member.property.name == "request"
+}
+
+/// True when the *origin* of a single-arg `new URL(template)` is
+/// author-controlled, even if a later path/query/fragment segment interpolates
+/// an untrusted value.
+///
+/// A single-arg `new URL(s)` throws unless `s` is a valid **absolute** URL — it
+/// needs a scheme (`https:`, `file:`, …); a scheme-less string (`/api/x`,
+/// `//cdn/x`, `?q=v`, ``) throws. So merely "reaching a `/`" proves nothing: the
+/// template must establish a real scheme. Once the origin (scheme + authority)
+/// is a valid absolute origin, whatever is appended in the path/query/fragment
+/// cannot make the constructor throw.
+///
+/// Two ways a template fixes a trusted absolute origin:
+///
+/// * **config-rooted origin** — the template starts with an interpolation (its
+///   first quasi is empty) that roots in trusted config, so the env-validated
+///   value supplies the whole `scheme://authority`
+///   (`${config.client.VITE_BASE_URL}/api/v1/${path}` — origin is the config
+///   value, `${path}` is in the path), or
+/// * **literal scheme** — the first quasi spells out a `scheme://` prefix
+///   (`https://api.example.com/${id}` — origin is literal, `${id}` is in the
+///   path).
+///
+/// In both cases, any interpolation reached *inside the authority* (before the
+/// path `/`) must itself root in trusted config, or the origin is untrusted and
+/// the template still flags. Interpolations after the path `/` are ignored.
+///
+/// Authority-less schemes (`mailto:`, `data:`, `tel:`) are intentionally not
+/// whitelisted: they have no `://`, so they match neither branch and keep
+/// flagging. That is the conservative direction — flagging a URL that would not
+/// throw — and these shapes do not occur in the HTTP-endpoint use case this rule
+/// targets. Widen only on a documented need.
+fn template_origin_is_trusted(tpl: &oxc_ast::ast::TemplateLiteral) -> bool {
+    let Some(first_quasi) = tpl.quasis.first() else {
+        return false;
+    };
+    let first_text = first_quasi.value.raw.as_str();
+
+    // The origin must be anchored to a real scheme. Either the leading quasi
+    // spells out a literal `scheme://`, or the template opens with a
+    // config-rooted interpolation that *is* the origin. A leading quasi that is
+    // neither (a scheme-less path, query, fragment, or relative segment) means
+    // `new URL` can throw — keep flagging.
+    let scheme_prefix = leading_scheme_authority_prefix(first_text);
+    let first_text_after_scheme = match scheme_prefix {
+        Some(rest) => rest,
+        None => {
+            let opens_with_trusted_origin = first_text.trim().is_empty()
+                && tpl
+                    .expressions
+                    .first()
+                    .is_some_and(expr_roots_in_trusted_config);
+            if !opens_with_trusted_origin {
+                return false;
+            }
+            // The config interpolation supplies scheme + authority; the first
+            // quasi is empty, so the authority continues into later quasis.
+            first_text
+        }
+    };
+
+    // Origin scheme is established. Walk the authority quasi-by-quasi until the
+    // path begins; every interpolation reached before then is still part of the
+    // authority and must root in trusted config too. The scheme's `//` has been
+    // stripped from the first quasi, so any remaining `/` begins the path.
+    for (index, quasi) in tpl.quasis.iter().enumerate() {
+        let text = if index == 0 { first_text_after_scheme } else { quasi.value.raw.as_str() };
+        if text.contains('/') {
+            return true;
+        }
+        let Some(expr) = tpl.expressions.get(index) else {
+            // Final quasi, no further interpolation: the authority was built
+            // entirely from the trusted scheme/config parts checked above.
+            return true;
+        };
+        if !expr_roots_in_trusted_config(expr) {
+            return false;
+        }
+    }
+    true
+}
+
+/// If `quasi` opens with a literal `scheme://` authority separator, return the
+/// remainder after it (so its slashes are not mistaken for the path separator);
+/// otherwise `None`. Matches a leading `<scheme>://` where `<scheme>` is a
+/// non-empty run of scheme characters per RFC 3986
+/// (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`).
+///
+/// Example: `"https://api.example.com/v1/"` → `Some("api.example.com/v1/")`.
+/// A scheme-less `"//cdn/x"` or `"/api/x"` returns `None` — those throw in a
+/// single-arg `new URL`, so the template stays untrusted.
+fn leading_scheme_authority_prefix(quasi: &str) -> Option<&str> {
+    let (scheme, rest) = quasi.split_once("://")?;
+    let mut chars = scheme.chars();
+    let first_ok = chars.next().is_some_and(|c| c.is_ascii_alphabetic());
+    let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    (first_ok && rest_ok).then_some(rest)
 }
 
 /// True when `expr` is a (possibly nested) member access rooted at an
@@ -413,6 +509,98 @@ mod tests {
     fn still_flags_template_with_untrusted_interpolation() {
         let src = r#"const u = new URL(`${req.query.target}/x`);"#;
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Regression for #285 (reopened): the live FP at use-export-csv.ts — a
+    // template whose origin is the env-validated config value, followed by an
+    // untrusted path-segment interpolation. `new URL` only throws on a bad
+    // origin; once the origin is valid, the trailing `${path}` lives in the path
+    // and cannot throw, so this must not flag.
+    #[test]
+    fn allows_template_with_trusted_origin_and_untrusted_path() {
+        let src = r#"const url = new URL(`${config.client.VITE_BASE_URL}/api/v1/${path}`);"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A literal absolute origin with an untrusted path interpolation is equally
+    // safe — the origin is fixed, the `${id}` is in the path.
+    #[test]
+    fn allows_template_with_literal_origin_and_untrusted_path() {
+        let src = r#"const u = new URL(`https://api.example.com/users/${id}`);"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // An untrusted interpolation *in the authority* (before the path) still
+    // controls the origin, so the constructor can throw — this must keep flagging.
+    #[test]
+    fn still_flags_template_with_untrusted_origin_interpolation() {
+        let src = r#"const u = new URL(`https://${userHost}/path`);"#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // A config interpolation in the *authority* (after a literal scheme, before
+    // the path) is trusted — the origin is fully author-controlled.
+    #[test]
+    fn allows_template_with_scheme_and_config_authority() {
+        let src = r#"const u = new URL(`https://${config.API_HOST}/path`);"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A scheme-less template throws in a single-arg `new URL` — reaching a `/`
+    // does not make it an absolute URL. Must keep flagging even when the only
+    // interpolation is a harmless path segment.
+    #[test]
+    fn still_flags_scheme_less_path_template() {
+        let src = r#"const u = new URL(`/api/v1/${path}`);"#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // A protocol-relative template (`//host/...`) has no scheme, so a single-arg
+    // `new URL` throws — both the literal-host and interpolated-host shapes flag.
+    #[test]
+    fn still_flags_protocol_relative_template() {
+        assert_eq!(run_on(r#"const u = new URL(`//cdn.example.com/${path}`);"#).len(), 1);
+        assert_eq!(run_on(r#"const u = new URL(`//${userHost}/path`);"#).len(), 1);
+    }
+
+    // A query/fragment-only template has no origin, so `new URL` throws even when
+    // the interpolation roots in config — the config value is not the origin.
+    #[test]
+    fn still_flags_query_only_template_with_trusted_interpolation() {
+        assert_eq!(run_on(r#"const u = new URL(`?q=${config.term}`);"#).len(), 1);
+        assert_eq!(run_on(r#"const u = new URL(`#${config.frag}`);"#).len(), 1);
+    }
+
+    // An empty template (`new URL(``)`) throws; nothing establishes an origin.
+    #[test]
+    fn still_flags_empty_template() {
+        assert_eq!(run_on(r#"const u = new URL(``);"#).len(), 1);
+    }
+
+    // A config-rooted origin followed by an untrusted interpolation *still in the
+    // authority* (no path `/` yet) is untrusted — the injected value controls the
+    // host, so the constructor can throw.
+    #[test]
+    fn still_flags_untrusted_authority_after_config_origin() {
+        let src = r#"const u = new URL(`${config.BASE}${userInjected}/path`);"#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // An untrusted interpolation in the userinfo or port of the authority (before
+    // the path) controls the origin, so a malformed value can throw — keep
+    // flagging both shapes.
+    #[test]
+    fn still_flags_untrusted_userinfo_or_port_in_authority() {
+        assert_eq!(run_on(r#"const u = new URL(`https://${user}@host/x`);"#).len(), 1);
+        assert_eq!(run_on(r#"const u = new URL(`https://host:${port}/x`);"#).len(), 1);
+    }
+
+    // A literal scheme followed by a config-rooted authority is trusted: scheme,
+    // host, and path are all author-controlled.
+    #[test]
+    fn allows_literal_scheme_with_config_authority_and_path() {
+        let src = r#"const u = new URL(`https://${config.API_HOST}/api/${segment}`);"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 
     #[test]
