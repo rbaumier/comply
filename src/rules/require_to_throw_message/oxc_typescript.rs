@@ -3,17 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
-use oxc_span::Span;
+use crate::rules::test_validation_rejection::is_validation_rejection_subject;
+use oxc_ast::ast::Expression;
 use std::sync::Arc;
-
-/// Schema-validation methods whose rejection is the test contract: a bare
-/// `.toThrow()` on `expect(() => schema.parse(x))` asserts "invalid input is
-/// rejected", and pinning the exact message is brittle across library
-/// versions. Covers zod/valibot (`parse`/`parseAsync`), yup
-/// (`validate`/`validateSync`/`cast`), and joi (`validate`/`attempt`).
-const VALIDATION_METHODS: &[&str] =
-    &["parse", "parseAsync", "validate", "validateSync", "cast", "attempt"];
 
 pub struct Check;
 
@@ -69,59 +61,6 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
-    }
-}
-
-/// Returns true when the `.toThrow()` receiver is an `expect(...)` call (the
-/// `expect(...)` may be wrapped in member chains like `.rejects`/`.resolves`)
-/// whose first argument is a callback invoking a schema-validation method.
-fn is_validation_rejection_subject<'a>(
-    object: &Expression<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    let mut current = object;
-    let expect_call = loop {
-        match current {
-            Expression::StaticMemberExpression(member) => current = &member.object,
-            Expression::CallExpression(call) => break call,
-            _ => return false,
-        }
-    };
-    let Expression::Identifier(callee) = &expect_call.callee else { return false };
-    if callee.name.as_str() != "expect" {
-        return false;
-    }
-
-    let callback_span = match expect_call.arguments.first() {
-        Some(Argument::ArrowFunctionExpression(arrow)) => arrow.span,
-        Some(Argument::FunctionExpression(func)) => func.span,
-        _ => return false,
-    };
-
-    semantic.nodes().iter().any(|node| {
-        let AstKind::CallExpression(inner) = node.kind() else { return false };
-        if !contains_span(callback_span, inner.span) {
-            return false;
-        }
-        callee_property_name(&inner.callee)
-            .is_some_and(|name| VALIDATION_METHODS.contains(&name))
-    })
-}
-
-fn contains_span(outer: Span, inner: Span) -> bool {
-    outer.start <= inner.start && inner.end <= outer.end
-}
-
-/// Property name of a member-expression callee (`x.parse(...)` or
-/// `x["parse"](...)`); `None` for non-member callees.
-fn callee_property_name<'a>(callee: &'a Expression<'a>) -> Option<&'a str> {
-    match callee {
-        Expression::StaticMemberExpression(member) => Some(member.property.name.as_str()),
-        Expression::ComputedMemberExpression(member) => match &member.expression {
-            Expression::StringLiteral(lit) => Some(lit.value.as_str()),
-            _ => None,
-        },
-        _ => None,
     }
 }
 
