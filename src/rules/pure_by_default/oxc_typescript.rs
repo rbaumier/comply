@@ -20,7 +20,7 @@ use oxc_ast::ast::{
     AssignmentOperator, AssignmentTarget, Expression, Statement,
     VariableDeclarationKind,
 };
-use oxc_semantic::NodeId;
+use oxc_semantic::{NodeId, ReferenceFlags};
 use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -59,6 +59,9 @@ impl OxcCheck for Check {
                 continue;
             }
             if is_effectively_const_binding(scoping, symbol_id) {
+                continue;
+            }
+            if is_write_once_lazy_init(nodes, scoping, symbol_id) {
                 continue;
             }
             let var_name = scoping.symbol_name(symbol_id).to_string();
@@ -235,6 +238,68 @@ fn is_effectively_const_binding(
     symbol_id: oxc_semantic::SymbolId,
 ) -> bool {
     !scoping.symbol_is_mutated(symbol_id)
+}
+
+/// True if the binding is a write-once lazy-init cache: it starts unset (no
+/// initializer or `= undefined`) and every write to it is a `??=` nullish
+/// assignment. The value is set exactly once on first access and never changes
+/// thereafter, so a function reading or seeding it returns the same value on
+/// every call and is idempotent. Any plain `=`/compound write would mutate the
+/// value past the first set, so it disqualifies the binding and keeps it flagged.
+fn is_write_once_lazy_init(
+    nodes: &oxc_semantic::AstNodes,
+    scoping: &oxc_semantic::Scoping,
+    symbol_id: oxc_semantic::SymbolId,
+) -> bool {
+    if !declaration_starts_unset(nodes, scoping.symbol_declaration(symbol_id)) {
+        return false;
+    }
+    let mut saw_write = false;
+    for reference in scoping.get_resolved_references(symbol_id) {
+        if !reference.flags().contains(ReferenceFlags::Write) {
+            continue;
+        }
+        saw_write = true;
+        if !write_is_nullish_assignment(nodes, reference.node_id()) {
+            return false;
+        }
+    }
+    saw_write
+}
+
+/// True if the binding's declarator has no initializer or initialises to
+/// `undefined`, i.e. it starts in the unset state a lazy cache fills on first use.
+fn declaration_starts_unset(
+    nodes: &oxc_semantic::AstNodes,
+    decl_id: NodeId,
+) -> bool {
+    for kind in
+        std::iter::once(nodes.kind(decl_id)).chain(nodes.ancestor_kinds(decl_id))
+    {
+        if let AstKind::VariableDeclarator(declarator) = kind {
+            return match &declarator.init {
+                None => true,
+                Some(Expression::Identifier(ident)) => {
+                    ident.name.as_str() == "undefined"
+                }
+                Some(_) => false,
+            };
+        }
+    }
+    false
+}
+
+/// True when the write at `ref_node_id` is the left target of a `??=`
+/// (nullish-coalescing) assignment.
+fn write_is_nullish_assignment(
+    nodes: &oxc_semantic::AstNodes,
+    ref_node_id: NodeId,
+) -> bool {
+    matches!(
+        nodes.ancestor_kinds(ref_node_id).next(),
+        Some(AstKind::AssignmentExpression(assign))
+            if assign.operator == AssignmentOperator::LogicalNullish
+    )
 }
 
 /// True if the symbol's declaration sits inside a `let` or `var`
@@ -708,6 +773,75 @@ export function getTicks(): number {
 }
 "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #4723 — write-once lazy-init memoization via `??=`. The
+    // module-level `let` starts unset and is seeded exactly once on first call
+    // through nullish-assign, so the function returns the same value every time
+    // and is idempotent. It must not be flagged.
+    #[test]
+    fn no_fp_on_nullish_lazy_init_inline() {
+        let src = r#"
+let availableParallelism: number | undefined;
+function getAvailableParallelism() {
+    return (availableParallelism ??= Math.max(1, os.availableParallelism()));
+}
+"#;
+        assert!(
+            run(src).is_empty(),
+            "write-once `??=` lazy-init must not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_nullish_lazy_init_two_statements() {
+        // The two-statement form: `cache ??= compute(); return cache;`.
+        let src = r#"
+let cachedEnv: string | undefined;
+function readEnvFileCached() {
+    cachedEnv ??= readEnvFile();
+    return cachedEnv;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_let_reassigned_with_plain_assign_alongside_nullish() {
+        // A binding written once via `??=` but also reassigned with a plain `=`
+        // elsewhere is genuinely mutable, not a write-once cache, so the
+        // reader stays flagged.
+        let src = r#"
+let cache: number | undefined;
+function read() {
+    cache ??= compute();
+    return cache;
+}
+function reset() {
+    cache = 0;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 2);
+        assert!(d.iter().any(|x| x.message.contains("read")));
+        assert!(d.iter().any(|x| x.message.contains("reset")));
+    }
+
+    #[test]
+    fn flags_let_with_initializer_even_if_only_nullish_written() {
+        // A binding that starts with a concrete value is not the unset-then-
+        // seed lazy-init shape; mutating it past that initial value is genuine
+        // shared state, so the reader stays flagged.
+        let src = r#"
+let counter = 0;
+function bump() {
+    counter ??= 1;
+    return counter += 1;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("bump"));
     }
 
     #[test]
