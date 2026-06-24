@@ -156,6 +156,35 @@ fn is_boolean_annotation(annotation: &TSTypeAnnotation) -> bool {
     matches!(&annotation.type_annotation, TSType::TSBooleanKeyword(_))
 }
 
+/// True when a union member is boolean-ish: the `boolean` keyword, a `true` /
+/// `false` literal, or the nullish keywords `undefined` / `null`. A union built
+/// only from these reads as a boolean (`boolean | undefined` is still a
+/// predicate), so it keeps requiring a predicate prefix. Any other member — a
+/// `string`, a `number`, a type reference (`AstObject`), a string literal — makes
+/// the union a value-or-sentinel type rather than a boolean.
+fn is_boolean_ish_member(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSBooleanKeyword(_)
+        | TSType::TSUndefinedKeyword(_)
+        | TSType::TSNullKeyword(_) => true,
+        TSType::TSLiteralType(lit) => matches!(&lit.literal, TSLiteral::BooleanLiteral(_)),
+        _ => false,
+    }
+}
+
+/// True when a type annotation is a `TSUnionType` carrying a non-boolean member
+/// (`string | false`, `AstObject | false`, `number | false`). Such a variable
+/// holds string/object/number content OR a `false` sentinel — it is an
+/// optional-value pattern, not a boolean predicate, so the `is*` prefix
+/// convention does not apply. A pure-boolean union (`boolean | undefined`) is not
+/// matched and still flags.
+fn is_non_boolean_union_annotation(annotation: &TSTypeAnnotation) -> bool {
+    match &annotation.type_annotation {
+        TSType::TSUnionType(union) => union.types.iter().any(|m| !is_boolean_ish_member(m)),
+        _ => false,
+    }
+}
+
 /// True when a `boolean` parameter is an opt-in configuration flag: it is
 /// optional (`colored?: boolean`) or carries a default value
 /// (`partial: boolean = false`). An omittable boolean parameter is structurally
@@ -302,6 +331,19 @@ impl OxcCheck for Check {
                     return;
                 };
                 let name = id.name.as_str();
+
+                // A `string | false` / `AstObject | false` union annotation marks
+                // a value-or-sentinel variable (it holds content OR the `false`
+                // sentinel), not a boolean predicate; the `= false` initializer is
+                // the sentinel, not a boolean. A pure-boolean union
+                // (`boolean | undefined`) is not matched and still flags.
+                if decl
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| is_non_boolean_union_annotation(ann))
+                {
+                    return;
+                }
 
                 // Check for `: boolean` annotation
                 let has_annotation = decl
@@ -810,5 +852,31 @@ mod tests {
         assert_eq!(run("function f(verbose: boolean) { if (verbose) {} }").len(), 1);
         // An arrow function is a runtime binding site too.
         assert_eq!(run("const f = (verbose: boolean) => { if (verbose) {} };").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_non_boolean_union_sentinel_variable() {
+        // A `string | false` / `AstObject | false` union variable holds string /
+        // object content OR a `false` sentinel — it is a value-or-sentinel
+        // pattern, not a boolean predicate. The `= false` initializer is the
+        // sentinel, not a boolean, so a predicate prefix would be misleading.
+        // (Closes #5967)
+        assert!(run("let trimLeftOfNextStr: string | false = false;").is_empty());
+        assert!(run("let currentObj: AstObject | false = false;").is_empty());
+        assert!(run("let idx: number | false = false;").is_empty());
+        // The non-boolean member may be on either side of the union.
+        assert!(run("let result: false | string = false;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_pure_boolean_and_inferred_boolean() {
+        // Strictness preserved: a pure `boolean` annotation, an unannotated
+        // `= false` (inferred boolean), and a union built only from boolean-ish
+        // members (`boolean | undefined`) are all genuine booleans and still
+        // require a predicate prefix — only a union with a non-boolean member is
+        // exempt.
+        assert_eq!(run("let active: boolean = false;").len(), 1);
+        assert_eq!(run("let active = false;").len(), 1);
+        assert_eq!(run("let active: boolean | undefined = false;").len(), 1);
     }
 }
