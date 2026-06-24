@@ -314,6 +314,15 @@ min_data_array_len = 10
 [rules.no-zero-fractions]
 min_data_array_len = 10
 
+# Minimum numeric-leaf count of a homogeneously-numeric array literal (flat array
+# or matrix) before its elements are treated as embedded data (cryptographic
+# K-tables such as the MD5/SHA constant tables, byte arrays, coefficient tables)
+# rather than groupable quantities. Inserting digit-grouping separators into an
+# individual leaf is meaningless and obscures spec-verbatim constants, so the
+# elements are not flagged.
+[rules.numeric-separators-style]
+min_data_array_len = 10
+
 # Minimum element count before a const array `.includes()` is worth a `Set`.
 # Below this, a linear scan beats constructing a `Set` + hashing + the extra
 # allocation, so suggesting `Set#has()` is a net pessimization.
