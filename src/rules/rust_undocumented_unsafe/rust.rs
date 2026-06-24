@@ -80,12 +80,23 @@ fn inside_unsafe_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 /// True if a `// SAFETY:` comment documents this unsafe block, either
-/// directly above it or above an enclosing `impl`/`fn` whose scope wraps
-/// it. The latter covers the convention of documenting a shared invariant
-/// once above an `impl` block whose methods all perform the same unsafe
-/// operation, instead of repeating the comment above each inner block.
-/// One such comment therefore suppresses every unsafe block in the impl's
-/// methods — the granularity is the enclosing scope, not the block.
+/// directly above it or above an enclosing scope whose comment covers it.
+/// Three enclosing-scope conventions are recognized:
+///
+///  - above an enclosing `impl`/`fn`: documenting a shared invariant once
+///    above an `impl` block whose methods all perform the same unsafe
+///    operation, instead of repeating the comment above each inner block;
+///  - at the start of an enclosing *loop* body (`while`/`loop`/`for`) when
+///    the unsafe sits inside a *nested* loop within it: the hot-path
+///    manually-unrolled-loop convention, where the invariant is proven once
+///    at the outer loop and applies to every iteration of the unrolled inner
+///    loop. The coverage is deliberately narrow — both the documented scope
+///    and the unsafe's intervening scope must be loop bodies — so an opening
+///    comment on a fn body, `if`/`match` arm, or bare block can't leak onto
+///    an undocumented unsafe in an unrelated branch.
+///
+/// One such comment therefore suppresses every unsafe block in the covered
+/// scope — the granularity is the enclosing scope, not the block.
 ///
 /// We check the lines directly above the unsafe block, then walk up the
 /// ancestor chain. For the nearest enclosing statement (`let_declaration` /
@@ -95,18 +106,26 @@ fn inside_unsafe_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// statement, not above the `unsafe` keyword's own row. Only the nearest
 /// statement is consulted, and only when it starts on a different row than
 /// the `unsafe` block, so a comment above an unrelated outer statement can't
-/// leak. We then keep walking for enclosing `impl_item` / `function_item`
-/// (the shared-invariant convention). Leakage from an unrelated sibling item
-/// is prevented by the per-row scan stopping at the first real-code line
-/// above each ancestor: a sibling's comment is never directly above an
-/// ancestor's start row. The walk bound (`source_file`) only caps how far
-/// up the chain we look.
+/// leak. For an *outer* loop body reached only after crossing an inner loop
+/// body we check whether a SAFETY comment sits at its start (between the
+/// opening `{` and the first statement); the upward scan stops at the `{`'s
+/// own row (real code), so it never leaks past the loop boundary. The
+/// unsafe's own innermost loop body is *not* consulted this way — a comment
+/// at the top of that loop documenting an earlier statement must not
+/// blanket-cover a later undocumented sibling unsafe; that case is governed
+/// by the direct-above scan. We then keep walking for enclosing `impl_item` /
+/// `function_item` (the shared-invariant convention). Leakage from an
+/// unrelated sibling item is prevented by the per-row scan stopping at the
+/// first real-code line above each ancestor: a sibling's comment is never
+/// directly above an ancestor's start row. The walk bound (`source_file`)
+/// only caps how far up the chain we look.
 fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
     let lines: Vec<&str> = source.lines().collect();
     if safety_comment_above_row(node.start_position().row, SkipLets::Yes, &lines) {
         return true;
     }
     let mut checked_enclosing_statement = false;
+    let mut crossed_inner_loop_body = false;
     let mut cur = node.parent();
     while let Some(p) = cur {
         if !checked_enclosing_statement
@@ -122,6 +141,17 @@ fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
                 return true;
             }
         }
+        if is_loop_body(p) {
+            // Only an *outer* loop body reached after crossing an inner loop
+            // body is treated as a block-level safety scope (the unrolled
+            // inner-loop convention). The unsafe's own innermost loop body is
+            // skipped so a top-of-loop comment documenting an earlier
+            // statement can't blanket a later sibling unsafe.
+            if crossed_inner_loop_body && block_opens_with_safety_comment(p, &lines) {
+                return true;
+            }
+            crossed_inner_loop_body = true;
+        }
         if matches!(p.kind(), "impl_item" | "function_item")
             && safety_comment_above_row(p.start_position().row, SkipLets::Yes, &lines)
         {
@@ -130,6 +160,40 @@ fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
         cur = p.parent();
     }
     false
+}
+
+/// True if `node` is the `{ … }` body of a `while`/`loop`/`for` expression.
+/// Block-level SAFETY coverage is restricted to loop bodies so that an
+/// opening comment can't leak from a fn body, `if`/`match` arm, or bare block.
+fn is_loop_body(node: tree_sitter::Node) -> bool {
+    node.kind() == "block"
+        && node.parent().is_some_and(|parent| {
+            matches!(
+                parent.kind(),
+                "while_expression" | "loop_expression" | "for_expression"
+            )
+        })
+}
+
+/// True if `block` (a loop body) opens with a `// SAFETY:` comment: a
+/// block-level rationale documenting the unsafe blocks nested within. We scan
+/// upward from the block's first statement; the scan stops at the opening `{`
+/// row (real code) so a comment belonging to the enclosing construct never
+/// leaks in. The first statement must sit on a different row than the `{`
+/// (otherwise there is no room for a leading comment, and `{ stmt }` carries
+/// no block-level documentation).
+fn block_opens_with_safety_comment(block: tree_sitter::Node, lines: &[&str]) -> bool {
+    let mut cursor = block.walk();
+    let Some(first_stmt) = block
+        .named_children(&mut cursor)
+        .find(|c| !matches!(c.kind(), "line_comment" | "block_comment"))
+    else {
+        return false;
+    };
+    if first_stmt.start_position().row == block.start_position().row {
+        return false;
+    }
+    safety_comment_above_row(first_stmt.start_position().row, SkipLets::No, lines)
 }
 
 /// Whether `safety_comment_above_row` skips a contiguous run of preparatory
@@ -548,6 +612,105 @@ mod tests {
                       );\n\
                       }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_nested_loop_unsafe_under_outer_block_safety_comment_issue_5973() {
+        // Issue #5973: regex-automata src/dfa/search.rs — a `// SAFETY:`
+        // comment at the start of the outer `while` block documents the
+        // invariants for the manually-unrolled inner loop. All four unsafe
+        // calls in the inner loop are covered by the one block-level comment.
+        let source = "fn search(input: I) {\n\
+                      while at < input.end() {\n\
+                      // SAFETY: invariants we uphold in the loops below: 'sid' is\n\
+                      // valid and 'at' is in bounds in the unrolled loop below.\n\
+                      let mut prev_sid;\n\
+                      while at < input.end() {\n\
+                      prev_sid = unsafe { next(sid, at) };\n\
+                      sid = unsafe { next(prev_sid, at) };\n\
+                      prev_sid = unsafe { next(sid, at) };\n\
+                      sid = unsafe { next(prev_sid, at) };\n\
+                      }\n\
+                      }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_nested_loop_unsafe_without_any_safety_comment_issue_5973() {
+        // Negative: the same nested-loop shape but with NO SAFETY comment
+        // anywhere in the ancestor block chain still fires once per unsafe.
+        let source = "fn search(input: I) {\n\
+                      while at < input.end() {\n\
+                      let mut prev_sid;\n\
+                      while at < input.end() {\n\
+                      prev_sid = unsafe { next(sid, at) };\n\
+                      sid = unsafe { next(prev_sid, at) };\n\
+                      }\n\
+                      }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn block_safety_comment_does_not_leak_to_sibling_unsafe_issue_5973() {
+        // The block-level coverage applies to unsafe nested in a *sub-block*.
+        // A comment at the top of a block documenting an earlier statement
+        // must not blanket-cover a later *direct sibling* unsafe in the same
+        // block separated by real code — that stays the direct-above scan's
+        // job, which breaks on intervening code.
+        let source = "fn f(p: *const u8) {\n\
+                      // SAFETY: documents the call below, not the unsafe read.\n\
+                      do_setup();\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn block_safety_comment_does_not_leak_to_if_arm_unsafe_issue_5973() {
+        // Block-level coverage is restricted to nested loop bodies. An opening
+        // SAFETY comment on a fn body that documents an earlier statement must
+        // not leak onto an undocumented unsafe inside an `if` arm.
+        let source = "fn f(p: *const u8, cond: bool) {\n\
+                      // SAFETY: documents the helper call below.\n\
+                      helper();\n\
+                      if cond {\n\
+                      let _ = unsafe { *p };\n\
+                      }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn block_safety_comment_does_not_leak_into_inner_loop_from_fn_body_issue_5973() {
+        // The documented scope must itself be a loop body. An opening SAFETY
+        // comment on the fn body (documenting an earlier statement) must not
+        // cover an undocumented unsafe inside an inner loop.
+        let source = "fn f(p: *const u8) {\n\
+                      // SAFETY: documents the helper call below.\n\
+                      helper();\n\
+                      while cond {\n\
+                      let _ = unsafe { *p };\n\
+                      }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn nested_block_own_safety_comment_takes_precedence_issue_5973() {
+        // A nested sub-block whose unsafe carries its own SAFETY comment is
+        // covered by that comment (direct-above), independent of any
+        // outer-block comment — per-unsafe documentation is not regressed.
+        let source = "fn search(input: I) {\n\
+                      while at < input.end() {\n\
+                      while at < input.end() {\n\
+                      // SAFETY: 'sid' is valid and 'at' is in bounds.\n\
+                      sid = unsafe { next(sid, at) };\n\
+                      }\n\
+                      }\n\
+                      }";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
