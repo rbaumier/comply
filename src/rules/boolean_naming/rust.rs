@@ -93,6 +93,9 @@ fn check_node(node: tree_sitter::Node, ctx: &CheckCtx) -> Option<Diagnostic> {
     if is_setter_value_placeholder_param(node, name, source) {
         return None;
     }
+    if is_toggle_yes_no_placeholder_param(node, source) {
+        return None;
+    }
     if is_assertion_value_param(node, name, source) {
         return None;
     }
@@ -288,6 +291,91 @@ fn is_setter_value_placeholder_param(
         cursor = parent;
     }
     false
+}
+
+/// True for the builder/toggler placeholder convention: a `bool` parameter
+/// named exactly `yes`/`no` that is the single non-self parameter of a fluent
+/// builder method — one that records the bool and yields the (re)configured
+/// receiver, as in `rust-lang/regex`:
+/// `fn case_insensitive(mut self, yes: bool) -> Config` (consuming, returns the
+/// builder by value) and `fn case_insensitive(&mut self, yes: bool) -> &mut Self`
+/// (borrowing, returns `&mut Self`). `yes`/`no` are universal content-free toggle
+/// placeholders meaning "pass `true` to enable, `false` to disable" — their
+/// meaning is fully carried by the method name, so a predicate prefix adds
+/// nothing and `is_yes` would be nonsensical.
+///
+/// Anchored on four AST signals so it cannot widen into a name allowlist: the
+/// node is a `parameter` named exactly `yes`/`no`, its directly-enclosing
+/// `function_item` declares a `self_parameter` receiver, has exactly one non-self
+/// parameter (this one), and returns a builder shape — a `Self`-form
+/// (`Self`/`&Self`/`&mut Self`) OR a by-value-`self` method returning a named
+/// type (`Config`). A method returning a primitive (`-> bool`/`-> u32`) or one
+/// that borrows `&self` while returning a fresh value (`-> String`) is a
+/// predicate/transform, not a builder, and still flags. A meaningful boolean
+/// param (`emit`, `enabled`, `drop`) in the same builder shape still flags — only
+/// the placeholders `yes`/`no` match. A `yes: bool` param in a free function, a
+/// method with no `self` receiver, a method taking other non-self params, or a
+/// unit-returning mutator still flags. The walk stops at the first
+/// `closure_expression` boundary so a closure callback param named `yes`/`no` is
+/// judged by its own scope.
+fn is_toggle_yes_no_placeholder_param(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let name = match extract_identifier(node, source) {
+        Some(n) => n,
+        None => return false,
+    };
+    if node.kind() != "parameter" || (name != "yes" && name != "no") {
+        return false;
+    }
+    let mut cursor = node;
+    while let Some(parent) = cursor.parent() {
+        if parent.kind() == "closure_expression" {
+            return false;
+        }
+        if parent.kind() == "function_item" {
+            return method_has_self_receiver(parent)
+                && method_non_self_param_count(parent) == 1
+                && method_returns_builder_shape(parent, source);
+        }
+        cursor = parent;
+    }
+    false
+}
+
+/// True if `function_item` returns a fluent-builder shape: either a `Self`-form
+/// (`Self`/`&Self`/`&mut Self`, the borrowing-builder return) or a named type
+/// returned from a by-value `self` receiver (the consuming-builder return,
+/// e.g. `mut self -> Config`). A method returning a primitive (`-> bool`,
+/// `-> u32`) is a predicate; a `&self` method returning a fresh named value
+/// (`-> String`) is a transform — neither yields the reconfigured receiver, so
+/// neither matches.
+fn method_returns_builder_shape(function_item: tree_sitter::Node, source: &[u8]) -> bool {
+    if method_returns_self_type(function_item, source) {
+        return true;
+    }
+    let Some(return_type) = function_item.child_by_field_name("return_type") else {
+        return false;
+    };
+    let returns_named_type = matches!(
+        return_type.kind(),
+        "type_identifier" | "scoped_type_identifier" | "generic_type"
+    );
+    returns_named_type && method_consumes_self_by_value(function_item)
+}
+
+/// True if `function_item`'s receiver is `self`/`mut self` taken by value (the
+/// `self_parameter` has no `&` reference child), as a consuming builder does.
+/// A `&self`/`&mut self` borrowing receiver is not by-value.
+fn method_consumes_self_by_value(function_item: tree_sitter::Node) -> bool {
+    let Some(params) = function_item.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = params.walk();
+    params.children(&mut cursor).any(|child| {
+        child.kind() == "self_parameter" && {
+            let mut sc = child.walk();
+            !child.children(&mut sc).any(|c| c.kind() == "&")
+        }
+    })
 }
 
 /// Count of `function_item`'s parameters excluding the `self` receiver.
@@ -1115,6 +1203,99 @@ mod tests {
         let diags = run_on("impl X { fn set_cb(&self) { let f = |value: bool| {}; } }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("'value'"));
+    }
+
+    #[test]
+    fn allows_yes_no_toggle_placeholder_param() {
+        // rust-lang/regex builder convention: `fn flag(self, yes: bool) -> T`
+        // where `yes`/`no` is the single non-self toggle placeholder and the
+        // method returns the (re)configured object — by value (`Config`) or by
+        // reference (`&mut Self`). `is_yes` would be nonsensical. (Closes #5968)
+        for src in [
+            "impl X { pub fn case_insensitive(mut self, yes: bool) -> Config { self } }",
+            "impl X { pub fn multi_line(&mut self, yes: bool) -> &mut Self { self } }",
+            "impl X { pub fn dot_matches_new_line(self, no: bool) -> Self { self } }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_meaningful_bool_param_in_yes_no_builder_shape() {
+        // The exemption is anchored to the placeholders `yes`/`no`; a meaningful
+        // boolean param in the same builder shape still requires a prefix.
+        let diags =
+            run_on("impl X { pub fn case_insensitive(mut self, emit: bool) -> Config { self } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'emit'"));
+    }
+
+    #[test]
+    fn still_flags_yes_param_in_free_fn() {
+        // No `self` receiver — not the builder/toggler shape.
+        assert_eq!(run_on("fn g(yes: bool) -> Config { todo!() }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_yes_param_in_unit_returning_mutator() {
+        // A `&mut self` method returning `()` is a plain mutator, not a toggler
+        // that yields the reconfigured object, so `yes` still flags.
+        let diags = run_on("impl X { fn set_flag(&mut self, yes: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'yes'"));
+    }
+
+    #[test]
+    fn still_flags_yes_param_in_builder_with_extra_params() {
+        // `yes` must be the single non-self param; an extra non-self param means
+        // the toggle placeholder is no longer unambiguous, so it still flags.
+        let diags =
+            run_on("impl X { fn flag(&mut self, key: K, yes: bool) -> &mut Self { self } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'yes'"));
+    }
+
+    #[test]
+    fn still_flags_yes_param_in_predicate_method() {
+        // A `&self` method returning a primitive (`-> bool`) is a predicate, not
+        // a builder that yields the reconfigured receiver, so `yes` still flags.
+        let diags = run_on("impl X { fn matches(&self, yes: bool) -> bool { yes } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'yes'"));
+    }
+
+    #[test]
+    fn still_flags_yes_param_in_borrowing_transform_method() {
+        // A `&self` method returning a fresh named value (`-> String`) is a
+        // transform, not a consuming builder, so `yes` still flags.
+        let diags = run_on("impl X { fn render(&self, yes: bool) -> String { todo!() } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'yes'"));
+    }
+
+    #[test]
+    fn still_flags_yes_param_in_by_value_method_returning_primitive() {
+        // A consuming `self` method returning a primitive (`-> u32`) is not a
+        // builder; `yes` still flags.
+        let diags = run_on("impl X { fn count(self, yes: bool) -> u32 { 0 } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'yes'"));
+    }
+
+    #[test]
+    fn still_flags_yes_local_binding() {
+        // The exemption is parameter-only; a bare `yes` local still flags.
+        assert_eq!(run_on("fn f() { let yes: bool = true; }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_closure_yes_param_nested_in_builder() {
+        // The walk stops at the closure boundary: a closure callback param named
+        // `yes` inside a builder method is not the method's own param.
+        let diags =
+            run_on("impl X { fn flag(&mut self) -> &mut Self { let f = |yes: bool| {}; self } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'yes'"));
     }
 
     #[test]
