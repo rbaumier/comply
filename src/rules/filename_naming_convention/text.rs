@@ -107,6 +107,18 @@ pub(crate) fn is_camel_case(stem: &str) -> bool {
     bytes.iter().all(|&b| b.is_ascii_alphanumeric())
 }
 
+/// Returns `true` when `stem` consists entirely of the convention-prefix sigils
+/// `_` and `$` (`_`, `__`, `$`, `$$`, …). Such a stem is a default/barrel module
+/// aggregator, not a name with a casing: `_`/`__` is the "default thing for this
+/// directory" convention (graphql-request codegen names the per-directory default
+/// export aggregator `_.ts` and the type-only aggregator `__.ts`, a Prelude
+/// analogue of `index.ts`) and `$` is the framework-internal / reactive-value
+/// convention. The sigils are not casing-bearing characters, so no kebab/camel/
+/// snake/pascal rule applies; the stem is exempt by shape.
+fn is_all_sigil_stem(stem: &str) -> bool {
+    !stem.is_empty() && stem.bytes().all(|b| b == b'_' || b == b'$')
+}
+
 /// A TS/JS filename-casing convention a project's source can settle on. Used by
 /// [`crate::project::ProjectCtx::dominant_ts_js_filename_convention`] to detect
 /// the project's established convention; the rule then accepts a snake_case file
@@ -143,10 +155,11 @@ pub(crate) fn classify_ts_js_stem(stem: &str) -> Option<FilenameConvention> {
 /// "private/internal module" signal (e.g. `_utils`, `__database`) and a leading
 /// `$` is the framework-internal / reactive-value convention (e.g. Prisma's
 /// `$extends`, jQuery, RxJS, SvelteKit `$lib`), so the convention is validated
-/// against the name after the prefix. Returns an empty string for an
-/// all-sigil stem; the bare-`$` case is allowed earlier, and an all-underscore
-/// stem then fails every convention check and is still flagged. Shared with the
-/// sibling `vue` backend, which applies the same private-prefix stripping.
+/// against the name after the prefix. Returns an empty string for an all-sigil
+/// stem; those (`_`, `__`, `$`, …) are exempted earlier by
+/// [`is_all_sigil_stem`], so this only ever sees a prefix plus a real name.
+/// Shared with the sibling `vue` backend, which applies the same private-prefix
+/// stripping.
 pub(super) fn strip_private_prefix(stem: &str) -> &str {
     stem.trim_start_matches(['_', '$'])
 }
@@ -485,6 +498,14 @@ impl TextCheck for Check {
         // in WebdriverIO. `$` is a legal identifier character, so validate the
         // base before the marker rather than rejecting the `$`.
         if is_query_command_stem(stem) {
+            return Vec::new();
+        }
+        // A stem that is entirely sigils (`_`, `__`, `$`, `$$`) names a
+        // default/barrel module aggregator rather than carrying a casing — the
+        // graphql-request codegen `_.ts` (default export) / `__.ts` (type-only)
+        // Prelude convention, the `index.ts` analogue for a directory subtree.
+        // No casing rule applies to a name made only of convention sigils.
+        if is_all_sigil_stem(stem) {
             return Vec::new();
         }
         // A leading `_`/`__` marks a private/internal module and a leading `$`
@@ -1022,10 +1043,48 @@ mod tests {
         assert_eq!(run("src/_user_profile.ts").len(), 1);
     }
 
-    // Guard: an all-underscore stem has an empty remainder and still fires.
+    // Regression for #6078: graphql-request codegen names the per-directory
+    // default-export aggregator `_.ts` and the type-only aggregator `__.ts`
+    // (a Prelude analogue of `index.ts`). An all-underscore stem is a barrel
+    // convention, not a casing, and must not be flagged.
     #[test]
-    fn flags_all_underscore_stem_issue_1616() {
-        assert_eq!(run("src/__.ts").len(), 1);
+    fn allows_all_underscore_default_barrel_stem_issue_6078() {
+        assert!(run("tests/_/fixtures/schemas/query-only/client/_.ts").is_empty());
+        assert!(run("tests/_/fixtures/schemas/query-only/client/__.ts").is_empty());
+        assert!(run("src/___.ts").is_empty());
+    }
+
+    // Regression for #6078: a stem of only `$` sigils follows the same
+    // framework-internal / reactive-value convention as `_` barrels and is
+    // exempt by shape, consistent with the `$.ts` / `$$.ts` handling (#5543).
+    #[test]
+    fn allows_all_dollar_stem_issue_6078() {
+        assert!(run("src/$.ts").is_empty());
+        assert!(run("src/$$.ts").is_empty());
+        assert!(run("src/_$_.ts").is_empty());
+    }
+
+    // Unit: `is_all_sigil_stem` matches only stems built entirely of `_`/`$`
+    // sigils, never an empty stem or a stem with any casing-bearing character.
+    #[test]
+    fn is_all_sigil_stem_unit_issue_6078() {
+        assert!(is_all_sigil_stem("_"));
+        assert!(is_all_sigil_stem("__"));
+        assert!(is_all_sigil_stem("$"));
+        assert!(is_all_sigil_stem("$$"));
+        assert!(is_all_sigil_stem("_$_"));
+        assert!(!is_all_sigil_stem(""));
+        assert!(!is_all_sigil_stem("_a"));
+        assert!(!is_all_sigil_stem("a_"));
+        assert!(!is_all_sigil_stem("__tests__"));
+    }
+
+    // Guard: the exemption is by full-stem shape, not a substring or prefix — an
+    // underscore-prefixed stem with a real name is still validated against the
+    // convention after stripping (a snake_case remainder still fires).
+    #[test]
+    fn flags_underscore_prefix_invalid_remainder_after_sigil_exemption_issue_6078() {
+        assert_eq!(run("src/_bad_name.ts").len(), 1);
     }
 
     // Regression for #1534: Angular's ng-packagr `public_api.ts` library barrel
