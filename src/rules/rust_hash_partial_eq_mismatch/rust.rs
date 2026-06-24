@@ -12,9 +12,13 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::collect_top_level_derives;
+use crate::rules::rust_helpers::{collect_top_level_derives, is_suppressed_by_clippy_allow};
 
 const KINDS: &[&str] = &["struct_item", "enum_item"];
+
+/// clippy's equivalent lint (and its pre-1.71 alias). An `#[allow]` of either
+/// is the author explicitly accepting this exact invariant, so we defer.
+const CLIPPY_LINTS: &[&str] = &["derived_hash_with_manual_eq", "derive_hash_xor_eq"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -39,12 +43,12 @@ impl AstCheck for Check {
             return;
         };
         let derives = collect_top_level_derives(node, source_bytes);
-        let (manual_hash, manual_eq) = manual_impls(node, source_bytes, type_name);
+        let manual = manual_impls(node, source_bytes, type_name);
         let derived_hash = derives.iter().any(|d| d == "Hash");
         let derived_eq = derives.iter().any(|d| d == "PartialEq");
 
-        let has_hash = derived_hash || manual_hash;
-        let has_eq = derived_eq || manual_eq;
+        let has_hash = derived_hash || manual.hash;
+        let has_eq = derived_eq || manual.eq;
         if !has_hash || !has_eq {
             return;
         }
@@ -52,8 +56,14 @@ impl AstCheck for Check {
         // a derived `Hash` (reads all fields) with a manual `PartialEq`
         // that may ignore some. A manual `Hash` over a subset of the
         // derived-`PartialEq` fields is the safe idiomatic optimization.
-        let mismatch = derived_hash && manual_eq;
-        if mismatch {
+        let mismatch = derived_hash && manual.eq;
+        // Defer when the author explicitly suppressed clippy's equivalent
+        // `derived_hash_with_manual_eq` lint (on the struct or the manual
+        // impl) — they have deliberately accepted this exact invariant, e.g.
+        // a constant-time `eq` over the same bytes the derived `Hash` reads.
+        let suppressed = manual.suppressed
+            || is_suppressed_by_clippy_allow(name_node, CLIPPY_LINTS, source_bytes);
+        if mismatch && !suppressed {
             diagnostics.push(Diagnostic::at_node(
                 std::sync::Arc::clone(&ctx.path_arc),
                 &name_node,
@@ -69,17 +79,28 @@ impl AstCheck for Check {
     }
 }
 
-/// Returns `(has_manual_hash, has_manual_partial_eq)` for `type_name`
-/// by walking the file root for `impl_item` blocks.
-fn manual_impls(node: tree_sitter::Node, source: &[u8], type_name: &str) -> (bool, bool) {
+/// Result of scanning the file's `impl_item` blocks for `type_name`:
+/// which of `Hash` / `PartialEq` is implemented manually, and whether any
+/// such matching impl block carries an `#[allow(clippy::derived_hash_with_manual_eq)]`.
+struct ManualImpls {
+    hash: bool,
+    eq: bool,
+    suppressed: bool,
+}
+
+/// Walks the file root for `impl_item` blocks targeting `type_name`.
+fn manual_impls(node: tree_sitter::Node, source: &[u8], type_name: &str) -> ManualImpls {
     let mut root = node;
     while let Some(p) = root.parent() {
         root = p;
     }
     let mut cursor = root.walk();
     let mut stack = vec![root];
-    let mut hash = false;
-    let mut eq = false;
+    let mut out = ManualImpls {
+        hash: false,
+        eq: false,
+        suppressed: false,
+    };
     while let Some(n) = stack.pop() {
         if n.kind() == "impl_item" {
             let trait_node = n.child_by_field_name("trait");
@@ -90,9 +111,17 @@ fn manual_impls(node: tree_sitter::Node, source: &[u8], type_name: &str) -> (boo
                 if target_text == type_name {
                     let bare = trait_text.rsplit("::").next().unwrap_or(trait_text);
                     if bare == "Hash" {
-                        hash = true;
+                        out.hash = true;
                     } else if bare == "PartialEq" {
-                        eq = true;
+                        out.eq = true;
+                    }
+                    // Pass `tr` (a descendant), not the `impl_item` itself:
+                    // the helper scans an item's preceding-sibling attributes
+                    // only when it reaches that item as a *parent* of the node.
+                    if (bare == "Hash" || bare == "PartialEq")
+                        && is_suppressed_by_clippy_allow(tr, CLIPPY_LINTS, source)
+                    {
+                        out.suppressed = true;
                     }
                 }
             }
@@ -101,7 +130,7 @@ fn manual_impls(node: tree_sitter::Node, source: &[u8], type_name: &str) -> (boo
             stack.push(child);
         }
     }
-    (hash, eq)
+    out
 }
 
 #[cfg(test)]
@@ -164,6 +193,60 @@ mod tests {
     fn allows_only_one() {
         let source = "#[derive(PartialEq)]\nstruct A;";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_when_clippy_lint_suppressed_on_struct() {
+        // The author explicitly suppressed clippy's equivalent lint on the
+        // struct: a constant-time `eq` over the same bytes the derived `Hash`
+        // reads upholds the contract. Reproduces quinn `ResetToken` (#4721).
+        let source = "#[allow(clippy::derived_hash_with_manual_eq)]\n\
+                      #[derive(Debug, Copy, Clone, Hash)]\n\
+                      struct ResetToken([u8; 16]);\n\
+                      impl PartialEq for ResetToken { fn eq(&self, other: &Self) -> bool { crate::constant_time::eq(&self.0, &other.0) } }\n\
+                      impl Eq for ResetToken {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_when_clippy_lint_suppressed_on_impl() {
+        // The `#[allow]` may sit on the manual `impl PartialEq` instead of the
+        // struct; honor it there too.
+        let source = "#[derive(Hash)]\n\
+                      struct A([u8; 16]);\n\
+                      #[allow(clippy::derived_hash_with_manual_eq)]\n\
+                      impl PartialEq for A { fn eq(&self, other: &Self) -> bool { crate::constant_time::eq(&self.0, &other.0) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_when_old_clippy_alias_suppressed() {
+        // Pre-1.71 alias `derive_hash_xor_eq`.
+        let source = "#[allow(clippy::derive_hash_xor_eq)]\n\
+                      #[derive(Hash)]\n\
+                      struct A([u8; 16]);\n\
+                      impl PartialEq for A { fn eq(&self, _: &Self) -> bool { true } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_mismatch_without_any_allow() {
+        // No suppression → a derived `Hash` + manual `PartialEq` mismatch
+        // still fires.
+        let source = "#[derive(Hash)]\n\
+                      struct A([u8; 16]);\n\
+                      impl PartialEq for A { fn eq(&self, _: &Self) -> bool { true } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_mismatch_with_unrelated_allow() {
+        // An unrelated `#[allow(dead_code)]` does not suppress this lint.
+        let source = "#[allow(dead_code)]\n\
+                      #[derive(Hash)]\n\
+                      struct A([u8; 16]);\n\
+                      impl PartialEq for A { fn eq(&self, _: &Self) -> bool { true } }";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
