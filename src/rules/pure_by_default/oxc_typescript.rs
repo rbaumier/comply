@@ -440,6 +440,12 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    /// Run through the production applicability gate, so `skip_in_test_dir`
+    /// suppresses the rule for test-file paths.
+    fn run_gated(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
     #[test]
     fn flags_function_using_top_level_let() {
         let src = "let counter = 0;\nfunction increment() { counter += 1; }\n";
@@ -861,6 +867,49 @@ export function increment() {
 }
 "#;
         let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("increment"));
+        assert!(d[0].message.contains("counter"));
+    }
+
+    // Regression for #2240 — a test file's module-level `let` is a deliberate
+    // `vi.mock` seam that a mock factory closes over, not accidental shared
+    // state. A `vi.mock` factory takes no caller arguments, so the seam cannot
+    // be passed as a parameter; `skip_in_test_dir` suppresses the rule there.
+    #[test]
+    fn no_fp_on_vi_mock_seam_in_test_file() {
+        let src = r#"
+let mockSearch = {};
+const navigateMock = vi.fn();
+
+vi.mock("@tanstack/react-router", () => ({
+    useSearch: () => mockSearch,
+    useNavigate: () => navigateMock,
+}));
+
+function navigateSpy(options: unknown): void {
+    recordFunctionalNavigate(options, mockSearch, navigateMock);
+}
+"#;
+        assert!(
+            run_gated(src, "src/features/organizations/organizations-page.test.tsx").is_empty(),
+            "vi.mock seam read in a test file must not be flagged"
+        );
+    }
+
+    #[test]
+    fn still_flags_same_mutable_state_in_production_file() {
+        // The identical shape in a production (non-test) file is genuine shared
+        // mutable state and must stay flagged: the test-dir skip is the only
+        // thing that exempts it.
+        let src = r#"
+let counter = 0;
+export function increment() {
+    counter += 1;
+    return counter;
+}
+"#;
+        let d = run_gated(src, "src/features/counter/counter.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("increment"));
         assert!(d[0].message.contains("counter"));
