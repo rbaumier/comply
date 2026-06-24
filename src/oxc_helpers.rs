@@ -1031,18 +1031,18 @@ pub fn is_fixed_signature_library_callback<'a>(
 }
 
 /// True when `ident` resolves to a local binding declared with `const` or `let`
-/// whose initializer is a plain object literal or object-spread
-/// (`Expression::ObjectExpression`, which covers both `{ key: val }` and
-/// `{ ...other }`). Such a binding is a freshly-created local builder, not a
-/// reference to shared state: assigning its properties (`value.x = ...`) or
-/// deleting them (`delete value.x`) before returning it is the object analogue
-/// of the `const items = []; items.push(x)` accumulator pattern, and mutates no
-/// external state.
+/// whose initializer constructs a fresh local object (`is_fresh_copy_expression`):
+/// an object literal / object-spread (`{ key: val }` / `{ ...other }`) or
+/// `Object.assign(<fresh>, …)` / `Object.assign(Object.create(null), …)`. Such a
+/// binding is a freshly-created local builder, not a reference to shared state:
+/// assigning its properties (`value.x = ...`) or deleting them (`delete value.x`)
+/// before returning it is the object analogue of the `const items = [];
+/// items.push(x)` accumulator pattern, and mutates no external state.
 ///
 /// Resolves the binding via `reference_id` → symbol → declaration node, then
 /// inspects the `VariableDeclarator` (whose `kind` carries the declaration
 /// keyword). A function parameter, imported binding, or `this` resolves to a
-/// non-`VariableDeclarator` declaration; a `var` binding or a non-object-literal
+/// non-`VariableDeclarator` declaration; a `var` binding or a non-fresh-copy
 /// initializer is rejected, so any mutation through it is still flagged.
 #[must_use]
 pub fn is_local_object_builder_binding(
@@ -1050,7 +1050,7 @@ pub fn is_local_object_builder_binding(
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     use oxc_ast::AstKind;
-    use oxc_ast::ast::{Expression, VariableDeclarationKind};
+    use oxc_ast::ast::VariableDeclarationKind;
 
     let Some(ref_id) = ident.reference_id.get() else {
         return false;
@@ -1068,10 +1068,132 @@ pub fn is_local_object_builder_binding(
             return matches!(
                 decl.kind,
                 VariableDeclarationKind::Const | VariableDeclarationKind::Let
-            ) && matches!(decl.init, Some(Expression::ObjectExpression(_)));
+            ) && decl.init.as_ref().is_some_and(is_fresh_copy_expression);
         }
     }
     false
+}
+
+/// True when `expr` constructs a brand-new object that copies from existing
+/// values — a fresh shallow copy whose properties can be assigned without
+/// touching the source:
+/// - an object literal / object-spread `{ ...x }` / `{ a: 1 }`
+///   (`Expression::ObjectExpression`);
+/// - `Object.assign(<fresh>, …)` where the first argument is itself a fresh
+///   target — an object literal (`{}`) or `Object.create(null)`. The result
+///   object is the (new) first argument, so the assignment produces a fresh
+///   object rather than mutating an existing one. `Object.assign(existing, …)`,
+///   whose first argument is an identifier or member expression, is NOT fresh —
+///   it mutates `existing` in place and stays subject to the rule.
+fn is_fresh_copy_expression(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::ObjectExpression(_) => true,
+        Expression::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                return false;
+            };
+            let Expression::Identifier(obj) = &member.object else {
+                return false;
+            };
+            if obj.name.as_str() != "Object" || member.property.name.as_str() != "assign" {
+                return false;
+            }
+            // First argument must itself be a freshly-created target.
+            match call.arguments.first().and_then(|arg| arg.as_expression()) {
+                Some(Expression::ObjectExpression(_)) => true,
+                Some(Expression::CallExpression(inner)) => is_object_create_null(inner),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// True when `call` is `Object.create(null)` — produces a fresh prototype-less
+/// object, a valid fresh `Object.assign` target.
+fn is_object_create_null(call: &oxc_ast::ast::CallExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    obj.name.as_str() == "Object"
+        && member.property.name.as_str() == "create"
+        && matches!(
+            call.arguments.first().and_then(|arg| arg.as_expression()),
+            Some(Expression::NullLiteral(_))
+        )
+}
+
+/// True when, at the point of a mutation starting at byte offset `mutation_start`,
+/// the receiver `ident` provably holds a freshly-created local object because the
+/// **nearest preceding write** to its binding reassigned it to a fresh-copy
+/// expression (`is_fresh_copy_expression`):
+///
+/// ```ts
+/// function f(options = {}) {
+///   options = Object.assign({}, options); // fresh copy
+///   options.showCache ??= true;           // mutates the fresh copy, not the caller's
+/// }
+/// ```
+///
+/// Considering only the *nearest* preceding write is sound: no write to the
+/// binding happens between that fresh-copy reassignment and the mutation, so the
+/// receiver still references the fresh object. A later reassignment to external
+/// state (`options = getConfig()`) becomes the nearest preceding write for any
+/// subsequent mutation and is not a fresh copy, so that mutation stays flagged.
+/// A binding never reassigned to a fresh copy (a plain parameter or a `const`
+/// from an external call) has no qualifying write and stays flagged.
+#[must_use]
+pub fn is_reassigned_fresh_copy_at(
+    ident: &oxc_ast::ast::IdentifierReference,
+    mutation_start: u32,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::AssignmentTarget;
+    use oxc_semantic::ReferenceFlags;
+    use oxc_span::GetSpan;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+
+    // Nearest write-reference to this binding strictly before the mutation.
+    let mut nearest: Option<(u32, &oxc_ast::ast::AssignmentExpression)> = None;
+    for reference in scoping.get_resolved_references(sym_id) {
+        if !reference.flags().contains(ReferenceFlags::Write) {
+            continue;
+        }
+        let write_node = nodes.get_node(reference.node_id());
+        let write_start = write_node.kind().span().start;
+        if write_start >= mutation_start {
+            continue;
+        }
+        // The write reference is the LHS identifier of an assignment; its parent
+        // is the `AssignmentExpression`. A `let x = …` declarator is a separate
+        // declaration node, not a write reference, so it is not considered here.
+        let AstKind::AssignmentExpression(assign) = nodes.parent_node(write_node.id()).kind()
+        else {
+            continue;
+        };
+        if !matches!(assign.left, AssignmentTarget::AssignmentTargetIdentifier(_)) {
+            continue;
+        }
+        if nearest.is_none_or(|(start, _)| write_start > start) {
+            nearest = Some((write_start, assign));
+        }
+    }
+
+    nearest.is_some_and(|(_, assign)| is_fresh_copy_expression(&assign.right))
 }
 
 /// Node module-system specifiers a `Module` binding can be imported/required from.

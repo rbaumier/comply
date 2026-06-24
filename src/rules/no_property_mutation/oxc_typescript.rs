@@ -11,9 +11,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding, is_node_module_system_target,
-    is_react_display_name_assignment, is_reduce_accumulator_param, is_rtk_reducer_draft_param,
-    is_typed_array_binding, is_valtio_proxy_binding, is_vue_reactive_object_target,
-    is_vue_ref_value_target,
+    is_react_display_name_assignment, is_reassigned_fresh_copy_at, is_reduce_accumulator_param,
+    is_rtk_reducer_draft_param, is_typed_array_binding, is_valtio_proxy_binding,
+    is_vue_reactive_object_target, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -503,6 +503,7 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
+                                || is_reassigned_fresh_copy_at(id, assign.span.start, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
@@ -544,6 +545,7 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
+                                || is_reassigned_fresh_copy_at(id, assign.span.start, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
@@ -640,6 +642,7 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
+                                || is_reassigned_fresh_copy_at(id, unary.span.start, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
@@ -653,6 +656,7 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
+                                || is_reassigned_fresh_copy_at(id, unary.span.start, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
@@ -2172,6 +2176,95 @@ mod tests {
         let src = r#"
             function mutate(value) {
                 value.x = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_nullish_assignment_after_object_assign_fresh_copy_issue_6076() {
+        // Regression for rbaumier/comply#6076 — gqless logger: `options` (a param)
+        // is reassigned to a fresh shallow copy via `Object.assign({}, options)`,
+        // then defaults are filled in with `??=`/`||=`/`&&=`. The logical
+        // assignments mutate the fresh local copy, not the caller's object.
+        let src = r#"
+            export function createLogger(client, options = {}) {
+                options = Object.assign({}, options);
+                options.showCache ??= true;
+                options.showSelections ??= true;
+                options.stringifyJSON ??= false;
+                options.label ||= "gqless";
+                options.verbose &&= true;
+                return options;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_after_object_create_null_fresh_copy() {
+        // `Object.assign(Object.create(null), src)` is also a fresh-copy target.
+        let src = r#"
+            function build(src) {
+                let out = Object.assign(Object.create(null), src);
+                out.flag = true;
+                return out;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_object_assign_into_existing_object() {
+        // Strong positive: `Object.assign(existing, src)` mutates `existing` in
+        // place — the receiver is NOT reassigned to a fresh object, so a later
+        // property write on it is still a mutation of shared state.
+        let src = r#"
+            function merge(existing, src) {
+                existing = Object.assign(existing, src);
+                existing.x = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_property_mutation_on_param_without_fresh_copy_reassignment() {
+        // Strong positive: a param that is never reassigned to a fresh copy is
+        // external state — `options.x = y` stays flagged.
+        let src = r#"
+            function configure(options) {
+                options.showCache = true;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_mutation_after_reassignment_to_external_state() {
+        // Strong positive: even after a fresh-copy reassignment, a *later*
+        // reassignment to external state (`options = getConfig()`) becomes the
+        // nearest preceding write, so the subsequent mutation is still flagged.
+        let src = r#"
+            function f(options) {
+                options = Object.assign({}, options);
+                options.a = 1;
+                options = getConfig();
+                options.b = 2;
+            }
+        "#;
+        // First write (`options.a`) exempt; second (`options.b`) flagged.
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_mutation_before_fresh_copy_reassignment() {
+        // Strong positive: a mutation that occurs BEFORE the fresh-copy
+        // reassignment still targets the caller's object and stays flagged.
+        let src = r#"
+            function f(options) {
+                options.a = 1;
+                options = Object.assign({}, options);
             }
         "#;
         assert_eq!(run(src).len(), 1);
