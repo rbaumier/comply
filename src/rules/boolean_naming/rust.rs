@@ -90,6 +90,9 @@ fn check_node(node: tree_sitter::Node, ctx: &CheckCtx) -> Option<Diagnostic> {
     if is_toggle_enable_setter_param(node, name, source) {
         return None;
     }
+    if is_setter_value_placeholder_param(node, name, source) {
+        return None;
+    }
     if is_assertion_value_param(node, name, source) {
         return None;
     }
@@ -240,6 +243,63 @@ fn is_toggle_enable_setter_param(
         cursor = parent;
     }
     false
+}
+
+/// True for the setter value-placeholder convention: a `bool` parameter named
+/// exactly `value`/`val` on a `set_*` method with a `self` receiver, where that
+/// bool param is the method's single non-self parameter
+/// (`pub fn set_dont_frag(&mut self, value: bool)`). `value`/`val` are the
+/// canonical generic placeholders for the value a setter assigns — they carry no
+/// semantic content, so a predicate prefix adds nothing; `is_value` would be
+/// nonsensical and diverge from the universal setter idiom.
+///
+/// Anchored on four AST signals so it cannot widen into a name allowlist: the
+/// node is a `parameter` named exactly `value`/`val`, its directly-enclosing
+/// `function_item` `name` field starts with `set_`, that function declares a
+/// `self_parameter` receiver, and it has exactly one non-self parameter (this
+/// one). A meaningful boolean param (`emit`, `drop`, `disabled`) is unaffected —
+/// only the generic placeholders `value`/`val` match. A `value: bool` param in a
+/// free function, a non-`set_*` method, or a `set_*` method that also takes other
+/// non-self parameters still flags. The walk stops at the first
+/// `closure_expression` boundary so a closure callback param named `value`/`val`
+/// nested inside a `set_*` method is judged by its own scope.
+fn is_setter_value_placeholder_param(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    if node.kind() != "parameter" || (name != "value" && name != "val") {
+        return false;
+    }
+    let mut cursor = node;
+    while let Some(parent) = cursor.parent() {
+        if parent.kind() == "closure_expression" {
+            return false;
+        }
+        if parent.kind() == "function_item" {
+            let starts_with_set = parent
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .is_some_and(|fn_name| fn_name.starts_with("set_"));
+            return starts_with_set
+                && method_has_self_receiver(parent)
+                && method_non_self_param_count(parent) == 1;
+        }
+        cursor = parent;
+    }
+    false
+}
+
+/// Count of `function_item`'s parameters excluding the `self` receiver.
+fn method_non_self_param_count(function_item: tree_sitter::Node) -> usize {
+    let Some(params) = function_item.child_by_field_name("parameters") else {
+        return 0;
+    };
+    let mut cursor = params.walk();
+    params
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "parameter")
+        .count()
 }
 
 /// True for the builder field-setter convention: a `bool` parameter whose name
@@ -994,6 +1054,67 @@ mod tests {
             run_on("impl X { fn set_blend_enable(&self) { let f = |enable: bool| {}; } }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("'enable'"));
+    }
+
+    #[test]
+    fn allows_setter_value_placeholder_param() {
+        // Setter convention: `set_*(&mut self, value: bool)` where `value`/`val`
+        // is the single non-self generic placeholder for the assigned value.
+        // `is_value` would be nonsensical. (Closes #4720)
+        for src in [
+            "impl X { pub fn set_dont_frag(&mut self, value: bool) {} }",
+            "impl X { pub fn set_more_frags(&mut self, value: bool) {} }",
+            "impl X { pub fn set_more_frags(&mut self, val: bool) {} }",
+            "impl X { fn set_flag(&self, value: bool) {} }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_meaningful_bool_param_in_setter() {
+        // Only the generic placeholders `value`/`val` are exempted; a meaningful
+        // boolean param in a setter (`emit`) still requires a predicate prefix.
+        let diags = run_on("impl X { fn set_mode(&mut self, emit: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'emit'"));
+    }
+
+    #[test]
+    fn still_flags_value_param_in_non_setter_free_fn() {
+        // No `set_` prefix and no `self` receiver — not the setter shape.
+        assert_eq!(run_on("fn compute(value: bool) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_param_in_set_fn_without_receiver() {
+        // A `set_*` associated fn with no `self` receiver is not a setter method.
+        assert_eq!(run_on("impl X { fn set_x(value: bool) {} }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_param_in_setter_with_extra_params() {
+        // The placeholder must be the single non-self value param; a `set_*`
+        // method taking other non-self params is not the simple-setter shape, so
+        // `value` is no longer an unambiguous placeholder and still flags.
+        let diags = run_on("impl X { fn set_field(&mut self, key: K, value: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'value'"));
+    }
+
+    #[test]
+    fn still_flags_value_local_binding() {
+        // The exemption is parameter-only; a bare `value` local still flags.
+        assert_eq!(run_on("fn f() { let value: bool = true; }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_closure_value_param_nested_in_setter() {
+        // The walk stops at the closure boundary: a closure callback param named
+        // `value` inside a `set_*` method is not the setter's own param.
+        let diags = run_on("impl X { fn set_cb(&self) { let f = |value: bool| {}; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'value'"));
     }
 
     #[test]
