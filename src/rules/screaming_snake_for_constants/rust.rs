@@ -65,11 +65,40 @@ fn is_google_k_prefix_constant(name: &str) -> bool {
 /// `#[allow(non_upper_case_globals)]` (or the broader
 /// `#[allow(nonstandard_style)]`), which is the compiler-level opt-out
 /// for the upper-case-globals convention. The allow is honored whether it
-/// sits on the item itself (preceding `attribute_item` sibling), on an
-/// enclosing module (inner `#![allow(...)]`), or at the crate root.
+/// sits on the item itself or on an enclosing `impl` (preceding
+/// `attribute_item` outer-attribute sibling), on an enclosing module
+/// (inner `#![allow(...)]`), or at the crate root.
 fn allows_non_upper_case_globals(item: Node, source: &[u8]) -> bool {
     // Item-level: `#[allow(...)]` as a preceding outer-attribute sibling.
-    let mut sibling = item.prev_named_sibling();
+    if has_outer_allow_sibling(item, source) {
+        return true;
+    }
+
+    let mut cur = item;
+    while let Some(parent) = cur.parent() {
+        // Enclosing `impl`: `#[allow(...)]` as an outer attribute on the
+        // `impl` block whose body holds the associated const.
+        if parent.kind() == "impl_item" && has_outer_allow_sibling(parent, source) {
+            return true;
+        }
+        // Module- and crate-level: `#![allow(...)]` inner attributes on any
+        // enclosing module or the file root.
+        if (parent.kind() == "mod_item" || parent.kind() == "source_file")
+            && has_inner_allow_non_upper_case_globals(parent, source)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if `node` is preceded by an outer `#[allow(...)]` attribute that
+/// suppresses the upper-case-globals convention. Consecutive
+/// `attribute_item` siblings are walked so the allow is found regardless of
+/// its position among other outer attributes.
+fn has_outer_allow_sibling(node: Node, source: &[u8]) -> bool {
+    let mut sibling = node.prev_named_sibling();
     while let Some(s) = sibling {
         if s.kind() != "attribute_item" {
             break;
@@ -78,18 +107,6 @@ fn allows_non_upper_case_globals(item: Node, source: &[u8]) -> bool {
             return true;
         }
         sibling = s.prev_named_sibling();
-    }
-
-    // Module- and crate-level: `#![allow(...)]` inner attributes on any
-    // enclosing module or the file root.
-    let mut cur = item;
-    while let Some(parent) = cur.parent() {
-        if (parent.kind() == "mod_item" || parent.kind() == "source_file")
-            && has_inner_allow_non_upper_case_globals(parent, source)
-        {
-            return true;
-        }
-        cur = parent;
     }
     false
 }
@@ -288,6 +305,43 @@ mod tests {
         let diags = run("static foo: u32 = 1;");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("foo"));
+    }
+
+    #[test]
+    fn allows_impl_level_non_upper_case_globals() {
+        // The pomsky case from the issue: a compact single-letter color-alias
+        // DSL whose `impl` opts out of the convention with an outer attribute.
+        let src = "#[allow(non_upper_case_globals)]\n\
+            impl Style {\n\
+            pub const c: Style = Style::Cyan;\n\
+            pub const g: Style = Style::Green;\n\
+            pub const m: Style = Style::Magenta;\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_const_in_impl_without_allow() {
+        // An `impl` without the opt-out: its lowercase consts still fire.
+        let src = "impl Style {\n\
+            pub const c: Style = Style::Cyan;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('c'));
+    }
+
+    #[test]
+    fn flags_const_in_impl_with_unrelated_allow() {
+        // An `impl` whose only opt-out targets an unrelated lint must not
+        // exempt its lowercase consts.
+        let src = "#[allow(dead_code)]\n\
+            impl Style {\n\
+            pub const c: Style = Style::Cyan;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('c'));
     }
 
     #[test]
