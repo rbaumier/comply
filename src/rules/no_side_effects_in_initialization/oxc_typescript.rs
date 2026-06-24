@@ -1439,8 +1439,16 @@ fn is_commander_subcommand_chain(call: &oxc_ast::ast::CallExpression) -> bool {
 }
 
 /// True when `path` is a TanStack Start entry file: `app/client.{ts,tsx}`,
-/// `app/router.{ts,tsx}`, or `app/server.{ts,tsx}` (also under `src/app/`).
-/// Requires the project to have the `tanstack-router` framework detected.
+/// `app/router.{ts,tsx}`, `app/server.{ts,tsx}`, or `app/ssr.{ts,tsx}` (also
+/// under `src/app/`). Requires the project to have the `tanstack-router`
+/// framework detected.
+///
+/// `ssr` is included so it is symmetric with the `tanstack-router` profile's
+/// seeded bootstrap basenames (`client.tsx`/`ssr.tsx`/`server.ts`, #6026): each
+/// of those is suppressed from the broad framework-entry exemption by
+/// [`is_tanstack_only_bootstrap_entry`] and re-exempted here only at the
+/// conventional `app/` location. Without `ssr` here, a legitimate `app/ssr.tsx`
+/// would be suppressed but never re-exempted, so it would wrongly be flagged.
 fn is_tanstack_start_entry(path: &std::path::Path, project: &crate::project::ProjectCtx) -> bool {
     if !project.has_framework("tanstack-router") {
         return false;
@@ -1453,14 +1461,16 @@ fn is_tanstack_start_entry(path: &std::path::Path, project: &crate::project::Pro
     } else {
         return false;
     };
-    if !matches!(stem, "client" | "router" | "server") {
+    if !matches!(stem, "client" | "router" | "server" | "ssr") {
         return false;
     }
     let s = path.to_string_lossy().replace('\\', "/");
-    s.contains("/app/client.") || s.contains("/app/router.") || s.contains("/app/server.")
+    s.contains("/app/client.") || s.contains("/app/router.")
+        || s.contains("/app/server.") || s.contains("/app/ssr.")
         || s == "app/client.ts" || s == "app/client.tsx"
         || s == "app/router.ts" || s == "app/router.tsx"
         || s == "app/server.ts" || s == "app/server.tsx"
+        || s == "app/ssr.ts" || s == "app/ssr.tsx"
 }
 
 /// True when `is_framework_entry_point` exempts `path` *only* because the
@@ -1488,11 +1498,11 @@ fn is_tanstack_only_bootstrap_entry(
     if !project.has_framework("tanstack-router") {
         return false;
     }
+    // Exactly the basenames the `tanstack-router` profile seeds (#6026): these
+    // are the only ones `is_framework_entry_point` can grant via TanStack, so
+    // suppressing anything else here would be a misleading no-op.
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if !matches!(
-        name,
-        "client.ts" | "client.tsx" | "ssr.ts" | "ssr.tsx" | "server.ts" | "server.tsx"
-    ) {
+    if !matches!(name, "client.tsx" | "ssr.tsx" | "server.ts") {
         return false;
     }
     // Another detected framework (Express/Elysia `server.ts`, …) legitimately
@@ -3087,6 +3097,47 @@ mod tests {
             diags.is_empty(),
             "Express owns `server.ts` as an entry file, so the framework-entry \
              exemption must still apply, got {diags:?}"
+        );
+    }
+
+    // Regression for #6026 follow-up: `ssr.tsx` is one of the TanStack bootstrap
+    // basenames suppressed from the broad framework-entry exemption, so it must
+    // be re-exempted by the depth-aware `is_tanstack_start_entry` at the
+    // conventional `app/` location — otherwise a legitimate `app/ssr.tsx` would
+    // wrongly be flagged. Mirrors `allows_tanstack_start_client_entry`.
+    #[test]
+    fn allows_tanstack_start_ssr_entry_issue_6026() {
+        let src = "initZodLocale();\n";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "src/app/ssr.tsx",
+            &crate::project::ProjectCtx::for_test_with_framework("tanstack-router"),
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(
+            diags.is_empty(),
+            "the TanStack `app/ssr.tsx` bootstrap entry must be exempt, got {diags:?}"
+        );
+    }
+
+    // Regression for #6026 follow-up: the `ssr` exemption stays depth-aware — an
+    // `ssr.tsx` outside the `app/` convention is still a true positive, just
+    // like `flags_client_tsx_outside_app_dir`.
+    #[test]
+    fn flags_ssr_tsx_outside_app_dir_issue_6026() {
+        let src = "initZodLocale();\n";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "src/utils/ssr.tsx",
+            &crate::project::ProjectCtx::for_test_with_framework("tanstack-router"),
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "ssr.tsx outside app/ must still be flagged, got {diags:?}"
         );
     }
 

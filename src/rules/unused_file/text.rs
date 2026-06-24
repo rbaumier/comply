@@ -476,11 +476,12 @@ fn is_test_file(path: &Path) -> bool {
         || name.contains(".spec.")
         || name.contains(".setup.")
         // Runner bootstrap files loaded via Vitest/Jest `setupFiles`, never
-        // `import`ed: the hyphenated `setup-msw.ts` convention, and the dotted
-        // `setup.<env>.ts` form (e.g. `setup.node.ts`), beside the existing
-        // `.setup.` infix above. (`file_stem` strips the final extension, so a
-        // bare `setup.ts` has stem `setup` and is matched by neither prefix —
-        // intentionally, mirroring the infix-only `.setup.` rule.)
+        // `import`ed: a bare `setup.{ts,tsx}` (stem `setup`, since `file_stem`
+        // strips the final extension), the hyphenated `setup-msw.ts`
+        // convention, and the dotted `setup.<env>.ts` form (e.g.
+        // `setup.node.ts`, stem `setup.node`) — beside the existing `.setup.`
+        // infix above.
+        || stem == "setup"
         || stem.starts_with("setup-")
         || stem.starts_with("setup.")
         || path_str.contains("/__tests__/")
@@ -2435,6 +2436,25 @@ mod tests {
             diags[0].path.to_str().unwrap().contains("orphan"),
             "an ordinary orphaned source file (no test-infra dir, not a setup \
              file) must still be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #6026 follow-up: a bare `setup.ts` (stem `setup`, since
+    // `file_stem` strips the extension) is a Vitest/Jest `setupFiles` bootstrap
+    // loaded by the runner, never `import`ed — it must be exempt. The earlier
+    // `stem.starts_with("setup.")` branch did not cover it (the stem has no
+    // trailing dot); the `stem == "setup"` arm does.
+    #[test]
+    fn bare_setup_file_is_not_flagged_issue_6026() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            ("src/setup.ts", "import { beforeAll } from 'vitest';\nbeforeAll(() => {});\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "a bare `setup.ts` runner bootstrap is test infrastructure, not dead \
+             code: {diags:?}"
         );
     }
 }
