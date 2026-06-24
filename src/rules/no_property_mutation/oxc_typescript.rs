@@ -384,6 +384,32 @@ fn is_promise_introspection_target(
     )
 }
 
+/// True when `ident` resolves to a `function` declaration (`function invariant()
+/// {}`). Attaching a property to such a callable (`invariant.debug = …`) is the
+/// function-as-namespace pattern — building a callable that also carries utility
+/// methods, the way Node's `assert.strictEqual` is exposed. There is no immutable
+/// alternative: a class needs `new` and an object literal is not callable.
+///
+/// Restricted to function DECLARATIONS, the unambiguous namespace shape. An
+/// arrow/function-expression bound to a `const` (`const g = () => {}`) is NOT
+/// matched: that binding equally covers CSF2 story arrows (`const WithArgs =
+/// (args) => …; WithArgs.args = {…}`) and ad-hoc callbacks, where the write is an
+/// ordinary mutation the rule must still flag.
+///
+/// The `Function` check is on the declaration node only, never via ancestors: a
+/// function PARAMETER's declaration node also has a `Function` ancestor, and a
+/// parameter is external state, not a callable namespace.
+fn is_function_declaration_binding(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    matches!(semantic.nodes().kind(decl_node_id), AstKind::Function(_))
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -460,6 +486,13 @@ impl OxcCheck for Check {
                         // introspection augmentation, the documented synchronous-read
                         // API with no immutable alternative.
                         if is_promise_introspection_target(&m.object, prop_text, semantic) { return; }
+                        // `invariant.debug = …` — attaching a method to a callable
+                        // that resolves (via binding data flow) to a function
+                        // declaration: the function-as-namespace pattern (cf.
+                        // `assert.strictEqual`), with no immutable form (a class
+                        // needs `new`, an object literal is not callable).
+                        if let Expression::Identifier(id) = &m.object
+                            && is_function_declaration_binding(id, semantic) { return; }
                         // Mutating an object's own instance state (`this.out = sink`)
                         // is encapsulated state, not the external/shared mutation this
                         // rule targets — replacing the whole object is the only
@@ -2078,6 +2111,67 @@ mod tests {
             function update() {
                 const result = getConfig();
                 result.status = "active";
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Function-as-namespace property extension (fn.method = …) — issue #6071
+
+    #[test]
+    fn allows_function_namespace_method_attachment_issue_6071() {
+        // Regression for rbaumier/comply#6071 — apollo-client's `invariant`:
+        // attaching utility methods to a function declaration builds a callable
+        // that also carries a namespace (cf. Node's `assert.strictEqual`), the
+        // documented API with no immutable form — a class needs `new` and an
+        // object literal is not callable.
+        let src = r#"
+            function invariant(condition: any, message?: string): asserts condition {
+                if (!condition) throw new Error(message);
+            }
+            invariant.debug = wrapConsoleMethod("debug");
+            invariant.log   = wrapConsoleMethod("log");
+            invariant.warn  = wrapConsoleMethod("warn");
+            invariant.error = wrapConsoleMethod("error");
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_mutation_on_non_function_binding_issue_6071() {
+        // Strong positive: the receiver must resolve to a function declaration.
+        // Ordinary object-state writes on a non-function binding stay flagged
+        // (`instance` is an external-call result, `5` is a plain state value).
+        let src = r#"
+            const instance = makeThing();
+            instance.prop = y;
+            const count = makeCounter();
+            count.value = 5;
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_property_mutation_on_arrow_const_binding_issue_6071() {
+        // Strong positive: the exemption is restricted to function DECLARATIONS.
+        // An arrow bound to a `const` (the CSF2-story / callback shape) stays
+        // flagged outside the story-file exemption — `WithArgs.args = {…}` is an
+        // ordinary mutation here.
+        let src = r#"
+            const WithArgs = (args) => renderButton(args);
+            WithArgs.args = { label: 'With args' };
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_property_mutation_on_function_parameter_issue_6071() {
+        // Strong positive: a function parameter's declaration node has a `Function`
+        // ancestor but is NOT a function declaration — it is external state and
+        // stays flagged.
+        let src = r#"
+            function mutate(value) {
+                value.x = 1;
             }
         "#;
         assert_eq!(run(src).len(), 1);
