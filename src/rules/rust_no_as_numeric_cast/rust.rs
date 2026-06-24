@@ -773,6 +773,37 @@ name = "normal_lib"
     }
 
     #[test]
+    fn repro_5886_method_returning_bool_as_u8_not_flagged() {
+        // Issue #5886 (rp2040-hal rosc.rs): `self.get_random_bit() as u8` where
+        // `get_random_bit(&self) -> bool`. The same-file signature resolves the
+        // method to `-> bool`, so `bool as u8` is lossless.
+        let src = "fn get_random_bit(&self) -> bool { true } \
+                   fn fill(&self) -> u8 { self.get_random_bit() as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5886_free_fn_returning_bool_as_u8_not_flagged() {
+        let src = "fn b() -> bool { true } fn f() -> u8 { b() as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5886_method_returning_numeric_still_flagged() {
+        // A same-file callee returning a non-bool numeric is a genuine narrowing:
+        // `self.tally() as u8` where `tally(&self) -> u32` stays flagged.
+        let src = "fn tally(&self) -> u32 { 0 } fn f(&self) -> u8 { self.tally() as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5886_unresolvable_method_still_flagged() {
+        // The callee is not defined in the file, so its return type is unknown —
+        // the narrowing stays a finding.
+        assert_eq!(run_on("fn f(s: S) -> u8 { s.unknown() as u8 }").len(), 1);
+    }
+
+    #[test]
     fn repro_3859_enum_discriminant_cast_not_flagged() {
         // A discriminant must be a const expression; `as` is the only
         // conversion that compiles there (`From`/`TryFrom` are unavailable).

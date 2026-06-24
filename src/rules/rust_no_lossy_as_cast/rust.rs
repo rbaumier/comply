@@ -758,6 +758,38 @@ mod tests {
     }
 
     #[test]
+    fn repro_5886_method_returning_bool_as_u8_not_flagged() {
+        // Issue #5886 (rp2040-hal rosc.rs): `self.get_random_bit() as u8` where
+        // `get_random_bit(&self) -> bool`. The same-file signature resolves the
+        // method to `-> bool`, so `bool as u8` is lossless.
+        let src = "fn get_random_bit(&self) -> bool { true } \
+                   fn fill(&self) -> u8 { self.get_random_bit() as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5886_free_fn_returning_bool_as_u8_not_flagged() {
+        let src = "fn b() -> bool { true } fn f() -> u8 { b() as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5886_method_returning_numeric_owned_by_numeric_cast() {
+        // A same-file callee returning a non-bool numeric is a genuine narrowing:
+        // `self.tally() as u8` where `tally(&self) -> u32`. `rust-no-as-numeric-cast`
+        // owns the span, so this rule suppresses its diagnostic.
+        let src = "fn tally(&self) -> u32 { 0 } fn f(&self) -> u8 { self.tally() as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5886_unresolvable_method_owned_by_numeric_cast() {
+        // The callee is not defined in the file, so its return type is unknown —
+        // a real narrowing, but `rust-no-as-numeric-cast` owns the span.
+        assert!(run_on("fn f(s: S) -> u8 { s.unknown() as u8 }").is_empty());
+    }
+
+    #[test]
     fn repro_3847_for_chars_binding_as_u32_not_flagged() {
         // `for c in s.chars()` binds `c: char`; `char as u32` is total.
         assert!(run_on("fn f(s: &str) { for c in s.chars() { let _ = c as u32; } }").is_empty());
