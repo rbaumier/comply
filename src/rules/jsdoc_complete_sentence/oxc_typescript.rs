@@ -4,10 +4,19 @@
 //! punctuation check accepts both ASCII (`.`/`!`/`?`) and CJK (`。`/`！`/`？`)
 //! terminators, so case-less scripts (Chinese, Japanese, Korean) are not
 //! flagged.
+//!
+//! A single-line `/** … */` comment documenting a property/field signature —
+//! a `TSPropertySignature` in an interface or type literal, or a class
+//! `PropertyDefinition` — is a field label, not prose, so the terminal-
+//! punctuation requirement is not applied to it: idiomatic TypeScript writes
+//! such labels as noun phrases without a closing period
+//! (`/** Timeout in milliseconds */`). The capital-letter check still applies,
+//! and a multi-line/prose property doc, or any function/method doc, still
+//! requires a complete sentence.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 pub struct Check;
@@ -104,6 +113,37 @@ fn drop_trailing_code_block_label(description_lines: &mut Vec<(String, usize)>) 
     }
 }
 
+/// Collect the byte-offset start of every property/field-signature node: a
+/// `TSPropertySignature` (interface or type-literal member) or a class
+/// `PropertyDefinition`. A single-line JSDoc comment immediately preceding one
+/// of these documents a field label, not prose, so its terminal-punctuation
+/// requirement is waived.
+fn property_node_starts(semantic: &oxc_semantic::Semantic) -> Vec<usize> {
+    semantic
+        .nodes()
+        .iter()
+        .filter_map(|node| match node.kind() {
+            AstKind::TSPropertySignature(p) => Some(p.span.start as usize),
+            AstKind::PropertyDefinition(p) => Some(p.span.start as usize),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether a single-line JSDoc comment ending at `comment_end` immediately
+/// precedes a property/field-signature node — only whitespace separates the
+/// comment's end from the node's start. Such a comment is a field label, so the
+/// terminal-punctuation check is waived for it.
+fn precedes_property(
+    comment_end: usize,
+    property_starts: &[usize],
+    source: &str,
+) -> bool {
+    property_starts.iter().any(|&start| {
+        start >= comment_end && source[comment_end..start].chars().all(char::is_whitespace)
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -119,6 +159,7 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        let property_starts = property_node_starts(semantic);
 
         for comment in semantic.comments() {
             let raw = &ctx.source[comment.span.start as usize..comment.span.end as usize];
@@ -160,10 +201,20 @@ impl OxcCheck for Check {
             // case-less script (CJK ideographs, kana, hangul) is exempt: such
             // text does not use ASCII terminators, and short phrases routinely
             // carry no closing mark at all, so requiring one is meaningless.
+            //
+            // A single-line `/** … */` comment documenting a property/field
+            // signature is a field label, not prose, so the noun-phrase style
+            // without a closing period is idiomatic and exempt. A multi-line
+            // property doc, or any non-property doc, still requires terminal
+            // punctuation.
+            let is_single_line = !raw.contains('\n');
+            let is_property_label = is_single_line
+                && precedes_property(comment.span.end as usize, &property_starts, ctx.source);
             let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
             if let Some(ch) = last_text.trim_end().chars().last()
                 && !is_terminal_punctuation(ch)
-                && !is_caseless_script_letter(ch) {
+                && !is_caseless_script_letter(ch)
+                && !is_property_label {
                     let line_byte_offset =
                         find_line_byte_offset(raw, *last_offset);
                     let (line, column) = byte_offset_to_line_col(
@@ -412,5 +463,73 @@ export function build(): void {}
         // First-tag-and-after is not checked; description ends at the
         // first `@`. "Build a user record." is fine.
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_single_line_interface_property_label() {
+        // Regression for rbaumier/comply#6064 — a single-line `/** … */` noun-
+        // phrase label on an interface property is idiomatic TS and must not be
+        // flagged for missing terminal punctuation.
+        let source = r#"
+export interface ExampleFile {
+  /** Full absolute path to the example file */
+  path: string
+  /** Relative path from project root */
+  relativePath: string
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_single_line_class_property_label() {
+        // A single-line label on a class property is exempt too.
+        let source = r#"
+class Foo {
+  /** Timeout in milliseconds */
+  timeout = 0;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_lowercase_single_line_property_label() {
+        // The label exemption waives only terminal punctuation — a lowercase
+        // start is still flagged.
+        let source = r#"
+export interface ExampleFile {
+  /** full absolute path to the example file */
+  path: string
+}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("capital")));
+    }
+
+    #[test]
+    fn still_flags_multi_line_property_doc_missing_punctuation() {
+        // A multi-line prose doc on a property is prose, not a label, so it
+        // still requires terminal punctuation.
+        let source = r#"
+export interface ExampleFile {
+  /**
+   * The absolute path to the example file on disk, resolved relative to the
+   * project root before the examples are collected
+   */
+  path: string
+}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_function_doc_missing_punctuation() {
+        // A single-line doc on a function is prose, not a field label, so it
+        // still requires terminal punctuation.
+        let source = "/** Adds two numbers */\nfunction add(a: number, b: number) {}";
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
     }
 }
