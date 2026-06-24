@@ -1463,6 +1463,46 @@ fn is_tanstack_start_entry(path: &std::path::Path, project: &crate::project::Pro
         || s == "app/server.ts" || s == "app/server.tsx"
 }
 
+/// True when `is_framework_entry_point` exempts `path` *only* because the
+/// `tanstack-router` profile seeds the TanStack Start bootstrap basenames
+/// (`client.tsx`/`ssr.tsx`/`server.ts`) as entry points for the import-graph
+/// reachability rules (`unused-file`, #6026), and `path` sits outside the
+/// conventional `app/` bootstrap location.
+///
+/// This rule's TanStack exemption is intentionally narrower than that basename
+/// match: the bootstrap is only framework-mounted at `app/`, and an
+/// `initZodLocale()`-style top-level side effect in a `client.tsx` living
+/// elsewhere is still a real smell ([`is_tanstack_start_entry`] is the
+/// depth-aware gate). So when the generic match is *attributable to TanStack*,
+/// the rule defers to that depth-aware gate instead of inheriting the broad
+/// basename exemption.
+///
+/// The match is suppressed only when no *other* detected framework also declares
+/// the basename as an entry file: `server.ts` is a legitimate Express/Elysia
+/// entry, so in a project where one of those is detected the generic exemption
+/// must still stand.
+fn is_tanstack_only_bootstrap_entry(
+    path: &std::path::Path,
+    project: &crate::project::ProjectCtx,
+) -> bool {
+    if !project.has_framework("tanstack-router") {
+        return false;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !matches!(
+        name,
+        "client.ts" | "client.tsx" | "ssr.ts" | "ssr.tsx" | "server.ts" | "server.tsx"
+    ) {
+        return false;
+    }
+    // Another detected framework (Express/Elysia `server.ts`, …) legitimately
+    // owns this basename as an entry: keep the generic exemption.
+    let owned_by_other_framework = project.detected_frameworks.iter().any(|fw| {
+        fw.name != "tanstack-router" && fw.entry_points.files.iter().any(|f| f == name)
+    });
+    !owned_by_other_framework
+}
+
 /// Collect the names of identifiers bound by top-level `const` declarations
 /// with a simple binding (`const lookup = …`). Destructuring patterns are
 /// skipped — the data-init exemption only reasons about plain named bindings.
@@ -2276,7 +2316,8 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        if is_framework_entry_point(ctx.path, ctx.project)
+        if (is_framework_entry_point(ctx.path, ctx.project)
+            && !is_tanstack_only_bootstrap_entry(ctx.path, ctx.project))
             || is_tanstack_start_entry(ctx.path, ctx.project)
             || is_application_root_entry(ctx.path, ctx.project, program)
             || ctx.project.is_script_entry_file(ctx.path)
@@ -2998,6 +3039,54 @@ mod tests {
             diags.len(),
             1,
             "client.tsx outside app/ must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression for #6026: seeding `server.ts` as a TanStack entry-point
+    // basename (for `unused-file`) must not silently re-exempt a `server.ts`
+    // outside the `app/` bootstrap location from this rule. A plain top-level
+    // side effect in `src/utils/server.ts` is still a smell; the TanStack
+    // exemption stays depth-aware via `is_tanstack_start_entry`.
+    #[test]
+    fn flags_server_ts_outside_app_dir_in_tanstack_project_issue_6026() {
+        let src = "initZodLocale();\n";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "src/utils/server.ts",
+            &crate::project::ProjectCtx::for_test_with_framework("tanstack-router"),
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "server.ts outside app/ in a TanStack project must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression for #6026: the TanStack bootstrap-basename suppression is gated
+    // on no *other* framework owning the basename. `server.ts` is a legitimate
+    // Express entry, so in a project where Express is also detected the generic
+    // framework-entry exemption must still stand even outside `app/`.
+    #[test]
+    fn allows_express_server_ts_when_express_also_detected_issue_6026() {
+        let mut project = crate::project::ProjectCtx::default();
+        project.detected_frameworks = vec![
+            crate::frameworks::get_framework("tanstack-router").unwrap(),
+            crate::frameworks::get_framework("express").unwrap(),
+        ];
+        let src = "initZodLocale();\n";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "src/utils/server.ts",
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(
+            diags.is_empty(),
+            "Express owns `server.ts` as an entry file, so the framework-entry \
+             exemption must still apply, got {diags:?}"
         );
     }
 

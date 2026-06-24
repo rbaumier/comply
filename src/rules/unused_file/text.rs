@@ -470,13 +470,28 @@ fn is_markdown_doc_file(path: &Path) -> bool {
 
 fn is_test_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let path_str = path.to_str().unwrap_or("");
     name.contains(".test.")
         || name.contains(".spec.")
         || name.contains(".setup.")
+        // Runner bootstrap files loaded via Vitest/Jest `setupFiles`, never
+        // `import`ed: the hyphenated `setup-msw.ts` convention, and the dotted
+        // `setup.<env>.ts` form (e.g. `setup.node.ts`), beside the existing
+        // `.setup.` infix above. (`file_stem` strips the final extension, so a
+        // bare `setup.ts` has stem `setup` and is matched by neither prefix —
+        // intentionally, mirroring the infix-only `.setup.` rule.)
+        || stem.starts_with("setup-")
+        || stem.starts_with("setup.")
         || path_str.contains("/__tests__/")
         || path_str.contains("/tests/")
         || path_str.contains("/test/")
+        // Test-infrastructure directories (mocks, fixtures, builders loaded
+        // only by tests) — same category as the singular `/test/` exemption.
+        || path_str.contains("/test-helpers/")
+        || path_str.contains("/test-helper/")
+        || path_str.contains("/test-utils/")
+        || path_str.contains("/test-util/")
 }
 
 fn is_in_ui_library(path: &Path) -> bool {
@@ -2328,6 +2343,98 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "a module referenced by no Gecko loader call is still flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #6026: TanStack Start's `client.tsx` bootstrap is mounted
+    // by the framework (`hydrateRoot` + `<StartClient/>`), never `import`ed, so
+    // the import-graph BFS cannot reach it — yet it is a real entry point. The
+    // `@tanstack/react-start` dependency detects the framework, which seeds
+    // `client.tsx`/`ssr.tsx`/`server.ts` as entry-point basenames.
+    #[test]
+    fn tanstack_start_client_bootstrap_is_not_flagged_issue_6026() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"app","dependencies":{"@tanstack/react-start":"1.0.0"}}"#,
+            ),
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "src/app/client.tsx",
+                "import { hydrateRoot } from 'react-dom/client';\n\
+                 import { StartClient } from '@tanstack/react-start/client';\n\
+                 hydrateRoot(document, <StartClient />);\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            !diags.iter().any(|d| d.path.to_str().unwrap().contains("client.tsx")),
+            "TanStack Start's framework-mounted client.tsx bootstrap must not be \
+             flagged unused: {diags:?}"
+        );
+    }
+
+    // Regression for #6026: the TanStack `client.tsx` entry is framework-gated.
+    // A project WITHOUT a TanStack dependency does not detect the framework, so
+    // an orphaned `src/client.tsx` is still genuine dead code and must be flagged
+    // — proving the seed is not a blanket filename exemption.
+    #[test]
+    fn orphan_client_tsx_in_non_tanstack_project_still_flagged_issue_6026() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app","dependencies":{"react":"18.0.0"}}"#),
+            ("src/index.ts", "export const app = 1;\n"),
+            ("src/client.tsx", "export const client = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("client.tsx"),
+            "without TanStack, an orphaned client.tsx is dead code and must be \
+             flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #6026: a Vitest `setupFiles` bootstrap under a
+    // `test-helpers/` directory (`setup-msw.ts`) is loaded by the runner, never
+    // `import`ed. Both signals (the `test-helpers` segment and the `setup-`
+    // stem prefix) classify it as test infrastructure, not dead code.
+    #[test]
+    fn vitest_setup_file_in_test_helpers_is_not_flagged_issue_6026() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "src/app/test-helpers/setup-msw.ts",
+                "import { beforeAll } from 'vitest';\nbeforeAll(() => {});\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "a `setupFiles` bootstrap under test-helpers/ is test infrastructure, \
+             not dead code: {diags:?}"
+        );
+    }
+
+    // Regression for #6026: the test-helpers/setup- exemption is precise — an
+    // ordinary orphaned source file that is neither under a test-infrastructure
+    // directory nor a setup file is still a true positive. Guards the exemption
+    // from blanketing genuine dead code.
+    #[test]
+    fn orphan_source_outside_test_infra_still_flagged_issue_6026() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "src/app/test-helpers/setup-msw.ts",
+                "import { beforeAll } from 'vitest';\nbeforeAll(() => {});\n",
+            ),
+            ("src/app/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "an ordinary orphaned source file (no test-infra dir, not a setup \
+             file) must still be flagged: {diags:?}"
         );
     }
 }

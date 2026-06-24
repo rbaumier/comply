@@ -8,7 +8,7 @@ dependencies = [
 
 [entry_points]
 dirs = ["/routes/"]
-files = ["__root.tsx", "__root.ts", "routeTree.gen.ts", "routeTree.gen.tsx"]
+files = ["__root.tsx", "__root.ts", "routeTree.gen.ts", "routeTree.gen.tsx", "client.tsx", "ssr.tsx", "server.ts"]
 file_suffixes = [".lazy.tsx", ".lazy.ts", ".route.tsx", ".route.ts"]
 
 [magic_exports]
