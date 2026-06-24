@@ -527,8 +527,37 @@ pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx,
     if file_has_explicit_react_signal(source) {
         return false;
     }
+    // Vue 3 TSX whose Vue dependency is indirect (Vuetify components import only
+    // internal `@/util` wrappers, never `'vue'`): the file still uses Vuetify's
+    // unambiguous Vue-JSX conventions (`genericComponent()` + `useRender()`),
+    // where `class`/`for` are the native props. This file signal has no React
+    // counterpart, so it runs after — not before — the React-signal guard above.
+    if uses_vue_jsx_conventions(source) {
+        return true;
+    }
+    // A `.tsx`/`.jsx` file in a non-React framework package (nearest manifest
+    // declares `vue`/`solid-js` and not `react`) with no per-file React signal is
+    // that framework's JSX. The React-coexistence guard lives in the helper: a
+    // package declaring `react` too keeps firing, falling through to the project
+    // `jsxImportSource` default rather than blanket-skipping its React files.
+    if in_non_react_framework_package(project, path) {
+        return true;
+    }
     // Fall back to the project-level `jsxImportSource` default.
     project.has_non_react_jsx_import_source(path)
+}
+
+/// True when the file uses Vuetify's Vue 3 JSX/TSX authoring conventions even
+/// without a direct `'vue'` import — Vuetify's component sources import only
+/// internal `@/util` wrappers (`genericComponent`, `useRender`) around Vue's
+/// `defineComponent`, never `'vue'` itself. Such files render with native HTML
+/// attribute names (`class`, `for`), so React's camelCase prop conventions do
+/// not apply. Recognized by the two markers that co-occur in this pattern: a
+/// `genericComponent(` factory call and a `useRender(` render callback. Memoized
+/// per file via [`source_contains`].
+#[must_use]
+fn uses_vue_jsx_conventions(source: &str) -> bool {
+    source_contains(source, "genericComponent(") || source_contains(source, "useRender(")
 }
 
 /// True when the file carries an explicit React signal: it imports from

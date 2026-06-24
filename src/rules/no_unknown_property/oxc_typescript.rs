@@ -387,6 +387,102 @@ mod tests {
         assert!(diags[0].message.contains("className"));
     }
 
+    /// Run the check against `source` placed at `importer_rel`, with a
+    /// `package.json` written at the temp-dir root. Lets a test exercise the
+    /// project-dependency Vue detection the rule performs.
+    fn run_with_package_json(
+        importer_rel: &str,
+        source: &str,
+        package_json: &str,
+    ) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), package_json).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn allows_class_in_vuetify_tsx_importing_internal_util() {
+        // Vuetify Vue 3 TSX components import only from internal `@/util`
+        // wrappers (not directly from `'vue'`), yet use Vue-JSX conventions
+        // (`genericComponent()`, `setup()`, `useRender()`) where `class` is the
+        // correct native prop. They must not be flagged. (Closes #4877)
+        let src = "import { genericComponent, useRender } from '@/util';\n\
+                   export const VBreadcrumbsDivider = genericComponent()({\n\
+                       setup (props, { slots }) {\n\
+                           useRender(() => (\n\
+                               <li class={['v-breadcrumbs-divider', props.class]}>\n\
+                                   { slots?.default?.() }\n\
+                               </li>\n\
+                           ))\n\
+                       },\n\
+                   })";
+        let diags = run(src);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn allows_class_in_tsx_in_vue_project() {
+        // A `.tsx` file in a project whose nearest package depends on `vue`
+        // (and not on react) is Vue JSX — `class` is native and must not be
+        // flagged, even with no per-file Vue signal. (Closes #4877)
+        let diags = run_with_package_json(
+            "src/Comp.tsx",
+            "export const X = () => <div class=\"x\" />;",
+            r#"{"name":"app","dependencies":{"vue":"^3.4.0"}}"#,
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn flags_class_in_react_tsx_in_react_project() {
+        // A genuine React `.tsx` (imports from `react`, no Vue signal) in a
+        // React project must STILL be flagged with the `className` suggestion —
+        // the Vue exemption must not bleed into React projects. (Closes #4877)
+        let diags = run_with_package_json(
+            "src/Comp.tsx",
+            "import { useState } from 'react';\nconst a = <li class=\"x\" />;",
+            r#"{"name":"app","dependencies":{"react":"^18.0.0","react-dom":"^18.0.0"}}"#,
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("className"));
+    }
+
+    #[test]
+    fn flags_class_in_react_tsx_in_react_plus_vue_project() {
+        // A project depending on BOTH react and vue (coexistence): a file with
+        // an explicit React signal and no per-file Vue convention must still be
+        // flagged — the project-level Vue exemption must not blanket-skip when
+        // react is also a dependency. (Closes #4877)
+        let diags = run_with_package_json(
+            "src/Comp.tsx",
+            "import { useState } from 'react';\nconst a = <li class=\"x\" />;",
+            r#"{"name":"app","dependencies":{"react":"^18.0.0","vue":"^3.4.0"}}"#,
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("className"));
+    }
+
     #[test]
     fn allows_class_in_stencil_jsx() {
         let src = "import { Component, Host, h } from '@stencil/core';\n\
