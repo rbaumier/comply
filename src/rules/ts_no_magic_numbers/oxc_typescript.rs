@@ -140,6 +140,19 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `10` as the base of a power with a *non-literal* exponent — `10 ** n`
+        // or `Math.pow(10, n)` — is decimal scaling: the canonical
+        // fixed-point/minor-unit formula of currency and unit libraries
+        // (`Math.pow(10, currency.decimal_digits)` to convert dollars↔cents).
+        // The `10` is the base of the decimal number system named by the power
+        // shape, the sibling of the existing `% 10` decimal idiom. The
+        // exponent must be variable: `10 ** 6` / `Math.pow(10, 6)` is a
+        // spelled-out magnitude (1000000) that still flags, and a non-`10`
+        // base (`Math.pow(2, n)`) still flags.
+        if is_base_ten_power_base(node.id(), semantic) {
+            return;
+        }
+
         // A literal compared against a version-named operand (`version >= 3.5`,
         // `vueVersion < 3`, `this.version === 2.7`) is a version gate: the literal
         // *is* the framework release where the relevant API was introduced, named
@@ -691,6 +704,92 @@ fn is_modular_arithmetic_constant(
         }
         _ => false,
     }
+}
+
+/// True when this literal is the `10` base of a power expression whose exponent
+/// is *non-literal* — `10 ** n` (an `Exponential` binary expression) or
+/// `Math.pow(10, n)`. Base-10 exponentiation with a variable exponent is decimal
+/// scaling: the minor-unit / fixed-point conversion of currency and unit
+/// libraries (`Math.pow(10, currency.decimal_digits)`). The `10` is the base of
+/// the decimal number system, named by the power shape, the sibling of the
+/// `% 10` decimal idiom. Anchored on the literal value `10`, the `Exponential`
+/// operator or the `Math.pow` callee, the base position, and a non-literal
+/// exponent: a literal exponent (`10 ** 6`, `Math.pow(10, 6)`) is a spelled-out
+/// magnitude that still flags, and a non-`10` base (`Math.pow(2, n)`) is
+/// unaffected.
+fn is_base_ten_power_base(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    let AstKind::NumericLiteral(base) = nodes.get_node(node_id).kind() else {
+        return false;
+    };
+    if base.value != 10.0 {
+        return false;
+    }
+    let base_span = base.span;
+
+    let parent_id = nodes.parent_id(node_id);
+    if parent_id == node_id {
+        return false;
+    }
+
+    match nodes.get_node(parent_id).kind() {
+        // `10 ** n`: the literal is the left (base) operand of an Exponential
+        // expression and the right (exponent) operand is non-literal.
+        AstKind::BinaryExpression(bin) => {
+            bin.operator == BinaryOperator::Exponential
+                && bin.left.span() == base_span
+                && !is_numeric_literal_expr(&bin.right)
+        }
+        // `Math.pow(10, n)`: the literal is the first argument and the second
+        // (exponent) argument is non-literal.
+        AstKind::CallExpression(call) => {
+            is_math_pow_callee(&call.callee)
+                && call
+                    .arguments
+                    .first()
+                    .is_some_and(|first| first.span() == base_span)
+                && call
+                    .arguments
+                    .get(1)
+                    .is_some_and(|second| {
+                        second
+                            .as_expression()
+                            .is_some_and(|e| !is_numeric_literal_expr(e))
+                    })
+        }
+        _ => false,
+    }
+}
+
+/// True when an expression is a numeric literal or a unary-negated numeric
+/// literal (`6`, `-6`) — used to reject spelled-out exponents like `10 ** 6`.
+fn is_numeric_literal_expr(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::NumericLiteral(_) => true,
+        Expression::UnaryExpression(unary) => {
+            unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+                && matches!(unary.argument, Expression::NumericLiteral(_))
+        }
+        _ => false,
+    }
+}
+
+/// True when a call expression's callee is the builtin `Math.pow` — the member
+/// access `Math.pow`.
+fn is_math_pow_callee(callee: &Expression<'_>) -> bool {
+    matches!(
+        callee,
+        Expression::StaticMemberExpression(member)
+            if member.property.name == "pow"
+                && matches!(
+                    &member.object,
+                    Expression::Identifier(obj) if obj.name == "Math"
+                )
+    )
 }
 
 /// True when this literal is an operand of a comparison whose other operand is a
@@ -2108,5 +2207,52 @@ mod tests {
         // still a magic number.
         let src = r#"function f(x: number) { return x * 10; }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5959: `Math.pow(10, n)` / `10 ** n` with a variable
+    // exponent is the canonical decimal↔minor-unit scaling idiom (js-money). The
+    // `10` is the base of the decimal number system, named by the power shape,
+    // not a magic number.
+    #[test]
+    fn allows_base_ten_power_with_variable_exponent() {
+        let src = r#"
+            function f(currency: { decimal_digits: number }, amount: number) {
+                const m = Math.pow(10, currency.decimal_digits);
+                const n = 10 ** currency.decimal_digits;
+                return amount / m + n;
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "the base 10 of Math.pow(10, expr) / 10 ** expr with a variable exponent must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_base_ten_power_with_literal_exponent() {
+        // A literal exponent makes the power a spelled-out magnitude (10 ** 6 =
+        // 1000000) that needs a named constant or separators; the base still
+        // flags. Both the base `10` and the literal exponent `6` are flagged in
+        // each of the two expressions (4 diagnostics total).
+        let src = r#"function f() { return 10 ** 6 + Math.pow(10, 6); }"#;
+        assert_eq!(run(src).len(), 4);
+    }
+
+    #[test]
+    fn flags_non_ten_base_power_with_variable_exponent() {
+        // The exemption is anchored on the base `10`; a non-decimal base
+        // (`Math.pow(3, n)`, `3 ** n`) is still a magic number. (Base `2` is
+        // separately in the universally-allowed set, so a non-allowed base is
+        // used here to exercise the base-10 anchor specifically.)
+        let src = r#"function f(n: number) { return Math.pow(3, n) + 3 ** n; }"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn flags_ten_as_exponent_not_base() {
+        // The exemption is the *base* position only; `n ** 10` / `Math.pow(n, 10)`
+        // has `10` as the exponent, which is a magic number.
+        let src = r#"function f(n: number) { return n ** 10 + Math.pow(n, 10); }"#;
+        assert_eq!(run(src).len(), 2);
     }
 }
