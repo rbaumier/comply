@@ -20,7 +20,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
     })
 }
 
-/// Variable-name substrings that mark a schema as a response/wire-contract
+/// PascalCase words that mark a schema as a response/wire-contract
 /// (server-emitted) shape rather than a user-input schema. The server controls
 /// the wire format, so `z.string()` fields need not be non-empty.
 const RESPONSE_SCHEMA_MARKERS: &[&str] = &[
@@ -28,8 +28,26 @@ const RESPONSE_SCHEMA_MARKERS: &[&str] = &[
     "Dto", "DTO", "Error", "Problem",
 ];
 
-/// True when `z.string()` lives inside a variable whose name contains a
-/// response/wire-contract marker (e.g. `ProblemSchema`, `FooResponseSchema`).
+/// PascalCase words that mark a schema as user/wire **input** — a POST/PATCH
+/// body, a URL query, a filter, or a form — where an empty `z.string()` is a
+/// real defect the rule must keep flagging. These take precedence over the
+/// `<Entity>Schema` response convention below: `Edit<Entity>InputSchema` is
+/// input even though it ends in `Schema`.
+const INPUT_SCHEMA_MARKERS: &[&str] = &[
+    "Input", "Body", "Payload", "Request", "Args", "Params",
+    "Form", "Filters", "Query", "Config",
+];
+
+/// True when `z.string()` lives inside a variable whose name marks it as a
+/// response / wire-read shape rather than a user-input schema.
+///
+/// A schema is treated as a response when its declarator name carries an
+/// explicit response marker (`ProblemSchema`, `FooResponseSchema`, `UserDto`)
+/// **or** follows the canonical entity-mirror convention — a PascalCase
+/// identifier ending in `Schema` (`TeamCentralCodeSchema`), the shape that
+/// deserializes a server-emitted row (issue #513). An input marker
+/// (`…InputSchema`, `…QuerySchema`, `…FiltersSchema`) overrides both: input
+/// bodies keep needing `.min(1)`, so they stay flagged.
 fn is_inside_response_schema(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -39,10 +57,45 @@ fn is_inside_response_schema(
             let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id else {
                 return false;
             };
-            return RESPONSE_SCHEMA_MARKERS.iter().any(|m| id.name.contains(m));
+            return is_response_schema_name(&id.name);
         }
     }
     false
+}
+
+/// A schema name is a response/wire-read shape when it is not input-direction
+/// and either carries a response marker or matches the `<Entity>Schema`
+/// entity-mirror convention.
+fn is_response_schema_name(name: &str) -> bool {
+    if INPUT_SCHEMA_MARKERS.iter().any(|m| contains_pascal_word(name, m)) {
+        return false;
+    }
+    RESPONSE_SCHEMA_MARKERS.iter().any(|m| contains_pascal_word(name, m))
+        || is_entity_mirror_schema_name(name)
+}
+
+/// True when `word` (itself a PascalCase token, first char uppercase) appears
+/// in `name` as a whole PascalCase segment, not merely as a substring. The
+/// segment ends at a new word — end of string, an uppercase letter, or a digit
+/// — so `Form` matches `FormSchema`/`EditFormSchema` but not `FormatSchema`,
+/// and `Config` matches `EmailConfigSchema` but not `ConfigurationSchema`. The
+/// leading boundary is implicit: `word` starts uppercase, which already opens a
+/// PascalCase segment wherever it occurs.
+fn contains_pascal_word(name: &str, word: &str) -> bool {
+    name.match_indices(word).any(|(index, _)| {
+        match name[index + word.len()..].chars().next() {
+            None => true,
+            Some(next) => next.is_ascii_uppercase() || next.is_ascii_digit(),
+        }
+    })
+}
+
+/// The canonical wire-read convention: a PascalCase identifier ending in
+/// `Schema` (`TeamCentralCodeSchema`, `ProductSchema`). Requiring PascalCase
+/// keeps ad-hoc camelCase input schemas (`loginSchema`) flagged: those are
+/// hand-named form bodies, not the generated entity-row mirror.
+fn is_entity_mirror_schema_name(name: &str) -> bool {
+    name.ends_with("Schema") && name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 const VALID_CONTINUATIONS: &[&str] = &[
@@ -249,9 +302,90 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_on_entity_mirror_schema() {
+        // Regression for the #513 reopening: the canonical wire-read shape is
+        // a PascalCase `<Entity>Schema`, which carries none of the explicit
+        // response markers above yet still deserializes a server-emitted row.
+        // The exact reproducer from the issue (TeamCentralCodeSchema.code).
+        let entity_mirror = r#"
+            export const TeamCentralCodeSchema = z.object({
+                id: TeamCentralCodeIdSchema,
+                teamId: TeamIdSchema,
+                centraleId: CentraleIdSchema,
+                code: z.string(),
+                isWeb: z.boolean(),
+                deactivatedAt: z.coerce.date().nullable(),
+                createdAt: z.coerce.date(),
+            });
+        "#;
+        assert!(run(entity_mirror).is_empty());
+
+        // Other plain entity-mirror names from the same convention.
+        assert!(run("const ProductSchema = z.object({ name: z.string() });").is_empty());
+        assert!(run("const LaboratorySchema = z.object({ label: z.string() });").is_empty());
+        // Extended / derived response shapes follow the same convention.
+        assert!(
+            run("const TransverseTeamCentralCodeSchema = z.object({ code: z.string() });").is_empty()
+        );
+    }
+
+    #[test]
+    fn input_markers_match_whole_pascal_words_not_substrings() {
+        // Markers are matched on PascalCase word boundaries, so an entity name
+        // that merely embeds a marker's letters stays exempt: `Form` ⊄ word in
+        // `FormatSchema` / `TransformSchema`, `Config` ⊄ word in
+        // `ConfigurationSchema`, `Body` ⊄ word in `AntibodySchema`. Without
+        // word-anchoring these wire-read schemas would regress to the #513 FP.
+        assert!(run("const FormatSchema = z.object({ value: z.string() });").is_empty());
+        assert!(run("const TransformSchema = z.object({ value: z.string() });").is_empty());
+        assert!(run("const ConfigurationSchema = z.object({ value: z.string() });").is_empty());
+        assert!(run("const AntibodySchema = z.object({ value: z.string() });").is_empty());
+
+        // The genuine whole-word marker still flags the input schema.
+        assert_eq!(run("const FormSchema = z.object({ value: z.string() });").len(), 1);
+        assert_eq!(run("const EditFormSchema = z.object({ value: z.string() });").len(), 1);
+    }
+
+    #[test]
+    fn input_marker_overrides_response_marker() {
+        // Precedence is load-bearing: an input marker wins even when an explicit
+        // response marker is also present, because the schema is still a body the
+        // user sends. `ConfigResponseSchema` is config input despite `Response`.
+        assert_eq!(
+            run("const ConfigResponseSchema = z.object({ host: z.string() });").len(),
+            1
+        );
+    }
+
+    #[test]
     fn still_flags_bare_string_in_input_schema() {
-        // Ensure response-schema exemption does not apply to input schemas.
+        // Ensure the response-schema exemption does not apply to input schemas.
+        // camelCase ad-hoc form bodies are not the entity-mirror convention.
         assert_eq!(run("const loginSchema = z.object({ username: z.string() });").len(), 1);
         assert_eq!(run("const CreateUserInput = z.object({ name: z.string() });").len(), 1);
+        // An input marker overrides the trailing `Schema`: `<Entity>InputSchema`
+        // / `Edit<Entity>InputSchema` are POST/PATCH bodies, still flagged.
+        assert_eq!(
+            run("const TeamCentralCodeInputSchema = z.object({ code: z.string() });").len(),
+            1
+        );
+        assert_eq!(
+            run("const EditTeamCentralCodeInputSchema = z.object({ code: z.string() });").len(),
+            1
+        );
+        // URL query / filter inputs end in `Schema` but are user-controlled.
+        assert_eq!(
+            run("const ListProductsQuerySchema = z.object({ search: z.string() });").len(),
+            1
+        );
+        assert_eq!(
+            run("const ProductFiltersSchema = z.object({ name: z.string() });").len(),
+            1
+        );
+        // Boot-time config validation is input, not a wire-read row.
+        assert_eq!(
+            run("const EmailConfigSchema = z.object({ host: z.string() });").len(),
+            1
+        );
     }
 }
