@@ -308,6 +308,16 @@ mod tests {
         assert!(run(src).is_empty());
     }
 
+    /// Regression for #149 — a bare `: undefined` return type (not a union)
+    /// is the `TSUndefinedKeyword` annotation. `return undefined;` matches it
+    /// literally and is the shape `require-explicit-undefined` mandates, so it
+    /// must not be flagged.
+    #[test]
+    fn allows_return_undefined_when_return_type_is_bare_undefined() {
+        let src = "function f(): undefined { return undefined; }";
+        assert!(run(src).is_empty());
+    }
+
     #[test]
     fn still_flags_return_undefined_when_return_type_excludes_undefined() {
         let src = "function f(): string { return undefined; }";
