@@ -1858,7 +1858,11 @@ pub fn cast_operand_is_bool(cast: Node, source: &[u8]) -> bool {
     operand_is_bool(value, source)
 }
 
-fn operand_is_bool(node: Node, source: &[u8]) -> bool {
+/// True when `node` is provably `bool` from its syntactic shape (or a bool-typed
+/// local binding / bool-returning method call). Used to recognise both the
+/// `bool as integer` cast idiom and the branchless `bool & bool` / `bool | bool`
+/// (non-short-circuit logical) idiom.
+pub fn operand_is_bool(node: Node, source: &[u8]) -> bool {
     match node.kind() {
         "boolean_literal" => true,
         "parenthesized_expression" => node
