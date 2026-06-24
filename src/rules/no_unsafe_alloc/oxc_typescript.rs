@@ -131,6 +131,39 @@ mod tests {
     }
 
     #[test]
+    fn skips_test_file_size_validation_fixture() {
+        // Regression for rbaumier/comply#6050 — in a test file, `allocUnsafe`
+        // builds size-varying throwaway buffers whose content is irrelevant by
+        // design (here, asserting a validator rejects invalid sizes). The
+        // uninitialized memory never ships, so the security rule does not fire.
+        let src = r#"
+            it('rejects smaller than 33', () => {
+              for (let i = 0; i < 33; i++) {
+                assert.strictEqual(false, bscript.isCanonicalPubKey(Buffer.allocUnsafe(i)));
+              }
+            });
+        "#;
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "test/script.spec.ts",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_alloc_unsafe_in_production_source() {
+        // The test-dir skip is scoped to test files only — `allocUnsafe` in
+        // production source still leaks uninitialized heap memory and is flagged.
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "const b = Buffer.allocUnsafe(n);",
+            "src/script.ts",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
     fn flags_alloc_unsafe() {
         assert_eq!(run("const b = Buffer.allocUnsafe(2);").len(), 1);
     }
