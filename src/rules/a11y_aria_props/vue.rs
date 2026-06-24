@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{collect_attr_names, extract_elements, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    collect_attr_names, extract_elements, is_custom_component_tag, is_vue_file,
+};
 
 const VALID_ARIA: &[&str] = &[
     "aria-activedescendant",
@@ -65,6 +67,13 @@ impl TextCheck for Check {
         }
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
+            // `aria-*` validation applies only to native HTML elements. On a
+            // custom Vue component (`<o-notification>`, `<MyComponent>`) an
+            // `aria-*` attribute is a component prop the component consumes
+            // internally, not a WAI-ARIA attribute applied to the DOM.
+            if is_custom_component_tag(elem.tag) {
+                continue;
+            }
             for name in collect_attr_names(elem.attrs) {
                 if name.starts_with("aria-") && !VALID_ARIA.contains(&name) {
                     diagnostics.push(Diagnostic {
@@ -107,5 +116,34 @@ mod tests {
         let source =
             "<template>\n  <div aria-label=\"hello\" aria-hidden=\"true\"></div>\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_aria_prop_on_hyphenated_custom_component() {
+        // `aria-close-label` is a component prop of `<o-notification>`, not a
+        // WAI-ARIA attribute on a native element (issue #4875).
+        let source = "<template>\n  <o-notification aria-close-label=\"Close notification\">\n  </o-notification>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_aria_prop_on_self_closing_custom_component() {
+        let source =
+            "<template>\n  <o-taginput aria-close-label=\"Close tag\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_aria_prop_on_pascal_case_component() {
+        let source = "<template>\n  <MyComponent aria-foo=\"x\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_invalid_aria_on_native_element() {
+        let source = "<template>\n  <div aria-invalidprop=\"x\"></div>\n</template>";
+        let d = run(source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("aria-invalidprop"));
     }
 }
