@@ -12,6 +12,14 @@
 //! `Value` collapses duplicate keys — losing the very case we must detect — and
 //! because real `package.json` files in the wild carry comments or trailing
 //! commas that strict parsing would reject outright.
+//!
+//! A cross-section overlap is not reported when the `dependencies` entry uses
+//! the pnpm/yarn `workspace:` protocol: such an entry is a monorepo-local build
+//! pin that is rewritten or dropped at publish, so it never reaches the
+//! published tree and creates no npm resolution conflict with a same-named
+//! `devDependencies`/`peerDependencies` entry. This is the standard pnpm library
+//! pattern (build pins `workspace:^x.y.z`, tests use `workspace:*`, peers
+//! declare the published range).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -49,12 +57,19 @@ const EXCLUSIVE_SECTIONS: &[(&str, &[&str])] = &[
     ("peerDependencies", &["optionalDependencies"]),
 ];
 
-/// One dependency entry located in the source: its name and where the name's
-/// opening quote sits (byte offset and 0-based line).
+/// One dependency entry located in the source: its name, the version range it
+/// maps to (empty for array-section elements, which have no version), and where
+/// the name's opening quote sits (byte offset and 0-based line).
 struct Entry {
     name: String,
+    version: String,
     byte_offset: usize,
     line: usize,
+}
+
+/// Whether a version range uses the pnpm/yarn `workspace:` protocol.
+fn is_workspace_protocol(version: &str) -> bool {
+    version.starts_with("workspace:")
 }
 
 impl TextCheck for Check {
@@ -109,9 +124,9 @@ fn cross_section_duplicates(
         let Some(source_entries) = sections.get(source_section) else {
             continue;
         };
-        let source_names: FxHashMap<&str, ()> = source_entries
+        let source_versions: FxHashMap<&str, &str> = source_entries
             .iter()
-            .map(|e| (e.name.as_str(), ()))
+            .map(|e| (e.name.as_str(), e.version.as_str()))
             .collect();
 
         for &other_section in others {
@@ -119,16 +134,23 @@ fn cross_section_duplicates(
                 continue;
             };
             for entry in other_entries {
-                if source_names.contains_key(entry.name.as_str()) {
-                    diags.push(diagnostic(
-                        ctx,
-                        entry,
-                        format!(
-                            "The dependency \"{}\" is also listed under {source_section}.",
-                            entry.name
-                        ),
-                    ));
+                let Some(&source_version) = source_versions.get(entry.name.as_str()) else {
+                    continue;
+                };
+                // A `workspace:`-protocol `dependencies` entry is never published,
+                // so its cross-section overlaps are not npm conflicts (see the
+                // module docblock).
+                if source_section == "dependencies" && is_workspace_protocol(source_version) {
+                    continue;
                 }
+                diags.push(diagnostic(
+                    ctx,
+                    entry,
+                    format!(
+                        "The dependency \"{}\" is also listed under {source_section}.",
+                        entry.name
+                    ),
+                ));
             }
         }
     }
@@ -165,6 +187,9 @@ fn collect_sections(source: &str) -> FxHashMap<&str, Vec<Entry>> {
     let mut pending_section: Option<&'static str> = None;
     // The active section and the depth its container opened at, if any.
     let mut current: Option<(&'static str, usize)> = None;
+    // An object member just pushed (section, index), whose version value is the
+    // next string literal to resolve at the member depth.
+    let mut awaiting_value: Option<(&'static str, usize)> = None;
 
     while i < bytes.len() {
         match bytes[i] {
@@ -186,8 +211,10 @@ fn collect_sections(source: &str) -> FxHashMap<&str, Vec<Entry>> {
                     } else if let Some((section, section_depth)) = current
                         && depth == section_depth + 1
                     {
-                        // Object member of the active section.
-                        push_entry(&mut sections, section, start, start_line, value);
+                        // Object member of the active section; its version value
+                        // follows and is captured at the next resolution point.
+                        let index = push_entry(&mut sections, section, start, start_line, value);
+                        awaiting_value = Some((section, index));
                     }
                 }
                 i += 1;
@@ -198,14 +225,23 @@ fn collect_sections(source: &str) -> FxHashMap<&str, Vec<Entry>> {
                 {
                     current = Some((section, depth));
                 }
+                // An object/array value is not a version string; abandon any
+                // pending object member awaiting its version.
+                awaiting_value = None;
                 pending = None;
                 depth += 1;
                 i += 1;
             }
             b'}' | b']' => {
-                // A string array element resolves at the closing bracket when no
-                // trailing comma followed it.
-                flush_array_element(&mut sections, current, depth, pending.take());
+                // A string array element, or an object member's version value,
+                // resolves at the closing bracket when no trailing comma followed.
+                flush_pending_value(
+                    &mut sections,
+                    current,
+                    depth,
+                    awaiting_value.take(),
+                    pending.take(),
+                );
                 if let Some((_, section_depth)) = current
                     && depth == section_depth + 1
                 {
@@ -216,7 +252,13 @@ fn collect_sections(source: &str) -> FxHashMap<&str, Vec<Entry>> {
                 i += 1;
             }
             b',' => {
-                flush_array_element(&mut sections, current, depth, pending.take());
+                flush_pending_value(
+                    &mut sections,
+                    current,
+                    depth,
+                    awaiting_value.take(),
+                    pending.take(),
+                );
                 i += 1;
             }
             b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
@@ -235,6 +277,8 @@ fn collect_sections(source: &str) -> FxHashMap<&str, Vec<Entry>> {
                 i = (i + 2).min(bytes.len());
             }
             b if !b.is_ascii_whitespace() => {
+                // A non-string value (number/bool/null) leaves the version empty.
+                awaiting_value = None;
                 pending = None;
                 i += 1;
             }
@@ -245,30 +289,44 @@ fn collect_sections(source: &str) -> FxHashMap<&str, Vec<Entry>> {
     sections
 }
 
+/// Push an entry into `section` and return its index within that section's list.
 fn push_entry(
     sections: &mut FxHashMap<&str, Vec<Entry>>,
     section: &'static str,
     byte_offset: usize,
     line: usize,
     name: String,
-) {
-    sections.entry(section).or_default().push(Entry {
+) -> usize {
+    let list = sections.entry(section).or_default();
+    list.push(Entry {
         name,
+        version: String::new(),
         byte_offset,
         line,
     });
+    list.len() - 1
 }
 
-/// Record `pending` as an array element when it is a direct string element of
-/// the active array section. A no-op for object sections and out-of-scope depths.
-fn flush_array_element(
+/// Resolve the pending string literal at a value position: either an object
+/// member's version (filling the entry recorded in `awaiting_value`) or a direct
+/// string element of an array section (a new entry). A no-op otherwise.
+fn flush_pending_value(
     sections: &mut FxHashMap<&str, Vec<Entry>>,
     current: Option<(&'static str, usize)>,
     depth: usize,
+    awaiting_value: Option<(&'static str, usize)>,
     pending: Option<(usize, usize, String)>,
 ) {
-    if let Some((start, start_line, value)) = pending
-        && let Some((section, section_depth)) = current
+    let Some((start, start_line, value)) = pending else {
+        return;
+    };
+    if let Some((section, index)) = awaiting_value {
+        if let Some(entry) = sections.get_mut(section).and_then(|l| l.get_mut(index)) {
+            entry.version = value;
+        }
+        return;
+    }
+    if let Some((section, section_depth)) = current
         && depth == section_depth + 1
         && is_array_section(section)
     {
@@ -529,5 +587,105 @@ mod tests {
     fn invalid_json_does_not_panic() {
         let src = r#"{ "dependencies": { "foo": "#;
         let _ = check(src);
+    }
+
+    // --- workspace: protocol cross-section exemption (issue #6067) ---
+
+    #[test]
+    fn allows_workspace_dep_across_dev_and_peer_dependencies() {
+        // The real urql pattern: a first-party sibling declared as a published
+        // peer range, pinned in `dependencies` via `workspace:` for the build,
+        // and floated in `devDependencies` via `workspace:*` for tests. The
+        // `dependencies` workspace pin never reaches the published tree, so the
+        // overlaps with peer/dev are not npm conflicts.
+        let src = r#"{
+  "name": "@urql/exchange-context",
+  "peerDependencies": { "@urql/core": "^6.0.0" },
+  "dependencies": {
+    "@urql/core": "workspace:^6.0.3",
+    "wonka": "^6.3.2"
+  },
+  "devDependencies": {
+    "@urql/core": "workspace:*",
+    "graphql": "^16.0.0"
+  }
+}"#;
+        assert!(check(src).is_empty(), "{:?}", check(src));
+    }
+
+    #[test]
+    fn flags_dep_and_dev_dep_with_real_versions() {
+        // A real npm version on the `dependencies` side is a genuine resolution
+        // conflict, even when the other side overlaps.
+        let src = r#"{
+  "dependencies": { "lodash": "^1.0.0" },
+  "devDependencies": { "lodash": "^2.0.0" }
+}"#;
+        let diags = check(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "The dependency \"lodash\" is also listed under dependencies."
+        );
+    }
+
+    #[test]
+    fn flags_real_dep_against_peer_dep() {
+        // A non-workspace `dependencies` range still conflicts with a peer entry.
+        let src = r#"{
+  "dependencies": { "foo": "^1.0.0" },
+  "peerDependencies": { "foo": "^1.0.0" }
+}"#;
+        let diags = check(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "The dependency \"foo\" is also listed under dependencies."
+        );
+    }
+
+    #[test]
+    fn flags_when_only_dev_side_is_workspace() {
+        // The exemption keys on the published `dependencies` range; a real
+        // `dependencies` version with a `workspace:` devDependency still flags.
+        let src = r#"{
+  "dependencies": { "foo": "^1.0.0" },
+  "devDependencies": { "foo": "workspace:*" }
+}"#;
+        let diags = check(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn peer_optional_overlap_unaffected_by_workspace_exemption() {
+        // The peerDependencies -> optionalDependencies pair is untouched by the
+        // dependencies-side exemption and is still reported.
+        let src = r#"{
+  "peerDependencies": { "foo": "workspace:*" },
+  "optionalDependencies": { "foo": "workspace:*" }
+}"#;
+        let diags = check(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "The dependency \"foo\" is also listed under peerDependencies."
+        );
+    }
+
+    #[test]
+    fn within_dependencies_duplicate_still_flagged_with_workspace_versions() {
+        let src = r#"{
+  "dependencies": {
+    "foo": "workspace:*",
+    "bar": "1",
+    "foo": "workspace:^1.0.0"
+  }
+}"#;
+        let diags = check(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "The dependency \"foo\" is listed twice under dependencies."
+        );
     }
 }
