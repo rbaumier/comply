@@ -4174,6 +4174,19 @@ impl ProjectCtx {
         ts_dir != pkg_dir && ts_dir.starts_with(&pkg_dir)
     }
 
+    /// True when the tsconfig governing `path` selects CommonJS module *emit*
+    /// (`compilerOptions.module` is `commonjs`, case-insensitively), directly or
+    /// inherited through its `extends` chain. Under CommonJS emit the only way to
+    /// produce a single-value `module.exports = value` is `export = value`
+    /// (`export default value` emits `exports.default`), so `export =` is
+    /// required rather than discouraged. Defaults to false when no tsconfig is
+    /// found or it sets no `module`.
+    pub fn tsconfig_module_is_commonjs(&self, path: &Path) -> bool {
+        self.nearest_tsconfig(path)
+            .and_then(|tsc| tsc.module.clone())
+            .is_some_and(|m| m.eq_ignore_ascii_case("commonjs"))
+    }
+
     /// Walk up from `path` to the nearest `tsconfig.json` / `jsconfig.json` and
     /// return the *directory* containing it. Shares the resolution and cache
     /// with `nearest_tsconfig`.
