@@ -2255,4 +2255,29 @@ mod tests {
         let src = r#"function f(n: number) { return n ** 10 + Math.pow(n, 10); }"#;
         assert_eq!(run(src).len(), 2);
     }
+
+    // Regression for issue #6047: the numeric initializer of a TS enum member
+    // (`OP_PUSHDATA1 = 76` in bitcoinjs-lib's 135-opcode Bitcoin Script enum) is
+    // named by the enum member itself — there is no unnamed magic. The literal's
+    // AST parent is a `TSEnumMember`, the allowed context that exempts it.
+    #[test]
+    fn allows_enum_member_initializers() {
+        for src in [
+            "enum OPS { OP_PUSHDATA1 = 76, OP_PUSHDATA2 = 77, OP_INVALIDOPCODE = 255 }",
+            "export enum OPS { OP_PUSHDATA1 = 76, OP_INVALIDOPCODE = 255 }",
+            "const enum OPS { OP_PUSHDATA1 = 76, OP_INVALIDOPCODE = 255 }",
+        ] {
+            assert!(run(src).is_empty(), "enum member initializer flagged: {src}");
+        }
+    }
+
+    #[test]
+    fn flags_same_value_in_expression_position() {
+        // The enum-member exemption is positional: the same value (`76`) used in
+        // an expression — a call argument, a multiplication, a bare initializer —
+        // is still a magic number that must be named.
+        assert_eq!(run("function f() { return foo(76); }").len(), 1);
+        assert_eq!(run("function f(x: number) { return x * 76; }").len(), 1);
+        assert_eq!(run("let x = 76;").len(), 1);
+    }
 }
