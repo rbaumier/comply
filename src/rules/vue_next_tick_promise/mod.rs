@@ -26,6 +26,11 @@
 //! - `nextTick("not a callback")` — first argument is not a function.
 //! - `localNextTick(cb)` — `localNextTick` is a local function, not a vue
 //!   import.
+//! - `nextTick(cb)` whose nearest enclosing function is **not** `async` —
+//!   `await` is not syntactically available, and making the function `async`
+//!   would change its return type to a Promise and break callers, so the
+//!   callback form is the only viable shape. (Module top level, where
+//!   top-level `await` applies, still fires.)
 //!
 //! ## Language coverage
 //!

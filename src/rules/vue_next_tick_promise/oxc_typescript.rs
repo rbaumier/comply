@@ -34,6 +34,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The remediation (`await nextTick()`) needs `await` syntactically
+        // available in the enclosing scope. When the nearest enclosing function
+        // is not `async`, switching to `await` would force that function to
+        // become `async` — changing its return type to a Promise and breaking
+        // callers — so the callback form is the only viable shape. Suppress.
+        if !await_is_available(node, semantic) {
+            return;
+        }
+
         if !callee_is_vue_next_tick(unwrap_parens(&call.callee), semantic) {
             return;
         }
@@ -51,6 +60,27 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when `await` is syntactically usable at `node`'s position: the nearest
+/// enclosing function (arrow, function expression, or declaration) is `async`,
+/// or there is no enclosing function at all (module top level, where top-level
+/// `await` applies). A non-`async` enclosing function — even when nested inside
+/// an `async` one — makes `await` unavailable, since the immediately-enclosing
+/// function is what determines it.
+fn await_is_available<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::Function(f) => return f.r#async,
+            AstKind::ArrowFunctionExpression(a) => return a.r#async,
+            _ => {}
+        }
+    }
+    // No enclosing function: module top level supports top-level `await`.
+    true
 }
 
 /// True when the call's first argument is an arrow or `function` expression
@@ -221,7 +251,8 @@ mod tests {
 
     #[test]
     fn flags_this_next_tick_callback() {
-        let src = "export default {\n  mounted() {\n    this.$nextTick(() => { updateDom(); });\n  },\n};";
+        // `await this.$nextTick()` is viable inside an `async` lifecycle hook.
+        let src = "export default {\n  async mounted() {\n    this.$nextTick(() => { updateDom(); });\n  },\n};";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -293,6 +324,62 @@ mod tests {
     #[test]
     fn ignores_this_other_method() {
         let src = "export default {\n  mounted() {\n    this.doSomething(() => {});\n  },\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- `await` availability guard (#4697) ---
+
+    /// The issue's exact `useOncePerTickFn` shape: `nextTick(cb)` inside a
+    /// returned non-`async` arrow whose result is returned synchronously.
+    /// Making the function `async` would change its return type and break
+    /// callers, so the callback form is the only viable shape.
+    #[test]
+    fn allows_callback_in_sync_returned_arrow() {
+        let src = "import { nextTick } from \"vue\";\n\
+            export const useOncePerTickFn = (fn) => {\n\
+            \x20 let canBeCalled = true;\n\
+            \x20 return (...args) => {\n\
+            \x20   if (!canBeCalled) { return; }\n\
+            \x20   canBeCalled = false;\n\
+            \x20   const result = fn(...args);\n\
+            \x20   nextTick(() => { canBeCalled = true; });\n\
+            \x20   return result;\n\
+            \x20 };\n\
+            };";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A non-`async` function declaration: `await` is unavailable, so suppress.
+    #[test]
+    fn allows_callback_in_sync_function_decl() {
+        let src = "import { nextTick } from \"vue\";\n\
+            function schedule() {\n\
+            \x20 nextTick(() => { updateDom(); });\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Inside an `async` function `await nextTick()` is viable — keep flagging.
+    #[test]
+    fn flags_callback_in_async_function() {
+        let src = "import { nextTick } from \"vue\";\n\
+            async function schedule() {\n\
+            \x20 nextTick(() => { updateDom(); });\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// A non-`async` arrow nested inside an `async` function still cannot use
+    /// `await` — the immediately-enclosing function decides. Suppress.
+    #[test]
+    fn allows_callback_in_sync_arrow_nested_in_async() {
+        let src = "import { nextTick } from \"vue\";\n\
+            async function outer() {\n\
+            \x20 const inner = () => {\n\
+            \x20   nextTick(() => { updateDom(); });\n\
+            \x20 };\n\
+            \x20 inner();\n\
+            }";
         assert!(run_on(src).is_empty());
     }
 }
