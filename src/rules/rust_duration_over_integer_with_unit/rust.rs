@@ -33,10 +33,15 @@
 //! file-wide — it does not verify a structural link — which deliberately errs
 //! toward silence over a false positive on a name collision.
 //! Test code is exempted via `is_in_test_context`.
+//! A parameter of a trait-impl method (`impl SomeTrait for T { fn f(ms: u32) }`)
+//! is exempted: the signature must match the trait's declaration exactly, so the
+//! integer type is the trait author's choice, not the implementor's. Inherent-impl
+//! methods, free functions, and struct fields still flag — there the unit-in-name
+//! design is the author's own.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_in_trait_impl};
 
 const SUFFIXES: &[&str] = &[
     "_seconds",
@@ -101,8 +106,11 @@ impl AstCheck for Check {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
             return;
         }
-        // Function parameter: `fn f(window_days: u32)`.
+        // Function parameter: `fn f(window_days: u32)`. A trait-impl method's
+        // signature must match the trait declaration, so the integer type is not
+        // the implementor's choice — exempt it.
         if node.kind() == "parameter"
+            && !is_in_trait_impl(node)
             && let Some(pattern) = node.child_by_field_name("pattern")
             && let Some(type_node) = node.child_by_field_name("type")
             && let Ok(name) = pattern.utf8_text(source_bytes)
@@ -521,5 +529,42 @@ fn build(timeout_ms: u64) -> u64 { timeout_ms }";
         // A custom derive whose name merely contains the substring is not serde.
         let source = "#[derive(MySerialize)]\nstruct Config { timeout_ms: u64 }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_trait_impl_method_param() {
+        // embedded-hal `DelayNs`: the `u32` is mandated by the trait signature;
+        // the implementor cannot change it (and the crate is `no_std`, so
+        // `Duration` is unavailable). Regression for #4718.
+        let source = "\
+struct NoDelay;
+impl embedded_hal::delay::DelayNs for NoDelay {
+    fn delay_ns(&mut self, _ns: u32) {}
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_async_trait_impl_method_param() {
+        let source = "\
+struct NoDelay;
+impl embedded_hal_async::delay::DelayNs for NoDelay {
+    async fn delay_ns(&mut self, _ns: u32) {}
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_inherent_impl_method_param() {
+        // An inherent `impl` method's signature IS the author's choice — still flag.
+        let source = "struct S; impl S { fn f(&self, timeout_ms: u32) {} }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_field_in_trait_impl_block_struct() {
+        // The trait-impl exemption is parameter-scoped: a struct field carrying a
+        // unit name is the struct author's choice and still flags.
+        assert_eq!(run_on("struct S { timeout_ms: u64 }").len(), 1);
     }
 }
