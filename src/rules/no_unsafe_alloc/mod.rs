@@ -1,4 +1,11 @@
 //! no-unsafe-alloc
+//!
+//! The harm is uninitialized heap memory escaping to an attacker in production
+//! (leaking prior heap contents). Test files (`skip_in_test_dir`) never ship
+//! such a buffer — there `allocUnsafe` builds throwaway fixtures whose content
+//! is irrelevant by design (e.g. size-varying buffers fed to a validator to
+//! assert it rejects invalid sizes). A production use of `allocUnsafe` /
+//! `new Buffer(size)` is still flagged in its own (non-test) file.
 
 mod oxc_typescript;
 
@@ -16,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["security"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 
