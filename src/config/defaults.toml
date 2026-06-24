@@ -306,6 +306,14 @@ min_cases = 3
 [rules.no-magic-numbers]
 min_data_array_len = 10
 
+# Minimum numeric-leaf count of a homogeneously-numeric array literal (flat array
+# or matrix) before its `N.0` elements are treated as embedded float data
+# (coordinate matrices, coefficient tables) rather than redundant zero fractions.
+# Normalizing an individual leaf of such a table is meaningless, so the elements
+# are not flagged.
+[rules.no-zero-fractions]
+min_data_array_len = 10
+
 # Minimum element count before a const array `.includes()` is worth a `Set`.
 # Below this, a linear scan beats constructing a `Set` + hashing + the extra
 # allocation, so suggesting `Set#has()` is a net pessimization.

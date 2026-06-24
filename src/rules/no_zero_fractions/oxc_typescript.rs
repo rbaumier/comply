@@ -119,6 +119,75 @@ fn object_has_fractional_sibling(
     })
 }
 
+/// Total count of numeric leaves in an array literal that is a homogeneous
+/// numeric table — every element is either a numeric literal (a leaf) or itself a
+/// numeric table (a row). Returns `None` the moment any element is something else
+/// (string, identifier, expression, object, spread, elision), which marks the
+/// array heterogeneous and unfit for the data-table exemption. A flat numeric
+/// array is the degenerate one-level table; a matrix recurses into its rows.
+fn numeric_table_leaf_count(array: &oxc_ast::ast::ArrayExpression) -> Option<usize> {
+    let mut total = 0;
+    for element in &array.elements {
+        let expr = element.as_expression()?;
+        total += match expr {
+            Expression::NumericLiteral(_) => 1,
+            Expression::UnaryExpression(unary)
+                if unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+                    && matches!(unary.argument, Expression::NumericLiteral(_)) =>
+            {
+                1
+            }
+            Expression::ArrayExpression(inner) => numeric_table_leaf_count(inner)?,
+            _ => return None,
+        };
+    }
+    Some(total)
+}
+
+/// True when the `N.0` literal at `node` is a leaf of an array literal that is
+/// embedded numeric data — a flat numeric array or a numeric matrix (rows of
+/// rows, e.g. a GeoJSON coordinate matrix `[[100.0, 0.0], [101.0, 1.0], ...]` or
+/// a coefficient table) whose total numeric-leaf count is at least `min_len`.
+/// Normalizing an individual leaf is meaningless: there is no semantic name for
+/// "row 2, column 0 of the coordinate matrix", and the `.0` carries the table's
+/// float notation. Anchored on the AST shape of the *outermost* enclosing array,
+/// not on any property name or value: the walk climbs through nested arrays so a
+/// coordinate matrix is judged as one table, and a non-numeric element anywhere
+/// makes the table heterogeneous and disables the exemption.
+fn is_numeric_data_array_leaf(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    min_len: usize,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    let mut array_id = nodes.parent_id(node.id());
+    if array_id == node.id() {
+        return false;
+    }
+    let AstKind::ArrayExpression(_) = nodes.get_node(array_id).kind() else {
+        return false;
+    };
+
+    // Climb to the outermost enclosing array literal so a matrix is measured as a
+    // single table. Stop as soon as the parent stops being an array.
+    loop {
+        let parent_id = nodes.parent_id(array_id);
+        if parent_id == array_id {
+            break;
+        }
+        if !matches!(nodes.get_node(parent_id).kind(), AstKind::ArrayExpression(_)) {
+            break;
+        }
+        array_id = parent_id;
+    }
+    let AstKind::ArrayExpression(array) = nodes.get_node(array_id).kind() else {
+        return false;
+    };
+
+    numeric_table_leaf_count(array).is_some_and(|count| count >= min_len)
+}
+
 /// True when the `N.0` literal at `node` sits in a floating-point computation.
 /// Signals (AST-anchored, never file name / substring):
 ///   - an element of an array literal that also holds a genuine fractional float
@@ -210,6 +279,17 @@ impl OxcCheck for Check {
         // fractional floats, arithmetic with `Math.*`, Float32/64Array element)
         // is intentional float notation, not noise.
         if is_zero_fraction && is_in_float_math_context(node, ctx.source, semantic) {
+            return;
+        }
+
+        // A leaf of a long, homogeneously-numeric array literal (flat array or
+        // matrix) is embedded float data — a coordinate matrix, a coefficient
+        // table — not a redundant zero fraction. Normalizing an individual leaf
+        // is meaningless. The leaf-count gate keeps small meaningful tuples
+        // flagged.
+        let min_data_array_len =
+            ctx.config.threshold("no-zero-fractions", "min_data_array_len", ctx.lang);
+        if is_zero_fraction && is_numeric_data_array_leaf(node, semantic, min_data_array_len) {
             return;
         }
 
@@ -369,5 +449,53 @@ mod tests {
         // `1.0` has no genuine fractional sibling in its own object, still flags.
         let src = "const o = { a: 1.0, b: { c: 0.5 } };";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_geojson_coordinate_matrix() {
+        // #5692: a GeoJSON coordinate matrix is one homogeneous numeric table
+        // (>= 10 leaves). Normalizing a single `100.0`/`0.0` leaf is meaningless.
+        let src = r#"const input = {
+            type: 'Polygon',
+            coordinates: [
+                [
+                    [100.0, 0.0],
+                    [101.0, 0.0],
+                    [101.0, 1.0],
+                    [100.0, 1.0],
+                    [100.0, 0.0]
+                ]
+            ]
+        };"#;
+        assert!(run_on(src).is_empty(), "got {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_long_flat_zero_fraction_data_array() {
+        // A flat homogeneous numeric table at the threshold (10 leaves) is data.
+        let src =
+            "const t = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];";
+        assert!(run_on(src).is_empty(), "got {:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_short_zero_fraction_array_below_threshold() {
+        // Below the leaf-count gate, every `N.0` of a small tuple still flags.
+        let src = "const xy = [1.0, 2.0, 3.0];";
+        assert_eq!(run_on(src).len(), 3);
+    }
+
+    #[test]
+    fn flags_heterogeneous_array_with_string_leaf() {
+        // A non-numeric element makes the array heterogeneous (not a data table),
+        // so the long-array exemption does not apply — every `N.0` still flags.
+        let src = r#"const a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, "x"];"#;
+        assert_eq!(run_on(src).len(), 9);
+    }
+
+    #[test]
+    fn flags_ordinary_zero_fraction_outside_data_array() {
+        // A redundant `5.0` in ordinary code is unaffected by the exemption.
+        assert_eq!(run_on("const radius = 5.0;").len(), 1);
     }
 }
