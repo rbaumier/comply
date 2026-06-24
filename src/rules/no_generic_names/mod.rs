@@ -6,11 +6,12 @@
 //! `perform`). `handle` is excluded because `handleXxx` is a React idiom.
 //!
 //! A PascalCase binding whose initializer is a React component — a
-//! `forwardRef`/`memo` call or an arrow/function returning JSX, including
-//! `function Item() { return <li/>; }` — is exempt: `Input`/`Label` are the
-//! conventional design-system component export names, not generic values. Other
-//! PascalCase bindings still flag (`const DefaultData = computeData()`,
-//! `class DataSource {}`, `const Input = 5`).
+//! `forwardRef`/`memo` call, an arrow/function returning JSX (including
+//! `function Item() { return <li/>; }`), or a polymorphic element-type ternary
+//! (`const Comp = asChild ? Slot : "div"`) — is exempt: `Input`/`Label`/`Comp`
+//! are the conventional design-system / `asChild` component names, not generic
+//! values. Other PascalCase bindings still flag (`const DefaultData =
+//! computeData()`, `class DataSource {}`, `const Input = 5`).
 
 mod oxc_typescript;
 

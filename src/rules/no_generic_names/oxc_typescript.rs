@@ -590,9 +590,48 @@ fn expr_is_jsx(expr: &Expression) -> bool {
     }
 }
 
+/// True when `expr` is a JSX element *type* — a value usable as the `<X/>` tag:
+/// a string literal (an intrinsic HTML tag, `"div"`), a PascalCase identifier (a
+/// component reference, `Slot`), or a member expression whose last segment is
+/// PascalCase (a namespaced component, `SlotPrimitive.Slot`). Lowercase
+/// identifiers/members are not JSX element types. Parenthesized wrappers are
+/// unwrapped.
+fn expr_is_jsx_element_type(expr: &Expression) -> bool {
+    match expr {
+        Expression::StringLiteral(_) => true,
+        Expression::Identifier(id) => is_pascal_case(&id.name),
+        Expression::StaticMemberExpression(m) => is_pascal_case(&m.property.name),
+        Expression::ParenthesizedExpression(p) => expr_is_jsx_element_type(&p.expression),
+        _ => false,
+    }
+}
+
+/// True when `init` is a polymorphic element-type ternary: a conditional whose
+/// both branches are JSX element types and at least one branch is a component
+/// reference (not two string tags). This is the `asChild` polymorphic-root idiom
+/// (`asChild ? Slot : "div"`) — the binding holds the component *to render*, the
+/// same renderable-element category the surrounding exemption targets, so a
+/// PascalCase binding for it (`const Comp = …`) is not a generic value. Requiring
+/// a component branch keeps a plain string ternary (`cond ? "a" : "b"`) flagged.
+fn binding_is_polymorphic_element_ternary(init: &Expression) -> bool {
+    let Expression::ConditionalExpression(cond) = init else {
+        return false;
+    };
+    let is_component_ref = |e: &Expression| {
+        matches!(
+            e,
+            Expression::Identifier(_) | Expression::StaticMemberExpression(_)
+        ) && expr_is_jsx_element_type(e)
+    };
+    expr_is_jsx_element_type(&cond.consequent)
+        && expr_is_jsx_element_type(&cond.alternate)
+        && (is_component_ref(&cond.consequent) || is_component_ref(&cond.alternate))
+}
+
 /// True when `init` is a React component value: a `forwardRef(...)`/`memo(...)`
-/// (bare or `React.`-namespaced) call, or an arrow/function expression whose
-/// body returns JSX. Parenthesized wrappers are unwrapped.
+/// (bare or `React.`-namespaced) call, an arrow/function expression whose body
+/// returns JSX, or a polymorphic element-type ternary (`asChild ? Slot : "div"`).
+/// Parenthesized wrappers are unwrapped.
 fn binding_is_react_component(init: &Expression) -> bool {
     match init {
         Expression::ParenthesizedExpression(p) => binding_is_react_component(&p.expression),
@@ -608,6 +647,7 @@ fn binding_is_react_component(init: &Expression) -> bool {
         Expression::FunctionExpression(func) => {
             func.body.as_ref().is_some_and(|b| body_returns_jsx(b))
         }
+        Expression::ConditionalExpression(_) => binding_is_polymorphic_element_ternary(init),
         _ => false,
     }
 }
@@ -1438,6 +1478,34 @@ mod tests {
         assert_eq!(run("const data = fetchData();").len(), 1);
         assert_eq!(run("class DataSource {}").len(), 1);
         assert_eq!(run_tsx("export const Result = 5;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_polymorphic_element_ternary_issue_5688() {
+        // Regression for #5688 — the `asChild` polymorphic-root idiom. A
+        // PascalCase binding whose initializer is a `cond ? Component : "tag"`
+        // ternary holds the renderable element to render, the same category the
+        // React-component exemption targets, so `Comp` (a banned word) is not a
+        // generic value here.
+        assert!(
+            run_tsx(r#"const Comp = asChild ? SlotPrimitive.Slot : "div";"#).is_empty()
+        );
+        assert!(run_tsx(r#"const Comp = asChild ? Slot : "div";"#).is_empty());
+        // Either branch may be the component reference.
+        assert!(run_tsx(r#"const Comp = asChild ? "div" : Slot;"#).is_empty());
+        // Two component references (no string tag) is still the element-type
+        // ternary.
+        assert!(run_tsx(r#"const Comp = isLink ? Link : Button;"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_element_and_string_only_ternary_issue_5688() {
+        // Negative space: the exemption requires a component branch and an
+        // element-type shape. A lowercase identifier (not a JSX type), a plain
+        // value ternary, and a string-only ternary all stay flagged.
+        assert_eq!(run_tsx(r#"const Comp = asChild ? slot : "div";"#).len(), 1);
+        assert_eq!(run_tsx(r#"const Comp = cond ? 1 : 2;"#).len(), 1);
+        assert_eq!(run_tsx(r#"const Comp = cond ? "a" : "b";"#).len(), 1);
     }
 
     #[test]
