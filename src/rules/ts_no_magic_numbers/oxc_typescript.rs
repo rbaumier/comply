@@ -297,13 +297,16 @@ fn is_typed_array_constructor_element(
         && new_expr.arguments.iter().any(|a| a.span() == array_span)
 }
 
-/// True when this literal is an element of an array literal that is embedded
-/// numeric data: at least `min_len` elements, every one a numeric literal
-/// (optionally unary-negated). Such arrays are byte arrays, lookup tables, or
-/// serialized binary (e.g. an inlined ONNX protobuf) where naming an individual
-/// element is meaningless. Anchored on the literal's parent being an
-/// `ArrayExpression`, not on any variable name. A non-numeric element (string,
-/// identifier, spread, nested array) makes the array heterogeneous and disables
+/// True when this literal is a leaf of an array literal that is embedded numeric
+/// data: a flat numeric array (byte array, lookup table, serialized binary) or a
+/// numeric matrix (rows of rows, e.g. polynomial coefficient tables), whose total
+/// numeric-leaf count is at least `min_len`. Naming an individual element is
+/// meaningless — there is no semantic name for "byte 42 of the ONNX header" or
+/// "row 3, column 2 of the coefficient matrix". Anchored on the AST shape of the
+/// *outermost* enclosing array, not on any variable name: the walk climbs through
+/// nested arrays so a 2×4 matrix is judged as one 8-leaf table, not eight 4-wide
+/// rows below the gate. A non-numeric element anywhere in the table (string,
+/// identifier, expression, object, spread) makes it heterogeneous and disables
 /// the exemption, so a small meaningful tuple keeps each literal flagged.
 fn is_numeric_data_array_element(
     node_id: oxc_semantic::NodeId,
@@ -322,32 +325,56 @@ fn is_numeric_data_array_element(
         element_id = parent_id;
     }
 
-    let array_id = nodes.parent_id(element_id);
+    let mut array_id = nodes.parent_id(element_id);
     if array_id == element_id {
         return false;
+    }
+    let AstKind::ArrayExpression(_) = nodes.get_node(array_id).kind() else {
+        return false;
+    };
+
+    // Climb to the outermost enclosing array literal so a matrix is measured as a
+    // single table. Stop as soon as the parent stops being an array.
+    loop {
+        let parent_id = nodes.parent_id(array_id);
+        if parent_id == array_id {
+            break;
+        }
+        if !matches!(nodes.get_node(parent_id).kind(), AstKind::ArrayExpression(_)) {
+            break;
+        }
+        array_id = parent_id;
     }
     let AstKind::ArrayExpression(array) = nodes.get_node(array_id).kind() else {
         return false;
     };
 
-    array.elements.len() >= min_len && array.elements.iter().all(is_numeric_array_element)
+    numeric_table_leaf_count(array).is_some_and(|count| count >= min_len)
 }
 
-/// True when an array element is a numeric literal, optionally wrapped in a
-/// unary minus (`-1`). Anything else — string, identifier, spread, elision,
-/// nested array/object — is non-numeric.
-fn is_numeric_array_element(element: &oxc_ast::ast::ArrayExpressionElement<'_>) -> bool {
-    let Some(expr) = element.as_expression() else {
-        return false;
-    };
-    match expr {
-        Expression::NumericLiteral(_) => true,
-        Expression::UnaryExpression(unary) => {
-            unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
-                && matches!(unary.argument, Expression::NumericLiteral(_))
-        }
-        _ => false,
+/// Total count of numeric leaves in an array literal that is a homogeneous
+/// numeric table — every element is either a numeric literal (a leaf) or itself a
+/// numeric table (a row). Returns `None` the moment any element is something else
+/// (string, identifier, expression, object, spread, elision), which marks the
+/// array heterogeneous and unfit for the data-table exemption. A flat numeric
+/// array is the degenerate one-level table; a matrix recurses into its rows.
+fn numeric_table_leaf_count(array: &oxc_ast::ast::ArrayExpression<'_>) -> Option<usize> {
+    let mut total = 0;
+    for element in &array.elements {
+        let expr = element.as_expression()?;
+        total += match expr {
+            Expression::NumericLiteral(_) => 1,
+            Expression::UnaryExpression(unary)
+                if unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+                    && matches!(unary.argument, Expression::NumericLiteral(_)) =>
+            {
+                1
+            }
+            Expression::ArrayExpression(inner) => numeric_table_leaf_count(inner)?,
+            _ => return None,
+        };
     }
+    Some(total)
 }
 
 /// True when this literal is the value of a named property in an object literal
@@ -1415,6 +1442,45 @@ mod tests {
     fn allows_as_cast_literal() {
         let src = r#"function f() { return foo(3 as Priority); }"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for issue #5673: proj4js's Robinson-projection coefficient table
+    // (`lib/projections/robin.js`) is a `var COEFS_X = [[…], […], …]` numeric
+    // matrix. Each leaf is a polynomial coefficient named by its row/column in the
+    // table; there is no constant name for "row 3, column 2". A matrix is the same
+    // embedded numeric data as a flat lookup table, so its leaves must not flag.
+    #[test]
+    fn allows_numeric_matrix_data_table_elements() {
+        let src = r#"var COEFS_X = [
+            [1.0000, 2.2199e-17, -7.15515e-05, 3.1103e-06],
+            [0.9986, -0.000482243, -2.4897e-05, -1.3309e-06],
+            [0.9954, -0.00083888, -3.7388e-05, -7.5341e-07]
+        ];"#;
+        assert!(
+            run(src).is_empty(),
+            "leaves of a numeric matrix data table must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_short_numeric_matrix_below_gate() {
+        // The length gate counts total leaves and applies to matrices too: a 2×2
+        // matrix (4 leaves, below `min_data_array_len`) is a small meaningful tuple,
+        // so its non-common values stay flagged. `1.0` is a common-value exemption;
+        // the remaining `2.0`/`3.0`/`4.0` flag.
+        let src = r#"var m = [[1.0, 2.0], [3.0, 4.0]];"#;
+        assert_eq!(run(src).len(), 3);
+    }
+
+    #[test]
+    fn flags_heterogeneous_matrix_with_expression_leaf() {
+        // A single non-numeric leaf (an expression `x * 7`) makes the whole table
+        // heterogeneous, disabling the exemption: every numeric leaf still flags,
+        // so an expression-position literal is never exempted by this path.
+        let src =
+            r#"var m = [[1.1, 2.2, x * 7, 4.4], [5.5, 6.6, 7.7, 8.8], [9.9, 1.2, 2.3, 3.4]];"#;
+        // 11 numeric leaves + the `7` in `x * 7` = 12 magic numbers.
+        assert_eq!(run(src).len(), 12);
     }
 
     #[test]
