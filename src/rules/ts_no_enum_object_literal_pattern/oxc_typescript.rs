@@ -85,8 +85,48 @@ fn type_keys_obj(ty: &TSType, obj_name: &str, aliases: &FxHashMap<&str, &str>) -
     false
 }
 
+/// If `ty` is a bare type reference to an identifier, return its name.
+fn type_ref_name<'a>(ty: &'a TSType<'a>) -> Option<&'a str> {
+    let TSType::TSTypeReference(r) = ty else { return None };
+    let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &r.type_name else { return None };
+    Some(id.name.as_str())
+}
+
+/// True when the generic type parameter named `param_name`, declared on the
+/// nearest function ancestor of `decl_node_id` that declares it, has a
+/// constraint that resolves to `keyof typeof obj_name` (directly or via alias).
+/// In valid TypeScript that nearest declarer is the function owning the indexed
+/// parameter, so an unrelated same-named `T` cannot apply.
+fn type_param_constraint_keys_obj<'a>(
+    param_name: &str,
+    decl_node_id: oxc_semantic::NodeId,
+    obj_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    aliases: &FxHashMap<&str, &str>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for kind in nodes.ancestor_kinds(decl_node_id) {
+        let type_params = match kind {
+            AstKind::Function(f) => f.type_parameters.as_deref(),
+            AstKind::ArrowFunctionExpression(f) => f.type_parameters.as_deref(),
+            _ => continue,
+        };
+        let Some(type_params) = type_params else { continue };
+        let Some(tp) = type_params.params.iter().find(|tp| tp.name.name.as_str() == param_name)
+        else {
+            continue;
+        };
+        return tp
+            .constraint
+            .as_ref()
+            .is_some_and(|c| type_keys_obj(c, obj_name, aliases));
+    }
+    false
+}
+
 /// True when the index identifier's declared type is `keyof typeof obj_name`
-/// (directly or via alias) — the lookup is then statically key-narrow and safe.
+/// (directly or via alias), or a generic type parameter whose constraint
+/// resolves to it — the lookup is then statically key-narrow and safe.
 fn index_ident_keys_obj<'a>(
     id: &IdentifierReference<'a>,
     obj_name: &str,
@@ -105,7 +145,15 @@ fn index_ident_keys_obj<'a>(
             AstKind::VariableDeclarator(decl) => decl.type_annotation.as_ref(),
             _ => continue,
         };
-        return ann.is_some_and(|a| type_keys_obj(&a.type_annotation, obj_name, aliases));
+        let Some(ann) = ann else { return false };
+        if type_keys_obj(&ann.type_annotation, obj_name, aliases) {
+            return true;
+        }
+        // `code: TCode` where `<TCode extends keyof typeof Obj>` is as safe as a
+        // direct `keyof typeof Obj` annotation — resolve the constraint.
+        return type_ref_name(&ann.type_annotation).is_some_and(|name| {
+            type_param_constraint_keys_obj(name, decl_node_id, obj_name, semantic, aliases)
+        });
     }
     false
 }
@@ -262,6 +310,53 @@ mod tests {
                    const key: keyof typeof BREAKPOINTS = 'sm';\n\
                    const v = BREAKPOINTS[key];";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_key_typed_as_generic_param_constrained_by_keyof_typeof_alias() {
+        // Regression for issue #556: a generic parameter `TCode extends
+        // CurrencyCode` (where `type CurrencyCode = keyof typeof CURRENCIES_MAP`)
+        // guarantees the key is valid — same safety as a direct `keyof typeof`.
+        let src = "const CURRENCIES_MAP = { USD: 1, EUR: 2 } as const;\n\
+                   type CurrencyCode = keyof typeof CURRENCIES_MAP;\n\
+                   function currencyFor<TCode extends CurrencyCode>(code: TCode) { return CURRENCIES_MAP[code]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_key_typed_as_generic_param_constrained_directly_by_keyof_typeof() {
+        let src = "const CURRENCIES_MAP = { USD: 1, EUR: 2 } as const;\n\
+                   function currencyFor<TCode extends keyof typeof CURRENCIES_MAP>(code: TCode) { return CURRENCIES_MAP[code]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_key_typed_as_generic_param_on_arrow_function() {
+        let src = "const M = { a: 1, b: 2 } as const;\n\
+                   const f = <T extends keyof typeof M>(k: T) => M[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_generic_param_constrained_by_string() {
+        let src = "const M = { a: 1, b: 2 } as const;\n\
+                   function f<T extends string>(k: T) { return M[k]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unconstrained_generic_param() {
+        let src = "const M = { a: 1, b: 2 } as const;\n\
+                   function f<T>(k: T) { return M[k]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_generic_param_constrained_by_keyof_typeof_other_object() {
+        let src = "const M = { a: 1 } as const;\n\
+                   const OTHER = { x: 1 } as const;\n\
+                   function f<T extends keyof typeof OTHER>(k: T) { return M[k]; }";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
