@@ -1,4 +1,14 @@
 //! pure-by-default
+//!
+//! Test files are skipped (`skip_in_test_dir`). The rule's whole point is
+//! testability: a function reading top-level mutable state should take that
+//! state as a parameter so it can be exercised in isolation. Inside a test
+//! file that rationale is moot — the function *is* the test — and the
+//! module-level mutable binding it reads is the deliberate test-harness seam
+//! (a `let mockSearch`/`navigateMock` that a `vi.mock` factory closes over).
+//! A `vi.mock` factory is invoked by the test runner with no caller, so the
+//! seam structurally cannot be passed as a parameter, and flagging it is a
+//! false positive (issue #2240).
 
 mod oxc_typescript;
 mod rust;
@@ -17,7 +27,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["code-quality"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
