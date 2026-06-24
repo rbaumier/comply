@@ -55,6 +55,7 @@ pub mod test_assertion_helpers;
 pub mod test_helpers;
 #[cfg(test)]
 pub mod test_methods;
+pub mod test_validation_rejection;
 pub mod throw_assertion;
 pub mod vue_sfc;
 pub mod vue_sfc_oxc;
