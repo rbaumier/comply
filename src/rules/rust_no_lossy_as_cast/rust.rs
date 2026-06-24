@@ -1134,6 +1134,17 @@ mod tests {
     }
 
     #[test]
+    fn repro_5972_as_bytes_index_as_i8_not_flagged() {
+        // Issue #5972 (fancy-regex prev_codepoint_ix): `(s.as_bytes()[ix] as i8)`.
+        // `.as_bytes()` returns `&[u8]`, so the indexed element resolves to `u8`
+        // and `u8 as i8` is the same-width reinterpretation already exempt here.
+        let src = "fn f(s: &str, ix: usize) -> bool { \
+                   let bytes = s.as_bytes(); (bytes[ix] as i8) >= -0x40 }";
+        assert!(run_on(src).is_empty());
+        assert!(run_on("fn f(s: &str, ix: usize) -> i8 { s.as_bytes()[ix] as i8 }").is_empty());
+    }
+
+    #[test]
     fn repro_5257_read_bits_within_target_not_flagged() {
         // A bit-reader reading N <= target bits is lossless — codec idiom.
         assert!(run_on("fn f(r: R) -> u8 { r.read_bits(4) as u8 }").is_empty());
