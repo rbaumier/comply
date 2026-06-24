@@ -32,6 +32,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Under CommonJS module emit (`compilerOptions.module: "commonjs"` in
+        // the file's nearest tsconfig) `export = value` is the only way to emit
+        // a single-value `module.exports = value`; `export default value` emits
+        // `exports.default`, breaking `require('./x')` consumers (e.g. yargs
+        // `CommandModule` files). So `export =` is required, not discouraged.
+        if ctx.project.tsconfig_module_is_commonjs(ctx.path) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, export.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -207,6 +216,94 @@ mod tests {
             diags.len(),
             1,
             "plugin-shaped object outside an eslint-plugin package must be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression #4724: a CommonJS-emit package (`compilerOptions.module:
+    // "commonjs"`) needs `export = command` to emit `module.exports = command`
+    // for `require('./command')` consumers (yargs `CommandModule` pattern).
+    #[test]
+    fn allows_export_equal_under_commonjs_module() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"module":"commonjs"}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("command.ts");
+        let source = "const command = {};\nexport = command;";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "`export = X` under `module: commonjs` must not be flagged, got {diags:?}"
+        );
+    }
+
+    // The CommonJS exemption follows the `extends` chain: a child tsconfig that
+    // inherits `module: commonjs` from a base still exempts the file.
+    #[test]
+    fn allows_export_equal_when_commonjs_inherited_via_extends() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("tsconfig.base.json"),
+            r#"{"compilerOptions":{"module":"commonjs"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"extends":"./tsconfig.base.json","compilerOptions":{"strict":true}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("command.ts");
+        let source = "const command = {};\nexport = command;";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "inherited `module: commonjs` must exempt `export = X`, got {diags:?}"
+        );
+    }
+
+    // Negative space: ESM module emit (`module: esnext`) keeps `export = X`
+    // flagged — `export default`/named exports are the correct form there.
+    #[test]
+    fn flags_export_equal_under_esnext_module() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"module":"esnext"}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("command.ts");
+        let source = "const command = {};\nexport = command;";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "`export = X` under `module: esnext` must stay flagged, got {diags:?}"
+        );
+    }
+
+    // Negative space: a tsconfig that sets no `module` (default ESM-ish) keeps
+    // `export = X` flagged.
+    #[test]
+    fn flags_export_equal_with_tsconfig_without_module() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"strict":true}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("command.ts");
+        let source = "const command = {};\nexport = command;";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "`export = X` with no `module` set must stay flagged, got {diags:?}"
         );
     }
 
