@@ -362,8 +362,9 @@ function ruleNoInOperator(sourceFile, checker, text, lineStarts, file) {
 // cannot know this type statically" (a caught error, `JSON.parse`, a lib that
 // returns `unknown`), and runtime-narrowing it with `typeof` — primitive or
 // object — is the TS-sanctioned discipline, not a boundary smell. Also skipped:
-// environment guards (`typeof window`), caught errors, a `z.preprocess`
-// normaliser, type-predicate functions (`x is T`), and already-typed operands.
+// environment guards (`typeof window`, `typeof globalThis.window`), caught
+// errors, a `z.preprocess` normaliser, type-predicate functions (`x is T`), a
+// `typeof` that only formats a diagnostic string, and already-typed operands.
 const ENV_GLOBALS = new Set([
   "window",
   "document",
@@ -381,6 +382,25 @@ const ENV_GLOBALS = new Set([
   "importScripts",
   "__DEV__",
 ]);
+
+/** Whether `typeof`'s operand reaches into an environment global — a bare
+ *  `typeof window` or a member access whose base is one (`typeof
+ *  globalThis.window`, `typeof window.document`). An SSR/CSR environment probe
+ *  is never a boundary parse, so it is exempt regardless of the operand's type.
+ *  The base identifier is peeled by `baseIdentifierNode` (parens / member
+ *  access / `as` / `!`), matched by name (these are ambient globals). */
+function operandIsEnvGlobal(text, sourceFile, operand) {
+  const base = baseIdentifierNode(operand);
+  return !!base && ENV_GLOBALS.has(nodeText(text, sourceFile, base));
+}
+
+/** Whether `typeof`'s result only formats a template-literal string — the
+ *  operand of a `${...}` span (`` `got ${typeof x}` ``). A `typeof` there builds
+ *  a diagnostic message, it does not branch on the runtime type, so it is not a
+ *  boundary smell. */
+function typeofOnlyFormatsString(node) {
+  return node.parent?.kind === SyntaxKind.TemplateSpan;
+}
 
 /** Whether `node` sits inside the callback argument of a `*.preprocess(...)`
  *  call (Zod's `z.preprocess(fn, schema)` normaliser). Scoped to the callback:
@@ -415,12 +435,8 @@ function ruleNoTypeofOperator(sourceFile, checker, text, lineStarts, file) {
     if (node.kind !== SyntaxKind.TypeOfExpression) return;
     const operand = node.expression;
 
-    if (
-      operand.kind === SyntaxKind.Identifier &&
-      ENV_GLOBALS.has(nodeText(text, sourceFile, operand))
-    ) {
-      return;
-    }
+    if (operandIsEnvGlobal(text, sourceFile, operand)) return;
+    if (typeofOnlyFormatsString(node)) return;
     if (operandIsCaughtError(checker, operand)) return;
     if (inPreprocessCallback(text, sourceFile, node)) return;
     if (inTypePredicateFunction(node)) return;
