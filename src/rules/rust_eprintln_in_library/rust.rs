@@ -47,6 +47,12 @@
 //! `println!` is the idiomatic diagnostic channel — tracing/log is
 //! unavailable there — so its `eprintln!` is exempt too.
 //!
+//! A `proc-macro = true` crate runs at compile time during macro expansion:
+//! its `eprintln!` writes to the compiler's build-time stderr, not the final
+//! program's runtime stderr, and the macro is not callable at runtime at all.
+//! The rule's premise — "library consumers can't redirect or capture it at
+//! runtime" — does not hold, so `eprintln!` in a proc-macro crate is exempt.
+//!
 //! An FFI bridge crate (a `[lib] crate-type` of `cdylib`/`staticlib` with no
 //! `rlib`/`lib`, such as Python/Java/Swift bindings) is linked into a foreign
 //! runtime, not consumed as a Rust library. That runtime never initialises a
@@ -173,6 +179,18 @@ impl AstCheck for Check {
             .project
             .nearest_cargo_manifest(ctx.path)
             .is_some_and(|m| m.is_build_codegen_crate())
+        {
+            return;
+        }
+        // A `proc-macro = true` crate runs at compile time during macro
+        // expansion: its `eprintln!` goes to the compiler's build-time stderr,
+        // not the shipped program's runtime stderr, and the macro is not
+        // callable at runtime. The "consumers can't capture it at runtime"
+        // premise is structurally inapplicable, so it is exempt.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_proc_macro())
         {
             return;
         }
@@ -561,6 +579,19 @@ name = "something_codegen"
 path = "src/lib.rs"
 "#;
 
+    /// A proc-macro crate (`[lib] proc-macro = true`): its code runs at compile
+    /// time during macro expansion, so `eprintln!` goes to the compiler's stderr
+    /// at build time, never the shipped program's runtime stderr.
+    const PROC_MACRO_CARGO_TOML: &str = r#"
+[package]
+name = "askama_derive"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+"#;
+
     /// An FFI bridge crate built as a C dynamic library (Python/Java bindings):
     /// `[lib] crate-type = ["cdylib"]`. Linked by a foreign runtime, never a Rust
     /// library consumer — `eprintln!` is the only error channel at the boundary.
@@ -663,6 +694,27 @@ tracing = "0.1"
     fn allows_eprintln_in_codegen_crate() {
         let source = "fn f() { eprintln!(\"{}\", msg); }";
         assert!(run_in_crate(CODEGEN_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// Regression for #6030 (djc/askama `askama_derive/src/lib.rs`): a
+    /// `proc-macro = true` crate runs at compile time during macro expansion,
+    /// so its `eprintln!` writes to the compiler's build-time stderr (here a
+    /// user-opt-in `print` debugging attribute), not the shipped program's
+    /// runtime stderr. The "consumers can't capture it at runtime" premise does
+    /// not hold, so it is exempt.
+    #[test]
+    fn allows_eprintln_in_proc_macro_crate() {
+        let source = "fn f() { eprintln!(\"{:?}\", nodes); }";
+        assert!(run_in_crate(PROC_MACRO_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// Strong positive: a normal `[lib]` crate (no `proc-macro = true`) ships a
+    /// runtime, so its `eprintln!` is still flagged — the exemption is
+    /// proc-macro-only.
+    #[test]
+    fn flags_eprintln_in_normal_library_crate() {
+        let source = "fn f() { eprintln!(\"{:?}\", nodes); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
     #[test]
