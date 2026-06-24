@@ -4,6 +4,7 @@
 //! not flagged: it is the only way to express logical XOR on `bool` in Rust.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::operand_is_bool;
 
 // `^` is excluded: `bool ^ bool` is the only way to express logical XOR in Rust
 // (there is no `^^`), and a `^` reached in a boolean condition is always that
@@ -22,7 +23,16 @@ fn has_bitwise_op(node: tree_sitter::Node, source: &[u8]) -> bool {
                     return false;
                 }
                 if BITWISE_OPS.contains(&op_text) {
-                    return true;
+                    // `bool & bool` / `bool | bool` is Rust's branchless,
+                    // non-short-circuit logical AND/OR — type-safe and idiomatic,
+                    // not a `&&`/`||` typo. Suppress only when both operands are
+                    // provably boolean; a non-bool operand keeps firing.
+                    let left = node.child_by_field_name("left");
+                    let right = node.child_by_field_name("right");
+                    let both_bool = left.zip(right).is_some_and(|(l, r)| {
+                        operand_is_bool(l, source) && operand_is_bool(r, source)
+                    });
+                    return !both_bool;
                 }
             }
             let mut cursor = node.walk();
@@ -88,8 +98,11 @@ mod tests {
     }
 
     #[test]
-    fn flags_bitwise_in_if() {
-        assert_eq!(run_on("fn f(a: bool, b: bool) { if a & b {} }").len(), 1);
+    fn flags_bitwise_on_unprovable_operands() {
+        // Operands whose bool-ness can't be proven from the AST (struct fields):
+        // still ambiguous between a `&&` typo and the branchless idiom, so fire.
+        assert_eq!(run_on("fn f(s: &S) { if s.a & s.b {} }").len(), 1);
+        assert_eq!(run_on("fn f(s: &S) { if s.foo() | s.bar() {} }").len(), 1);
     }
 
     #[test]
@@ -104,8 +117,45 @@ mod tests {
     }
 
     #[test]
-    fn flags_bare_bitwise_without_comparison() {
-        assert_eq!(run_on("fn f(a: bool, b: bool) { if a | b {} }").len(), 1);
+    fn allows_branchless_op_on_bool_bindings() {
+        // Both operands are `bool`-typed locals: `bool & bool` / `bool | bool`
+        // type-checks only on bools, so this is the branchless logical idiom,
+        // not a `&&`/`||` typo (#5629).
+        assert!(run_on("fn f(a: bool, b: bool) { if a & b {} }").is_empty());
+        assert!(run_on("fn f(a: bool, b: bool) { if a | b {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_branchless_or_of_comparisons() {
+        // revm hot-path `dup`: `bool | bool` is the non-short-circuit logical
+        // OR idiom, both operands provably boolean — not a `||` typo (#5629).
+        assert!(
+            run_on(
+                "fn f(len: usize, n: usize) { if (len < n) | (len + 1 > STACK_LIMIT) { return; } }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_branchless_and_of_comparisons() {
+        assert!(
+            run_on("fn f(a: u32, b: u32, c: u32, d: u32) { let ok = (a == b) & (c != d); }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_branchless_ops_with_negation_and_literal() {
+        assert!(run_on("fn f(a: bool, b: u32) { if !a | (b > 0) {} }").is_empty());
+        assert!(run_on("fn f(a: u32) { if (a > 0) & true {} }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_integer_operand() {
+        // One operand is a plain integer-typed expression: intent is ambiguous,
+        // keep flagging.
+        assert_eq!(run_on("fn f(mask: u32) { if (mask > 0) | mask {} }").len(), 1);
     }
 
     #[test]
@@ -135,7 +185,8 @@ mod tests {
 
     #[test]
     fn still_flags_and_or_nested_under_xor() {
-        // `^` is exempt, but a `&`/`|` typo nested inside it must still fire.
-        assert_eq!(run_on("fn f(a: bool, b: bool, c: bool) { if (a & b) ^ c {} }").len(), 1);
+        // `^` is exempt, but a `&`/`|` on unprovable operands nested inside it
+        // must still fire.
+        assert_eq!(run_on("fn f(s: &S, c: bool) { if (s.a & s.b) ^ c {} }").len(), 1);
     }
 }
