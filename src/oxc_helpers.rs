@@ -2350,6 +2350,43 @@ pub(crate) fn is_inside_browser_injection_callback(
     false
 }
 
+/// True when `node` sits inside a function/arrow that is an argument of an
+/// `.onError(...)` call — `.onError(({ set }) => { set.status = 500 })` or the
+/// scope-qualified `.onError({ as: 'global' }, ({ set }) => { ... })`.
+///
+/// Inside an Elysia `.onError` handler the idiomatic shape is to mutate
+/// `set.status` (and `set.headers`) separately while returning a computed body;
+/// the `status(code, body)` helper is for route handlers, not the error
+/// callback. So `set.status = ...` there is not a violation of
+/// `elysia-prefer-status-over-set`.
+///
+/// Walks ancestors from `node` to each enclosing function and checks that the
+/// function is a direct argument of a `CallExpression` whose callee is a member
+/// named `onError`. Argument position is not constrained, so both the
+/// single-argument and the scope-qualified two-argument forms are covered.
+#[must_use]
+pub(crate) fn is_inside_onerror_callback(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        if matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) && let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
+            && let Expression::StaticMemberExpression(member) = &call.callee
+            && member.property.name.as_str() == "onError"
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// True when `span` fully encloses `inner`.
 pub(crate) fn span_contains(span: oxc_span::Span, inner: oxc_span::Span) -> bool {
     span.start <= inner.start && inner.end <= span.end
