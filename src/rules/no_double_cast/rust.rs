@@ -22,6 +22,14 @@
 //! so the integer step there is a compiler-mandated bridge, not a redundant
 //! cast. The operand's source type is invisible in the cast syntax for a
 //! field/variable/method/index access, so a non-numeric operand is not flagged.
+//!
+//! A *float* operand in that chain (`(value + 0.5f64) as i64 as f64`) is the
+//! manual truncate-then-restore floor/round/trunc idiom: `as <int>` discards the
+//! fractional part, `as <float>` restores to float. It has no `From`/`Into`
+//! single-step alternative in `no_std`, where `f64::trunc`/`round` are absent. A
+//! float literal on the operand's value spine (a direct arithmetic operand or a
+//! method-call receiver) proves the source is a float, so the chain is exempt
+//! even though it is "provably numeric".
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -148,6 +156,52 @@ fn operand_is_provably_numeric(inner_cast: tree_sitter::Node, source: &[u8]) -> 
     }
 }
 
+/// True when `node` evaluates to a float, judged structurally by following only
+/// the value spine to a `float_literal`: a float literal as a direct arithmetic
+/// operand (`value + 0.5`) or as a method-call receiver (`0.5f64.copysign(v)`).
+/// Recursion follows arithmetic operands and the receiver/base of a method/field
+/// access, but NOT call arguments, index subscripts, or nested casts — a float
+/// literal in `g(1.0)`, `a[1.0 as usize]`, or `1.0 as i32` does not set the
+/// enclosing expression's type. Method receivers can in principle return a
+/// non-float (`0.5f64.to_bits()`), so this can miss a flag, never add one.
+fn is_float_arithmetic(node: tree_sitter::Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "float_literal" => true,
+        "parenthesized_expression" => {
+            node.named_child(0).is_some_and(|inner| is_float_arithmetic(inner, source))
+        }
+        "unary_expression" => {
+            unary_is_arithmetic(node, source)
+                && node.named_child(0).is_some_and(|inner| is_float_arithmetic(inner, source))
+        }
+        "binary_expression" => {
+            binary_is_arithmetic(node, source)
+                && [node.child_by_field_name("left"), node.child_by_field_name("right")]
+                    .into_iter()
+                    .flatten()
+                    .any(|operand| is_float_arithmetic(operand, source))
+        }
+        // `0.5f64.copysign(v)`: descend the receiver (the `value`/first named
+        // child), not the call arguments.
+        "call_expression" | "field_expression" => {
+            node.named_child(0).is_some_and(|recv| is_float_arithmetic(recv, source))
+        }
+        _ => false,
+    }
+}
+
+/// True when the inner cast's operand is provably a float (see
+/// `is_float_arithmetic`). A `<float> as <int> as <float>` chain is then a manual
+/// truncate-then-restore floor/round/trunc idiom: the integer step discards the
+/// fractional part, the float step restores it, and there is no `From`/`Into`
+/// single-step replacement (`f64::trunc`/`round` are unavailable in `no_std`).
+fn operand_is_provably_float(inner_cast: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(operand) = inner_cast.child_by_field_name("value") else {
+        return false;
+    };
+    is_float_arithmetic(peel_parens(operand), source)
+}
+
 crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnostics|
     // The inner expression (left side of `as`) is the first named child.
     let Some(inner) = node.child_by_field_name("value") else { return };
@@ -183,17 +237,21 @@ crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnosti
         return;
     }
 
-    // A `<expr> as <int> as <float>` chain may be a compiler-mandated bridge:
-    // `bool` (E0606) and `char` (E0604) can only reach a float type THROUGH an
-    // integer. When the operand's source type is not visible in the cast syntax
-    // (a field/variable/method/index access) we can't distinguish a mandatory
-    // bridge from a redundant numeric chain, so suppress. A numeric-literal or
-    // arithmetic operand is provably numeric (the int step IS redundant — `5 as
-    // f32`, `(a + b) as f32` compile directly), so it still fires.
+    // A `<expr> as <int> as <float>` chain is exempt in two cases:
+    //   - the operand is NOT provably numeric: `bool` (E0606) and `char` (E0604)
+    //     can only reach a float THROUGH an integer, so the int step is a
+    //     compiler-mandated bridge; a field/variable/method/index access hides the
+    //     source type, so we cannot rule that out — suppress.
+    //   - the operand is provably a FLOAT (a float literal, or arithmetic with a
+    //     float literal): `<float> as <int> as <float>` is the manual
+    //     truncate-then-restore floor/round/trunc idiom (`f64::trunc`/`round` are
+    //     absent in `no_std`), with no `From`/`Into` single-step replacement.
+    // Only a provably-integer operand (`5 as i32 as f32`, `(a + b) as i32 as f32`)
+    // makes the int step genuinely redundant, so only that still fires.
     if let Some(outer_ty) = node.child_by_field_name("type")
         && is_int_primitive(inner_ty, source)
         && is_float_primitive(outer_ty, source)
-        && !operand_is_provably_numeric(inner, source)
+        && (!operand_is_provably_numeric(inner, source) || operand_is_provably_float(inner, source))
     {
         return;
     }
@@ -408,6 +466,50 @@ mod tests {
         // An arithmetic operand is provably numeric: `(a + b) as f32` compiles
         // directly, so the `as i32` step is redundant — still fires.
         assert_eq!(run_on("fn f(a: u8, b: u8) { let _ = (a + b) as i32 as f32; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_float_truncate_round_chain() {
+        // #4700, ratatui layout.rs: a `no_std` `round()` fallback. `(value +
+        // 0.5f64.copysign(value)) as i64 as f64` truncates to the integer part
+        // then restores to float — the only portable round/trunc with no `From`/
+        // `Into` alternative (`f64::round`/`trunc` need std). The float literal
+        // `0.5f64` proves the operand is a float, so the chain is exempt.
+        let src = "fn round(value: f64) -> f64 { \
+                   (value + 0.5f64.copysign(value)) as i64 as f64 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_float_var_truncate_chain() {
+        // `x as i32 as f32`: `x`'s type is invisible (could be `bool`/`char`),
+        // so the existing not-provably-numeric bridge exemption already covers it.
+        assert!(run_on("fn f(x: f32) -> f32 { x as i32 as f32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_float_literal_truncate_chain() {
+        // A bare float literal: `1.5 as i64 as f64` truncates to `1.0`, distinct
+        // from `1.5 as f64`, so the int step is load-bearing — exempt.
+        assert!(run_on("fn f() { let _ = 1.5 as i64 as f64; }").is_empty());
+    }
+
+    #[test]
+    fn flags_int_arith_with_nested_float_cast_to_float_chain() {
+        // Negative-space guard: the float literal is INSIDE a nested cast
+        // (`1.0 as usize`, an integer), so the `n + ...` arithmetic is integer,
+        // not float — the `as i32` step is redundant and the chain still fires.
+        let src = "fn f(n: usize) { let _ = (n + (1.0 as usize)) as i32 as f32; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_int_arith_with_float_literal_in_call_arg_to_float_chain() {
+        // Negative-space guard: the float literal is a call ARGUMENT (`g(1.0)`),
+        // not on the value spine, so it does not set `g(..)`'s return type — the
+        // `n + g(1.0)` arithmetic is not provably a float, so the chain fires.
+        let src = "fn f(n: i32) { let _ = (n + g(1.0)) as i32 as f32; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
