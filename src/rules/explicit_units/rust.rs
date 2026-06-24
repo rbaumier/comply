@@ -1,10 +1,10 @@
 //! explicit-units backend for Rust.
 //!
 //! Detects numeric bindings whose semantic head — the last snake_case segment
-//! — is an ambiguous measurement base (delay / timeout / duration / …) lacking
-//! an explicit unit. A unit suffix moves the head off the base (`delay_ms`,
+//! — is an ambiguous measurement base (delay / duration / …) lacking an
+//! explicit unit. A unit suffix moves the head off the base (`delay_ms`,
 //! `size_bytes`), and a non-final base is a qualifier on another head noun
-//! (`timeout_policy`), so neither is flagged.
+//! (`duration_policy`), so neither is flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -14,6 +14,12 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // (measured in the same units as the bucketed data, not a fixed physical unit)
 // as well as confidence/sampling intervals, so it cannot demand a single unit
 // suffix like `_ms`.
+//
+// `timeout` is excluded as a self-evidently temporal name: it denotes the
+// maximum wait duration before giving up. The dimension (time) is unambiguous,
+// so a unit suffix adds little and `timeout_bytes`/`timeout_count` are
+// nonsensical. `deadline` (an absolute point in time) is the same category and
+// is likewise not a base.
 //
 // `elapsed` is excluded as a named temporal quantity whose unit is conventional
 // (the sibling of `duration`): elapsed time since a start point is expressed
@@ -27,7 +33,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // `rate` is excluded as either a dimensionless ratio/multiplier (playback rate)
 // or a quantity that carries its unit in a qualifier (`sample_rate`→Hz,
 // `bit_rate`→bps): `rate_ms`/`sample_rate_bytes` are wrong.
-const AMBIGUOUS_BASES: &[&str] = &["delay", "timeout", "duration", "age", "wait"];
+const AMBIGUOUS_BASES: &[&str] = &["delay", "duration", "age", "wait"];
 
 const NUMERIC_TYPES: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32",
@@ -107,9 +113,9 @@ fn identifier_of<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a st
 /// Returns the ambiguous base only when it is the *semantic head* of the
 /// identifier — the last snake_case segment, i.e. the thing actually being
 /// measured. A measurement word in a non-final position is a qualifier
-/// modifying a different head noun (`timeout_policy`, `delay_strategy`: head is
+/// modifying a different head noun (`duration_policy`, `delay_strategy`: head is
 /// `policy` / `strategy`), so it does not demand a unit suffix. A standalone
-/// `timeout` or `connect_timeout` (head is `timeout`) still does.
+/// `duration` or `connect_duration` (head is `duration`) still does.
 fn matches_ambiguous_base(name: &str) -> Option<&'static str> {
     let head = name.rsplit('_').next()?.to_ascii_lowercase();
     AMBIGUOUS_BASES.iter().find(|&&base| head == base).copied()
@@ -154,8 +160,13 @@ mod tests {
     }
 
     #[test]
-    fn flags_bare_timeout_param() {
-        assert_eq!(run_on("fn f(timeout: u64) {}").len(), 1);
+    fn allows_bare_timeout_deadline_interval() {
+        // `timeout`/`deadline`/`interval` are self-evidently temporal names whose
+        // dimension (time) is unambiguous — `timeout_bytes`/`timeout_count` are
+        // nonsensical, so they must not be flagged (#5640).
+        assert!(run_on("fn f(timeout: u64) {}").is_empty());
+        assert!(run_on("fn f(deadline: u64) {}").is_empty());
+        assert!(run_on("fn f(interval: u64) {}").is_empty());
     }
 
     #[test]
@@ -225,18 +236,18 @@ mod tests {
     #[test]
     fn still_flags_other_bases_after_elapsed_removal() {
         // Removing `elapsed` must not loosen genuinely unit-ambiguous bases.
-        assert_eq!(run_on("fn f(timeout: u64) {}").len(), 1);
+        assert_eq!(run_on("fn f(delay: u64) {}").len(), 1);
         assert_eq!(run_on("fn f(duration: u64) {}").len(), 1);
     }
 
     #[test]
     fn other_bases_only_flag_as_head_segment() {
         // The head-position gate generalizes across all measurement bases:
-        // `timeout`/`delay`/`duration` flag as the head, but as a leading
-        // qualifier on a different head noun they do not.
-        assert_eq!(run_on("fn f() { let connect_timeout: u64 = 30; }").len(), 1);
+        // `delay`/`duration` flag as the head, but as a leading qualifier on a
+        // different head noun they do not.
+        assert_eq!(run_on("fn f() { let connect_duration: u64 = 30; }").len(), 1);
         assert_eq!(run_on("fn f() { let retry_delay: u64 = 5; }").len(), 1);
-        assert!(run_on("fn f() { let timeout_policy: u32 = 1; }").is_empty());
+        assert!(run_on("fn f() { let duration_policy: u32 = 1; }").is_empty());
         assert!(run_on("fn f() { let delay_strategy: u32 = 2; }").is_empty());
     }
 
@@ -266,8 +277,8 @@ mod tests {
     #[test]
     fn still_flags_other_bases_after_frequency_rate_removal() {
         // Removing `frequency`/`rate` must not loosen genuinely unit-ambiguous
-        // bases — a bare `timeout`/`duration`/`delay` still demands a suffix.
-        assert_eq!(run_on("fn f(timeout: u64) {}").len(), 1);
+        // bases — a bare `duration`/`delay` still demands a suffix.
+        assert_eq!(run_on("fn f(delay: u64) {}").len(), 1);
         assert_eq!(run_on("fn f(duration: u64) {}").len(), 1);
         assert_eq!(run_on("fn f() { let retry_delay: u64 = 5; }").len(), 1);
     }
