@@ -91,10 +91,21 @@
 //!   so it is a runtime opt-in just like a verbosity flag.
 //!
 //! Negated, compared, or compound conditions stay flagged.
+//!
+//! An `eprintln!` / `eprint!` covered by an explicit
+//! `#[allow(clippy::disallowed_macros)]` / `#[expect(clippy::disallowed_macros)]`
+//! is exempt. `eprintln!` is a canonical entry in clippy's `disallowed_macros`
+//! lint, so that attribute is the author explicitly opting out of exactly this
+//! macro ban — scoped to the enclosing item or statement (e.g. an
+//! `#[allow(clippy::disallowed_macros)] { eprintln!(…) }` block). The same
+//! attribute-honoring applies as for any clippy-mirroring rule. A comment alone
+//! (with no such attribute) does not exempt — only the attribute does.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{
+    is_in_test_context, is_suppressed_by_clippy_allow, is_under_tests_dir,
+};
 use std::path::Path;
 
 const KINDS: &[&str] = &["macro_invocation"];
@@ -183,6 +194,9 @@ impl AstCheck for Check {
             return;
         }
         if is_in_panic_hook_closure(node, source_bytes) {
+            return;
+        }
+        if is_suppressed_by_clippy_allow(node, &["disallowed_macros"], source_bytes) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -919,6 +933,43 @@ required-features = ["std"]
     #[test]
     fn flags_eprintln_in_non_set_hook_closure() {
         let source = "pub fn f() { with_thing(Box::new(|info| { eprintln!(\"{info}\"); })); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #5641 (foundry-rs/foundry `crates/cli/src/opts/global.rs`):
+    /// an `eprintln!` inside a `#[allow(clippy::disallowed_macros)] { … }` block
+    /// is covered by the author's explicit suppression of clippy's
+    /// `disallowed_macros` lint (which bans `eprintln!`). Honoring that scoped
+    /// attribute exempts the macro, just as comply does for other
+    /// clippy-mirroring rules.
+    #[test]
+    fn allows_eprintln_under_clippy_disallowed_macros_allow() {
+        let source = "pub fn f() { #[allow(clippy::disallowed_macros)] { eprintln!(\"note\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The `#[expect(...)]` form scoped to the block is honored too.
+    #[test]
+    fn allows_eprintln_under_clippy_disallowed_macros_expect() {
+        let source = "pub fn f() { #[expect(clippy::disallowed_macros)] { eprintln!(\"note\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The attribute exemption is specific to `clippy::disallowed_macros`: an
+    /// `#[allow]` for an unrelated lint does not suppress the diagnostic.
+    #[test]
+    fn flags_eprintln_under_unrelated_clippy_allow() {
+        let source = "pub fn f() { #[allow(clippy::print_stderr)] { eprintln!(\"oops\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Case (1) of #5641 (foundry-rs/foundry `crates/config/src/lib.rs`): an
+    /// `eprintln!` documented only by a `//` comment — with NO suppression
+    /// attribute — stays flagged. A comment is not a suppression signal; the
+    /// dev can add `#[allow(clippy::disallowed_macros)]` to exempt it.
+    #[test]
+    fn flags_eprintln_with_explanatory_comment_only() {
+        let source = "pub fn f() {\n    // `sh_warn!` is a circular dependency, preventing us from using it here.\n    eprintln!(\"oops\");\n}";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 

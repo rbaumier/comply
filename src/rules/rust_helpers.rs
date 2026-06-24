@@ -546,10 +546,12 @@ fn attr_marks_test(text: &str) -> bool {
 /// `#[expect(clippy::<lint>)]` naming one of `lints` (each given WITHOUT the
 /// `clippy::` prefix, e.g. `"result_unit_err"`). Walks the same ancestry as
 /// `is_in_test_context`: crate-root inner attributes (`#![allow(...)]`) plus
-/// outer attributes on an enclosing function / mod / impl / struct /
-/// field. Lets a comply rule that mirrors a clippy lint honor the author's
-/// in-source suppression of it — including a struct-level or field-level
-/// `#[allow]` covering a type written in that struct's field.
+/// outer attributes on an enclosing function / mod / impl / struct / field, or
+/// on an enclosing statement (a statement-level `#[allow(...)] { … }` block or
+/// `#[allow(...)] <stmt>;`). Lets a comply rule that mirrors a clippy lint
+/// honor the author's in-source suppression of it — including a struct-level or
+/// field-level `#[allow]` covering a type written in that struct's field, or a
+/// statement-scoped `#[allow]` covering the node it decorates.
 pub fn is_suppressed_by_clippy_allow(node: Node, lints: &[&str], source: &[u8]) -> bool {
     // Crate-root inner attributes: `#![allow(clippy::X)]`.
     let mut root = node;
@@ -565,23 +567,23 @@ pub fn is_suppressed_by_clippy_allow(node: Node, lints: &[&str], source: &[u8]) 
             return true;
         }
     }
-    // Outer attributes on an enclosing function / mod / impl / struct / field.
-    // For each, the `#[allow(...)]` parses as a preceding `attribute_item`
-    // sibling (a field's attribute is a sibling inside the
-    // `field_declaration_list`, not a child), so the same preceding-sibling
-    // scan covers all of them.
+    // Outer attributes on an enclosing function / mod / impl / struct / field,
+    // and statement-level attributes on an enclosing statement. In every case
+    // the `#[allow(...)]` parses as a preceding `attribute_item` sibling: of the
+    // decorated item (a field's attribute is a sibling inside the
+    // `field_declaration_list`, not a child), or — for a statement-scoped
+    // `#[allow(...)] { … }` / `#[allow(...)] expr;` — of the statement node
+    // itself. Scanning each ancestor's own preceding siblings covers both.
     let mut cur = node;
-    while let Some(parent) = cur.parent() {
-        if matches!(
-            parent.kind(),
-            "function_item" | "mod_item" | "impl_item" | "struct_item" | "field_declaration"
-        ) && item_has_clippy_allow(parent, lints, source)
-        {
+    loop {
+        if item_has_clippy_allow(cur, lints, source) {
             return true;
         }
-        cur = parent;
+        match cur.parent() {
+            Some(parent) => cur = parent,
+            None => return false,
+        }
     }
-    false
 }
 
 /// True if any `attribute_item` immediately preceding `item` is an
@@ -5207,6 +5209,39 @@ mod tests {
                 .expect("snippet should contain a generic_type");
             assert_eq!(
                 is_suppressed_by_clippy_allow(node, &["mutex_atomic"], src.as_bytes()),
+                expected,
+                "is_suppressed_by_clippy_allow mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_suppressed_by_clippy_allow_honors_statement_scope() {
+        let test_cases = [
+            // Statement-level `#[allow]` on a `{ … }` block covers a node inside.
+            (
+                "fn f() { #[allow(clippy::disallowed_macros)] { eprintln!(\"x\"); } }",
+                true,
+            ),
+            // The `#[expect(...)]` form on the block suppresses too.
+            (
+                "fn f() { #[expect(clippy::disallowed_macros)] { eprintln!(\"x\"); } }",
+                true,
+            ),
+            // A different clippy lint on the block does not suppress.
+            (
+                "fn f() { #[allow(clippy::print_stderr)] { eprintln!(\"x\"); } }",
+                false,
+            ),
+            // No attribute on the enclosing block.
+            ("fn f() { { eprintln!(\"x\"); } }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "macro_invocation")
+                .expect("snippet should contain a macro_invocation");
+            assert_eq!(
+                is_suppressed_by_clippy_allow(node, &["disallowed_macros"], src.as_bytes()),
                 expected,
                 "is_suppressed_by_clippy_allow mismatch for `{src}`"
             );
