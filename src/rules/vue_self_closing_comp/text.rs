@@ -13,6 +13,22 @@ const VOID_ELEMENTS: &[&str] = &[
     "track", "wbr",
 ];
 
+/// Vue directives that inject inner content at runtime. An element carrying one
+/// is semantically non-empty even with no static children, so it must not be
+/// suggested for self-closing.
+const CONTENT_DIRECTIVES: &[&str] = &["v-html", "v-text"];
+
+/// True when the opening tag's inner content (tag name + attributes) carries a
+/// `v-html` or `v-text` directive. Each whitespace-separated token is matched as
+/// a whole attribute name (bare or `directive="..."`), so `data-v-html` and the
+/// like do not match.
+fn has_content_directive(open_tag_inner: &str) -> bool {
+    open_tag_inner.split_whitespace().any(|token| {
+        let name = token.split('=').next().unwrap_or(token);
+        CONTENT_DIRECTIVES.contains(&name)
+    })
+}
+
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_vue_file(ctx.path) {
@@ -45,6 +61,11 @@ impl TextCheck for Check {
             // Extract tag name (first word).
             let tag = between.split_whitespace().next().unwrap_or("");
             if tag.is_empty() || VOID_ELEMENTS.contains(&tag) {
+                continue;
+            }
+            // `v-html`/`v-text` inject inner content at runtime — the element is
+            // not empty, so the self-closing suggestion would be misleading.
+            if has_content_directive(between) {
                 continue;
             }
             // Verify close tag matches.
@@ -103,6 +124,52 @@ mod tests {
     fn allows_element_with_content() {
         let source = "<template>\n  <div>Hello</div>\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_v_html_element() {
+        // Issue #4699: `v-html` injects dynamic inner content — not empty.
+        let source =
+            "<template>\n  <a class=\"icon\" :href=\"link\" v-html=\"svg\"></a>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_v_html_multiline_element() {
+        // Issue #4699 (VPSocialLink.vue): multi-line tag with `v-html`.
+        let source = "<template>\n  <a\n    ref=\"el\"\n    class=\"VPSocialLink no-icon\"\n    :href=\"link\"\n    target=\"_blank\"\n    v-html=\"svg\"\n  ></a>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_v_html_with_v_if() {
+        // Issue #4699 (VPHero.vue): `v-if` guard plus `v-html` content.
+        let source =
+            "<template>\n  <span v-if=\"name\" v-html=\"name\" class=\"name clip\"></span>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_v_text_element() {
+        // Issue #4699: `v-text` also injects dynamic inner content.
+        let source = "<template>\n  <span v-text=\"label\"></span>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_component() {
+        // Control: a genuinely empty component (no children, no content
+        // directive) still gets the self-closing suggestion.
+        let source = "<template>\n  <MyComp></MyComp>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_element_with_data_v_html_attr() {
+        // `data-v-html` is matched as a whole attribute name, not a substring
+        // of `v-html`, so an otherwise-empty element is still flagged.
+        let source = "<template>\n  <div data-v-html=\"x\"></div>\n</template>";
+        assert_eq!(run(source).len(), 1);
     }
 
     #[test]
