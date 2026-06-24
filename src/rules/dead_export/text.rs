@@ -16,6 +16,14 @@
 //!     packages consume it by invoking the binary, not by ES-importing its
 //!     modules, and the tool's command framework wires up internal modules
 //!     dynamically, so their exports have no static importer.
+//!   - CLI-tool config files referenced by path from a `package.json` — a file
+//!     a build/lint tool loads by path (`rollup -c scripts/rollup/config.mjs`,
+//!     `eslintConfig.extends: ["./scripts/eslint/preset.js"]`, a `lint-staged`
+//!     `eslint -c …/preset.js` command), never through a module `import`. The
+//!     root and every workspace-root manifest are scanned (resolving each token
+//!     against its declaring manifest's directory) so a monorepo's shared config,
+//!     referenced from a sibling package by a `../../scripts/…` path, is
+//!     recognized. Detected via `ProjectCtx::is_config_referenced_entry_file`.
 //!   - Star re-exports (`export * from './m'`) — the re-export doesn't carry
 //!     a specific name to link against; it's a barrel, not a dead symbol.
 //!   - Reusable UI library directories (`components/ui/`, `lib/ui/`) — these
@@ -714,6 +722,16 @@ impl TextCheck for Check {
                 || pkg.has_bin
                 || is_script_entry_point(ctx.path, ctx.project.project_root.as_deref(), &pkg.script_entry_files)
         }) {
+            return Vec::new();
+        }
+        // CLI-tool config file referenced by path from a `package.json` — a
+        // build/lint tool loads it by path (`rollup -c scripts/rollup/config.mjs`,
+        // `eslintConfig.extends: ["./scripts/eslint/preset.js"]`, a `lint-staged`
+        // `eslint -c …/preset.js` command), never through a module `import`, so
+        // its exports have no in-repo importer yet are live. Scans the root and
+        // every workspace-root manifest so a monorepo's shared config, referenced
+        // from sibling packages by a `../../scripts/…` path, is recognized.
+        if ctx.project.is_config_referenced_entry_file(ctx.path) {
             return Vec::new();
         }
 
