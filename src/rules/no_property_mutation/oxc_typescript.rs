@@ -312,6 +312,78 @@ fn is_create_element_call(expr: &Expression) -> bool {
     method == "createElement" || method == "createElementNS"
 }
 
+/// React 18 `use()` Thennable introspection fields: a cached promise is augmented
+/// with these so React can read settlement state synchronously during render
+/// without awaiting. Assigning them on a promise *is* the documented API — there
+/// is no immutable alternative. The name-set alone is far too broad (`obj.status`,
+/// `obj.value` are ordinary state writes), so it only exempts when the receiver is
+/// also provably a promise (see `is_introspectable_promise_target`).
+const PROMISE_INTROSPECTION_FIELDS: &[&str] = &["status", "value", "reason"];
+
+/// True when `expr` constructs a promise: `Promise.reject(...)`, `Promise.resolve(...)`,
+/// `new Promise(...)`, or `Promise.withResolvers()`. Any `as`/`satisfies` cast wrapper
+/// is unwrapped first (`Promise.reject(r) as RejectedPromise<T>`).
+fn is_promise_initializer_expression(expr: &Expression) -> bool {
+    match expr {
+        Expression::TSAsExpression(as_expr) => is_promise_initializer_expression(&as_expr.expression),
+        Expression::TSSatisfiesExpression(s) => is_promise_initializer_expression(&s.expression),
+        Expression::TSNonNullExpression(n) => is_promise_initializer_expression(&n.expression),
+        Expression::ParenthesizedExpression(p) => is_promise_initializer_expression(&p.expression),
+        Expression::NewExpression(new) => {
+            matches!(&new.callee, Expression::Identifier(id) if id.name.as_str() == "Promise")
+        }
+        Expression::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else { return false };
+            let Expression::Identifier(obj) = &member.object else { return false };
+            obj.name.as_str() == "Promise"
+                && matches!(member.property.name.as_str(), "reject" | "resolve" | "withResolvers")
+        }
+        _ => false,
+    }
+}
+
+/// True when `ident` resolves to a local binding whose initializer constructs a
+/// promise (`is_promise_initializer_expression`). The receiver is provably a
+/// promise from its own data flow, no type information required.
+fn is_promise_initialized_binding(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(init) = &decl.init else { return false };
+            return is_promise_initializer_expression(init);
+        }
+    }
+    false
+}
+
+/// True when the assignment augments a promise with a React `use()` Thennable
+/// introspection field (`status`/`value`/`reason`) — `m.object` is a plain
+/// identifier resolving to a promise-initialized binding and `prop_text` is one of
+/// the introspection fields. Both gates are required: the name-set alone is too
+/// broad, and the promise check is structural (initializer data flow), not a
+/// type-provenance signal.
+fn is_promise_introspection_target(
+    object: &Expression,
+    prop_text: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    if !PROMISE_INTROSPECTION_FIELDS.contains(&prop_text) {
+        return false;
+    }
+    matches!(
+        object,
+        Expression::Identifier(id) if is_promise_initialized_binding(id, semantic)
+    )
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -383,6 +455,11 @@ impl OxcCheck for Check {
                         // `request.onerror = () => …`, `el.onclick = fn` — DOM-style
                         // event-handler registration, not object-state mutation.
                         if is_event_handler_registration(prop_text, &assign.right) { return; }
+                        // `promise.status = "rejected"`, `promise.reason = r` on a
+                        // promise-initialized local — React 18 `use()` Thennable
+                        // introspection augmentation, the documented synchronous-read
+                        // API with no immutable alternative.
+                        if is_promise_introspection_target(&m.object, prop_text, semantic) { return; }
                         // Mutating an object's own instance state (`this.out = sink`)
                         // is encapsulated state, not the external/shared mutation this
                         // rule targets — replacing the whole object is the only
@@ -1937,6 +2014,71 @@ mod tests {
             function proxy(x) { return x; }
             const state = proxy({ n: 0 });
             state.n = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_promise_introspection_augmentation_issue_6070() {
+        // Regression for rbaumier/comply#6070 — apollo-client createRejectedPromise:
+        // a promise from `Promise.reject(r)` (behind an `as` cast) is augmented with
+        // React 18 `use()` Thennable introspection fields so React reads settlement
+        // state synchronously during render — the documented API, no immutable form.
+        let src = r#"
+            export function createRejectedPromise<TValue = unknown>(reason: unknown) {
+                const promise = Promise.reject(reason) as RejectedPromise<TValue>;
+                promise.catch(() => {});
+                promise.status = "rejected";
+                promise.reason = reason;
+                return promise;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_promise_introspection_on_resolved_and_with_resolvers() {
+        // The exemption covers all promise constructors: `Promise.resolve(...)`,
+        // `new Promise(...)`, and `Promise.withResolvers()`, with `.value`.
+        let src = r#"
+            function cacheResolved(v) {
+                const a = Promise.resolve(v);
+                a.status = "fulfilled";
+                a.value = v;
+                const b = new Promise((res) => res(v));
+                b.status = "fulfilled";
+                b.value = v;
+                const { promise: c } = Promise.withResolvers();
+                return [a, b, c];
+            }
+        "#;
+        // `c` is destructured (not a direct promise-initialized binding) so it has
+        // no introspection write here; `a`/`b` writes are exempt.
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_status_value_on_plain_object_issue_6070() {
+        // Strong positive: the introspection name-set on a NON-promise receiver
+        // stays flagged — `obj.status`/`obj.value` are ordinary state writes.
+        let src = r#"
+            function update(obj, item) {
+                obj.status = "active";
+                item.value = 5;
+            }
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_status_on_external_call_result() {
+        // Strong positive: a `const` from an external call is not a promise
+        // initializer — `result.status = ...` stays flagged.
+        let src = r#"
+            function update() {
+                const result = getConfig();
+                result.status = "active";
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
