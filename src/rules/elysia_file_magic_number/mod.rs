@@ -16,7 +16,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["security", "elysia"],
 
-    skip_in_test_dir: false,
+    // Test files use `z.file()` to assert error-message wording, not to
+    // validate file content; the magic-number advisory does not apply there
+    // (issue #434).
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 
