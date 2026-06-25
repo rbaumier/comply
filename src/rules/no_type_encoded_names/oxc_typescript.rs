@@ -118,4 +118,17 @@ mod tests {
         assert_eq!(run("const strName = 'x';").len(), 1);
         assert_eq!(run("const arrItems = [];").len(), 1);
     }
+
+    // Regression for #6115: `strOrNum…`/`boolOrString…` are JSON-Schema type-union
+    // phrases (the value may be str-or-num), not Hungarian prefixes. The leading
+    // abbreviation describes a union member, not the variable's own type.
+    #[test]
+    fn allows_type_union_phrase() {
+        assert!(run("const strOrNumObjSchema = {} as const;").is_empty());
+        assert!(run("const boolStrOrNumObjSchema = {} as const;").is_empty());
+        assert!(run("const boolOrStringInstance = true;").is_empty());
+        // Genuine Hungarian (prefix + noun, no conjunction) still flags.
+        assert_eq!(run("const strValue = 'x';").len(), 1);
+        assert_eq!(run("const boolFlag = true;").len(), 1);
+    }
 }
