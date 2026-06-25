@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{ChainElement, Expression};
+use oxc_ast::ast::{ChainElement, Expression, IdentifierReference, TSType};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -98,6 +98,21 @@ impl OxcCheck for Check {
             // accidental dead code. Gated on the type-test path convention so
             // the same shape stays flagged in ordinary source files.
             if is_bare_member_access(expr) && is_type_test_file(ctx.path) {
+                continue;
+            }
+
+            // A bare identifier statement (`assertUser;`) that references a
+            // literal-type-assertion const is the type-test "mark-used"
+            // counterpart to `expect(x).toBe(y)`: the binding's annotation is a
+            // conditional type (e.g. ts-toolbelt's `A.Equals<R, E>`) that
+            // resolves to the literal `0`/`1` only when the asserted types
+            // match, so `const assertUser: A.Equals<R, E> = 1` fails to compile
+            // otherwise. The reference exists to satisfy noUnusedLocals and to
+            // make the assertion visible as a statement — never dead code. A
+            // bare identifier referencing an ordinary variable still flags.
+            if let Expression::Identifier(id) = expr
+                && references_literal_type_assertion(id, semantic)
+            {
                 continue;
             }
 
@@ -233,6 +248,54 @@ fn is_type_test_file(path: &Path) -> bool {
         || name.ends_with(".spec-d.tsx")
         || name.ends_with(".types-test.ts")
         || name.ends_with(".types-test.tsx")
+}
+
+/// True when `id` resolves to a `const` binding declared with the
+/// literal-type-assertion shape: a named type-reference annotation (such as
+/// `A.Equals<R, E>`) initialized with the numeric literal `0` or `1`. That
+/// annotation is a conditional type that only yields `0`/`1` when the asserted
+/// types match, so the declaration is a compile-time test and the bare reference
+/// is its intentional "mark-used" statement. Gated to `const`: a reassignable
+/// binding defeats the compile-time guarantee, so it is never the idiom. A
+/// binding with a primitive keyword annotation (`const x: number = 1`) or no
+/// annotation (`const n = 5`) is excluded, so a bare reference to it still
+/// flags. "Non-primitive" is approximated structurally by the annotation being
+/// a `TSTypeReference`; a type alias to a primitive (`type N = number`) is not
+/// resolved here, as that needs a type-aware pass.
+fn references_literal_type_assertion(
+    id: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            if !decl.kind.is_const() {
+                return false;
+            }
+            let annotation_is_named_type = decl
+                .type_annotation
+                .as_ref()
+                .is_some_and(|ann| matches!(&ann.type_annotation, TSType::TSTypeReference(_)));
+            let init_is_literal = decl.init.as_ref().is_some_and(is_zero_or_one_literal);
+            return annotation_is_named_type && init_is_literal;
+        }
+    }
+    false
+}
+
+/// True when `expr` is the numeric literal `0` or `1` — the literal value a
+/// conditional-type assertion (`A.Equals<…>`) yields when the types match.
+fn is_zero_or_one_literal(expr: &Expression) -> bool {
+    matches!(expr, Expression::NumericLiteral(n) if n.value == 0.0 || n.value == 1.0)
 }
 
 fn has_side_effects(expr: &Expression) -> bool {
@@ -704,6 +767,53 @@ mod tests {
         // useless bare member access or literal must still be flagged.
         assert_eq!(run_on("foo.bar;").len(), 1);
         assert_eq!(run_on("42;").len(), 1);
+    }
+
+    // Regression #6113: a bare identifier statement referencing a literal-type
+    // assertion const (`const assertUser: A.Equals<R, E> = 1; assertUser;`) is
+    // the type-test "mark-used" counterpart to `expect(x).toBe(y)` — the const's
+    // annotation is a conditional type that only resolves to `1` when the types
+    // match, so the declaration is the compile-time assertion and the bare
+    // reference is intentional, never dead code.
+    #[test]
+    fn allows_bare_reference_to_literal_type_assertion_const_issue_6113() {
+        let src = "const assertUser: A.Equals<ReceivedUser, ExpectedUser> = 1; assertUser;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+        let src2 = "const e: Equals<A, B> = 0; e;";
+        assert!(run_on(src2).is_empty(), "{:?}", run_on(src2));
+    }
+
+    #[test]
+    fn still_flags_bare_reference_to_plain_variable_issue_6113() {
+        // A bare identifier referencing a normal (un-annotated) variable is a
+        // genuine unused expression and must still flag.
+        let d = run_on("const n = 5; n;");
+        assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
+    #[test]
+    fn still_flags_bare_reference_to_primitive_typed_const_issue_6113() {
+        // A primitive type annotation (`: number = 1`) is a plain runtime
+        // assignment, not a conditional-type assertion — the bare reference is
+        // still unused.
+        let d = run_on("const x: number = 1; x;");
+        assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
+    #[test]
+    fn still_flags_bare_reference_to_let_binding_issue_6113() {
+        // A reassignable binding defeats the compile-time guarantee, so a `let`
+        // is never the assertion idiom — its bare reference still flags.
+        let d = run_on("let a: A.Equals<X, Y> = 1; a;");
+        assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
+    #[test]
+    fn still_flags_other_unused_expressions_alongside_6113_exemption() {
+        // The exemption is scoped to bare identifiers resolving to a literal
+        // type-assertion const; other unused expressions must keep flagging.
+        assert_eq!(run_on("const a = 1; const b = 2; a && b;").len(), 1);
+        assert_eq!(run_on("foo.bar;").len(), 1);
     }
 
     #[test]
