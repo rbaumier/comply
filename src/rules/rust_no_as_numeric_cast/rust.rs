@@ -800,6 +800,42 @@ name = "normal_lib"
     }
 
     #[test]
+    fn repro_6090_inferred_bool_local_as_u32_not_flagged() {
+        // rapier generic_joint_constraint_builder.rs: `min_enabled` is bound by an
+        // inferred-bool comparison `let min_enabled = lo <= dist;`, so
+        // `min_enabled as u32` (the integer step of the bool→float mask) is a
+        // lossless `bool as u32`, not a narrowing.
+        let src = "fn f(lo: f64, dist: f64) -> u32 { \
+                   let min_enabled = lo <= dist; min_enabled as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6090_inferred_non_bool_local_as_u32_still_flagged() {
+        // Negative-space guard: `n` is bound to an arithmetic (non-bool)
+        // expression, so `n as u32` is a genuine narrowing and stays flagged.
+        let src = "fn f(a: u64, b: u64) -> u32 { let n = a + b; n as u32 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6090_non_bool_shadow_of_bool_local_still_flagged() {
+        // Negative-space guard: the nearest binding wins. A later non-bool `n`
+        // shadows an earlier bool `n`, so `n as u32` is a real narrowing.
+        let src = "fn f(a: u64, b: u64) -> u32 { let n = a < b; let n = a + b; n as u32 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6090_bool_binding_in_sibling_block_does_not_leak() {
+        // Negative-space guard: a bool binding inside a sibling inner block does
+        // not enclose the cast, so the outer `n` (a non-bool param) governs and
+        // the narrowing stays flagged.
+        let src = "fn f(n: u64) -> u32 { { let n = n < 1; let _ = n; } n as u32 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn repro_5886_method_returning_bool_as_u8_not_flagged() {
         // Issue #5886 (rp2040-hal rosc.rs): `self.get_random_bit() as u8` where
         // `get_random_bit(&self) -> bool`. The same-file signature resolves the

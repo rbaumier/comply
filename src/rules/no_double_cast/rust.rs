@@ -23,6 +23,14 @@
 //! cast. The operand's source type is invisible in the cast syntax for a
 //! field/variable/method/index access, so a non-numeric operand is not flagged.
 //!
+//! A `<bool> as <int> as <target>` chain whose operand is *provably* bool
+//! (`b as u32 as Real`, the branch-free 0.0/1.0 multiplicative mask) is exempt
+//! for any outer target — float primitive, float type alias (`Real`), or vector
+//! component type. Rust forbids `bool as <float>` directly (E0606), so the
+//! integer step is compiler-mandated; the bool source keeps the whole chain
+//! lossless. Keying on the provably-bool operand sidesteps resolving a target
+//! type alias.
+//!
 //! A *float* operand in that chain (`(value + 0.5f64) as i64 as f64`) is the
 //! manual truncate-then-restore floor/round/trunc idiom: `as <int>` discards the
 //! fractional part, `as <float>` restores to float. It has no `From`/`Into`
@@ -32,6 +40,7 @@
 //! even though it is "provably numeric".
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::operand_is_bool;
 
 /// Bit width of a primitive integer type by its `primitive_type` node text.
 /// `isize`/`usize` map to 64: pointer width is target-dependent, but 64-bit is
@@ -233,6 +242,21 @@ crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnosti
     // field, not a redundant cast, and has no `From`/`Into` alternative.
     if let Some(outer_ty) = node.child_by_field_name("type")
         && int_sign_reinterpret(inner_ty, outer_ty, source)
+    {
+        return;
+    }
+
+    // Exempt the bool-to-float mask chain `<bool> as <int> as <float>`
+    // (`b as u32 as Real`, the branch-free 0.0/1.0 multiplicative mask). Rust
+    // forbids `bool as <float>` directly (E0606), so the integer step is a
+    // compiler-mandated bridge, not a redundant double cast — and the bool source
+    // makes the whole chain lossless (bool→int widening, int→float widening). The
+    // outer target is exempt whether it is a float primitive (`f32`/`f64`) or a
+    // float type alias (`Real`): keying on the provably-bool operand and an
+    // integer intermediate proves the bridge without resolving the alias.
+    if is_int_primitive(inner_ty, source)
+        && let Some(operand) = inner.child_by_field_name("value")
+        && operand_is_bool(operand, source)
     {
         return;
     }
@@ -445,6 +469,67 @@ mod tests {
         // `char as f64` is E0604; `char` only casts to an integer, so the `as
         // u32` bridge is compiler-mandated.
         assert!(run_on("fn f(c: char) { let _ = c as u32 as f64; }").is_empty());
+    }
+
+    #[test]
+    fn allows_bool_to_float_alias_mask_chain() {
+        // #6090, rapier: `b as u32 as Real` is the branch-free 0.0/1.0 mask.
+        // `Real` is an `f32`/`f64` type alias, not a float primitive, so the
+        // existing float-primitive bridge missed it. The provably-bool operand
+        // makes the integer step a compiler-mandated bridge (E0606) regardless of
+        // the outer target.
+        assert!(run_on("type Real = f32; fn f(b: bool) -> Real { b as u32 as Real }").is_empty());
+    }
+
+    #[test]
+    fn allows_contains_call_to_float_alias_mask_chain() {
+        // #6090, rapier pid_controller.rs: `axes.contains(M) as u32 as Real` —
+        // `contains` is a bool-convention method.
+        let src = "type Real = f64; \
+                   fn f(a: A) -> Real { a.axes.contains(1) as u32 as Real }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_is_none_call_to_float_alias_mask_chain() {
+        // #6090, rapier toi_entry.rs: `frozen.is_none() as u32 as Real`.
+        let src = "type Real = f32; \
+                   fn f(frozen: Option<i32>) -> Real { frozen.is_none() as u32 as Real }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inferred_bool_local_to_float_alias_mask_chain() {
+        // #6090, rapier generic_joint_constraint_builder.rs: `min_enabled` is a
+        // `let min_enabled = lo <= dist;` inferred-bool comparison binding, so
+        // `min_enabled as u32 as Real` is the bool mask.
+        let src = "type Real = f64; \
+                   fn f(lo: Real, dist: Real) -> Real { \
+                   let min_enabled = lo <= dist; min_enabled as u32 as Real }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_comparison_to_float_alias_mask_chain() {
+        // #6090, rapier contact_pair.rs: `(self.restitution > 0.0) as u32 as Real`.
+        let src = "type Real = f32; \
+                   fn f(r: Real) -> Real { (r > 0.0) as u32 as Real }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bool_to_f32_primitive_mask_chain() {
+        // The float-primitive target is exempt via the same bool-source path.
+        assert!(run_on("fn f(b: bool) -> f32 { b as u32 as f32 }").is_empty());
+    }
+
+    #[test]
+    fn flags_non_bool_var_int_to_float_alias_chain() {
+        // Negative-space guard: `n` is an annotated `i64` (not bool), so
+        // `n as u32 as Real` is a genuine lossy/redundant double cast — the
+        // bool-mask exemption must not catch a non-bool operand. Still fires.
+        let src = "type Real = f64; fn f(n: i64) -> Real { n as u32 as Real }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
