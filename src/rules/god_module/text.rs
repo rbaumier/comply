@@ -32,6 +32,16 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
+        // A constants-only module (error sentinels, enums, status codes,
+        // lookup tables) has exactly one responsibility — it holds values — so
+        // it cannot accumulate the unrelated responsibilities the rule targets.
+        // Its high fan-in reflects a universally-needed domain concept, not a
+        // centralisation smell, and "split into smaller modules" is inapplicable
+        // because there is no behaviour to extract.
+        if is_constants_only_module(ctx.source) {
+            return Vec::new();
+        }
+
         let index = ctx.project.import_index();
 
         // Total indexed files = every file that made it through
@@ -77,6 +87,118 @@ impl TextCheck for Check {
             span: None,
         }]
     }
+}
+
+/// True when `source` is a module that exports only constant values and
+/// declares no behaviour — error sentinels, enums, status-code tables, lookup
+/// maps. Such a module has a single responsibility (holding values) regardless
+/// of how many files import it, so its fan-in is never a centralisation smell.
+///
+/// The discriminator is the *absence of behaviour*, not the file's name or
+/// path: after stripping comments and string/template literals, the module
+/// must export something yet contain no function or class declaration, no
+/// arrow function, and no method/getter body (`) {`). A `new Error('…')` value
+/// is fine — it is a constructed constant, not a declared function. Any
+/// behaviour marker disqualifies the file, so a module that mixes constants
+/// with functions or classes is still flagged. Under-exempting is safer than
+/// over-exempting: a file with no recognisable export is treated as not
+/// constants-only.
+fn is_constants_only_module(source: &str) -> bool {
+    let code = strip_strings(&strip_comments(source));
+
+    // The module must bind at least one constant VALUE export. A re-export
+    // barrel (`export * from`, `export { … } from`) is handled by the
+    // `is_pure_reexport_index` exemption and is not a constants-only module —
+    // disqualify it so a non-`index` barrel still flags.
+    let has_value_export = code.contains("export const")
+        || code.contains("export let")
+        || code.contains("export var")
+        || code.contains("export default")
+        || code.contains("export enum")
+        || code.contains("module.exports")
+        || code.contains("exports.");
+    if !has_value_export {
+        return false;
+    }
+
+    // A `from` clause means an `import … from` or `export … from` passthrough —
+    // coupling / re-export surface area, not a self-contained constants module.
+    // Pure re-export barrels are handled by `is_pure_reexport_index`.
+    if has_word(&code, "from") {
+        return false;
+    }
+
+    // Any of these markers means the module carries behaviour to extract:
+    //   - `function` / `class`  : declared or expression function/class
+    //   - `=>`                  : arrow function value
+    //   - `) {` / `){`          : a function/method/getter body (object and
+    //                             array literals never contain a `)`-then-`{`)
+    !has_word(&code, "function")
+        && !has_word(&code, "class")
+        && !code.contains("=>")
+        && !code.contains(") {")
+        && !code.contains("){")
+}
+
+/// True when `needle` appears in `code` as a whole word — not as a substring of
+/// a longer identifier (so `classify` / `functional` don't trip the `class` /
+/// `function` markers).
+fn has_word(code: &str, needle: &str) -> bool {
+    let mut from = 0;
+    while let Some(rel) = code[from..].find(needle) {
+        let start = from + rel;
+        let end = start + needle.len();
+        let before_ok = start == 0
+            || !is_ident_char(code.as_bytes()[start - 1]);
+        let after_ok = end == code.len() || !is_ident_char(code.as_bytes()[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
+fn is_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+/// Replace the contents of every `'…'`, `"…"`, and `` `…` `` literal with
+/// spaces, leaving the surrounding code intact. Used so behaviour markers
+/// (`function`, `=>`, `) {`) inside a string value cannot trip the
+/// constants-only check. Assumes comments are already stripped.
+fn strip_strings(code: &str) -> String {
+    let mut out = String::with_capacity(code.len());
+    let bytes = code.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\'' || b == b'"' || b == b'`' {
+            out.push(b as char);
+            i += 1;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if c == b'\\' && i + 1 < bytes.len() {
+                    out.push(' ');
+                    out.push(' ');
+                    i += 2;
+                    continue;
+                }
+                if c == b {
+                    out.push(c as char);
+                    i += 1;
+                    break;
+                }
+                // Preserve newlines so line structure is unchanged; blank the rest.
+                out.push(if c == b'\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
 }
 
 /// True when `path`'s stem is `index` AND every meaningful statement in
@@ -308,9 +430,13 @@ mod tests {
     #[test]
     fn flags_hub_imported_by_more_than_threshold() {
         // 1 hub + 12 importers = 13 files. Importers/total = 12/13 ~= 92%,
-        // well above 30% and well above min_importers = 10.
+        // well above 30% and well above min_importers = 10. The hub declares a
+        // function so it is behaviour-bearing, not a constants-only module.
         let mut files: Vec<(String, String)> = Vec::new();
-        files.push(("hub.ts".to_string(), "export const x = 1;\n".to_string()));
+        files.push((
+            "hub.ts".to_string(),
+            "export function x() { return 1; }\n".to_string(),
+        ));
         for i in 0..12 {
             files.push((
                 format!("a{i}.ts"),
@@ -460,6 +586,126 @@ mod tests {
             diags.len(),
             1,
             "index with a local declaration must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn exempts_const_error_sentinels_module() {
+        // formulajs/formulajs src/utils/error.js: only `export const X = new
+        // Error('…')` bindings. High fan-in (every formula imports it) but the
+        // module is constants-only, so it must not be flagged. Closes #6104.
+        let body = "export const nil = new Error('#NULL!')\n\
+                    export const div0 = new Error('#DIV/0!')\n\
+                    export const value = new Error('#VALUE!')\n";
+        let (_dir, diags) = run_high_fanin("error.js", body);
+        assert!(
+            diags.is_empty(),
+            "constants-only error-sentinel module must not be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn exempts_default_export_constants_object() {
+        // A single default-exported constants object (no functions/classes).
+        let body = "export default {\n\
+                    nil: '#NULL!',\n\
+                    div0: '#DIV/0!',\n\
+                    value: '#VALUE!',\n\
+                    }\n";
+        let (_dir, diags) = run_high_fanin("error.js", body);
+        assert!(
+            diags.is_empty(),
+            "constants object default export must not be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn exempts_ts_enum_module() {
+        // A TS enum module — pure value definitions, no behaviour.
+        let body = "export enum Status {\n  Ok = 200,\n  NotFound = 404,\n}\n";
+        let (_dir, diags) = run_high_fanin("status.ts", body);
+        assert!(
+            diags.is_empty(),
+            "enum-only module must not be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_module_declaring_functions() {
+        // High fan-in module that declares real behaviour — still flagged.
+        let body = "export function add(a, b) {\n  return a + b;\n}\n\
+                    export const ZERO = 0;\n";
+        let (_dir, diags) = run_high_fanin("math.ts", body);
+        assert_eq!(
+            diags.len(),
+            1,
+            "module declaring a function must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_module_with_arrow_function_export() {
+        // A constant bound to an arrow function is behaviour, not a value.
+        let body = "export const handler = (req, res) => res.end();\n\
+                    export const NAME = 'x';\n";
+        let (_dir, diags) = run_high_fanin("handler.ts", body);
+        assert_eq!(
+            diags.len(),
+            1,
+            "module exporting an arrow function must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_constants_object_with_method() {
+        // An object that mixes constant fields with a method has behaviour.
+        let body = "export default {\n  nil: '#NULL!',\n  format(code) {\n    return code;\n  },\n}\n";
+        let (_dir, diags) = run_high_fanin("error.js", body);
+        assert_eq!(
+            diags.len(),
+            1,
+            "constants object with a method must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_module_declaring_class() {
+        let body = "export class Money {\n  constructor() {}\n}\n";
+        let (_dir, diags) = run_high_fanin("money.ts", body);
+        assert_eq!(
+            diags.len(),
+            1,
+            "module declaring a class must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn behaviour_marker_inside_string_does_not_exempt_failure() {
+        // A behaviour marker that lives only inside a string literal must not
+        // wrongly KEEP a real-behaviour module flagged, nor wrongly exempt a
+        // constants module: a const whose string value contains `function`/`=>`
+        // is still constants-only and must be exempt.
+        let body = "export const TEMPLATE = 'const f = () => {}';\n\
+                    export const HINT = 'use function keyword';\n";
+        let (_dir, diags) = run_high_fanin("templates.ts", body);
+        assert!(
+            diags.is_empty(),
+            "behaviour markers inside string values must not flag a constants module, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ts_function_type_annotation_stays_flagged() {
+        // A constant whose TS *type annotation* contains `=>` is kept flagged.
+        // The text-shape check cannot distinguish an arrow type from an arrow
+        // value, so it under-exempts here — safer than wrongly exempting a real
+        // behaviour module. This test pins that intentional decision.
+        let body = "export const noop: () => void = NOOP;\n";
+        let (_dir, diags) = run_high_fanin("noop.ts", body);
+        assert_eq!(
+            diags.len(),
+            1,
+            "TS arrow-type annotation is conservatively kept flagged, got {diags:?}"
         );
     }
 }
