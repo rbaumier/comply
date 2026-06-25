@@ -1967,13 +1967,82 @@ pub fn operand_is_bool(node: Node, source: &[u8]) -> bool {
                     .is_some_and(|operand| operand_is_bool(operand, source))
         }
         "call_expression" => call_returns_bool(node, source),
-        "identifier" => node
-            .utf8_text(source)
-            .ok()
-            .and_then(|name| find_identifier_type(node, name, source))
-            .is_some_and(|type_text| type_text == "bool"),
+        "identifier" => node.utf8_text(source).ok().is_some_and(|name| {
+            // A binding explicitly annotated `bool`, or — for an inferred
+            // binding — one whose initializer is itself provably bool
+            // (`let enabled = lo <= x;`), so `enabled as u32` is a bool cast.
+            find_identifier_type(node, name, source).as_deref() == Some("bool")
+                || local_binding_initializer_is_bool(node, name, source)
+        }),
         _ => false,
     }
+}
+
+/// True when `name`'s nearest in-scope `let` binding before `node` has an
+/// initializer that is itself provably bool (`let enabled = lo <= x;`). This
+/// resolves the inferred-bool local that `find_identifier_type` misses — it only
+/// reads explicit `bool` annotations, and bool comparison/logical bindings are
+/// written without one. A parameter or annotated binding is handled by the
+/// annotation path; this covers only `let <name> = <bool-expr>;`.
+///
+/// Scopes are walked innermost-first and the *nearest* preceding binding decides:
+/// a later non-bool shadow (`let n = a < b; let n = a + b; n as u32`) is not
+/// bool, and a sibling/inner-block binding that does not enclose `node` is
+/// ignored. The matched binding's own initializer is judged with the binding's
+/// position as the lookup limit, so a self-referential `let x = x;` cannot
+/// resolve to itself (which would recurse forever).
+fn local_binding_initializer_is_bool(node: Node, name: &str, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if matches!(
+            n.kind(),
+            "function_item" | "closure_expression" | "block" | "source_file"
+        ) && let Some(value) = nearest_binding_value_before(n, node.start_byte(), name, source)
+        {
+            // The nearest binding in this scope is authoritative — its
+            // initializer alone decides, even when it is not bool (shadowing).
+            return operand_is_bool(value, source);
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// The initializer expression of the nearest `let <name> = <expr>;` declared
+/// directly within `scope` (a single statement-bearing block, not its nested
+/// child blocks — those bindings do not reach `limit`) whose initializer ends
+/// before `limit`. Returns the value node of the latest such binding, so the
+/// nearest shadow wins. Requiring `value.end_byte() <= limit` excludes a
+/// self/forward reference (`let x = x;` resolving its own RHS), which would
+/// otherwise re-enter the same binding and recurse without progress. `None` when
+/// the scope declares no such binding before `limit`.
+fn nearest_binding_value_before<'a>(
+    scope: Node<'a>,
+    limit: usize,
+    name: &str,
+    source: &[u8],
+) -> Option<Node<'a>> {
+    let mut best: Option<Node<'a>> = None;
+    let mut cursor = scope.walk();
+    for child in scope.named_children(&mut cursor) {
+        if child.start_byte() >= limit {
+            break;
+        }
+        if child.kind() != "let_declaration" {
+            continue;
+        }
+        let Some(value) = child.child_by_field_name("value") else {
+            continue;
+        };
+        if value.end_byte() <= limit
+            && child
+                .child_by_field_name("pattern")
+                .is_some_and(|pattern| pattern_contains_identifier(pattern, name, source))
+        {
+            best = Some(value);
+        }
+    }
+    best
 }
 
 /// True if `call` is a call expression whose result is provably `bool`, by either
@@ -5596,6 +5665,27 @@ mod tests {
             ("fn f(s: S) -> u8 { s.unknown() as u8 }", false),
             // Identifier whose binding is annotated bool.
             ("fn f(b: bool) -> u8 { b as u8 }", true),
+            // #6090: an inferred local bound to a bool comparison initializer.
+            ("fn f(lo: f64, x: f64) -> u8 { let e = lo <= x; e as u8 }", true),
+            // An inferred local bound to a logical expression is bool.
+            ("fn f(a: bool, b: bool) -> u8 { let e = a && b; e as u8 }", true),
+            // An inferred local bound to an arithmetic expression is NOT bool.
+            ("fn f(a: u32, b: u32) -> u8 { let n = a + b; n as u8 }", false),
+            // The nearest shadow decides: a later non-bool `n` masks an earlier
+            // bool `n`, so the cast operand is NOT bool.
+            (
+                "fn f(a: u32, b: u32) -> u8 { let n = a < b; let n = a + b; n as u8 }",
+                false,
+            ),
+            // A binding in a sibling inner block does not enclose the cast, so it
+            // must not be picked up — the outer `n` (a param, non-bool) governs.
+            (
+                "fn f(n: u32) -> u8 { { let n = n < 1; let _ = n; } n as u8 }",
+                false,
+            ),
+            // A self-referential `let x = x;` must not recurse forever; the
+            // shadowed outer `x` is a param (non-bool), so the cast is not bool.
+            ("fn f(x: u32) -> u8 { let x = x; x as u8 }", false),
             // A plain integer cast is not a bool operand.
             ("fn f(x: u32) -> u8 { x as u8 }", false),
             // `.len()` returns usize, not bool.
