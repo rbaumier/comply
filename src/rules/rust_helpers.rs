@@ -1615,6 +1615,60 @@ pub fn cast_operand_is_collection_size(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|name| SIZE_METHODS.contains(&name))
 }
 
+/// If the operand of `cast` (a `type_cast_expression`) is a bit-counting method
+/// call — `<receiver>.leading_zeros()`, `.trailing_zeros()`, `.count_ones()`,
+/// `.count_zeros()`, `.leading_ones()`, `.trailing_ones()` — return the maximum
+/// value the call can produce (`128`).
+///
+/// These integer methods return a `u32` whose value is bounded by the bit-width
+/// of the receiver type, at most 128 (for `u128`/`i128`). The receiver type need
+/// not be resolved: 128 is the upper bound across every integer width, so it is
+/// the value a caller checks against the cast target's range. Casting to any
+/// integer that holds 128 (`u8`..`u128`, `i16`..`i128`) is provably lossless,
+/// while a `try_into()` there only manufactures an unreachable error path.
+///
+/// The match is on the call shape: the `function` field of the cast operand must
+/// be a `field_expression` whose `field` is one of the bit-count methods, and the
+/// call must take no arguments. This rejects same-named functions taking
+/// arguments and every other method-call operand, so an arbitrary unbounded
+/// narrowing cast stays flagged. Arithmetic on the result
+/// (`(x.leading_zeros() + offset) as u8`) is no longer a bare method-call
+/// operand, so it is not matched and stays flagged.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag `x.leading_zeros() as u8` because the operand's bounded range
+/// is not visible from the cast in isolation.
+pub fn cast_operand_bit_count_max(cast: Node, source: &[u8]) -> Option<i128> {
+    const BIT_COUNT_METHODS: &[&str] = &[
+        "leading_zeros",
+        "trailing_zeros",
+        "count_ones",
+        "count_zeros",
+        "leading_ones",
+        "trailing_ones",
+    ];
+
+    let value = cast.child_by_field_name("value")?;
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    if value
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return None;
+    }
+    let function = value.child_by_field_name("function")?;
+    if function.kind() != "field_expression" {
+        return None;
+    }
+    // The widest integer is 128 bits (`u128`/`i128`), so a bit count is ≤ 128.
+    const MAX_BIT_COUNT: i128 = 128;
+
+    let name = function.child_by_field_name("field")?.utf8_text(source).ok()?;
+    BIT_COUNT_METHODS.contains(&name).then_some(MAX_BIT_COUNT)
+}
+
 /// If the operand of `cast` (a `type_cast_expression`) is a bit-reader call
 /// reading a literal number of bits, return that bit count `N`.
 ///
@@ -5577,6 +5631,38 @@ mod tests {
                 cast_operand_is_collection_size(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_collection_size mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_bit_count_max_matches_bit_count_methods_only() {
+        let cases = [
+            ("fn f(x: u32) -> u8 { x.leading_zeros() as u8 }", Some(128)),
+            ("fn f(x: u64) -> u16 { x.trailing_zeros() as u16 }", Some(128)),
+            ("fn f(x: u128) -> u8 { x.count_ones() as u8 }", Some(128)),
+            ("fn f(x: u64) -> u8 { x.count_zeros() as u8 }", Some(128)),
+            ("fn f(x: u32) -> u8 { x.leading_ones() as u8 }", Some(128)),
+            ("fn f(x: u32) -> u8 { x.trailing_ones() as u8 }", Some(128)),
+            // A parenthesized receiver is fine — the operand is still the call.
+            ("fn f(x: u64) -> i16 { (x ^ x).leading_zeros() as i16 }", Some(128)),
+            // A non-bit-count method is unbounded.
+            ("fn f(v: V) -> u8 { v.some_other_method() as u8 }", None),
+            // A same-named method taking arguments is not the bit-count accessor.
+            ("fn f(x: u32) -> u8 { x.count_ones(2) as u8 }", None),
+            // Arithmetic on the result is no longer a bare call operand.
+            ("fn f(x: u64, o: u32) -> u8 { (x.leading_zeros() + o) as u8 }", None),
+            // A bare identifier operand has no call shape.
+            ("fn f(n: usize) -> u32 { n as u32 }", None),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_bit_count_max(cast, src.as_bytes()),
+                expected,
+                "cast_operand_bit_count_max mismatch for `{src}`"
             );
         }
     }

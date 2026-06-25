@@ -77,8 +77,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_feeds_sized_pointer_write,
-    cast_in_const_context, cast_is_int_to_float, cast_operand_bit_width,
-    cast_operand_indexed_element_type,
+    cast_in_const_context, cast_is_int_to_float, cast_operand_bit_count_max,
+    cast_operand_bit_width, cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
@@ -150,6 +150,14 @@ impl AstCheck for Check {
         }
         if cast_operand_literal_value(node, source_bytes)
             .is_some_and(|value| literal_fits(value, target_type))
+        {
+            return;
+        }
+        // A bit-counting method (`leading_zeros()`, `count_ones()`, …) returns a
+        // value bounded by the receiver's bit-width — at most 128 — so casting it
+        // to any integer that holds 128 is provably lossless.
+        if cast_operand_bit_count_max(node, source_bytes)
+            .is_some_and(|max| literal_fits(max, target_type))
         {
             return;
         }
@@ -1434,5 +1442,43 @@ mod tests {
         // so the anchor must not exempt it: `u64 as i32` discards 32 bits. The
         // narrowing stays a finding, owned by `rust-no-as-numeric-cast`.
         assert!(run_on("fn f(x: u64) -> __m128i { _mm_set1_epi32(x as i32) }").is_empty());
+    }
+
+    #[test]
+    fn repro_6092_leading_zeros_as_smaller_int_not_flagged() {
+        // Issue #6092 (dimforge/parry z_order.rs): `leading_zeros()` returns a
+        // `u32` bounded by the receiver's bit-width (≤ 128), so casting it to a
+        // smaller integer that holds 128 is provably lossless.
+        assert!(run_on("fn f(x: u64) -> i16 { 64i16 - (x ^ x).leading_zeros() as i16 }").is_empty());
+        assert!(run_on("fn f(x: u32) -> u8 { x.leading_zeros() as u8 }").is_empty());
+        assert!(run_on("fn f(n: u64) -> u16 { n.trailing_zeros() as u16 }").is_empty());
+        assert!(run_on("fn f(v: u128) -> u8 { v.count_ones() as u8 }").is_empty());
+        assert!(run_on("fn f(v: u64) -> u8 { v.count_zeros() as u8 }").is_empty());
+        assert!(run_on("fn f(v: u32) -> i16 { v.leading_ones() as i16 }").is_empty());
+        assert!(run_on("fn f(v: u32) -> u16 { v.trailing_ones() as u16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6092_bit_count_as_i8_owned_by_numeric_cast() {
+        // `i8` max is 127 < 128 — the maximum bit-count result (128) does not fit,
+        // so the carve-out must not apply. The narrowing stays a finding, owned by
+        // `rust-no-as-numeric-cast`, so this rule cedes the span.
+        assert!(run_on("fn f(x: u128) -> i8 { x.leading_zeros() as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6092_non_bit_count_method_owned_by_numeric_cast() {
+        // A non-bit-count no-arg method is unbounded — a real narrowing, owned by
+        // `rust-no-as-numeric-cast`, so this rule cedes the span.
+        assert!(run_on("fn f(x: V) -> u8 { x.some_other_method() as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6092_arithmetic_on_bit_count_result_owned_by_numeric_cast() {
+        // `(x.leading_zeros() + offset) as u8` — the operand is a binary
+        // expression, not a bare bit-count call, so the bound no longer holds and
+        // the narrowing stays a finding (owned by `rust-no-as-numeric-cast`).
+        let src = "fn f(x: u64, offset: u32) -> u8 { (x.leading_zeros() + offset) as u8 }";
+        assert!(run_on(src).is_empty());
     }
 }
