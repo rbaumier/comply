@@ -1433,6 +1433,15 @@ fn is_allowed_context(
             }
             // Type annotation / type literal
             AstKind::TSTypeAnnotation(_) | AstKind::TSLiteralType(_) => return true,
+            // A numeric literal that is a *member key* of a type literal or
+            // interface (`type F = { 501: any }`, `interface I { 503: string }`)
+            // is the name of a type-level property, not a runtime value — the
+            // type-level analogue of an object-literal key. It cannot be
+            // "extracted into a named constant": it is part of the type's shape.
+            // This is the property-signature case of literals in type positions
+            // (indexed-access `T[501]` and union literals `200 | 501` are already
+            // covered by `TSLiteralType`).
+            AstKind::TSPropertySignature(_) | AstKind::TSIndexSignature(_) => return true,
             // `satisfies`/`as` operand: `7 satisfies NodeTypes.DIRECTIVE`,
             // `3 as Priority`. The annotation binds the literal to a named type
             // at compile time, giving it the same semantic context a named
@@ -2406,5 +2415,37 @@ mod tests {
         assert_eq!(run("function f() { return foo(76); }").len(), 1);
         assert_eq!(run("function f(x: number) { return x * 76; }").len(), 1);
         assert_eq!(run("let x = 76;").len(), 1);
+    }
+
+    // Regression for rbaumier/comply#6111: numeric literals used as member keys
+    // in a TS type-literal / interface (`type F<T> = T extends { 501: any } ?
+    // T[501] : never`) are type-level — they name a property of a type, not a
+    // runtime value — and must not be flagged. The indexed-access `T[501]` and
+    // the union-literal forms were already exempt via `TSLiteralType`; the
+    // remaining false positive was the property-signature key.
+    #[test]
+    fn allows_numeric_key_in_type_literal_and_interface() {
+        // Codes outside the HTTP allowlist (501/451) isolate the type-position
+        // exemption from the pre-existing value-allowlist: each assertion fails
+        // without the new property-signature arm.
+        assert!(run("type H = { 501: string };").is_empty());
+        assert!(run("interface I { 451: string }").is_empty());
+        // The issue's conditional-type chain, in full shape.
+        let chain = "export type FirstErrorStatus<T> = \
+            T extends { 500: any } ? T[500] : \
+            T extends { 501: any } ? T[501] : \
+            T extends { 502: any } ? T[502] : never;";
+        assert!(run(chain).is_empty());
+        // Indexed-access and union-literal forms (already exempt, kept as guards).
+        assert!(run("type G<T> = T[501];").is_empty());
+        assert!(run("type Status = 200 | 501;").is_empty());
+    }
+
+    #[test]
+    fn flags_runtime_magic_numbers_after_type_exemption() {
+        // The type-position exemption must not bleed into runtime expressions: a
+        // numeric literal in a runtime comparison or call argument still flags.
+        assert_eq!(run("function f(n: number) { if (n === 86400) return; }").len(), 1);
+        assert_eq!(run("function f() { return foo(86400); }").len(), 1);
     }
 }
