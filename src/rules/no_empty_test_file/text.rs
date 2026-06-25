@@ -89,6 +89,14 @@ const TYPE_TEST_MARKERS: &[&str] = &[
 /// type-check — a compile-time test on its own.
 const TS_EXPECT_ERROR_DIRECTIVE: &str = "@ts-expect-error";
 
+/// Type-testing library packages whose sole purpose is compile-time type
+/// assertions. `ts-toolbelt` exposes `A.Equals<T, U>` (resolves to the literal
+/// type `1` when `T`/`U` are identical, `0` otherwise); `expect-type` exposes
+/// `expectTypeOf`; `tsd` exposes `expectType`/`expectError`. A test file that
+/// imports from one of these carries its assertions at the type level rather
+/// than through a runtime `expect(`, so it is not empty.
+const TYPE_TEST_LIBRARIES: &[&str] = &["ts-toolbelt", "expect-type", "tsd"];
+
 /// Performance-test framework packages whose `.spec.ts` files are scenario
 /// classes (a `PerfTest<T>` subclass with an `async run()` entry point), not
 /// unit-test files. The framework discovers them by the `*.spec.ts` pattern, so
@@ -103,6 +111,12 @@ fn has_test_content(source: &str) -> bool {
         }
     }
     if source.contains(TS_EXPECT_ERROR_DIRECTIVE) {
+        return true;
+    }
+    if imports_type_test_library(source) {
+        return true;
+    }
+    if has_literal_type_assertion(source) {
         return true;
     }
     if has_chained_runner_call(source) {
@@ -180,6 +194,66 @@ fn is_perf_test_scenario(source: &str) -> bool {
     PERF_TEST_FRAMEWORKS
         .iter()
         .any(|pkg| source.contains(pkg))
+}
+
+/// True when the file imports from a type-testing library (see
+/// [`TYPE_TEST_LIBRARIES`]). The package name is matched inside the quoted
+/// module specifier of an `import` statement so that an unrelated identifier
+/// containing the same substring elsewhere does not count.
+fn imports_type_test_library(source: &str) -> bool {
+    source.lines().any(|line| {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("import ") {
+            return false;
+        }
+        TYPE_TEST_LIBRARIES
+            .iter()
+            .any(|pkg| line.contains(&format!("\"{pkg}\"")) || line.contains(&format!("'{pkg}'")))
+    })
+}
+
+/// True when the file contains the literal-type assertion idiom: a
+/// `const`/`let`/`var` with a type annotation assigned a bare numeric literal,
+/// e.g. `const assertUser: A.Equals<R, E> = 1;`. The annotation is a conditional
+/// type (such as `ts-toolbelt`'s `A.Equals`) that resolves to the literal type
+/// `1` only when the asserted types match, so the assignment fails to compile
+/// otherwise — a compile-time test on its own. A plain runtime assignment
+/// (`const x = 1;`, `const x: number = 1;` with the bare-number RHS but no
+/// non-trivial type) is excluded by requiring a non-primitive type annotation.
+fn has_literal_type_assertion(source: &str) -> bool {
+    source.lines().any(|line| is_literal_type_assertion(line.trim_start()))
+}
+
+/// `true` when `line` is a `const`/`let`/`var` declaration whose declarator is
+/// type-annotated and assigned a bare numeric literal (`0` or `1`), with the
+/// annotation being a non-primitive type (the conditional-type assertion shape).
+fn is_literal_type_assertion(line: &str) -> bool {
+    let Some(after_kw) = strip_declaration_keyword(line) else {
+        return false;
+    };
+    let Some(colon) = after_kw.find(':') else {
+        return false;
+    };
+    let Some(eq) = after_kw.find('=') else {
+        return false;
+    };
+    if eq < colon {
+        return false;
+    }
+    let annotation = after_kw[colon + 1..eq].trim();
+    if annotation.is_empty() || is_numeric_literal_annotation(annotation) {
+        return false;
+    }
+    let rhs = after_kw[eq + 1..].trim().trim_end_matches(';').trim();
+    rhs == "0" || rhs == "1"
+}
+
+/// `true` when the annotation is a type that ordinarily holds a numeric literal,
+/// so `: <type> = 1` is a plain runtime assignment rather than a conditional-type
+/// assertion. (`const assertUser: A.Equals<R, E> = 1` is the assertion; `const n:
+/// number = 1` is not.)
+fn is_numeric_literal_annotation(annotation: &str) -> bool {
+    matches!(annotation, "number" | "any" | "unknown" | "bigint")
 }
 
 /// True when the file imports a symbol and then invokes it as a top-level
@@ -763,5 +837,58 @@ mod tests {
             run("src/utils.test.ts", "import { helper } from './helper';\n").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_ts_toolbelt_literal_type_assertion_spec_issue6112() {
+        // ThomasAribart/json-schema-to-ts src/tests/readme/definitions.test.ts:
+        // a type-level test suite that asserts `FromSchema<Schema>` resolves to
+        // the expected type via `ts-toolbelt`'s `A.Equals<T, U>` (the `const x:
+        // A.Equals<...> = 1` idiom). No runtime test calls by design.
+        let source = "import type { A } from \"ts-toolbelt\";\n\
+                      import type { FromSchema } from \"~/index\";\n\
+                      \n\
+                      const userSchema = { type: \"object\" } as const;\n\
+                      type ReceivedUser = FromSchema<typeof userSchema>;\n\
+                      type ExpectedUser = { name: string };\n\
+                      \n\
+                      type AssertUser = A.Equals<ReceivedUser, ExpectedUser>;\n\
+                      const assertUser: AssertUser = 1;\n\
+                      assertUser;\n";
+        assert!(run("src/tests/readme/definitions.test.ts", source).is_empty());
+        // The same assertion idiom under varied test suffixes used by the project.
+        assert!(run("src/tests/readme/primitive.type.test.ts", source).is_empty());
+        assert!(run("src/parse-schema/references/external.unit.test.ts", source).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_literal_type_assertion_without_library_import() {
+        // A `.test.ts` type-test using a local conditional-type assertion
+        // (`const x: Equals<A, B> = 1`) is recognized by the literal-type
+        // assertion idiom even without importing a known type-test library.
+        let source = "import type { Equals } from './type-utils';\n\
+                      type Got = { a: 1 };\n\
+                      type Want = { a: 1 };\n\
+                      const assert: Equals<Got, Want> = 1;\n\
+                      assert;\n";
+        assert!(run("local.test.ts", source).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_test_with_plain_number_const_only() {
+        // A test file whose only statement is a plain runtime `const x: number = 1`
+        // (a primitive annotation, not a conditional-type assertion) carries no
+        // test content and is still flagged.
+        assert_eq!(
+            run("src/utils.test.ts", "const x: number = 1;\n").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_empty_test_with_bare_literal_const_only() {
+        // `const x = 1;` with no type annotation is ordinary runtime code, not a
+        // type assertion — the file stays empty and is flagged.
+        assert_eq!(run("src/utils.test.ts", "const x = 1;\n").len(), 1);
     }
 }
