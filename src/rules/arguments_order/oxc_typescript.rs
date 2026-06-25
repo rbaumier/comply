@@ -192,6 +192,12 @@ fn find_likely_swap(params: &[String], args: &[Option<String>]) -> Option<(Strin
             };
 
             if names_match(arg_i, &params[j]) && names_match(arg_j, &params[i]) {
+                // Names that differ only in case (`n`/`N`, `k`/`K`) are distinct
+                // identifiers by mathematical/scientific convention (e.g. sample
+                // size `n` vs population size `N`), not an accidental swap.
+                if differ_only_in_case(arg_i, arg_j) {
+                    continue;
+                }
                 return Some((arg_i.clone(), arg_j.clone()));
             }
         }
@@ -207,6 +213,12 @@ fn names_match(arg: &str, param: &str) -> bool {
 
 fn normalize_name(name: &str) -> String {
     name.to_lowercase().trim_start_matches('_').to_string()
+}
+
+/// True when `a` and `b` are equal ignoring ASCII case but not exactly equal —
+/// i.e. they differ only in the case of some letters.
+fn differ_only_in_case(a: &str, b: &str) -> bool {
+    a != b && a.eq_ignore_ascii_case(b)
 }
 
 #[cfg(test)]
@@ -251,6 +263,28 @@ mod tests {
     fn flags_ternary_with_single_matching_branch() {
         // Only the alternate calls `cmp`; not a reversed pair, so still flagged.
         let src = "function cmp(a, b) {}\nfunction g(a, b, c) { return c ? cmp(b, a) : other(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_case_only_differing_args() {
+        // #6108: lowercase `n` (sample size) and uppercase `N` (population size)
+        // are distinct statistical quantities, not an accidental swap.
+        let src = "function pdf(n, N) {}\nfunction call(n, N) { pdf(N, n); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_case_only_differing_args_k() {
+        // `k`/`K` likewise differ only in case.
+        let src = "function dist(k, K) {}\nfunction call(k, K) { dist(K, k); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_swap_distinct_names() {
+        // Same-name reorder where names differ by more than case is still a swap.
+        let src = "function foo(width, height) {}\nfunction bar(width, height) { foo(height, width); }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
