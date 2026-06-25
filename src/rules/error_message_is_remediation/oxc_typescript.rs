@@ -105,6 +105,18 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A `new Error(...)` in a variable declarator is a named, reusable Error
+        // object — a sentinel/constant — not a message surfaced at this
+        // construction site (e.g. `const value = new Error('#VALUE!')`, returned
+        // elsewhere as a domain sentinel). The rule targets messages thrown at
+        // the construction site, so only those are flagged.
+        if matches!(
+            semantic.nodes().parent_node(node.id()).kind(),
+            oxc_ast::AstKind::VariableDeclarator(_)
+        ) {
+            return;
+        }
+
         // Get the first argument.
         let Some(first_arg) = new_expr.arguments.first() else {
             return;
@@ -218,5 +230,22 @@ mod tests {
         // A lone in-word apostrophe is not a field reference: a constraint
         // qualifier with no type and no balanced delimiter stays flagged.
         assert_eq!(run(r#"throw new Error("o'clock value expected");"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_named_error_sentinel_constants() {
+        // Issue #6106: `new Error(...)` bound to a variable is a named sentinel
+        // object returned elsewhere, not a message surfaced at this site (e.g.
+        // formulajs Excel error values from ECMA-376).
+        assert!(run(r#"export const value = new Error('#VALUE!')"#).is_empty());
+        assert!(run(r#"export const div0 = new Error('#DIV/0!')"#).is_empty());
+        assert!(run(r#"const na = new Error('#N/A')"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_thrown_vague_error() {
+        // Core target survives: a vague message thrown at the construction site.
+        assert_eq!(run(r#"throw new Error("bad input");"#).len(), 1);
+        assert_eq!(run(r#"throw new Error("failed");"#).len(), 1);
     }
 }
