@@ -6,7 +6,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, is_typed_array_binding, is_typed_array_ctor_name};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryOperator, Expression, PropertyKey};
+use crate::rules::screaming_snake_for_constants::is_screaming_snake;
+use oxc_ast::ast::{AssignmentOperator, BinaryOperator, Expression, PropertyKey};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -255,6 +256,19 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A literal that is the value of a `SCREAMING_SNAKE_CASE`-keyed property
+        // (`{ MAX_ROW: 1048576 }`) or the right-hand side of an assignment to a
+        // `SCREAMING_SNAKE_CASE` member (`OBJ.MAX_COLUMN = 16384`) is a
+        // named-constant *definition*: the key IS the name the rule asks for.
+        // This is the object/member analogue of the `const SCREAMING = N`
+        // declaration (already exempt via `is_allowed_context`) — the literal is
+        // being named, not used. The key must be SCREAMING_SNAKE_CASE: a
+        // lowercase/camelCase key (`{ width: 1048576 }`, `obj.width = …`) is an
+        // ordinary value assignment and keeps its literal flagged.
+        if is_screaming_snake_constant_definition(node.id(), semantic) {
+            return;
+        }
+
         if is_allowed_context(node.id(), semantic) {
             return;
         }
@@ -474,6 +488,70 @@ fn is_named_numeric_property(prop: &oxc_ast::ast::ObjectPropertyKind<'_>) -> boo
                 && matches!(unary.argument, Expression::NumericLiteral(_))
         }
         _ => false,
+    }
+}
+
+/// True when this literal is a named-constant *definition* keyed by a
+/// `SCREAMING_SNAKE_CASE` name — either the value of an object property
+/// (`{ MAX_ROW: 1048576 }`) or the right-hand side of an assignment to a static
+/// member (`OBJ.MAX_COLUMN = 16384`). The SCREAMING_SNAKE key IS the name the
+/// rule asks the user to introduce, so the literal is being named, not used —
+/// the object/member analogue of the already-exempt `const SCREAMING = N`
+/// declaration. The key must be SCREAMING_SNAKE_CASE: a lowercase/camelCase key
+/// (`{ width: 1048576 }`, `obj.width = …`, `{ MaxRow: … }`) is an ordinary
+/// value assignment and stays flagged.
+fn is_screaming_snake_constant_definition(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The literal itself, or a `-literal` unary, is the named value.
+    let mut value_id = node_id;
+    let parent_id = nodes.parent_id(value_id);
+    if parent_id != value_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        value_id = parent_id;
+    }
+    let value_span = nodes.get_node(value_id).kind().span();
+
+    let outer_id = nodes.parent_id(value_id);
+    if outer_id == value_id {
+        return false;
+    }
+    match nodes.get_node(outer_id).kind() {
+        // `{ MAX_ROW: 1048576 }` — value of a SCREAMING_SNAKE-keyed property.
+        AstKind::ObjectProperty(prop) => {
+            if prop.value.span() != value_span {
+                return false;
+            }
+            property_key_name(&prop.key).is_some_and(is_screaming_snake)
+        }
+        // `OBJ.MAX_COLUMN = 16384` — RHS of a plain assignment to a static member
+        // whose property is SCREAMING_SNAKE. Compound assignments (`+=` etc.) use
+        // the literal in arithmetic, so only `=` defines a constant.
+        AstKind::AssignmentExpression(assign) => {
+            if assign.operator != AssignmentOperator::Assign || assign.right.span() != value_span {
+                return false;
+            }
+            let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
+                return false;
+            };
+            is_screaming_snake(member.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// The static name of an object-property key — a plain identifier (`MAX_ROW`) or
+/// a string-literal key (`"MAX_ROW"`). Computed keys and other forms yield `None`.
+fn property_key_name<'a>(key: &'a PropertyKey<'a>) -> Option<&'a str> {
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+        PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
     }
 }
 
@@ -1412,6 +1490,55 @@ mod tests {
         // Regression for rbaumier/comply#4831 — Three.js / Vue devtools hex colors.
         let src = r#"node.tags.push({ textColor: 0x42B883, backgroundColor: 0xF0FCF3 });"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for rbaumier/comply#6101: a numeric literal keyed by a
+    // SCREAMING_SNAKE_CASE name is a named-constant definition — the key is the
+    // name the rule asks for — so it must not be flagged, mirroring `const FOO`.
+    #[test]
+    fn allows_screaming_snake_keyed_property_value() {
+        // Single SCREAMING-keyed property inside an `Object.assign` (the issue's
+        // shape, stripped of the 2-property enum-map exemption that would also
+        // cover it).
+        assert!(run("Object.assign(F, { MAX_ROW: 1048576 });").is_empty());
+        // String-literal key form.
+        assert!(run(r#"Object.assign(F, { "MAX_COLUMN": 16384 });"#).is_empty());
+        // Negative-valued constant.
+        assert!(run("Object.assign(F, { MIN_OFFSET: -2958465 });").is_empty());
+    }
+
+    #[test]
+    fn allows_screaming_snake_member_assignment_value() {
+        // `OBJ.MAX_COLUMN = 16384` — a member-target named-constant definition.
+        assert!(run("OBJ.MAX_COLUMN = 16384;").is_empty());
+    }
+
+    #[test]
+    fn flags_lowercase_keyed_property_value() {
+        // The exemption is keyed on SCREAMING_SNAKE_CASE: a lowercase/camelCase
+        // key in a non-const context is an ordinary value assignment and stays
+        // flagged. (A `const` initializer is exempt for an unrelated reason, so
+        // these use `Object.assign`/member-assignment to isolate the key check.)
+        assert_eq!(run("Object.assign(F, { width: 1048576 });").len(), 1);
+        assert_eq!(run("obj.width = 1048576;").len(), 1);
+        // Mixed-case (PascalCase) is not SCREAMING_SNAKE_CASE.
+        assert_eq!(run("Object.assign(F, { MaxRow: 1048576 });").len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_comparison_magic_number() {
+        // The issue's second case (`if (v > 2958465 || v < 0)`) is a genuine
+        // magic number: opaque usage in a comparison, not a named-constant
+        // definition. It must stay flagged.
+        let src = r#"function parse_date_code(v) { if (v > 2958465 || v < 0) return null; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_screaming_compound_assignment_value() {
+        // A compound assignment (`+=`) uses the literal in arithmetic — it is not
+        // a definition, so it stays flagged.
+        assert_eq!(run("OBJ.MAX_COLUMN += 16384;").len(), 1);
     }
 
     #[test]
