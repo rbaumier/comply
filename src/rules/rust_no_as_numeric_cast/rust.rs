@@ -67,6 +67,13 @@
 //! is the only infallible conversion. Narrowing (`usize as u32`) and
 //! sign-changing (`usize as i64`) casts stay flagged.
 //!
+//! A cast into `u128` from any non-float source — `u64 as u128`,
+//! `entity.to_bits() as u128` — is exempt: `u128` is the widest integer type, so
+//! no integer value of any width or signedness can overflow it, and there is no
+//! `From` impl reachable for an unresolved source (method call / field access),
+//! making the `u128::from(x)` remediation uncompilable. A float source
+//! (`f64 as u128`) truncates and stays flagged.
+//!
 //! Float-target casts (`as f32` / `as f64`) are only flagged when the
 //! source type is statically known to have a matching `From` impl
 //! (`f64: From<{i8,i16,i32,u8,u16,u32,f32}>`, `f32: From<{i8,i16,u8,u16}>`).
@@ -260,6 +267,22 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     let source_type = source_numeric_type(node, source_bytes);
+    // `u128` is the widest integer type in Rust: no integer value — of any width
+    // or signedness — can overflow it, so `<int> as u128` is always lossless
+    // (`u64 as u128`, `entity.to_bits() as u128`). There is no `From<T>` impl for
+    // `u128` from an unresolvable source (a method call / field access), so the
+    // rule's `u128::from(x)` remediation would not compile. Only a float source
+    // (`f64 as u128`) truncates, so it stays governed by `is_dangerous_cast`; an
+    // unresolved source is treated as the common integer case and exempted. The
+    // signed widest target `i128` is left to `is_dangerous_cast` — a `u128 as
+    // i128` source can exceed `i128::MAX`, so the widest-target shortcut applies
+    // only to the unsigned `u128` target.
+    if target_type.kind == NumericKind::Unsigned
+        && target_type.bits == 128
+        && source_type.is_none_or(|src| src.kind != NumericKind::Float)
+    {
+        return false;
+    }
     if target_type.kind == NumericKind::Float {
         // `as f32`/`as f64` is the only std conversion unless the source
         // has a matching `From` impl. Suggesting `f64::from(x)` for a
@@ -796,6 +819,41 @@ name = "normal_lib"
     #[test]
     fn repro_3949_bool_binding_as_u8_not_flagged() {
         assert!(run_on("fn g(b: bool) -> u8 { b as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6105_method_call_as_u128_not_flagged() {
+        // bevy_rapier: storing a `u64` Entity handle into a `u128` user_data
+        // field. `to_bits()` is unresolved by the AST, but `u128` is the widest
+        // integer type, so `<int> as u128` cannot overflow.
+        assert!(run_on("fn f(e: Entity) -> u128 { e.to_bits() as u128 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6105_widening_int_idents_as_u128_not_flagged() {
+        // Every unsigned/signed source widens losslessly into `u128`.
+        for ty in ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"] {
+            let src = format!("fn f(x: {ty}) -> u128 {{ x as u128 }}");
+            assert!(run_on(&src).is_empty(), "{ty} as u128 should not be flagged");
+        }
+    }
+
+    #[test]
+    fn repro_6105_field_access_as_u128_not_flagged() {
+        assert!(run_on("fn f(s: S) -> u128 { s.id as u128 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6105_float_as_u128_still_flagged() {
+        // A float source truncates the fractional part — genuinely lossy.
+        assert_eq!(run_on("fn f(x: f64) -> u128 { x as u128 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6105_narrowing_from_u128_still_flagged() {
+        // The widest-target exemption is one-directional: narrowing out of
+        // `u128` stays flagged.
+        assert_eq!(run_on("fn f(x: u128) -> u64 { x as u64 }").len(), 1);
     }
 
     #[test]
