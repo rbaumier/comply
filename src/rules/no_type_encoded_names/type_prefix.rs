@@ -99,9 +99,58 @@ pub fn matched_camel_case(name: &str) -> Option<&'static str> {
         if bytes.get(plen + 1).is_some_and(u8::is_ascii_uppercase) {
             continue;
         }
+        // A type abbreviation coordinated by `Or`/`And` is a type-*union phrase*
+        // (`str`Or`Num`…, `bool`Or`String`…), not a Hungarian prefix on one
+        // variable. In `strOrNumObjSchema` the leading `str` describes a member
+        // of the union the value may take, not the variable's own type — the
+        // type checker cannot recover it by dropping the prefix, so the rule's
+        // premise ("drop it, the checker knows the type") does not apply. A
+        // Hungarian prefix is always followed by the *noun* being named
+        // (`str`Value, `bool`Flag, `bool`Type), never by a conjunction.
+        if is_type_union_phrase(name) {
+            continue;
+        }
         return Some(prefix);
     }
     None
+}
+
+/// Split a camelCase / PascalCase identifier into its word segments
+/// (`strOrNumObjSchema` → `["str", "Or", "Num", "Obj", "Schema"]`).
+fn camel_segments(name: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let bytes = name.as_bytes();
+    for i in 1..bytes.len() {
+        if bytes[i].is_ascii_uppercase() {
+            segments.push(&name[start..i]);
+            start = i;
+        }
+    }
+    segments.push(&name[start..]);
+    segments
+}
+
+/// True when a leading run of type-abbreviation segments is immediately
+/// followed by an `Or`/`And` conjunction — i.e. the identifier reads as a
+/// type-union phrase (`str`-`Or`-`Num`, `bool`-`Str`-`Or`-`Num`,
+/// `bool`-`Or`-`String`) rather than a Hungarian-prefixed variable.
+///
+/// The run may contain several type abbreviations (`boolStrOr…`) because a
+/// union lists multiple member types; what disqualifies a Hungarian reading
+/// is the conjunction following them, which never follows a real prefix
+/// (`boolType`, `boolFlag` are nouns, not conjunctions, so they stay flagged).
+fn is_type_union_phrase(name: &str) -> bool {
+    let segments = camel_segments(name);
+    let mut idx = 0;
+    while segments
+        .get(idx)
+        .is_some_and(|seg| TYPE_PREFIXES.iter().any(|p| seg.eq_ignore_ascii_case(p)))
+    {
+        idx += 1;
+    }
+    // Need at least one type abbreviation, then a conjunction.
+    idx > 0 && segments.get(idx).is_some_and(|s| *s == "Or" || *s == "And")
 }
 
 #[cfg(test)]
@@ -144,5 +193,29 @@ mod tests {
         assert_eq!(matched_camel_case("BOOL"), None);
         // Still flag genuine camelCase Hungarian sharing the same prefix.
         assert_eq!(matched_camel_case("bytValue"), Some("byt"));
+    }
+
+    // Regression for #6115: a type abbreviation coordinated by `Or`/`And` is a
+    // type-union phrase (the value may be str-or-num), not a Hungarian prefix.
+    #[test]
+    fn ignores_type_union_phrase() {
+        assert_eq!(matched_camel_case("strOrNumObjSchema"), None);
+        assert_eq!(matched_camel_case("boolStrOrNumObjSchema"), None);
+        assert_eq!(matched_camel_case("boolOrStringInstance"), None);
+        assert_eq!(matched_camel_case("strOrNum"), None);
+    }
+
+    // A Hungarian prefix is followed by the *noun* being named, never a
+    // conjunction — these must still flag (the #6095 class stays flagged).
+    #[test]
+    fn still_flags_hungarian_without_conjunction() {
+        assert_eq!(matched_camel_case("strValue"), Some("str"));
+        assert_eq!(matched_camel_case("boolFlag"), Some("bool"));
+        assert_eq!(matched_camel_case("strName"), Some("str"));
+        assert_eq!(matched_camel_case("boolType"), Some("bool"));
+        // `Order`/`Android` start with `Or`/`And` letters but are single
+        // segments, not the standalone `Or`/`And` conjunction.
+        assert_eq!(matched_camel_case("strOrder"), Some("str"));
+        assert_eq!(matched_camel_case("boolAndroidFlag"), Some("bool"));
     }
 }
