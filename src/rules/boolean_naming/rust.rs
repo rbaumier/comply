@@ -248,24 +248,33 @@ fn is_toggle_enable_setter_param(
     false
 }
 
-/// True for the setter value-placeholder convention: a `bool` parameter named
-/// exactly `value`/`val` on a `set_*` method with a `self` receiver, where that
-/// bool param is the method's single non-self parameter
-/// (`pub fn set_dont_frag(&mut self, value: bool)`). `value`/`val` are the
-/// canonical generic placeholders for the value a setter assigns — they carry no
-/// semantic content, so a predicate prefix adds nothing; `is_value` would be
-/// nonsensical and diverge from the universal setter idiom.
+/// True for the value-placeholder convention: a `bool` parameter named exactly
+/// `value`/`val` carrying the generic value a mutator records, on a method with a
+/// `self` receiver. Two conventions qualify:
 ///
-/// Anchored on four AST signals so it cannot widen into a name allowlist: the
-/// node is a `parameter` named exactly `value`/`val`, its directly-enclosing
-/// `function_item` `name` field starts with `set_`, that function declares a
-/// `self_parameter` receiver, and it has exactly one non-self parameter (this
-/// one). A meaningful boolean param (`emit`, `drop`, `disabled`) is unaffected —
-/// only the generic placeholders `value`/`val` match. A `value: bool` param in a
-/// free function, a non-`set_*` method, or a `set_*` method that also takes other
-/// non-self parameters still flags. The walk stops at the first
-/// `closure_expression` boundary so a closure callback param named `value`/`val`
-/// nested inside a `set_*` method is judged by its own scope.
+/// - the `set_*` simple setter, where the placeholder is the method's single
+///   non-self parameter (`pub fn set_dont_frag(&mut self, value: bool)`); and
+/// - the `record_*` visitor (`tracing`'s `Visit` trait), where the placeholder is
+///   the recorded value preceded by a leading `field` selector parameter
+///   (`fn record_bool(&mut self, field: &Field, value: bool)`).
+///
+/// `value`/`val` are the canonical generic placeholders for the value a setter
+/// assigns or a visitor records — they carry no semantic content, so a predicate
+/// prefix adds nothing; `is_value` would be nonsensical and diverge from these
+/// universal idioms.
+///
+/// Anchored on AST signals so it cannot widen into a name allowlist: the node is a
+/// `parameter` named exactly `value`/`val`, its directly-enclosing `function_item`
+/// declares a `self_parameter` receiver, and its `name` field either starts with
+/// `set_` (with this as the single non-self parameter) or starts with `record_`
+/// (with this and a leading `field` selector as its two non-self parameters).
+/// A meaningful boolean param (`emit`, `drop`, `disabled`) is unaffected — only the
+/// generic placeholders `value`/`val` match. A `value: bool` param in a free
+/// function, a non-`set_*`/`record_*` method, a `set_*` method that also takes
+/// other non-self parameters, or a `record_*` method without exactly two non-self
+/// parameters still flags. The walk stops at the first `closure_expression`
+/// boundary so a closure callback param named `value`/`val` nested inside such a
+/// method is judged by its own scope.
 fn is_setter_value_placeholder_param(
     node: tree_sitter::Node,
     name: &str,
@@ -280,13 +289,22 @@ fn is_setter_value_placeholder_param(
             return false;
         }
         if parent.kind() == "function_item" {
-            let starts_with_set = parent
+            if !method_has_self_receiver(parent) {
+                return false;
+            }
+            let Some(fn_name) = parent
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source).ok())
-                .is_some_and(|fn_name| fn_name.starts_with("set_"));
-            return starts_with_set
-                && method_has_self_receiver(parent)
-                && method_non_self_param_count(parent) == 1;
+            else {
+                return false;
+            };
+            if fn_name.starts_with("set_") {
+                return method_non_self_param_count(parent) == 1;
+            }
+            if fn_name.starts_with("record_") {
+                return method_non_self_param_count(parent) == 2;
+            }
+            return false;
         }
         cursor = parent;
     }
@@ -1214,6 +1232,58 @@ mod tests {
         // The walk stops at the closure boundary: a closure callback param named
         // `value` inside a `set_*` method is not the setter's own param.
         let diags = run_on("impl X { fn set_cb(&self) { let f = |value: bool| {}; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'value'"));
+    }
+
+    #[test]
+    fn allows_record_visitor_value_placeholder_param() {
+        // tracing `Visit` trait convention: `record_*(&mut self, field: &Field,
+        // value: bool)` where `value`/`val` is the mandated placeholder for the
+        // recorded value, preceded by a leading `field` selector param. Every
+        // `Visit` implementation across the ecosystem copies this signature, so
+        // `is_value` would be nonsensical. (Closes #6157)
+        for src in [
+            "impl X { fn record_bool(&mut self, field: &Field, value: bool) {} }",
+            "impl X { fn record_bool(&mut self, field: &Field, val: bool) {} }",
+            "trait V { fn record_bool(&mut self, field: &Field, value: bool) {} }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_meaningful_bool_param_in_record_visitor() {
+        // Only the generic placeholders `value`/`val` are exempted; a meaningful
+        // boolean param in a `record_*` visitor still requires a predicate prefix.
+        let diags = run_on("impl X { fn record_bool(&mut self, field: &Field, emit: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'emit'"));
+    }
+
+    #[test]
+    fn still_flags_record_value_param_without_self_receiver() {
+        // No `self` receiver — not the visitor shape; a free `record_*` function
+        // (or `record_*` associated fn without a receiver) still flags `value`.
+        assert_eq!(run_on("fn record_bool(field: &Field, value: bool) {}").len(), 1);
+        assert_eq!(
+            run_on("impl X { fn record_bool(field: &Field, value: bool) {} }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_record_value_param_without_two_non_self_params() {
+        // The visitor shape is the `Visit` trait's `(field, value)` pair — exactly
+        // two non-self params. A `record_*` method missing the `field` selector, or
+        // carrying extra params, is not that shape, so `value` is no longer the
+        // unambiguous recorded value and still flags.
+        assert_eq!(
+            run_on("impl X { fn record_bool(&mut self, value: bool) {} }").len(),
+            1
+        );
+        let diags =
+            run_on("impl X { fn record_bool(&mut self, field: &Field, extra: K, value: bool) {} }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("'value'"));
     }
