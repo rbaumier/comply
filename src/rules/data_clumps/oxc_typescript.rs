@@ -161,6 +161,13 @@ impl OxcCheck for Check {
         for node in nodes.iter() {
             let params = match node.kind() {
                 AstKind::Function(func) => {
+                    if func.body.is_none() {
+                        // TypeScript overload signature — a bodyless declaration of
+                        // the same underlying function as its implementation, sharing
+                        // params by definition. Only the implementation (which has a
+                        // body) contributes to the clump count.
+                        continue;
+                    }
                     if is_framework_callback(node, semantic, ctx.source) {
                         continue;
                     }
@@ -352,6 +359,39 @@ function f2(_: unknown, userId: string, name: string, email: string) {}
         assert_eq!(diags.len(), 2);
         assert!(diags[0].message.contains("email, name, userId"));
         assert!(!diags[0].message.contains('_'));
+    }
+
+    #[test]
+    fn no_fp_on_typescript_overload_signatures() {
+        // Regression for issue #6308 — TypeScript overload signatures (bodyless
+        // declarations) are not separate functions; they declare the same
+        // underlying function as the implementation. The shared parameter triple
+        // appears in only one real function (the implementation), so it must not
+        // be flagged as a clump.
+        let src = r#"
+class EventSource {
+  public addEventListener(type: string, listener: EventHandler, options?: AddEventListenerOptions): void
+  public addEventListener(type: string, listener: EventListener, options?: AddEventListenerOptions): void
+  public addEventListener(type: string, listener: EventListenerObject, options?: AddEventListenerOptions): void
+  public addEventListener(type: string, listener: EventHandler | EventListener, options?: AddEventListenerOptions): void {
+    return;
+  }
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_distinct_bodied_functions_sharing_params() {
+        // Negative control for issue #6308 — three DISTINCT functions, each with a
+        // body, sharing the same parameter triple are a genuine clump and must
+        // still be flagged. Only bodyless overload signatures are skipped.
+        let src = r#"
+function createUser(name: string, email: string, age: number) { return; }
+function updateUser(name: string, email: string, age: number) { return; }
+function deleteUser(name: string, email: string, age: number) { return; }
+"#;
+        assert_eq!(run(src).len(), 3);
     }
 
     #[test]
