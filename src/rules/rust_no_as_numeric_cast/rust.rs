@@ -90,7 +90,8 @@ use crate::rules::rust_helpers::{
     cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
+    cast_operand_is_enum_discriminant, cast_operand_is_modulo_bounded,
+    cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
     is_in_enum_discriminant, is_in_test_context,
@@ -221,6 +222,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_operand_is_bitwise(node, source_bytes) {
+        return false;
+    }
+    // `(x % N) as uT` with a non-negative `x` and `N - 1 <= uT::MAX` is in range
+    // — the unsigned-remainder narrowing in `(width % 256) as u8` (#6151).
+    if cast_operand_is_modulo_bounded(node, source_bytes) {
         return false;
     }
     if cast_feeds_from_bits(node, source_bytes) {
@@ -553,6 +559,53 @@ name = "normal_lib"
     #[test]
     fn flags_float_cast() {
         assert_eq!(run_on("fn f(x: i32) -> f64 { x as f64 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_modulo_bounded_unsigned_dividend() {
+        // Issue #6151: `(x % N) as uT` with a non-negative `x` and `N - 1 <=
+        // uT::MAX` is always in range — the remainder of an unsigned dividend.
+        assert!(run_on("fn f(width: u32) -> u8 { (width % 256) as u8 }").is_empty());
+        assert!(run_on("fn f(n: u128) -> u32 { (n % 1_000_000) as u32 }").is_empty());
+        // A same-file `let` with an unsigned annotation resolves the dividend too.
+        assert!(run_on("fn f() -> u8 { let width: usize = 1000; (width % 256) as u8 }").is_empty());
+        // A literal dividend is non-negative by construction.
+        assert!(run_on("fn f() -> u8 { (100 % 256) as u8 }").is_empty());
+        // A nested `%` is non-negative when its own dividend is.
+        assert!(run_on("fn f(width: u32) -> u8 { ((width % 1000) % 256) as u8 }").is_empty());
+        // A `& mask` is non-negative regardless of the masked value's sign — a
+        // bitwise AND with a non-negative literal clears the sign bit.
+        assert!(run_on("fn f(x: i32) -> u8 { ((x & 0xFF) % 16) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn flags_modulo_bound_exceeding_target() {
+        // `300 - 1 = 299` does not fit `u8`: the remainder can be `256..=299`.
+        assert_eq!(run_on("fn f(width: u32) -> u8 { (width % 300) as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_modulo_signed_target() {
+        // A signed target is never exempt — the remainder's range is irrelevant
+        // to whether so large a value fits a signed type.
+        assert_eq!(run_on("fn f(width: u32) -> i8 { (width % 256) as i8 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_modulo_signed_dividend() {
+        // `s: i32` can be negative, so `s % 256` can be negative and `as u8`
+        // wraps — the dividend is not proven non-negative.
+        assert_eq!(run_on("fn f(s: i32) -> u8 { (s % 256) as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_modulo_unresolved_dividend() {
+        // A method return whose type lives in std (`Duration::as_nanos`) is not
+        // provably unsigned from the AST, so the cast stays flagged.
+        assert_eq!(
+            run_on("fn f(d: Duration) -> u32 { (d.as_nanos() % 1_000_000) as u32 }").len(),
+            1
+        );
     }
 
     #[test]
