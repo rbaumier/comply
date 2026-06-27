@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, ObjectPropertyKind};
+use oxc_ast::ast::{Expression, ObjectPropertyKind, TSType};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -47,6 +47,18 @@ impl OxcCheck for Check {
         if let Expression::ObjectExpression(obj) = &as_expr.expression
             && obj.properties.is_empty()
         {
+            return;
+        }
+
+        // `satisfies unknown` / `satisfies any` are vacuously true — every
+        // value satisfies `unknown`/`any`, so the suggestion validates
+        // nothing. `literal as unknown` / `literal as any` is a deliberate
+        // escape hatch (often the first half of an `as unknown as T`
+        // double-assertion), not a widening that `satisfies` can replace.
+        if matches!(
+            as_expr.type_annotation,
+            TSType::TSUnknownKeyword(_) | TSType::TSAnyKeyword(_)
+        ) {
             return;
         }
 
@@ -171,6 +183,40 @@ mod tests {
     #[test]
     fn allows_as_const() {
         assert!(crate::rules::test_helpers::run_rule(&Check, "const x = [1, 2] as const;", "t.ts").is_empty());
+    }
+
+    // Regression test for #6138: `satisfies unknown`/`satisfies any` are
+    // vacuously true, so `literal as unknown` / `literal as any` must not be
+    // flagged — these are deliberate escape hatches `satisfies` cannot replace.
+    #[test]
+    fn allows_array_literal_as_unknown() {
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const t = [] as unknown as [undefined, undefined];", "t.ts")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_object_literal_as_any() {
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const n = { tag: '', props: { children: jsxNode } } as any;", "t.ts")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_object_literal_as_unknown() {
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = { a: 1 } as unknown;", "t.ts").is_empty());
+    }
+
+    // Negative space: a concrete cast target that `satisfies` can validate must
+    // still fire even when `any`/`unknown` appear nested inside the type.
+    #[test]
+    fn still_flags_concrete_type_with_nested_unknown() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "const x = { a: 1 } as Record<string, unknown>;", "t.ts").len(),
+            1
+        );
     }
 
     #[test]
