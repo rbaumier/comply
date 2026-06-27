@@ -3600,6 +3600,140 @@ pub fn cast_operand_is_bitwise(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|op| matches!(op, ">>" | "<<" | "&" | "|" | "^"))
 }
 
+/// True when `cast` (a `type_cast_expression`) narrows `(x % N) as uT` where the
+/// modulo's right operand `N` is an integer literal small enough that the
+/// remainder always fits the unsigned target, and the dividend `x` is provably
+/// non-negative from the AST.
+///
+/// For a non-negative `x`, Rust's `%` yields a value in `[0, N - 1]` (the
+/// remainder follows the sign of the dividend, so a non-negative dividend gives a
+/// non-negative remainder). When `N - 1 <= uT::MAX` that whole range is
+/// representable, so the cast is lossless — `(width % 256) as u8`,
+/// `(nanos % 1_000_000) as u32`.
+///
+/// Soundness hinges on the dividend being non-negative: a SIGNED `x % N` can be
+/// negative (`-1i32 % 256 == -1`), and `(-1i32) as u8` wraps to `255` — a
+/// genuinely lossy cast the rules must keep flagging. Unlike the bitwise-AND mask
+/// of [`cast_operand_is_bitwise`] (non-negative regardless of sign), modulo needs
+/// an explicit unsigned proof. The exemption therefore requires:
+///
+/// - the target is an **unsigned** integer (`u8`..`u128`/`usize`); a signed target
+///   is never exempt;
+/// - the right operand is an integer literal `N` with `N - 1 <= uT::MAX` (i.e.
+///   `N <= 2^bits`); `(x % 300) as u8` stays flagged because `299` exceeds `u8`;
+/// - the dividend is **provably non-negative** from the AST per
+///   [`expr_is_provably_nonneg`]. A dividend whose type cannot be resolved (an
+///   unannotated local, or a method return like `.as_nanos()` whose type lives in
+///   std) is left unproven, so it stays flagged — a conservative false-negative,
+///   never an unsound false-positive.
+///
+/// Any `parenthesized_expression` layers around the operand are transparent.
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`.
+pub fn cast_operand_is_modulo_bounded(cast: Node, source: &[u8]) -> bool {
+    let Some(target_bits) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .and_then(unsigned_int_bits)
+    else {
+        return false;
+    };
+    let target_max: u128 = if target_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << target_bits) - 1
+    };
+
+    let Some(mut value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    while value.kind() == "parenthesized_expression" {
+        let Some(inner) = value.named_child(0) else {
+            return false;
+        };
+        value = inner;
+    }
+    if value.kind() != "binary_expression" {
+        return false;
+    }
+    if value
+        .child_by_field_name("operator")
+        .and_then(|op| op.utf8_text(source).ok())
+        != Some("%")
+    {
+        return false;
+    }
+    let (Some(left), Some(right)) = (
+        value.child_by_field_name("left"),
+        value.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    // `x % N` (non-negative `x`) yields a value in `[0, N - 1]`; it fits when
+    // `N - 1 <= target_max`. A zero or absent literal rejects via `checked_sub` /
+    // `parse_int_literal`, keeping `(x % N)` with an unparsed bound flagged.
+    if right.kind() != "integer_literal" {
+        return false;
+    }
+    if !parse_int_literal(right, source)
+        .and_then(|n| n.checked_sub(1))
+        .is_some_and(|remainder_max| remainder_max <= target_max)
+    {
+        return false;
+    }
+    expr_is_provably_nonneg(left, source)
+}
+
+/// True when `node`'s value is provably `>= 0` from the AST alone (no type
+/// inference) — the non-negativity [`cast_operand_is_modulo_bounded`] needs to
+/// make an unsigned `%` lossless.
+///
+/// Proven shapes:
+/// - an `integer_literal` (literals carry no sign; a leading `-` is a separate
+///   `unary_expression`);
+/// - an `identifier` whose same-file binding/parameter is annotated with an
+///   unsigned integer type (`u8`..`u128`/`usize`);
+/// - `a % b`, non-negative when `a` is (the remainder follows the dividend's sign);
+/// - `a & b`, non-negative when either operand is (a bitwise AND clears the sign
+///   bit unless both operands have it set).
+///
+/// Any `parenthesized_expression` layers are transparent. Any other shape
+/// (`a + b`, a method call, an unannotated local) is left unproven, so the caller
+/// keeps flagging it.
+fn expr_is_provably_nonneg(node: Node, source: &[u8]) -> bool {
+    let mut node = node;
+    while node.kind() == "parenthesized_expression" {
+        let Some(inner) = node.named_child(0) else {
+            return false;
+        };
+        node = inner;
+    }
+    match node.kind() {
+        "integer_literal" => true,
+        "identifier" => node
+            .utf8_text(source)
+            .ok()
+            .and_then(|name| find_identifier_type(node, name, source))
+            .and_then(|t| unsigned_int_bits(&t))
+            .is_some(),
+        "binary_expression" => {
+            let op = node
+                .child_by_field_name("operator")
+                .and_then(|op| op.utf8_text(source).ok());
+            let left = node.child_by_field_name("left");
+            let right = node.child_by_field_name("right");
+            match op {
+                Some("%") => left.is_some_and(|l| expr_is_provably_nonneg(l, source)),
+                Some("&") => {
+                    left.is_some_and(|l| expr_is_provably_nonneg(l, source))
+                        || right.is_some_and(|r| expr_is_provably_nonneg(r, source))
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// True when `cast` (a `type_cast_expression`) is the argument of a
 /// `from_bits` call — `f32::from_bits(p as u32)`, `f64::from_bits(x as u64)`,
 /// or any `<T>::from_bits(..)`.
