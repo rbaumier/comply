@@ -15,12 +15,16 @@
 //! that produce side effects (console, fetch, emit, push, ...), and
 //! conditional assignments are left alone.
 //!
-//! Two usage-context exemptions, because `computed()` is read-only:
+//! Three usage-context exemptions, because `computed()` is read-only:
 //! - A constant RHS (`''`, `0`, `true`, ...) is a reset on a trigger, not a
 //!   derivation; `computed()` would freeze the ref to that constant.
 //! - A target ref assigned at another site in the file is mutable interactive
 //!   state, not a derived value; converting it to `computed()` would break the
 //!   other assignment.
+//! - A target ref initialized by a composable call (`const t = use<Uppercase>(…)`)
+//!   may back its `.value` setter with an external store (localStorage, cookies,
+//!   IndexedDB, ...) and read it back on init; `computed()` is read-only and can't
+//!   express that side effect.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -66,6 +70,14 @@ impl TextCheck for Check {
                 // interactive state, not a derived value; `computed()` is
                 // read-only and would break it.
                 if value_assignment_count(src, &ident) >= 2 {
+                    continue;
+                }
+                // A ref initialized by a composable (`const t = use<Uppercase>(…)`)
+                // may persist its `.value` setter to an external store
+                // (localStorage, cookies, IndexedDB, ...) and read it back on
+                // init. That side effect can't be expressed by a read-only
+                // `computed()`, so the assignment is not a plain derivation.
+                if target_initialized_by_composable(src, &ident) {
                     continue;
                 }
                 diags.push(Diagnostic {
@@ -261,6 +273,96 @@ fn value_assignment_count(src: &str, ident: &str) -> usize {
     count
 }
 
+/// Returns true when `ident` is declared in `src` and initialized by a
+/// composable call — `const <ident> = use<Uppercase>...(`. The match is tied to
+/// this exact identifier (word boundary on both sides), so a composable bound to
+/// a different name does not exempt the watch target.
+///
+/// By the universal Vue/VueUse convention every composable is `use`-prefixed
+/// (`useLocalStorage`, `useSessionStorage`, custom `use*`), and the ref it
+/// returns may implement a custom `.value` setter with an external side effect.
+/// An optional `: <type>` annotation between the name and `=` is skipped.
+fn target_initialized_by_composable(src: &str, ident: &str) -> bool {
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed
+            .strip_prefix("const ")
+            .or_else(|| trimmed.strip_prefix("let "))
+        else {
+            continue;
+        };
+        let Some(after_ident) = rest.trim_start().strip_prefix(ident) else {
+            continue;
+        };
+        // Word boundary: the next char must not continue the identifier, so
+        // `previousAvatar` does not match a declaration of `previousAvatarExtra`.
+        if after_ident
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        {
+            continue;
+        }
+        // Land on the initializer past any `: <type>` annotation.
+        let Some(eq) = find_assignment_eq(after_ident) else {
+            continue;
+        };
+        if is_composable_call(after_ident[eq + 1..].trim_start()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns the byte offset of the declaration's assignment `=` in a tail like
+/// `= useFoo()` or `: Ref<T> = useFoo()`. Comparison/compound operators
+/// (`==`, `=>`, `<=`, `>=`, `!=`, `+=`, ...) are not assignments and are skipped,
+/// so a `=>` inside a function-type annotation is ignored.
+fn find_assignment_eq(tail: &str) -> Option<usize> {
+    let bytes = tail.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'=' {
+            continue;
+        }
+        let next = bytes.get(i + 1).copied();
+        if next == Some(b'=') || next == Some(b'>') {
+            continue;
+        }
+        let prev = i.checked_sub(1).map(|p| bytes[p]);
+        if matches!(
+            prev,
+            Some(b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^')
+        ) {
+            continue;
+        }
+        return Some(i);
+    }
+    None
+}
+
+/// Returns true when `init` begins with a composable invocation: a `use`-prefixed
+/// PascalCase callee immediately invoked (`use<Uppercase>...(` or a generic
+/// `use<Uppercase>...<...>(`). Plain factories like `ref(`/`reactive(` do not
+/// match, so a derived `ref()` target is still flagged.
+fn is_composable_call(init: &str) -> bool {
+    let Some(after_use) = init.strip_prefix("use") else {
+        return false;
+    };
+    // First char after `use` must be uppercase — the PascalCase composable shape.
+    if !after_use
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
+    {
+        return false;
+    }
+    let name_end = after_use
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+        .unwrap_or(after_use.len());
+    let after_name = after_use[name_end..].trim_start();
+    after_name.starts_with('(') || after_name.starts_with('<')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +437,49 @@ mod tests {
     fn ignores_comment_lines() {
         let src = "// watch(count, () => { x.value = 1 })";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_composable_ref_target() {
+        let src = "const previousAvatar = useLocalStorage('slidev-webcam-show', false)\n\
+                   watch(showAvatar, () => {\n  previousAvatar.value = showAvatar.value\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_plain_ref_target_declared_in_file() {
+        let src = "const doubled = ref(0)\n\
+                   watch(count, (v) => {\n  doubled.value = v * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_composable_binds_a_different_identifier() {
+        let src = "const stored = useLocalStorage('k', false)\n\
+                   watch(count, (v) => {\n  doubled.value = v * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_bound_composable_ref_target() {
+        let src = "let theme = useLocalStorage('theme', 'dark')\n\
+                   watch(scheme, () => {\n  theme.value = scheme.value\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_type_annotated_composable_ref_target() {
+        let src = "const previousAvatar: RemovableRef<boolean> = useLocalStorage('k', false)\n\
+                   watch(showAvatar, () => {\n  previousAvatar.value = showAvatar.value\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_when_composable_name_is_a_prefix_of_the_target() {
+        // `previousAvatarExtra` declares a composable, but the watch target is
+        // `previousAvatar` — the word boundary must prevent a prefix match.
+        let src = "const previousAvatarExtra = useLocalStorage('k', false)\n\
+                   watch(showAvatar, () => {\n  previousAvatar.value = showAvatar.value\n})";
+        assert_eq!(run(src).len(), 1);
     }
 }
