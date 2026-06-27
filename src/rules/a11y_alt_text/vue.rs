@@ -16,7 +16,13 @@ impl TextCheck for Check {
         for elem in extract_elements(ctx.source) {
             match elem.tag {
                 "img" => {
-                    if !has_attr(elem.attrs, "alt") {
+                    // A whole-object `v-bind="expr"` spread can forward `alt`
+                    // (and every other attribute) from the caller dynamically,
+                    // so the alt may be supplied at runtime. A named binding
+                    // (`v-bind:alt`) contains `v-bind:`, so it never matches.
+                    let has_object_spread =
+                        elem.attrs.contains("v-bind=\"") || elem.attrs.contains("v-bind='");
+                    if !has_attr(elem.attrs, "alt") && !has_object_spread {
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
                             line: elem.line,
@@ -87,6 +93,50 @@ mod tests {
     #[test]
     fn flags_area_without_alt() {
         let source = "<template>\n  <area shape=\"rect\" />\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_img_with_object_spread() {
+        // A whole-object `v-bind` spread forwards `alt` dynamically; not flagged.
+        let source = "<template>\n  <img v-bind=\"imgAttrs\" :src=\"src\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_img_with_object_spread_single_quote() {
+        let source = "<template>\n  <img v-bind='attrs.img' />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_img_with_object_spread_multiline() {
+        // Mirrors nuxt/image NuxtImg.vue: alt flows through useAttrs() spread.
+        let source = "<template>\n  <img\n    v-if=\"!custom\"\n    ref=\"imgEl\"\n    v-bind=\"imgAttrs\"\n    :src=\"src\"\n  >\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_img_without_alt_or_spread() {
+        // No alt, no spread → still flagged.
+        let source = "<template>\n  <img src=\"x\" />\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_img_with_named_binding_only() {
+        // A named dynamic binding (`:src`) is not a whole-object spread, and
+        // there is no alt → still flagged.
+        let source = "<template>\n  <img :src=\"x\" />\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_img_with_long_form_named_binding_only() {
+        // The long-form named binding `v-bind:src` contains `v-bind:` (colon),
+        // not the bare object-spread `v-bind=`, so it is not a whole-object
+        // spread and, with no alt, still flags.
+        let source = "<template>\n  <img v-bind:src=\"x\" />\n</template>";
         assert_eq!(run(source).len(), 1);
     }
 
