@@ -384,26 +384,31 @@ fn is_in_locale_dir(path: &std::path::Path) -> bool {
     })
 }
 
-/// Returns `true` when any whole path segment of `path` is a `middleware`
-/// directory. Nuxt's route middleware lives in a `middleware/` directory (root
-/// `middleware/` in Nuxt 3, `app/middleware/` in Nuxt 4); the segment match
-/// covers both. Gates the numeric-load-order-prefix allowance so the convention
-/// only applies to middleware files, not a like-named file elsewhere.
-fn is_in_middleware_dir(path: &std::path::Path) -> bool {
+/// Returns `true` when any whole path segment of `path` is a Nuxt directory
+/// whose files are loaded in filename order — `middleware` or `plugins`. Both
+/// live at the root in Nuxt 3 (`middleware/`, `plugins/`) and under `app/` in
+/// Nuxt 4 (`app/middleware/`, `app/plugins/`); the segment match covers both.
+/// Nuxt registers route middleware and plugins in alphabetical/numeric filename
+/// order, and both directories use the same leading-numeric load-order prefix
+/// convention. Gates the numeric-load-order-prefix allowance so it only applies
+/// to files in these ordered directories, not a like-named file elsewhere.
+/// See https://nuxt.com/docs/guide/directory-structure/plugins#registration-order.
+fn is_in_nuxt_ordered_dir(path: &std::path::Path) -> bool {
     path.components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new("middleware"))
+        .any(|c| matches!(c.as_os_str().to_str(), Some("middleware" | "plugins")))
 }
 
 /// Strips a leading numeric load-order prefix (`<digits>` followed by a `.`, `_`,
-/// or `-` separator) from a Nuxt route-middleware `file_name`, returning the
-/// remaining name. Nuxt runs route middleware in alphabetical/numeric filename
-/// order, so a leading `01.`, `02.` (also `01_`, `01-`) ordering prefix is a
-/// documented framework convention used to sequence middleware, not part of the
-/// author's chosen name. The prefix is removed so the convention is validated
-/// against the real name that follows (`01.auth.global.ts` → `auth.global.ts`).
+/// or `-` separator) from a Nuxt `middleware`/`plugins` `file_name`, returning
+/// the remaining name. Nuxt registers route middleware and plugins in
+/// alphabetical/numeric filename order, so a leading `01.`, `0.` (also `01_`,
+/// `01-`) ordering prefix is a documented framework convention used to sequence
+/// them, not part of the author's chosen name. The prefix is removed so the
+/// convention is validated against the real name that follows
+/// (`01.auth.global.ts` → `auth.global.ts`, `0.setup-users.ts` → `setup-users.ts`).
 /// Returns `None` when there is no leading numeric prefix, so an ordinary
-/// middleware filename is validated unchanged.
-/// See https://nuxt.com/docs/guide/directory-structure/middleware.
+/// filename is validated unchanged.
+/// See https://nuxt.com/docs/guide/directory-structure/plugins#registration-order.
 fn strip_numeric_order_prefix(file_name: &str) -> Option<&str> {
     let digits = file_name.bytes().take_while(|b| b.is_ascii_digit()).count();
     if digits == 0 {
@@ -455,11 +460,12 @@ impl TextCheck for Check {
         let Some(file_name) = ctx.path.file_name().and_then(|s| s.to_str()) else {
             return Vec::new();
         };
-        // Nuxt route middleware in a `middleware/` directory may carry a leading
-        // numeric load-order prefix (`01.auth.global.ts`) to sequence execution;
+        // Nuxt route middleware and plugins in a `middleware/`/`plugins/`
+        // directory may carry a leading numeric load-order prefix
+        // (`01.auth.global.ts`, `0.setup-users.ts`) to sequence registration;
         // strip it so the convention is validated against the real name that
         // follows, not the numeric ordering segment.
-        let name_to_check = if is_in_middleware_dir(ctx.path) {
+        let name_to_check = if is_in_nuxt_ordered_dir(ctx.path) {
             strip_numeric_order_prefix(file_name).unwrap_or(file_name)
         } else {
             file_name
@@ -1657,5 +1663,43 @@ mod tests {
         assert!(strip_numeric_order_prefix("01.").is_none());
         assert!(strip_numeric_order_prefix("auth.ts").is_none());
         assert_eq!(strip_numeric_order_prefix("01.auth.ts"), Some("auth.ts"));
+    }
+
+    // Regression for #6190: Nuxt plugins in a `plugins/` directory may carry a
+    // leading numeric load-order prefix (`0.`, `1.`) to control registration
+    // order, the same documented convention as route middleware. The prefix is
+    // stripped and the kebab-case name that follows is validated, so it is not
+    // flagged.
+    #[test]
+    fn allows_nuxt_plugin_numeric_prefix_issue_6190() {
+        assert!(run("app/plugins/0.setup-users.ts").is_empty());
+        assert!(run("app/plugins/1.scroll-to-top.ts").is_empty());
+        assert!(run("plugins/0.setup-users.ts").is_empty());
+    }
+
+    // The `.client`/`.server` plugin modifier suffix is reduced away with the
+    // rest of the dotted segments, so the convention is checked against the stem
+    // that follows the numeric prefix (`bar` in `10.bar.client.ts`).
+    #[test]
+    fn allows_nuxt_plugin_numeric_prefix_with_client_modifier_issue_6190() {
+        assert!(run("plugins/10.bar.client.ts").is_empty());
+        assert!(run("app/plugins/2.analytics.server.ts").is_empty());
+    }
+
+    // Load-bearing scope guard for #6190: the numeric-prefix strip is gated on
+    // the `plugins/`/`middleware/` directory — the same numeric-prefixed name
+    // elsewhere must STILL fire, since the stem `0` is not a valid convention
+    // name on its own.
+    #[test]
+    fn flags_numeric_prefix_outside_ordered_dir_issue_6190() {
+        assert_eq!(run("src/utils/0.setup-users.ts").len(), 1);
+    }
+
+    // Guard: stripping the numeric prefix does not exempt a mis-cased remainder —
+    // a snake_case plugin name after the prefix still fires, since the stem
+    // `setup_users` is not kebab-case (and the project is not snake-dominant).
+    #[test]
+    fn flags_nuxt_plugin_numeric_prefix_bad_remainder_issue_6190() {
+        assert_eq!(run("plugins/0.setup_users.ts").len(), 1);
     }
 }
