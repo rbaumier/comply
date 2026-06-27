@@ -787,6 +787,67 @@ fn is_namespaced_type_declaration_name<'a>(
         .any(|kind| matches!(kind, AstKind::TSModuleDeclaration(_)))
 }
 
+/// True when the identifier is the *name* of a `type X = …` whose body's key
+/// type is a template-literal type whose first quasi begins with `word` followed
+/// by `-` (`type DataAttributes = Record<`data-${string}`, V>` for word `data`).
+/// The flagged name segment then reproduces the literal prefix of the type's own
+/// key pattern — a structural name↔body correspondence — so the name is grounded
+/// by the type it describes rather than chosen as a vague placeholder. The check
+/// is parameterised by `word`, so it generalises across words (`aria` for
+/// `type AriaAttributes = Record<`aria-${string}`, V>`).
+fn type_alias_key_template_grounds_word<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    word: &str,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    let AstKind::TSTypeAliasDeclaration(alias) = nodes.kind(parent_id) else {
+        return false;
+    };
+    let prefix = format!("{}-", word.to_ascii_lowercase());
+    key_type_template_has_prefix(&alias.type_annotation, &prefix)
+}
+
+/// True when `ty` is a keyed object type (`Record<K, V>` or a mapped type
+/// `{ [P in K]: V }`) whose key `K` is a `TSTemplateLiteralType` whose first
+/// quasi, lowercased, starts with `prefix`.
+fn key_type_template_has_prefix(ty: &TSType, prefix: &str) -> bool {
+    match ty {
+        // `Record<`data-${string}`, V>` — the key is the first type argument.
+        TSType::TSTypeReference(tref) => {
+            let TSTypeName::IdentifierReference(id) = &tref.type_name else {
+                return false;
+            };
+            if id.name.as_str() != "Record" {
+                return false;
+            }
+            tref
+                .type_arguments
+                .as_ref()
+                .and_then(|args| args.params.first())
+                .is_some_and(|key| template_literal_starts_with(key, prefix))
+        }
+        // `{ [P in `data-${string}`]: V }` — the key is the mapped constraint.
+        TSType::TSMappedType(mapped) => template_literal_starts_with(&mapped.constraint, prefix),
+        _ => false,
+    }
+}
+
+/// True when `ty` is a `TSTemplateLiteralType` whose first quasi, lowercased,
+/// starts with `prefix`.
+fn template_literal_starts_with(ty: &TSType, prefix: &str) -> bool {
+    let TSType::TSTemplateLiteralType(tpl) = ty else {
+        return false;
+    };
+    tpl.quasis
+        .first()
+        .is_some_and(|q| q.value.raw.as_str().to_ascii_lowercase().starts_with(prefix))
+}
+
 /// True when the identifier sits inside an `import { … }` / `import x from …`
 /// / `import * as x from …` declaration. The author has no rename freedom
 /// for a third-party export (e.g. `import { Result } from "better-result"`).
@@ -1407,6 +1468,16 @@ impl OxcCheck for Check {
             if mirrors_dom_api_name(name) {
                 return;
             }
+            // The identifier names a `type X = …` whose key type is a
+            // template-literal type beginning with the flagged word followed by
+            // `-` (`type DataAttributes = Record<`data-${string}`, V>`, word
+            // `data`; `type AriaAttributes = Record<`aria-${string}`, V>`, word
+            // `aria`). The flagged name segment reproduces the literal prefix of
+            // the type's own key pattern, so it is grounded by the type body
+            // rather than standing in as a vague placeholder.
+            if type_alias_key_template_grounds_word(node, semantic, word) {
+                return;
+            }
             if word == "data" && DATA_PASCAL_CASE_ALLOWED_COMPOUNDS.iter().any(|allowed| match name.strip_prefix(allowed) {
                 Some("") => true,
                 Some(rest) => rest.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase()),
@@ -1523,6 +1594,33 @@ mod tests {
         assert_eq!(run("const data = fetchData();").len(), 1);
         assert_eq!(run("class DataSource {}").len(), 1);
         assert_eq!(run_tsx("export const Result = 5;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_type_alias_key_template_grounds_word_issue_6298() {
+        // Regression for #6298 — `DataAttributes` names the HTML `data-*`
+        // attribute API. The flagged `data` segment reproduces the literal
+        // `data-` prefix of the type's own key template, so the name is
+        // structurally grounded by the type body, not a vague placeholder.
+        assert!(
+            run("export type DataAttributes = Record<`data-${string}`, string>;").is_empty()
+        );
+        // The same correspondence holds for the desugared mapped-type shape.
+        assert!(
+            run("type DataAttributes = { [K in `data-${string}`]: string };").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_type_alias_without_template_key_grounding_issue_6298() {
+        // Negative space: the exemption requires a template-literal key whose
+        // prefix matches the flagged word. A `Record<string, V>` key (no
+        // grounding) or a plain alias keeps firing, as does a generic binding.
+        assert_eq!(run("type DataAttributes = Record<string, string>;").len(), 1);
+        assert_eq!(run("type Data = Foo;").len(), 1);
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        // A non-matching template prefix (`x-`) does not ground the `data` word.
+        assert_eq!(run("type DataAttributes = Record<`x-${string}`, string>;").len(), 1);
     }
 
     #[test]
