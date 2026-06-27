@@ -1,7 +1,9 @@
 //! no-negated-condition Rust backend — flag `if !x { A } else { B }`.
 //!
 //! Flags if_expression with a negated condition (`!x` or `!=`) that has
-//! an else clause (but not `else if`).
+//! an else clause (but not `else if`). The bitmask membership idiom
+//! `(expr & mask) != 0` is exempt: it is a positive "is this bit set?"
+//! assertion, not an invertible negation.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -59,10 +61,71 @@ fn is_negated_condition(node: &tree_sitter::Node, source: &[u8]) -> bool {
                 .child_by_field_name("operator")
                 .and_then(|o| o.utf8_text(source).ok())
                 .unwrap_or("");
-            op == "!="
+            // `(expr & mask) != 0` is the idiomatic positive "is this bit set?"
+            // membership test, not an invertible negation.
+            op == "!=" && !is_bitmask_zero_test(node, source)
         }
         _ => false,
     }
+}
+
+/// True for the bitmask membership test `(expr & mask) != 0` (or the mirrored
+/// `0 != (expr & mask)`): one operand is a bitwise-AND expression and the other
+/// is an integer literal whose value is zero.
+fn is_bitmask_zero_test(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(left) = node.child_by_field_name("left") else {
+        return false;
+    };
+    let Some(right) = node.child_by_field_name("right") else {
+        return false;
+    };
+    (is_bitwise_and(&left, source) && is_zero_literal(&right, source))
+        || (is_bitwise_and(&right, source) && is_zero_literal(&left, source))
+}
+
+/// True if `node` (after unwrapping parentheses) is a `<expr> & <expr>` bitwise-AND.
+fn is_bitwise_and(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    let inner = unwrap_parens(node);
+    inner.kind() == "binary_expression"
+        && inner
+            .child_by_field_name("operator")
+            .and_then(|o| o.utf8_text(source).ok())
+            == Some("&")
+}
+
+/// True if `node` is an integer literal whose value is zero (any radix, with
+/// optional `_` separators and integer type suffix: `0`, `0u32`, `0x0`, ...).
+fn is_zero_literal(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "integer_literal" {
+        return false;
+    }
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
+    let cleaned: String = text.chars().filter(|&c| c != '_').collect();
+    let body = cleaned
+        .strip_prefix("0x")
+        .or_else(|| cleaned.strip_prefix("0o"))
+        .or_else(|| cleaned.strip_prefix("0b"))
+        .unwrap_or(&cleaned);
+    // A type suffix starts at the first `u`/`i`, neither of which is a radix digit.
+    let digits = match body.find(['u', 'i']) {
+        Some(idx) => &body[..idx],
+        None => body,
+    };
+    !digits.is_empty() && digits.bytes().all(|b| b == b'0')
+}
+
+/// Strip enclosing `parenthesized_expression` layers to reach the inner expression.
+fn unwrap_parens<'a>(node: &tree_sitter::Node<'a>) -> tree_sitter::Node<'a> {
+    let mut current = *node;
+    while current.kind() == "parenthesized_expression" {
+        match current.named_child(0) {
+            Some(inner) => current = inner,
+            None => break,
+        }
+    }
+    current
 }
 
 
@@ -115,5 +178,31 @@ mod tests {
     #[test]
     fn allows_positive_condition() {
         assert!(run_on("fn f(x: bool) { if x { a(); } else { b(); } }").is_empty());
+    }
+
+    #[test]
+    fn allows_bitmask_test() {
+        // `(expr & mask) != 0` is the positive "is this bit set?" idiom.
+        assert!(run_on(
+            "fn f(x: u32) { if x & 0x80_00_00 != 0 { a(); } else { b(); } }"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_parenthesized_bitmask_test() {
+        assert!(run_on("fn f(x: u32) { if (x & 0x80) != 0 { a(); } else { b(); } }").is_empty());
+    }
+
+    #[test]
+    fn allows_mirrored_bitmask_test() {
+        assert!(run_on("fn f(x: u32) { if 0 != x & 0x80 { a(); } else { b(); } }").is_empty());
+    }
+
+    #[test]
+    fn flags_non_bitmask_nonzero_test() {
+        // Only the bitwise-AND-vs-zero shape is exempt; a bare `x != 0` is not.
+        let d = run_on("fn f(x: i32) { if x != 0 { a(); } else { b(); } }");
+        assert_eq!(d.len(), 1);
     }
 }
