@@ -158,6 +158,15 @@
 //!   Tone.js's `addToWorklet(src)`), so that top-level call is the module's
 //!   mandated entry point, not an avoidable side effect. The `.worklet.` infix is
 //!   the signal, so an ordinary `worklet.ts` (no leading dot) is still flagged;
+//! - ServiceWorker entry modules carrying an in-file worker-scope signature: a
+//!   `/// <reference lib="webworker" />` triple-slash directive or a reference to
+//!   the `ServiceWorkerGlobalScope` / `WorkerGlobalScope` type (e.g.
+//!   `declare const self: ServiceWorkerGlobalScope`). They run in a dedicated
+//!   worker thread registered via `navigator.serviceWorker.register()`, are never
+//!   imported by the application bundle, and never tree-shaken, so their
+//!   mandatory top-level registrations (`self.addEventListener`, workbox's
+//!   `precacheAndRoute` / `registerRoute`) are the required programming model. A
+//!   module without the worker-scope signature is still flagged;
 //! - static browser assets under a `public/`, `static/`, or `assets/`
 //!   directory: vanilla `<script>`-loaded scripts served verbatim by the web
 //!   server, never bundled, so the tree-shaking concern does not apply (a
@@ -303,7 +312,7 @@ use crate::rules::path_utils::{
 };
 use oxc_ast::ast::{
     Argument, AssignmentTarget, BindingPattern, Declaration, ExportDefaultDeclarationKind,
-    Expression, ImportDeclarationSpecifier, Program, Statement,
+    Expression, ImportDeclarationSpecifier, Program, Statement, TSTypeName,
 };
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
@@ -2283,6 +2292,51 @@ fn has_pure_annotation(source: &str, span_start: usize) -> bool {
         }
 }
 
+/// A ServiceWorker entry module, proven by an in-file structural signature of
+/// the worker execution context: the `/// <reference lib="webworker" />`
+/// triple-slash directive (the canonical TypeScript way to type a worker file)
+/// or a reference to the `ServiceWorkerGlobalScope` / `WorkerGlobalScope` type
+/// (`declare const self: ServiceWorkerGlobalScope`, or a
+/// `self as ServiceWorkerGlobalScope` cast). Such modules run in a dedicated
+/// worker thread registered through `navigator.serviceWorker.register()`, are
+/// never imported by the application bundle, and never tree-shaken, so their
+/// mandatory top-level registrations (`self.addEventListener`, workbox's
+/// `precacheAndRoute` / `registerRoute`) are the required programming model, not
+/// avoidable initialization side effects.
+fn is_service_worker_module(semantic: &oxc_semantic::Semantic, source: &str) -> bool {
+    use oxc_ast::AstKind;
+
+    source_has_webworker_reference_directive(source)
+        || semantic.nodes().iter().any(|node| {
+            let AstKind::TSTypeReference(type_ref) = node.kind() else {
+                return false;
+            };
+            matches!(
+                &type_ref.type_name,
+                TSTypeName::IdentifierReference(id)
+                    if matches!(id.name.as_str(), "ServiceWorkerGlobalScope" | "WorkerGlobalScope")
+            )
+        })
+}
+
+/// True when the source carries a `/// <reference lib="webworker" />`
+/// triple-slash directive (case- and quote-style-insensitive on the lib name).
+/// TypeScript only types a module against the WebWorker lib through this
+/// directive, so its presence proves a worker execution context.
+fn source_has_webworker_reference_directive(source: &str) -> bool {
+    source.lines().any(|line| {
+        let Some(rest) = line.trim_start().strip_prefix("///") else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        if !rest.starts_with("<reference") {
+            return false;
+        }
+        let rest = rest.to_ascii_lowercase();
+        rest.contains("lib=") && rest.contains("webworker")
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [crate::rules::backend::AstType] {
         &[]
@@ -2322,6 +2376,7 @@ impl OxcCheck for Check {
             || is_data_generation_script(program)
             || is_entry_barrel_shape(program)
             || is_audio_worklet_module(ctx.path)
+            || is_service_worker_module(semantic, ctx.source)
         {
             return Vec::new();
         }
@@ -2470,6 +2525,70 @@ mod tests {
         assert_eq!(prod.len(), 1, "registerProcessor in a non-worklet module must flag");
         let bare = crate::rules::test_helpers::run_rule(&Check, "addToWorklet(x);", "src/worklet.ts");
         assert_eq!(bare.len(), 1, "bare worklet.ts (no leading dot) must still flag");
+    }
+
+    #[test]
+    fn skips_service_worker_module_by_webworker_signature_issue6194() {
+        // Issue #6194: ServiceWorker entry modules (elk-zone/elk's
+        // `service-worker/elk-sw.ts`) run in a dedicated `ServiceWorkerGlobalScope`
+        // thread registered via `navigator.serviceWorker.register()` — never
+        // imported by the app bundle, never tree-shaken. Their top-level
+        // registrations (`self.addEventListener`, workbox's `precacheAndRoute` /
+        // `registerRoute`) are the mandated programming model, not avoidable side
+        // effects. The exemption keys off the in-file worker-scope signature
+        // (`/// <reference lib="webworker" />` + `declare const self:
+        // ServiceWorkerGlobalScope`), NOT the path — so a neutral path is exempt.
+        let src = "\
+/// <reference lib=\"WebWorker\" />
+declare const self: ServiceWorkerGlobalScope
+
+self.addEventListener('message', () => {})
+precacheAndRoute(entries)
+cleanupOutdatedCaches()
+registerRoute(new NavigationRoute(handler))
+self.addEventListener('push', onPush)
+";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app/entry.ts");
+        assert!(diags.is_empty(), "service worker module must be exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn skips_service_worker_module_by_each_signal_alone_issue6194() {
+        // Either worker-scope signal alone proves the execution context.
+        let directive_only = "\
+/// <reference lib=\"webworker\" />
+self.addEventListener('install', () => {})
+";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, directive_only, "src/a.ts").is_empty(),
+            "webworker reference directive alone must exempt"
+        );
+        let type_ref_only = "\
+declare const self: ServiceWorkerGlobalScope
+self.addEventListener('install', () => {})
+";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, type_ref_only, "src/b.ts").is_empty(),
+            "ServiceWorkerGlobalScope type reference alone must exempt"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_side_effects_without_worker_signature_issue6194() {
+        // Negative space: the same top-level registrations in a module WITHOUT any
+        // worker-scope signature (no triple-slash directive, no
+        // `ServiceWorkerGlobalScope` reference) are genuine init side effects and
+        // must still flag.
+        let src = "\
+self.addEventListener('message', () => {})
+precacheAndRoute(entries)
+";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app/entry.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "side effects without a worker signature must flag, got {diags:?}"
+        );
     }
 
     #[test]
