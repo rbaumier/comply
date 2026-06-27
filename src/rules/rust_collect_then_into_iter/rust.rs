@@ -20,6 +20,14 @@
 //! `IntoIter` of the right type for the escaping slot. An escaping
 //! chain that immediately re-collects (`…into_iter().collect()`) is
 //! still a genuine round-trip and is flagged.
+//!
+//! The chain is also left alone inside a test context (a `#[test]`
+//! function or a `#[cfg(test)]` module): there the concrete
+//! `Vec::IntoIter` type is routinely load-bearing, exercising the code
+//! under a specific iterator *kind* (range vs slice-iter vs vec
+//! into-iter vs custom) to cover branches gated on iterator-type
+//! properties, so the round-trip selects a type rather than wasting an
+//! allocation.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -65,6 +73,11 @@ impl AstCheck for Check {
         };
         let Some(receiver) = receiver else { return };
         if !receiver_is_collect_call(receiver, source_bytes) {
+            return;
+        }
+        // In a test context the concrete `Vec::IntoIter` type is load-bearing
+        // (see module docs): the round-trip selects a type, not an allocation.
+        if crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
             return;
         }
         // The owned iterator is load-bearing when it escapes its scope
@@ -348,6 +361,29 @@ mod tests {
     fn flags_for_loop_subject() {
         // Consumed locally by the loop — not an escape.
         let source = "fn f() { for x in xs.iter().map(g).collect::<Vec<_>>().into_iter() {} }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_round_trip_in_cfg_test_module() {
+        // Issue #6198 (rust-random/rand, seq/iterator.rs): a test cycles an
+        // algorithm through several iterator kinds; the `Vec::IntoIter` type
+        // is deliberate, not a wasted allocation.
+        let source = "#[cfg(test)]\nmod tests {\n    fn outer<R>(r: &mut R) {\n        test_iter(r, (0..9).collect::<Vec<_>>().into_iter());\n    }\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_round_trip_in_test_fn() {
+        let source = "#[test]\nfn t() { let _: Vec<_> = it.collect::<Vec<_>>().into_iter().collect(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_round_trip_in_production_code() {
+        // Negative space: the same round-trip in non-test production code with
+        // no load-bearing-type reason is still the rule's genuine perf target.
+        let source = "fn f() { let _: Vec<_> = it.collect::<Vec<_>>().into_iter().collect(); }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
