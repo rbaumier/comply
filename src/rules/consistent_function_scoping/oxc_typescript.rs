@@ -29,6 +29,14 @@ impl OxcCheck for Check {
         for (node_id, node) in nodes.iter_enumerated() {
             let (func_span, is_arrow, func_name, own_scope) = match node.kind() {
                 AstKind::Function(func) => {
+                    // A bodyless function is a TypeScript overload signature or
+                    // an ambient declaration — pure type surface with no runtime
+                    // body, references, or captures. It cannot be hoisted: an
+                    // overload signature must immediately precede its
+                    // implementation in the same scope. Never a nested helper.
+                    if func.body.is_none() {
+                        continue;
+                    }
                     let Some(scope) = func.scope_id.get() else {
                         continue;
                     };
@@ -427,6 +435,30 @@ mod tests {
             }
         "#;
         assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_nested_overload_signatures() {
+        // Regression for rbaumier/comply#6289 — TypeScript function overload
+        // signatures (no body) nested in a factory function are pure type
+        // surface and cannot be hoisted apart from their implementation
+        // (pmndrs/valtio proxySet.ts). Only the bodied implementation is
+        // subject to the hoist check.
+        let src = r#"
+            function proxySet<T>() {
+                function intersectionImpl<T, U>(this: Set<T>, other: Set<U>): Set<T & U>
+                function intersectionImpl<T>(this: Set<T>, other: Set<T>): Set<T>
+                function intersectionImpl<T>(this: Set<T>, other: Set<T>): Set<unknown> {
+                    return this.size + other.size;
+                }
+                return intersectionImpl;
+            }
+        "#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "overload signatures must not be flagged: {diags:?}"
+        );
     }
 
     #[test]
