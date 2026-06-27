@@ -90,7 +90,7 @@ use crate::rules::rust_helpers::{
     cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_modulo_bounded,
+    cast_operand_is_enum_discriminant, cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
     cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
@@ -227,6 +227,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     // `(x % N) as uT` with a non-negative `x` and `N - 1 <= uT::MAX` is in range
     // — the unsigned-remainder narrowing in `(width % 256) as u8` (#6151).
     if cast_operand_is_modulo_bounded(node, source_bytes) {
+        return false;
+    }
+    // `<recv>.min(BOUND) as uT` where the `.min()` clamp proves the value fits the
+    // unsigned target — `.as_nanos().min(u64::MAX as u128) as u64` (#6174).
+    if cast_operand_is_min_clamped(node, source_bytes) {
         return false;
     }
     if cast_feeds_from_bits(node, source_bytes) {
@@ -606,6 +611,33 @@ name = "normal_lib"
             run_on("fn f(d: Duration) -> u32 { (d.as_nanos() % 1_000_000) as u32 }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_min_clamped_narrowing() {
+        // Issue #6174: `.min(BOUND) as uT` where the explicit clamp proves the
+        // value fits. An unsigned-typed bound (`u64::MAX as u128`) forces the
+        // receiver to share that unsigned type, so the clamped value is in range.
+        assert!(
+            run_on("fn f(d: Duration) -> u64 { d.as_nanos().min(u64::MAX as u128) as u64 }")
+                .is_empty()
+        );
+        assert!(run_on("fn f(x: u64) -> u64 { x.min(u64::MAX) as u64 }").is_empty());
+        // Narrowing target with an unsigned-cast literal bound (`200 as u64`).
+        assert!(run_on("fn f(x: u64) -> u8 { x.min(200 as u64) as u8 }").is_empty());
+        // Bare-literal bound with a provably non-negative (unsigned) receiver.
+        assert!(run_on("fn f(v: u32) -> u8 { v.min(255) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn flags_min_clamp_unprovable_or_out_of_range() {
+        // A signed receiver with a bare literal: `.min()` clamps only the upper
+        // side, so `(-1i64).min(255) as u8` wraps to 255 — still lossy.
+        assert_eq!(run_on("fn f(x: i64) -> u8 { x.min(255) as u8 }").len(), 1);
+        // The clamp bound exceeds the target's range.
+        assert_eq!(run_on("fn f(x: u128) -> u8 { x.min(u64::MAX as u128) as u8 }").len(), 1);
+        // `.max()` bounds from below, not above.
+        assert_eq!(run_on("fn f(x: u128) -> u64 { x.max(u64::MAX as u128) as u64 }").len(), 1);
     }
 
     #[test]

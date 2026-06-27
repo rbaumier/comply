@@ -87,7 +87,7 @@ use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_modulo_bounded,
+    cast_operand_is_enum_discriminant, cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
     cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
@@ -213,6 +213,11 @@ impl AstCheck for Check {
         // `(x % N) as uT` with a non-negative `x` and `N - 1 <= uT::MAX` is in
         // range — the unsigned-remainder narrowing in `(width % 256) as u8` (#6151).
         if cast_operand_is_modulo_bounded(node, source_bytes) {
+            return;
+        }
+        // `<recv>.min(BOUND) as uT` where the `.min()` clamp proves the value fits
+        // the unsigned target — `.as_nanos().min(u64::MAX as u128) as u64` (#6174).
+        if cast_operand_is_min_clamped(node, source_bytes) {
             return;
         }
         if cast_feeds_from_bits(node, source_bytes) {
@@ -471,6 +476,19 @@ mod tests {
         // not start flagging it — the modulo exemption keeps it silent here too.
         assert!(run_on("fn f(width: u32) -> u8 { (width % 256) as u8 }").is_empty());
         assert!(run_on("fn f(n: u128) -> u32 { (n % 1_000_000) as u32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_min_clamped_narrowing() {
+        // Issue #6174: `.min(BOUND) as uT` where the clamp proves the value fits.
+        // Once `rust-no-as-numeric-cast` stops owning the span, this rule must not
+        // start flagging it — the clamp exemption keeps it silent here too.
+        assert!(
+            run_on("fn f(d: Duration) -> u64 { d.as_nanos().min(u64::MAX as u128) as u64 }")
+                .is_empty()
+        );
+        assert!(run_on("fn f(x: u64) -> u64 { x.min(u64::MAX) as u64 }").is_empty());
+        assert!(run_on("fn f(v: u32) -> u8 { v.min(255) as u8 }").is_empty());
     }
 
     #[test]
