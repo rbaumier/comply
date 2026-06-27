@@ -33,6 +33,7 @@ impl OxcCheck for Check {
             obj_symbol: Option<SymbolId>,
             end_byte: u32,
             fn_range: Option<(u32, u32)>,
+            block_range: Option<(u32, u32)>,
         }
         let mut destructured: Vec<Destructured> = Vec::new();
 
@@ -80,22 +81,42 @@ impl OxcCheck for Check {
                         continue;
                     }
 
-                    let fn_range = {
-                        let mut result = None;
+                    // `var` hoists to the enclosing function, so its binding
+                    // stays live outside the block it is written in; only
+                    // `let`/`const`/`using` are block-scoped.
+                    let is_var = matches!(
+                        nodes.get_node(nodes.parent_id(node.id())).kind(),
+                        AstKind::VariableDeclaration(vd) if vd.kind.is_var()
+                    );
+
+                    // Walk up once: record the innermost enclosing
+                    // `BlockStatement` (a block-scoped binding's lexical extent)
+                    // and stop at the enclosing function. `block_range` stays
+                    // `None` when the declarator sits directly in a
+                    // function/program body, or when it is a hoisted `var`, so
+                    // the function-level check governs those cases.
+                    let (fn_range, block_range) = {
+                        let mut fn_range = None;
+                        let mut block_range = None;
                         for ancestor in nodes.ancestors(node.id()) {
                             match ancestor.kind() {
+                                AstKind::BlockStatement(b) => {
+                                    if block_range.is_none() && !is_var {
+                                        block_range = Some((b.span.start, b.span.end));
+                                    }
+                                }
                                 AstKind::Function(f) => {
-                                    result = Some((f.span.start, f.span.end));
+                                    fn_range = Some((f.span.start, f.span.end));
                                     break;
                                 }
                                 AstKind::ArrowFunctionExpression(a) => {
-                                    result = Some((a.span.start, a.span.end));
+                                    fn_range = Some((a.span.start, a.span.end));
                                     break;
                                 }
                                 _ => {}
                             }
                         }
-                        result
+                        (fn_range, block_range)
                     };
                     let obj_symbol = identifier_symbol(init, semantic);
                     destructured.push(Destructured {
@@ -103,6 +124,7 @@ impl OxcCheck for Check {
                         obj_symbol,
                         end_byte: decl.span.end,
                         fn_range,
+                        block_range,
                     });
                 }
                 AstKind::StaticMemberExpression(member) => {
@@ -203,13 +225,24 @@ impl OxcCheck for Check {
                     {
                         continue;
                     }
-                    let scope_ok = match d.fn_range {
+                    // The access must fall inside the destructuring's enclosing
+                    // function AND, when the destructuring lives in a nested
+                    // block, inside that block's span — the binding is only live
+                    // there, so a sibling/ancestor block access has no
+                    // destructured variable to be consistent with.
+                    let fn_ok = match d.fn_range {
                         None => true,
                         Some((fn_start, fn_end)) => {
                             c.start_byte >= fn_start && c.start_byte <= fn_end
                         }
                     };
-                    if scope_ok {
+                    let block_ok = match d.block_range {
+                        None => true,
+                        Some((block_start, block_end)) => {
+                            c.start_byte >= block_start && c.start_byte <= block_end
+                        }
+                    };
+                    if fn_ok && block_ok {
                         let (line, column) = byte_offset_to_line_col(source, c.start_byte as usize);
                         diagnostics.push(Diagnostic {
                             path: Arc::clone(&ctx.path_arc),
@@ -393,6 +426,88 @@ mod tests {
         let diags = run(code);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("bar"));
+    }
+
+    #[test]
+    fn skips_sibling_block_scope() {
+        // Issue #6176: `this` is destructured inside one `if`-block, then a
+        // different property is read in a sibling `if`-block that the
+        // destructuring's block does not lexically contain. The destructured
+        // binding is not live at the read site, so it must not be flagged.
+        let code = r#"
+            function startOf(normalizedUnit, useLocaleWeeks, o) {
+                if (normalizedUnit === "weeks") {
+                    if (useLocaleWeeks) {
+                        const { weekday } = this;
+                        if (weekday < 1) {
+                            o.weekNumber = 0;
+                        }
+                    }
+                }
+                if (normalizedUnit === "quarters") {
+                    const q = Math.ceil(this.month / 3);
+                    o.month = (q - 1) * 3 + 1;
+                }
+            }
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag a read in a sibling block where the destructured binding is out of scope"
+        );
+    }
+
+    #[test]
+    fn flags_hoisted_var_read_outside_block() {
+        // `var` is function-scoped: a destructuring `var { x } = obj` inside a
+        // block stays live after the block, so a later sibling-scope read is a
+        // genuine inconsistency and must still be flagged.
+        let code = r#"
+            function test() {
+                if (cond) {
+                    var { x } = obj;
+                }
+                console.log(obj.y);
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('y'));
+    }
+
+    #[test]
+    fn flags_same_block_scope() {
+        // Negative-space guard: a read in the *same* block as the destructuring
+        // (where the binding is live) is still a genuine inconsistency.
+        let code = r#"
+            function test() {
+                if (cond) {
+                    const { x } = obj;
+                    console.log(obj.y);
+                }
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('y'));
+    }
+
+    #[test]
+    fn flags_nested_block_scope() {
+        // Negative-space guard: a read in a descendant block (the binding is
+        // still live there) is still flagged.
+        let code = r#"
+            function test() {
+                if (cond) {
+                    const { x } = obj;
+                    if (other) {
+                        console.log(obj.y);
+                    }
+                }
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains('y'));
     }
 
     #[test]
