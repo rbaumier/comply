@@ -3,7 +3,9 @@ use rustc_hash::FxHashMap;
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::{byte_offset_to_line_col, type_annotation_is_type_predicate};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Declaration, Function, Statement};
+use oxc_ast::ast::{
+    Declaration, Function, Statement, TSType, TSTypeName, TSTypeOperatorOperator,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -51,6 +53,39 @@ fn generics_in_return_type(source: &str, f: &Function) -> Option<Vec<String>> {
 /// a single union signature without erasing that narrowing at every call site.
 fn returns_type_predicate(f: &Function) -> bool {
     type_annotation_is_type_predicate(f.return_type.as_deref())
+}
+
+/// True when `ty` is the tagged-template marker type — the lib type
+/// `TemplateStringsArray`, or its structural equivalent `readonly string[]`. A
+/// function is callable with tagged-template syntax (`` tag`...` ``) only when
+/// its first parameter accepts that readonly string array, so an overload that
+/// leads with it cannot be replaced by a union parameter. A mutable `string[]`
+/// does NOT qualify: `TemplateStringsArray` is readonly and is not assignable to
+/// a mutable array, so such a parameter is not tag-callable.
+fn type_is_tagged_template_marker(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSTypeReference(tref) => matches!(
+            &tref.type_name,
+            TSTypeName::IdentifierReference(id) if id.name.as_str() == "TemplateStringsArray"
+        ),
+        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
+            matches!(
+                &op.type_annotation,
+                TSType::TSArrayType(arr) if matches!(&arr.element_type, TSType::TSStringKeyword(_))
+            )
+        }
+        _ => false,
+    }
+}
+
+/// True when the signature's first formal parameter is annotated with the
+/// tagged-template marker type ([`type_is_tagged_template_marker`]).
+fn first_param_is_tagged_template(f: &Function) -> bool {
+    f.params
+        .items
+        .first()
+        .and_then(|param| param.type_annotation.as_ref())
+        .is_some_and(|ann| type_is_tagged_template_marker(&ann.type_annotation))
 }
 
 /// The source text of the signature's return-type annotation, normalized of
@@ -150,6 +185,9 @@ impl OxcCheck for Check {
                     if preserves_generic_return_inference(&sigs) {
                         continue;
                     }
+                    if preserves_tagged_template_call(&sigs) {
+                        continue;
+                    }
                     if preserves_type_predicate_narrowing(&sigs) {
                         continue;
                     }
@@ -200,6 +238,9 @@ struct OverloadSig {
     generics_in_return: Vec<String>,
     /// True when this signature returns a `x is T` type predicate.
     returns_predicate: bool,
+    /// True when this signature's first parameter is the tagged-template marker
+    /// type (`TemplateStringsArray` or `readonly string[]`).
+    first_param_is_tagged_template: bool,
     /// Number of declared parameters in this signature, counting a trailing rest
     /// parameter as one.
     param_count: usize,
@@ -224,6 +265,19 @@ struct OverloadSig {
 /// return type does not qualify: that signature collapses into the union cleanly.
 fn preserves_generic_return_inference(sigs: &[OverloadSig]) -> bool {
     sigs.iter().all(|sig| !sig.generics_in_return.is_empty())
+}
+
+/// True when ANY overload signature leads with the tagged-template marker type
+/// (`TemplateStringsArray`, or its structural `readonly string[]` equivalent) as
+/// its first parameter. Such a signature is the dedicated
+/// tagged-template overload — TypeScript only permits `` tag`...` `` syntax when
+/// the function's first parameter has this shape. A union parameter
+/// (`TemplateStringsArray | string`) does NOT enable the tag form, so the group
+/// cannot collapse and must not be flagged. The quantifier is existential: the
+/// tagged-template overload is one specific member whose presence makes the
+/// whole group non-collapsible.
+fn preserves_tagged_template_call(sigs: &[OverloadSig]) -> bool {
+    sigs.iter().any(|sig| sig.first_param_is_tagged_template)
 }
 
 /// True when EVERY overload signature returns a `x is T` type predicate. Each
@@ -501,6 +555,7 @@ fn sig_from_function(source: &str, f: &Function) -> Option<OverloadSig> {
         span_start: f.span.start,
         generics_in_return,
         returns_predicate: returns_type_predicate(f),
+        first_param_is_tagged_template: first_param_is_tagged_template(f),
         param_count,
         first_param_is_rest,
         return_type: return_type_text(source, f),
@@ -1032,6 +1087,68 @@ function f(a: 'y', b: string): R3;
 function f(a: any, b: any): any { return a; }
 ";
         assert_eq!(run_on(source).len(), 3);
+    }
+
+    #[test]
+    fn allows_tagged_template_overloads() {
+        // Regression for #6393: h3's `html` exposes a tagged-template form
+        // (`` html`<h1>x</h1>` ``) and a plain-string form (`html("<h1>x</h1>")`).
+        // The tagged-template overload MUST lead with `TemplateStringsArray` —
+        // a union `TemplateStringsArray | string` does not enable the tag syntax,
+        // so the group cannot collapse and must not flag.
+        let source = r#"
+export function html(strings: TemplateStringsArray, ...values: unknown[]): HTTPResponse;
+export function html(markup: string): HTTPResponse;
+export function html(first: TemplateStringsArray | string, ...values: unknown[]): HTTPResponse {
+  const body =
+    typeof first === "string"
+      ? first
+      : first.reduce((out, str, i) => out + str + (values[i] ?? ""), "");
+  return new HTTPResponse(body);
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_tagged_template_overloads_with_string_array_marker() {
+        // The structural form of the tag's first arg — `readonly string[]` — is
+        // equally a tagged-template marker and exempts the group.
+        let source = r#"
+function tag(strings: readonly string[], ...values: unknown[]): string;
+function tag(markup: string): string;
+function tag(first: readonly string[] | string, ...values: unknown[]): string {
+  return typeof first === "string" ? first : first.join("");
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_mutable_string_array_first_param_overloads() {
+        // A mutable `string[]` first param is NOT tagged-template callable
+        // (`TemplateStringsArray` is readonly and not assignable to a mutable
+        // array), so the marker exemption must not fire: this group collapses
+        // cleanly into `parse(parts: string[] | string): Foo` and still flags.
+        let source = "
+function parse(parts: string[]): Foo;
+function parse(raw: string): Foo;
+function parse(input: string[] | string): Foo { return input as any; }
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn flags_ordinary_overloads_without_tagged_template_first_param() {
+        // Negative control: an ordinary collapsible group with no
+        // `TemplateStringsArray` first param still flags — it collapses cleanly
+        // into `f(x: string | number): number`.
+        let source = "
+function f(x: string): number;
+function f(x: number): number;
+function f(x: string | number): number { return 0; }
+";
+        assert_eq!(run_on(source).len(), 2);
     }
 
     #[test]
