@@ -97,16 +97,21 @@ fn return_type_text(source: &str, f: &Function) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-/// The source text of each fixed parameter's type annotation, positionally.
-/// A parameter without a type annotation yields an empty string so positions
-/// still align across signatures. The trailing rest parameter, when present, is
-/// not included — it is tracked separately via `first_param_is_rest`/arity.
+/// The source text of each fixed parameter's type annotation, positionally,
+/// prefixed with `"?"` when the parameter is optional (`x?: T`). Optionality is
+/// part of the type key because required vs optional presence can itself
+/// discriminate the return type at the call site — collapsing a required and an
+/// optional parameter that share a type annotation into one signature would erase
+/// that narrowing. A parameter without a type annotation yields an empty string
+/// (or `"?"` when optional) so positions still align across signatures. The
+/// trailing rest parameter, when present, is not included — it is tracked
+/// separately via `first_param_is_rest`/arity.
 fn param_type_texts(source: &str, f: &Function) -> Vec<String> {
     f.params
         .items
         .iter()
         .map(|param| {
-            param
+            let type_text = param
                 .type_annotation
                 .as_ref()
                 .and_then(|ann| {
@@ -116,7 +121,12 @@ fn param_type_texts(source: &str, f: &Function) -> Vec<String> {
                     )
                 })
                 .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
-                .unwrap_or_default()
+                .unwrap_or_default();
+            if param.optional {
+                format!("?{type_text}")
+            } else {
+                type_text
+            }
         })
         .collect()
 }
@@ -1147,6 +1157,38 @@ function parse(input: string[] | string): Foo { return input as any; }
 function f(x: string): number;
 function f(x: number): number;
 function f(x: string | number): number { return 0; }
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn allows_parameter_optionality_discriminating_return_type() {
+        // Regression for #6413: nuxt/test-utils `setTestContext` discriminates on
+        // parameter OPTIONALITY at the same arity — a required `TestContext` arg
+        // narrows the return to `TestContext`, while omitting it gives
+        // `TestContext | undefined`. The single union-parameter form
+        // `(context?: TestContext): TestContext | undefined` loses the required-arg
+        // return narrowing, so the overloads are load-bearing and must not flag.
+        let source = r#"
+export function setTestContext(context: TestContext): TestContext;
+export function setTestContext(context?: TestContext): TestContext | undefined;
+export function setTestContext(context?: TestContext): TestContext | undefined {
+  currentContext = context;
+  return currentContext;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_parameter_optionality_with_same_return_type() {
+        // Negative control: optionality varies but the return type is identical, so
+        // the pair collapses cleanly into `f(x?: string): number` — no per-variant
+        // return narrowing to preserve, so it still flags.
+        let source = "
+function f(x: string): number;
+function f(x?: string): number;
+function f(x?: string): number { return 0; }
 ";
         assert_eq!(run_on(source).len(), 2);
     }
