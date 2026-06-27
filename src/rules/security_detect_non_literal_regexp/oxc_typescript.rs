@@ -67,11 +67,21 @@ impl OxcCheck for Check {
 ///   metacharacters reachable).
 /// - An identifier bound by a module/function-local `const` whose initializer is
 ///   itself a safe pattern (a constant pattern defined once, not runtime input).
+/// - A `.source` member access whose object is itself a safe pattern, i.e.
+///   `new RegExp(RE.source, flags)` rebuilding a regex from a const literal regex
+///   with different flags — `.source` reads the compile-time pattern text.
 fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
     match expr {
         Expression::StringLiteral(_) | Expression::RegExpLiteral(_) => true,
         Expression::TemplateLiteral(tpl) => template_slots_all_numeric(tpl, semantic),
         Expression::Identifier(ident) => is_const_literal_binding(ident, semantic),
+        // `RE.source` is safe only when the object is itself a safe pattern (a const
+        // bound to a regex/string literal), so the read yields a compile-time-fixed
+        // string. `.source` on a non-const or call-expression object (e.g.
+        // `buildPattern().source`) is not provably static and stays flagged.
+        Expression::StaticMemberExpression(member) if member.property.name.as_str() == "source" => {
+            is_safe_pattern(&member.object, semantic)
+        }
         _ => false,
     }
 }
@@ -294,6 +304,25 @@ mod tests {
             pattern = req.query.p;
             const r = new RegExp(pattern);
         "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_const_regex_literal_source() {
+        // Issue #6282: rebuilding a regex from a const regex literal with new flags.
+        // `RE.source` reads the compile-time pattern, not attacker input.
+        let src = r#"
+            const HEAD_SSR_FILTER_RE = /\bhead\.ssr\b/;
+            const HEAD_SSR_RE = new RegExp(HEAD_SSR_FILTER_RE.source, 'g');
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_source_on_call_expression() {
+        // Tightness guard: `.source` on a call-expression object is not a const
+        // regex literal, so the pattern is not provably static — still flagged.
+        let src = r#"const r = new RegExp(buildPattern().source);"#;
         assert_eq!(run(src).len(), 1);
     }
 }
