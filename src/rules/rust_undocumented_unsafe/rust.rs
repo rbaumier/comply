@@ -18,7 +18,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_safety_marker};
 
 const KINDS: &[&str] = &["unsafe_block"];
 
@@ -265,36 +265,6 @@ fn safety_comment_above_row(start_row: usize, skip_lets: SkipLets, lines: &[&str
         }
         // Hit real code — stop looking.
         break;
-    }
-    false
-}
-
-/// True if a comment line carries a safety marker. Two forms are
-/// accepted:
-///
-///  - a `safety` keyword (any case) immediately followed by `:` or
-///    `.` — covers `// SAFETY:`, `// Safety:`, `// safety:`,
-///    `// safety.`, whose casing and terminator vary across projects;
-///  - the rustdoc `# Safety` heading (`/// # Safety`), where the
-///    keyword stands alone after a `#` with no terminator.
-///
-/// The `safety` keyword itself is always required, so an arbitrary
-/// comment that merely contains the word in prose
-/// (`// the safety of this depends on X`) does not count.
-fn is_safety_marker(trimmed: &str) -> bool {
-    let lower = trimmed.to_ascii_lowercase();
-    // `# Safety` rustdoc heading: a `#` heading whose sole word is `safety`.
-    if lower.split_once('#').is_some_and(|(_, after)| after.trim() == "safety") {
-        return true;
-    }
-    // `safety` immediately followed by a `:` or `.` terminator.
-    let mut from = 0;
-    while let Some(rel) = lower[from..].find("safety") {
-        let after = from + rel + "safety".len();
-        if matches!(lower[after..].chars().next(), Some(':' | '.')) {
-            return true;
-        }
-        from = after;
     }
     false
 }
