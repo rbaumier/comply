@@ -9,7 +9,9 @@
 use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{enclosing_fn, has_outer_attribute, is_in_test_context};
+use crate::rules::rust_helpers::{
+    enclosing_fn, has_outer_attribute, has_test_attribute, is_in_test_context,
+};
 
 /// Deprecated methods of the `std::error::Error` trait. Implementing one of
 /// these on a wrapper type forces a delegating call to the inner type's
@@ -53,8 +55,10 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    if (allow_list_contains(text, "unused") || allow_list_contains(text, "deprecated"))
-        && is_in_test_context(node, source)
+    if (allow_list_contains(text, "unused")
+        || allow_list_contains(text, "deprecated")
+        || allow_list_has_clippy_lint(text))
+        && is_test_scoped(node, source)
     {
         return;
     }
@@ -214,6 +218,53 @@ fn allow_list_contains(attribute: &str, name: &str) -> bool {
     })
 }
 
+/// True when the allow list names at least one `clippy::`-prefixed lint
+/// (`clippy::reversed_empty_ranges`, `clippy::bool_assert_comparison`, …). The
+/// discriminator is the `clippy::` lint *namespace*, not any single lint name.
+fn allow_list_has_clippy_lint(attribute: &str) -> bool {
+    let Some(start) = attribute.find('(') else {
+        return false;
+    };
+    let Some(end) = attribute.rfind(')') else {
+        return false;
+    };
+    attribute[start + 1..end]
+        .split(',')
+        .any(|part| part.trim().starts_with("clippy::"))
+}
+
+/// True when the `#[allow(...)]` sits in test code: either inside an enclosing
+/// `#[test]`/`#[cfg(test)]` function, module, or impl ([`is_in_test_context`]),
+/// or as an outer attribute *decorating* a `#[test]`-attributed item
+/// ([`decorates_test_item`]). The latter covers an `#[allow]` stacked alongside
+/// `#[test]` on the same function — there the `#[test]` is a sibling attribute,
+/// not an ancestor, so the ancestor walk alone misses it.
+fn is_test_scoped(node: Node, source: &[u8]) -> bool {
+    is_in_test_context(node, source) || decorates_test_item(node, source)
+}
+
+/// True when this `attribute_item` decorates an item that itself carries a
+/// `#[test]` / `#[cfg(test)]` attribute — i.e. the `#[allow]` is part of the
+/// outer-attribute run of a test item.
+///
+/// tree-sitter-rust models outer attributes as `attribute_item` siblings
+/// preceding the item they decorate, so the decorated item is the first
+/// following named sibling that is neither another attribute nor a comment.
+/// [`has_test_attribute`] then scans that item's own preceding attributes for a
+/// test marker, regardless of the `#[test]`/`#[allow]` ordering.
+fn decorates_test_item(attribute_item: Node, source: &[u8]) -> bool {
+    let mut sibling = attribute_item.next_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" | "line_comment" | "block_comment" => {
+                sibling = s.next_named_sibling();
+            }
+            _ => return has_test_attribute(s, source),
+        }
+    }
+    false
+}
+
 /// True when the allow attribute names at least one lint and *every* lint it
 /// names is in [`SELF_JUSTIFYING_LINTS`]. A mixed list (e.g.
 /// `#[allow(missing_docs, dead_code)]`) is not exempt, since `dead_code` still
@@ -327,6 +378,32 @@ mod tests {
     #[test]
     fn ignores_in_test_context() {
         assert!(run("#[cfg(test)]\nmod tests {\n#[allow(unused)]\nfn f() {}\n}").is_empty());
+    }
+
+    #[test]
+    fn ignores_clippy_on_test_fn() {
+        // #6197: an `#[allow(clippy::*)]` stacked on a `#[test]` function — the
+        // test deliberately exercises the lint-triggering pattern (a reversed
+        // range to verify a panic), so the clippy suppression is self-evident.
+        // The `#[test]` is a *sibling* attribute, so the ancestor-walk
+        // `is_in_test_context` misses it; `decorates_test_item` catches it.
+        assert!(
+            run("#[test]\n#[should_panic]\n#[allow(clippy::reversed_empty_ranges)]\nfn test_random_range_panic_int() {\n    let mut r = rng(102);\n    r.random_range(5..-2);\n}")
+                .is_empty()
+        );
+        // Same pattern wrapped in the idiomatic `#[cfg(test)] mod test` — exempt
+        // via the module-level cfg(test) too.
+        assert!(
+            run("#[cfg(test)]\nmod test {\n#[test]\n#[allow(clippy::bool_assert_comparison)]\nfn t() {\n    assert_eq!(b, false);\n}\n}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_clippy_outside_test_context() {
+        // Load-bearing guard: the clippy exemption is test-scoped only; an
+        // unjustified `#[allow(clippy::*)]` on an ordinary fn stays flagged.
+        assert_eq!(run("#[allow(clippy::reversed_empty_ranges)]\nfn f() {}").len(), 1);
     }
 
     #[test]
