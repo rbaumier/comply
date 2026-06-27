@@ -3,7 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryOperator, Expression, UnaryOperator};
+use oxc_ast::ast::{
+    BinaryOperator, ComputedMemberExpression, Expression, TSType, TSTypeName, UnaryOperator,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -58,9 +60,88 @@ fn is_bitwise_operator(op: BinaryOperator) -> bool {
     )
 }
 
+/// True when `ty` is a reference to `Uint32Array`. It is the only TypedArray
+/// whose element range `[0, 2^32 - 1]` includes values above `INT32_MAX`, where
+/// `| 0` (ToInt32) and `Math.trunc` diverge — every other TypedArray either
+/// stays in int32 range or has `| 0` act as identity.
+fn type_is_uint32array(ty: &TSType) -> bool {
+    let TSType::TSTypeReference(type_ref) = ty else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(id) = &type_ref.type_name else {
+        return false;
+    };
+    id.name == "Uint32Array"
+}
+
+/// True when `expr` is `new Uint32Array(...)`. A binding initialized this way
+/// without an annotation is still inferred as `Uint32Array`.
+fn expr_is_new_uint32array(expr: &Expression) -> bool {
+    matches!(
+        expr.get_inner_expression(),
+        Expression::NewExpression(new)
+            if matches!(&new.callee, Expression::Identifier(id) if id.name == "Uint32Array")
+    )
+}
+
+/// True when the receiver of a computed member access (`recv[i]`) is a bare
+/// identifier whose binding is `Uint32Array` — either annotated as such or
+/// initialized from `new Uint32Array(...)`. Such an element read can exceed
+/// `INT32_MAX`, so `| 0` is an intentional ToInt32 coercion rather than
+/// fractional truncation.
+fn receiver_is_uint32array<'a>(
+    member: &ComputedMemberExpression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_ast::ast::BindingPattern;
+
+    let Expression::Identifier(ident) = member.object.get_inner_expression() else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+
+    // Only trust a declaration whose binding is the bare identifier itself; a
+    // destructured binding's real type is an element/property of the
+    // annotation, not the annotation.
+    fn pattern_is_bare_identifier(pattern: &BindingPattern) -> bool {
+        matches!(pattern, BindingPattern::BindingIdentifier(_))
+    }
+
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::VariableDeclarator(decl) if pattern_is_bare_identifier(&decl.id) => {
+                if let Some(ann) = &decl.type_annotation {
+                    return type_is_uint32array(&ann.type_annotation);
+                }
+                return decl.init.as_ref().is_some_and(expr_is_new_uint32array);
+            }
+            AstKind::FormalParameter(param) if pattern_is_bare_identifier(&param.pattern) => {
+                return param
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| type_is_uint32array(&ann.type_annotation));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// `| 0` on this left operand is a ToInt32 / 32-bit coercion, not a fractional
 /// truncation, so suggesting `Math.trunc` would change behavior.
-fn is_int32_coercion_left(left: &Expression) -> bool {
+fn is_int32_coercion_left<'a>(
+    left: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
     let inner = left.get_inner_expression();
     match inner {
         // Result of a bitwise op is already int32; `| 0` is an idempotent
@@ -78,6 +159,13 @@ fn is_int32_coercion_left(left: &Expression) -> bool {
             if bin.operator == BinaryOperator::Multiplication
                 && (is_out_of_int32_range_literal(&bin.left)
                     || is_out_of_int32_range_literal(&bin.right)) =>
+        {
+            true
+        }
+        // `uint32Arr[i] | 0`: a Uint32Array element can exceed INT32_MAX, so
+        // `| 0` is a ToInt32 coercion whose result diverges from `Math.trunc`.
+        Expression::ComputedMemberExpression(member)
+            if receiver_is_uint32array(member, semantic) =>
         {
             true
         }
@@ -177,7 +265,7 @@ impl OxcCheck for Check {
                 }
                 // `| 0` used as a ToInt32 / 32-bit coercion (not fractional
                 // truncation) diverges from `Math.trunc`; don't suggest it.
-                if is_int32_coercion_left(&bin.left) {
+                if is_int32_coercion_left(&bin.left, semantic) {
                     return;
                 }
                 let op_str = &ctx.source[bin.left.span().end as usize..bin.right.span().start as usize].trim();
@@ -340,6 +428,50 @@ mod tests {
     #[test]
     fn allows_paren_bitwise_left_operand() {
         assert!(run("const m = (1 << layer) | 0;").is_empty());
+    }
+
+    // A `Uint32Array` element can exceed INT32_MAX, so `| 0` is a ToInt32
+    // coercion whose result diverges from `Math.trunc` — must not flag.
+
+    #[test]
+    fn allows_uint32array_param_subscript() {
+        let src = "function f(IV: Uint32Array) { this.v0 = IV[0] | 0; }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_uint32array_const_subscript() {
+        let src = "const SHA256_IV: Uint32Array = new Uint32Array(8);\n\
+                   class H { A = SHA256_IV[0] | 0; }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_inferred_uint32array_const_subscript() {
+        // No annotation, but `new Uint32Array(...)` init infers the type.
+        let src = "const IV = new Uint32Array(8); const v = IV[0] | 0;";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative controls: only `Uint32Array` is exempt. A plain `number`, an
+    // `Int32Array` (whose elements never exceed INT32_MAX), and an unresolved
+    // receiver must still flag.
+
+    #[test]
+    fn flags_plain_number_operand() {
+        assert_eq!(run("function f(n: number) { return n | 0; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_int32array_subscript() {
+        let src = "function f(arr: Int32Array) { return arr[0] | 0; }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_unresolved_receiver_subscript() {
+        // No in-scope declaration for `bigArr`; can't prove Uint32Array, flag.
+        assert_eq!(run("const v = bigArr[0] | 0;").len(), 1);
     }
 
     // Unchanged behavior.
