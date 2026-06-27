@@ -246,9 +246,14 @@ fn receiver_is_request_call(call: &oxc_ast::ast::CallExpression) -> bool {
 ///   (`https://api.example.com/${id}` — origin is literal, `${id}` is in the
 ///   path).
 ///
-/// In both cases, any interpolation reached *inside the authority* (before the
-/// path `/`) must itself root in trusted config, or the origin is untrusted and
-/// the template still flags. Interpolations after the path `/` are ignored.
+/// For a network scheme, any interpolation reached *inside the authority*
+/// (before the path `/`) must itself root in trusted config, or the origin is
+/// untrusted and the template still flags. Interpolations after the path `/` are
+/// ignored. The `file://` scheme is the exception: it builds a local-filesystem
+/// reference (`file://${process.cwd()}/`) of the same author-controlled
+/// provenance as the already-trusted `import.meta.url`, not untrusted network
+/// input, so a literal `file://` prefix is trusted whatever its authority
+/// interpolates.
 ///
 /// Authority-less schemes (`mailto:`, `data:`, `tel:`) are intentionally not
 /// whitelisted: they have no `://`, so they match neither branch and keep
@@ -268,7 +273,17 @@ fn template_origin_is_trusted(tpl: &oxc_ast::ast::TemplateLiteral) -> bool {
     // `new URL` can throw — keep flagging.
     let scheme_prefix = leading_scheme_authority_prefix(first_text);
     let first_text_after_scheme = match scheme_prefix {
-        Some(rest) => rest,
+        Some((scheme, rest)) => {
+            // A literal `file://` scheme builds a local-filesystem reference
+            // (`file://${process.cwd()}/`) of the same author-controlled
+            // provenance as the already-trusted `import.meta.url` (itself a
+            // `file:` URL) — not untrusted network input. Trust it on that
+            // provenance rather than demanding a config-rooted authority.
+            if scheme == "file" {
+                return true;
+            }
+            rest
+        }
         None => {
             let opens_with_trusted_origin = first_text.trim().is_empty()
                 && tpl
@@ -306,20 +321,20 @@ fn template_origin_is_trusted(tpl: &oxc_ast::ast::TemplateLiteral) -> bool {
 }
 
 /// If `quasi` opens with a literal `scheme://` authority separator, return the
-/// remainder after it (so its slashes are not mistaken for the path separator);
-/// otherwise `None`. Matches a leading `<scheme>://` where `<scheme>` is a
-/// non-empty run of scheme characters per RFC 3986
-/// (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`).
+/// scheme name and the remainder after the `://` (so the remainder's slashes are
+/// not mistaken for the path separator); otherwise `None`. Matches a leading
+/// `<scheme>://` where `<scheme>` is a non-empty run of scheme characters per
+/// RFC 3986 (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`).
 ///
-/// Example: `"https://api.example.com/v1/"` → `Some("api.example.com/v1/")`.
+/// Example: `"https://api.example.com/v1/"` → `Some(("https", "api.example.com/v1/"))`.
 /// A scheme-less `"//cdn/x"` or `"/api/x"` returns `None` — those throw in a
 /// single-arg `new URL`, so the template stays untrusted.
-fn leading_scheme_authority_prefix(quasi: &str) -> Option<&str> {
+fn leading_scheme_authority_prefix(quasi: &str) -> Option<(&str, &str)> {
     let (scheme, rest) = quasi.split_once("://")?;
     let mut chars = scheme.chars();
     let first_ok = chars.next().is_some_and(|c| c.is_ascii_alphabetic());
     let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
-    (first_ok && rest_ok).then_some(rest)
+    (first_ok && rest_ok).then_some((scheme, rest))
 }
 
 /// True when `expr` is a (possibly nested) member access rooted at an
@@ -718,6 +733,42 @@ mod tests {
     fn still_flags_arbitrary_dot_url_object() {
         // `meta.url` is a plain member read, not the `import.meta` meta-property.
         assert_eq!(run_on("const u = new URL(meta.url);").len(), 1);
+    }
+
+    // Regression for #6110: `new URL(`file://${process.cwd()}/`)` builds a
+    // local-filesystem URL from a literal `file://` scheme — the same trust
+    // category as `import.meta.url` (itself a `file:` URL). `process.cwd()` is an
+    // author-controlled absolute local path, never untrusted network input, so
+    // the constructor cannot throw and wrapping it in try/catch would be dead
+    // code.
+    #[test]
+    fn allows_file_scheme_template_with_cwd() {
+        assert!(run_on("const CWD = new URL(`file://${process.cwd()}/`);").is_empty());
+    }
+
+    // The two-arg form `new URL(`file://...`, base)` is equally safe: the first
+    // argument already carries the absolute `file://` origin, so the base is
+    // never consulted.
+    #[test]
+    fn allows_file_scheme_template_with_cwd_and_base() {
+        assert!(run_on("const u = new URL(`file://${process.cwd()}/`, base);").is_empty());
+    }
+
+    // The `file://` exemption is provenance-based, like `import.meta.url`: a
+    // literal `file://` prefix is trusted whatever its authority interpolates,
+    // by deliberate design. Pin that contract so a future tightening of the
+    // file-scheme authority is a conscious change, not a silent regression.
+    #[test]
+    fn allows_file_scheme_with_arbitrary_authority() {
+        assert!(run_on("const u = new URL(`file://${anything}/p`);").is_empty());
+    }
+
+    // The exemption is scoped to the `file://` scheme: a genuinely dynamic
+    // argument with no static scheme still has no trusted origin and must keep
+    // flagging.
+    #[test]
+    fn still_flags_dynamic_arg_with_no_static_scheme() {
+        assert_eq!(run_on("const u = new URL(userInput);").len(), 1);
     }
 
     // Regression for #4392: a redirect-asserting test builds a URL from the
