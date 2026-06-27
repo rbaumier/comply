@@ -153,6 +153,36 @@ mod tests {
     }
 
     #[test]
+    fn allows_assigned_define_slots_between_ordered_macros() {
+        // nuxt/ui repro (#6170): `const slots = defineSlots<...>()` assigned to a
+        // variable between defineProps and defineEmits is neutral, just like a bare
+        // `defineSlots()` call, and must not flag the later defineEmits.
+        let src = "<script setup lang=\"ts\">\ndefineOptions({ inheritAttrs: false })\n\nconst _props = defineProps<BannerProps>()\nconst slots = defineSlots<BannerSlots>()\nconst emits = defineEmits<BannerEmits>()\n</script>\n\n<template><div /></template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_out_of_order_with_assigned_neutral_macro() {
+        // A genuine ordering violation (emits before props) is still flagged even
+        // when an assigned neutral macro (`const slots = defineSlots()`) sits
+        // between them.
+        let src = "<script lang=\"ts\" setup>\nconst emits = defineEmits<E>()\nconst slots = defineSlots<S>()\nconst props = defineProps<P>()\n</script>\n\n<template><div /></template>";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("defineProps"));
+    }
+
+    #[test]
+    fn still_flags_macro_after_assigned_non_neutral_call() {
+        // `const thing = useThing()` is a non-neutral assigned call — it blocks the
+        // later defineProps just like the bare-call form does.
+        let src = "<script lang=\"ts\" setup>\nconst thing = useThing()\nconst props = defineProps<P>()\n</script>\n\n<template><div /></template>";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("defineProps"));
+    }
+
+    #[test]
     fn allows_define_expose_interspersed() {
         // defineExpose between ordered macros does not block them.
         let src = "<script lang=\"ts\" setup>\nconst props = defineProps<P>()\ndefineExpose({ focus() {} })\nconst emits = defineEmits<E>()\n</script>\n\n<template><div /></template>";

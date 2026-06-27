@@ -4,10 +4,10 @@
 //! order, identifies the configured Vue compiler-macro calls (bare or assigned,
 //! including the `withDefaults(defineProps(...))` wrapper), and flags the
 //! lowest-order macro that sits out of order — either after a later-ordered
-//! macro or after a non-skippable non-macro statement. A bare call to a Vue
+//! macro or after a non-skippable non-macro statement. A call to a Vue
 //! compiler macro that is not in the configured order (`defineOptions` /
-//! `defineSlots` / `defineExpose`) is neutral: it may precede an ordered macro
-//! without flagging it.
+//! `defineSlots` / `defineExpose`), whether bare or assigned to a variable, is
+//! neutral: it may precede an ordered macro without flagging it.
 //!
 //! The macros are auto-imported globals that exist only inside `<script
 //! setup>`, so the check fires only when invoked from the Vue backend
@@ -115,16 +115,24 @@ fn find_out_of_order_macro(
 
         if let Statement::VariableDeclaration(decl) = statement {
             for declarator in &decl.declarations {
-                match declarator_macro(declarator).and_then(|name| {
-                    order_map.get(name).map(|&idx| (idx, declarator.span))
-                }) {
-                    Some((order_index, span)) => update_for_declarator(
+                let Some(name) = declarator_macro(declarator) else {
+                    // A declarator with no call initializer (`const x = 5`) is
+                    // real non-macro content and blocks a later ordered macro.
+                    non_macro_found = true;
+                    continue;
+                };
+                if let Some(&order_index) = order_map.get(name) {
+                    update_for_declarator(
                         &mut found_macro,
                         order_index,
-                        span,
+                        declarator.span,
                         non_macro_found,
-                    ),
-                    None => non_macro_found = true,
+                    );
+                } else if !is_neutral_macro(name) {
+                    // `const slots = defineSlots<...>()` is neutral, mirroring the
+                    // bare-call branch; only a non-neutral assigned call counts as
+                    // non-macro content.
+                    non_macro_found = true;
                 }
             }
             continue;
@@ -216,8 +224,9 @@ fn is_skippable_before_macro(statement: &Statement<'_>) -> bool {
 
 /// `defineOptions` / `defineSlots` / `defineExpose` are Vue compiler macros that
 /// set component options / slots / the exposed API. They do not participate in
-/// the `defineModel → defineProps → defineEmits` ordering, so a bare call to one
-/// is neutral and must not block a later ordered macro. A macro the user added to
+/// the `defineModel → defineProps → defineEmits` ordering, so a call to one —
+/// bare or assigned to a variable — is neutral and must not block a later ordered
+/// macro. A macro the user added to
 /// the configured `order` is matched as an ordered macro before this is reached,
 /// so an explicit ordering choice still wins.
 fn is_neutral_macro(name: &str) -> bool {
