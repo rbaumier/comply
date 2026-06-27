@@ -129,9 +129,16 @@ fn collect_specifier(
     };
     if exported_name_is_default(&spec.exported) {
         *default_export = Some((symbol, local.span));
-    } else {
-        named.insert(symbol);
+        return;
     }
+    // A string-literal-named export (e.g. `export { plugin as 'module.exports' }`)
+    // is a bundler-interop directive, not a conventional named export: `import
+    // { plugin }` cannot reach it, so it serves a different consumer than the
+    // default export and does not make it redundant.
+    if matches!(spec.exported, ModuleExportName::StringLiteral(_)) {
+        return;
+    }
+    named.insert(symbol);
 }
 
 fn exported_name_is_default(name: &ModuleExportName) -> bool {
@@ -288,6 +295,34 @@ mod tests {
     fn fires_export_const_then_default() {
         // The canonical case from the rule docs.
         let d = run_on("export const foo = 42;\nexport default foo;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_string_literal_coexport_issue_6229() {
+        // `export { plugin as 'module.exports' }` is a string-literal named export
+        // — a bundler CJS-interop directive, not reachable by `import { plugin }`.
+        // It serves a different consumer than the default export, so the two are
+        // not redundant.
+        let src = "const plugin = {};\nexport default plugin;\nexport { plugin as 'module.exports' };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn fires_ordinary_named_coexport_negative_control() {
+        // An ordinary identifier named export co-existing with the default still
+        // makes the default redundant.
+        let d = run_on("const foo = 1;\nexport default foo;\nexport { foo };");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn fires_string_literal_default_specifier() {
+        // `export { foo as 'default' }` is a string-literal export, but its value
+        // is "default" — it marks the default export, so a co-existing named
+        // export is still redundant. Pins the ordering of the StringLiteral guard
+        // below the default check.
+        let d = run_on("const foo = 1;\nexport { foo as 'default' };\nexport { foo };");
         assert_eq!(d.len(), 1);
     }
 }
