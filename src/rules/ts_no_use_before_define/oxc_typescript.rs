@@ -14,11 +14,16 @@
 //! TanStack initializes `Route` before the component renders, so the
 //! forward reference is safe.
 //!
-//! Also skips forward references that live inside a callback passed
-//! directly to a React-style hook call (`useXxx(...)`, e.g. `useMutation`,
-//! `useEffect`, `useCallback`). Those callbacks run after the surrounding
-//! component finishes rendering, so identifiers declared later in the same
-//! function body are already initialized when the callback fires.
+//! Also skips forward references that live inside a callback passed directly to
+//! a deferred-execution callee — a React-style hook (`useXxx(...)`, e.g.
+//! `useMutation`, `useEffect`, `useCallback`) or a lazily-invoked Vue reactivity
+//! primitive (`computed`, `watch`, `watchPostEffect`). Those callbacks (the
+//! React hook body, the `computed` getter/setter, the watch effect) are stored
+//! and invoked later — after render, on reactive access, or on dependency change
+//! — never synchronously during setup, so identifiers declared later in the same
+//! function body are already initialized when the callback fires. The eager
+//! `watchEffect` / `watchSyncEffect` variants run their effect synchronously at
+//! setup and are intentionally not exempt.
 //!
 //! Also skips forward references inside callbacks passed (directly or as
 //! property values) to `createFileRoute(...)({...})` /
@@ -148,7 +153,7 @@ impl OxcCheck for Check {
                 let ref_node_id = reference.node_id();
                 let ref_span = nodes.kind(ref_node_id).span();
                 if ref_span.start < decl_span.start {
-                    if is_inside_react_hook_callback(nodes, ref_node_id) {
+                    if is_inside_deferred_callback(nodes, ref_node_id) {
                         continue;
                     }
                     if is_inside_tanstack_route_factory_callback(nodes, ref_node_id) {
@@ -265,12 +270,14 @@ fn is_tanstack_route_callee(name: &str) -> bool {
 }
 
 /// True when the reference sits inside a function/arrow callback that is
-/// passed directly as an argument to a React-style hook call (`useXxx(...)`).
-/// Such callbacks fire after the surrounding component finishes rendering, so
+/// passed directly as an argument to a deferred-execution callee — a
+/// React-style hook (`useXxx(...)`) or a lazily-invoked Vue reactivity primitive
+/// (`computed`/`watch`/`watchPostEffect`). Such callbacks fire after the
+/// surrounding component renders, or only on reactive access/change, so
 /// identifiers declared later in the same function body are already in scope
 /// by the time the callback runs — the forward reference is not a real TDZ
 /// hazard.
-fn is_inside_react_hook_callback<'a>(
+fn is_inside_deferred_callback<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     ref_node_id: NodeId,
 ) -> bool {
@@ -278,7 +285,7 @@ fn is_inside_react_hook_callback<'a>(
         let ancestor = nodes.get_node(ancestor_id);
         match ancestor.kind() {
             AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
-                if callback_passed_to_react_hook(ancestor_id, nodes) {
+                if callback_passed_to_deferred_callee(ancestor_id, nodes) {
                     return true;
                 }
                 return false;
@@ -290,10 +297,14 @@ fn is_inside_react_hook_callback<'a>(
     false
 }
 
-/// True when `func_id` is the direct argument of an enclosing `useXxx(...)`
-/// call expression. Stops at the next function boundary so that nested
-/// definitions do not leak across closures.
-fn callback_passed_to_react_hook<'a>(
+/// True when `func_id` is the direct argument of an enclosing deferred-callee
+/// call expression — a React hook (`useXxx(...)`) or a Vue reactivity primitive
+/// (`computed(...)`/`watch(...)`/...). Object-literal wrappers between the
+/// callback and the call are transparent (the `_ => {}` arm), so a getter/setter
+/// inside `computed({ get, set })` still reaches the `computed` call. Stops at
+/// the next function boundary so that nested definitions do not leak across
+/// closures.
+fn callback_passed_to_deferred_callee<'a>(
     func_id: NodeId,
     nodes: &'a oxc_semantic::AstNodes<'a>,
 ) -> bool {
@@ -301,7 +312,9 @@ fn callback_passed_to_react_hook<'a>(
         let ancestor = nodes.get_node(ancestor_id);
         match ancestor.kind() {
             AstKind::CallExpression(call) => {
-                if callee_name(&call.callee).is_some_and(is_react_hook_name) {
+                if callee_name(&call.callee)
+                    .is_some_and(|name| is_react_hook_name(name) || is_vue_reactive_primitive(name))
+                {
                     return true;
                 }
                 return false;
@@ -757,6 +770,23 @@ fn is_react_hook_name(name: &str) -> bool {
         return false;
     };
     rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+}
+
+/// Vue 3 reactivity primitives whose callback/accessor arguments are stored and
+/// invoked lazily — a `computed` getter/setter runs on reactive read/write, a
+/// `watch` callback on dependency change (lazy by default), and a
+/// `watchPostEffect` effect only in the post-render flush. None of these runs
+/// synchronously during a composable's setup pass, so — like a React `useXxx`
+/// callback — a binding declared later in the same function scope is already
+/// initialized by the time the callback fires, and a forward reference inside it
+/// is not a real TDZ hazard.
+///
+/// `watchEffect` and `watchSyncEffect` are deliberately excluded: their effect
+/// runs *immediately* (synchronously) when the primitive is called during setup,
+/// so a forward reference inside one to a binding declared later in the scope is
+/// a genuine TDZ hazard and must stay flagged.
+fn is_vue_reactive_primitive(name: &str) -> bool {
+    matches!(name, "computed" | "watch" | "watchPostEffect")
 }
 
 #[cfg(test)]
@@ -1802,5 +1832,134 @@ mod tests {
             "a ternary-bound arrow called eagerly must still be flagged: {d:?}"
         );
         assert!(d[0].message.contains("`later`"));
+    }
+
+    // Regression for #6164: a Vue `computed({ get, set })` setter references a
+    // binding declared later in the same composable scope. The setter only runs
+    // on `drawingMode.value = x` — after setup completes and the binding is
+    // initialized — so the forward reference is not a real TDZ hazard.
+    #[test]
+    fn no_fp_forward_ref_in_vue_computed_setter_issue_6164() {
+        let source = "function useDrawings(_mode) {\n\
+                      const drawingMode = computed({\n\
+                      get() { return _mode.value; },\n\
+                      set(v) { drauu.mode = v; },\n\
+                      });\n\
+                      const drauu = markRaw(createDrauu());\n\
+                      return drawingMode;\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "forward ref inside a computed() setter should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_forward_ref_in_vue_computed_getter_issue_6164() {
+        // The direct getter form `computed(() => ...)` defers the same way.
+        let source = "function useThing() {\n\
+                      const total = computed(() => base.value + 1);\n\
+                      const base = ref(0);\n\
+                      return total;\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "forward ref inside a computed() getter should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_forward_ref_in_vue_watch_callback_issue_6164() {
+        // A `watch(source, callback)` callback fires on dependency change, after
+        // setup — a binding declared later in the scope is already initialized.
+        let source = "function useThing(src) {\n\
+                      watch(src, () => handler());\n\
+                      const handler = () => {};\n\
+                      return null;\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "forward ref inside a watch() callback should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_forward_ref_in_non_vue_callback_issue_6164() {
+        // Negative space: a callback passed to a callee that is NOT a known
+        // deferred hook/reactivity primitive may be invoked synchronously, so a
+        // forward reference inside it stays flagged — the Vue exemption is scoped
+        // to the reactivity-primitive names, not any callee taking a callback.
+        let d = run_on(
+            "render(() => later);\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "non-deferred callee callback must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_synchronous_watch_source_arg_issue_6164() {
+        // Negative space: only references *inside* the deferred callback are
+        // exempt. `watch`'s source argument is read synchronously when `watch`
+        // runs at module evaluation, so a forward reference there is a real TDZ
+        // hazard and must still fire.
+        let d = run_on(
+            "watch(later, () => {});\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "synchronous watch source-arg use-before-define must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn no_fp_forward_ref_in_vue_watch_post_effect_callback_issue_6164() {
+        // `watchPostEffect` queues its effect to the post-render flush, so the
+        // initial run is deferred past setup — a binding declared later is
+        // already initialized by then.
+        let source = "function useThing() {\n\
+                      watchPostEffect(() => handler());\n\
+                      const handler = () => {};\n\
+                      return null;\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "forward ref inside a watchPostEffect effect should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_forward_ref_in_eager_watch_effect_callbacks_issue_6164() {
+        // Negative space: `watchEffect` and `watchSyncEffect` run their effect
+        // synchronously when called during setup, so a forward reference inside
+        // the effect to a binding declared later in the scope is a real TDZ
+        // hazard and must stay flagged — unlike the lazy `computed`/`watch`/
+        // `watchPostEffect`, these eager variants are not exempt.
+        for callee in ["watchEffect", "watchSyncEffect"] {
+            let source = format!(
+                "function useThing() {{\n\
+                 {callee}(() => use(later));\n\
+                 const later = 1;\n\
+                 }}"
+            );
+            let d = run_on(&source);
+            assert_eq!(
+                d.len(),
+                1,
+                "forward ref inside a {callee} effect must still be flagged: {d:?}"
+            );
+            assert!(d[0].message.contains("`later`"));
+        }
     }
 }
