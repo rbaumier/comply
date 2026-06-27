@@ -3,8 +3,11 @@
 //!
 //! Suppressed when the switch discriminant cannot be narrowed to `never`: a
 //! `for...of` / `for...in` loop element, a binding annotated with a plain
-//! primitive type (`string`, `number`, `boolean`, ...), or a binding whose
-//! initializer calls a same-file function declared to return such a primitive.
+//! primitive type (`string`, `number`, `boolean`, ...), a binding whose
+//! initializer calls a same-file function declared to return such a primitive,
+//! or a member access `obj.prop` whose property resolves to a primitive type on
+//! `obj`'s in-file declared type — or whose object type is not declared in-file
+//! (imported/global), where the property cannot be assumed to be a closed union.
 //! On those, the `default: throw` is runtime input validation, and
 //! `const _: never = x` would itself be a TypeScript error — the exhaustiveness
 //! check is only meaningful for a union or enum discriminant.
@@ -12,7 +15,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, IdentifierReference, TSType};
+use oxc_ast::ast::{
+    Expression, IdentifierReference, PropertyKey, StaticMemberExpression, TSSignature, TSType,
+    TSTypeName,
+};
 use std::sync::Arc;
 
 pub struct Check;
@@ -78,19 +84,31 @@ impl OxcCheck for Check {
     }
 }
 
-/// True when `discriminant` resolves to a binding whose type can never narrow
-/// to `never`, so an exhaustive `const _: never = x` check would not compile:
-/// a `for...of`/`for...in` loop element, a binding annotated with a plain
-/// primitive keyword type, or a binding initialized by a same-file function
-/// call whose declared return type is such a primitive (inferred-primitive
-/// binding).
+/// True when `discriminant` can never narrow to `never`, so an exhaustive
+/// `const _: never = x` check would not compile and the `default: throw` is
+/// runtime validation rather than a stale exhaustiveness guard. Handles a bare
+/// identifier binding and an `obj.prop` member access; any other expression
+/// shape keeps firing.
 fn discriminant_cannot_be_never<'a>(
     discriminant: &Expression<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
-    let Expression::Identifier(ident) = discriminant else {
-        return false;
-    };
+    match discriminant {
+        Expression::Identifier(ident) => identifier_cannot_be_never(ident, semantic),
+        Expression::StaticMemberExpression(member) => member_cannot_be_never(member, semantic),
+        _ => false,
+    }
+}
+
+/// True when an identifier discriminant resolves to a binding whose type can
+/// never narrow to `never`: a `for...of`/`for...in` loop element, a binding
+/// annotated with a plain primitive keyword type, or a binding initialized by a
+/// same-file function call whose declared return type is such a primitive
+/// (inferred-primitive binding).
+fn identifier_cannot_be_never<'a>(
+    ident: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
     let Some(ref_id) = ident.reference_id.get() else {
         return false;
     };
@@ -131,6 +149,165 @@ fn discriminant_cannot_be_never<'a>(
         }
     }
     false
+}
+
+/// True when an `obj.prop` discriminant can never narrow to `never`. Resolves
+/// `obj`'s in-file declared type and inspects the declared type of `prop`: a
+/// primitive keyword (`string`, `number`, ...) is open-ended and never narrows
+/// to `never`, so the exhaustive check is a TypeScript error. A property typed
+/// purely as string-literals / enum members stays narrowable and keeps firing —
+/// the genuine stale-exhaustiveness case. When `obj`'s type is not declared
+/// in-file (imported or global) the property type can't be inspected; default
+/// to exempt, since `switch (obj.prop)` over a plain string property is far more
+/// common than over a typed union and `const _: never = obj.prop` would not
+/// compile there.
+fn member_cannot_be_never<'a>(
+    member: &StaticMemberExpression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(obj) = &member.object else {
+        return true;
+    };
+    let Some(obj_type) = binding_type_annotation(obj, semantic) else {
+        return true;
+    };
+    let prop = member.property.name.as_str();
+    let mut property_types = Vec::new();
+    let fully_resolved = collect_property_types(obj_type, prop, semantic, 8, &mut property_types);
+    // An imported/unknown shape, or a property absent from a fully-resolved
+    // shape, leaves the property type unknown — default to exempt.
+    if !fully_resolved || property_types.is_empty() {
+        return true;
+    }
+    // Any primitive-keyword occurrence means the property is open-ended; only an
+    // all-literal/enum property is a closed set the switch can exhaust.
+    property_types.iter().any(|ty| is_primitive_type(ty))
+}
+
+/// The declared TypeScript type annotation of the binding `ident` refers to,
+/// resolved through its parameter or variable declaration. `None` when the
+/// binding has no in-file annotation (imported, inferred, or untyped).
+fn binding_type_annotation<'a>(
+    ident: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        match kind {
+            AstKind::FormalParameter(param) => {
+                return param.type_annotation.as_ref().map(|a| &a.type_annotation);
+            }
+            AstKind::VariableDeclarator(decl) => {
+                return decl.type_annotation.as_ref().map(|a| &a.type_annotation);
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return None;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Gathers the declared type of property `prop` from every concrete object shape
+/// in `ty`, following in-file type-alias / interface references and union
+/// members. Returns `false` when any branch hits a shape that can't be resolved
+/// in-file (an imported or structurally-unknown type), so the caller can fall
+/// back conservatively.
+fn collect_property_types<'a>(
+    ty: &'a TSType<'a>,
+    prop: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    depth: u8,
+    out: &mut Vec<&'a TSType<'a>>,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    match ty {
+        TSType::TSTypeLiteral(lit) => {
+            if let Some(prop_ty) = property_signature_type(&lit.members, prop) {
+                out.push(prop_ty);
+            }
+            true
+        }
+        TSType::TSUnionType(union) => {
+            let mut resolved = true;
+            for variant in &union.types {
+                resolved &= collect_property_types(variant, prop, semantic, depth - 1, out);
+            }
+            resolved
+        }
+        TSType::TSTypeReference(tref) => {
+            let TSTypeName::IdentifierReference(name) = &tref.type_name else {
+                return false;
+            };
+            match find_named_type(name.name.as_str(), semantic) {
+                Some(NamedTypeDecl::Interface(members)) => {
+                    if let Some(prop_ty) = property_signature_type(members, prop) {
+                        out.push(prop_ty);
+                    }
+                    true
+                }
+                Some(NamedTypeDecl::Alias(aliased)) => {
+                    collect_property_types(aliased, prop, semantic, depth - 1, out)
+                }
+                None => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// An in-file `interface` member list or the aliased type of a `type` alias.
+enum NamedTypeDecl<'a> {
+    Interface(&'a [TSSignature<'a>]),
+    Alias(&'a TSType<'a>),
+}
+
+/// Finds an in-file `interface`/`type` declaration named `name`. `None` when no
+/// such declaration exists in this file — e.g. an imported or global type.
+fn find_named_type<'a>(
+    name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<NamedTypeDecl<'a>> {
+    for node in semantic.nodes().iter() {
+        match node.kind() {
+            AstKind::TSInterfaceDeclaration(decl) if decl.id.name.as_str() == name => {
+                return Some(NamedTypeDecl::Interface(&decl.body.body));
+            }
+            AstKind::TSTypeAliasDeclaration(decl) if decl.id.name.as_str() == name => {
+                return Some(NamedTypeDecl::Alias(&decl.type_annotation));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The declared type of property `prop` in a type-literal / interface member
+/// list, or `None` when the property is absent or has no type annotation.
+fn property_signature_type<'a>(
+    members: &'a [TSSignature<'a>],
+    prop: &str,
+) -> Option<&'a TSType<'a>> {
+    members.iter().find_map(|sig| {
+        let TSSignature::TSPropertySignature(p) = sig else {
+            return None;
+        };
+        let PropertyKey::StaticIdentifier(key) = &p.key else {
+            return None;
+        };
+        if key.name.as_str() != prop {
+            return None;
+        }
+        p.type_annotation.as_ref().map(|ann| &ann.type_annotation)
+    })
 }
 
 /// True when the `let`/`const` binding has a primitive type: either an explicit
@@ -337,6 +514,70 @@ mod tests {
                    case '1.0': break;\n\
                    case '2.0': break;\n\
                    default: throw new Error(version);\n\
+                   }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #6278: discriminant is `obj.prop` where `prop` is a plain
+    // `string` property of an inline object-literal type. `const _: never =
+    // element.name` would be a TypeScript error, so the `default: throw` is
+    // runtime validation of unknown names, not a stale exhaustiveness check.
+    #[test]
+    fn no_fp_member_access_string_property_inline_issue_6278() {
+        let src = "function mapAction(element: { name: string }) {\n\
+                   switch (element.name) {\n\
+                   case 'transition': break;\n\
+                   case 'onentry': break;\n\
+                   default: throw new Error(`Conversion of \"${element.name}\" not implemented`);\n\
+                   }\n\
+                   }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Same as above but the object's type is a named in-file interface; the
+    // `name` property still resolves to `string`, so no diagnostic.
+    #[test]
+    fn no_fp_member_access_string_property_interface_issue_6278() {
+        let src = "interface XmlElement { name: string; }\n\
+                   function mapAction(element: XmlElement) {\n\
+                   switch (element.name) {\n\
+                   case 'transition': break;\n\
+                   default: throw new Error(element.name);\n\
+                   }\n\
+                   }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The real xstate repro: `element` is typed with an imported type whose
+    // shape isn't declared in-file, so the property type can't be inspected.
+    // Default to exempt — `switch (obj.prop)` over a plain string property is
+    // far more common than over a typed union, and the never-check would not
+    // compile against a `string`-typed property.
+    #[test]
+    fn no_fp_member_access_imported_object_type_issue_6278() {
+        let src = "import { Element as XMLElement } from 'xml-js';\n\
+                   function mapAction(element: XMLElement) {\n\
+                   switch (element.name) {\n\
+                   case 'transition': break;\n\
+                   default: throw new Error(`Conversion of \"${element.name}\" not implemented`);\n\
+                   }\n\
+                   }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative control for #6278: a member-access discriminant over a genuine
+    // in-file discriminated union (`x.type` where each variant pins `type` to a
+    // string literal) IS narrowable to `never`, so the rule must STILL fire —
+    // the member-access path must not gut the core exhaustiveness nudge.
+    #[test]
+    fn still_flags_member_access_discriminated_union_issue_6278() {
+        let src = "type Action = { type: 'a' } | { type: 'b' };\n\
+                   function f(x: Action) {\n\
+                   switch (x.type) {\n\
+                   case 'a': return 1;\n\
+                   case 'b': return 2;\n\
+                   default: throw new Error('unreachable');\n\
+                   }\n\
                    }";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
