@@ -255,14 +255,15 @@ fn child_text<'a>(node: tree_sitter::Node, kind: &str, source: &'a [u8]) -> Opti
 
 /// The attribute name to validate, or `None` when the node is out of scope.
 ///
-/// - plain `attribute` → its `attribute_name`, unless the name contains a `:` or
-///   begins with `.`. A colon-bearing plain attribute is a namespaced /
-///   variant-prefixed name (an XML/SVG namespace like `xlink:href`, or a
-///   UnoCSS/Windi attributify utility like `md:grid-cols-2`). A name beginning
-///   with `.` is the trailing segment of a member-expression element tag like
-///   `<motion.div>` (motion-v), which the grammar splits into a `motion`
-///   `tag_name` plus a spurious `.div` attribute — the dot is part of the
-///   component identifier, not an attribute name. Both are skipped.
+/// - plain `attribute` → its `attribute_name`, unless the name contains `:`, `--`,
+///   or `.`. None of these can occur in a JavaScript identifier, so a name bearing
+///   one is a token from another sublanguage rather than a component prop or DOM
+///   attribute subject to the kebab-case convention: `:` is a namespaced /
+///   variant-prefixed name (XML/SVG namespace like `xlink:href`, or a UnoCSS/Windi
+///   attributify variant like `md:grid-cols-2`); `--` is UnoCSS attributify
+///   negative-value notation (`me--4`, `z--1`); `.` is a UnoCSS attributify decimal
+///   value (`gap-0.5`, `px1.2`) or the trailing member-expression segment of a
+///   `<motion.div>` element tag.
 /// - `directive_attribute` with name `:`, `v-bind`, or `v-model` → its static
 ///   `directive_argument`. Dynamic arguments (`:[key]`), argument-less directives,
 ///   and any other directive (`v-on`, `@`, `v-if`, ...) are skipped.
@@ -270,18 +271,18 @@ fn checked_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str
     match node.kind() {
         "attribute" => {
             let name = child_text(node, "attribute_name", source)?;
-            // A plain attribute name containing `:` is a namespaced / variant-prefixed
-            // name (XML/SVG namespace like `xlink:href`, or a UnoCSS/Windi attributify
-            // utility like `md:grid-cols-2`), not a component prop or DOM attribute
-            // subject to the kebab-case convention.
-            if name.contains(':') {
-                return None;
-            }
-            // A name beginning with `.` is the segment after the dot in a
-            // member-expression element tag (`<motion.div>` → `tag_name` `motion`
-            // plus a spurious `.div` attribute). The whole `motion.div` is the
-            // component identifier; `.div` is not an attribute.
-            if name.starts_with('.') {
+            // `:`, `--`, and `.` cannot occur in a JavaScript identifier, so a plain
+            // attribute name containing any of them is not a component prop or DOM
+            // attribute subject to the kebab-case convention:
+            // - `:` → namespaced / variant-prefixed name (`xlink:href`,
+            //   `md:grid-cols-2`).
+            // - `--` → UnoCSS attributify negative-value notation (`me--4` =
+            //   `margin-inline-end: -1rem`, `z--1`, `inset-ie--10`).
+            // - `.` → UnoCSS attributify decimal/fractional value (`gap-0.5`,
+            //   `px1.2`, `mx-1.25rem`), or the trailing member-expression segment of
+            //   a `<motion.div>` element tag (the grammar splits `motion.div` into a
+            //   `motion` `tag_name` plus a spurious `.div` attribute).
+            if name.contains(':') || name.contains("--") || name.contains('.') {
                 return None;
             }
             Some(name)
@@ -615,6 +616,32 @@ mod tests {
         // `:fooBar` flows through the directive arm (argument validation), which the
         // plain-attribute colon guard does not touch → still flagged.
         assert_eq!(run(&wrap("<div :fooBar=\"x\" />")).len(), 1);
+    }
+
+    // --- UnoCSS attributify value notation (negative `--`, decimal `.`) ---
+
+    #[test]
+    fn allows_unocss_attributify_negative_value() {
+        // Issue #6191: in UnoCSS attributify mode a negative value is written with a
+        // double hyphen (`me--4` = `margin-inline-end: -1rem`). `--` cannot occur in
+        // a JavaScript identifier, so these are utility class names, not props.
+        assert!(run(&wrap("<div me--4 z--1 inset-ie--10 />")).is_empty());
+    }
+
+    #[test]
+    fn allows_unocss_attributify_decimal_value() {
+        // Issue #6191: fractional UnoCSS values use a dot (`gap-0.5`, `px1.2`,
+        // `py0.2`, `mx-1.25rem`). A `.` cannot occur in a JavaScript identifier.
+        assert!(run(&wrap("<div gap-0.5 px1.2 py0.2 mx-1.25rem />")).is_empty());
+    }
+
+    #[test]
+    fn flags_camelcase_prop_without_unocss_value_notation() {
+        // Negative space: a genuine camelCase prop carries neither `--` nor `.`, so
+        // the UnoCSS value-notation guards do not exempt it.
+        let diags = run(&wrap("<div maxRetries=\"3\" />"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("maxRetries"));
     }
 
     // --- Member-expression element tags (`<Foo.bar>`, e.g. motion-v) ---
