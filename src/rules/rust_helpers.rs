@@ -1499,10 +1499,10 @@ pub fn is_effectively_pub(item: Node, source: &[u8]) -> bool {
     is_pub(item, source) && !is_inside_non_public_module(item, source)
 }
 
-/// True if the `match_arm`'s body is a single diverging or error
+/// True if the `match_arm`'s body is a single diverging or early-exit
 /// expression — a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!`
-/// macro invocation, or a `return Err(...)`. Such an arm is an explicit
-/// guard for the impossible/error case.
+/// macro invocation, or a `return Err(...)` / `return None`. Such an arm is
+/// an explicit guard for the impossible/error/absent case.
 ///
 /// Two rules need this: `rust-explicit-enum-match-arms` exempts a
 /// wildcard arm that only diverges, and `no-empty-catch` treats an empty
@@ -1548,27 +1548,32 @@ fn expr_is_diverging(expr: Node, source: &[u8]) -> bool {
                 Ok("unreachable" | "panic" | "unimplemented" | "todo" | "bail")
             )
         }
-        "return_expression" => return_yields_err(expr, source),
+        "return_expression" => return_yields_none_or_err(expr, source),
         _ => false,
     }
 }
 
-/// True if a `return_expression` returns an `Err(...)` value — the head
-/// of the returned call expression is the `Err` constructor.
-fn return_yields_err(ret: Node, source: &[u8]) -> bool {
+/// True if a `return_expression` returns a failure/absence value — either an
+/// `Err(...)` constructor call or the `None` variant (bare `None`, or a scoped
+/// `Option::None`). Both are early-exit guards for a `Result`/`Option`-returning
+/// function ("this case is not handled here, propagate failure"), the same
+/// structural shape, so they get the same treatment.
+fn return_yields_none_or_err(ret: Node, source: &[u8]) -> bool {
     let Some(returned) = ret.named_child(0) else {
         return false;
     };
-    if returned.kind() != "call_expression" {
-        return false;
+    match returned.kind() {
+        // `return Err(...)`: the head of the call is the `Err` constructor.
+        "call_expression" => returned
+            .child_by_field_name("function")
+            .and_then(|callee| callee.utf8_text(source).ok())
+            .is_some_and(|text| text.rsplit("::").next().unwrap_or(text).trim() == "Err"),
+        // `return None` (`identifier`) or `return Option::None` (`scoped_identifier`).
+        "identifier" | "scoped_identifier" => returned
+            .utf8_text(source)
+            .is_ok_and(|text| text.rsplit("::").next().unwrap_or(text).trim() == "None"),
+        _ => false,
     }
-    let Some(callee) = returned.child_by_field_name("function") else {
-        return false;
-    };
-    let Ok(text) = callee.utf8_text(source) else {
-        return false;
-    };
-    text.rsplit("::").next().unwrap_or(text).trim() == "Err"
 }
 
 /// True if `cast` (a `type_cast_expression`) casts the result of a collection

@@ -53,11 +53,11 @@
 //! (the guard may be false at runtime), so the `_` arm is compiler-mandated
 //! and listing every variant explicitly does not remove it.
 //!
-//! A wildcard arm whose body is a single diverging or error expression —
+//! A wildcard arm whose body is a single diverging or early-exit expression —
 //! a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!` macro
-//! invocation, or `return Err(...)` (optionally wrapped in a
+//! invocation, or `return Err(...)` / `return None` (optionally wrapped in a
 //! single-statement block) — is an explicit guard for the
-//! impossible/error case, not a catch-all standing in for unenumerated
+//! impossible/error/absent case, not a catch-all standing in for unenumerated
 //! variants, so it is not flagged.
 //!
 //! A `_ => None` arm paired with at least one `Variant(v) => Some(v)` arm
@@ -205,10 +205,11 @@ impl AstCheck for Check {
             return;
         }
         // Emit on each wildcard arm found (usually just one). A wildcard
-        // arm whose body only diverges or returns an error
+        // arm whose body only diverges or early-exits
         // (`unreachable!()`, `panic!()`, `bail!(...)`, `return Err(...)`,
-        // …) is a deliberate guard for the impossible/error case, not a
-        // lazy catch-all to be replaced with enumerated variants — skip it.
+        // `return None`, …) is a deliberate guard for the impossible/error/
+        // absent case, not a lazy catch-all to be replaced with enumerated
+        // variants — skip it.
         for arm in wildcard_arms {
             if arm_body_is_diverging(arm, source_bytes) {
                 continue;
@@ -1105,6 +1106,32 @@ mod tests {
         let src = "fn f(x: Foo) -> Result<i32, E> { match x { \
                    Foo::A => Ok(1), _ => return Err(E::Unexpected), } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_arm_with_return_none_body() {
+        // Issue #6207: `_ => return None` is an early-exit guard in an
+        // `Option`-returning function, the same shape as `return Err(...)`.
+        let src = "fn f(x: Foo) -> Option<i32> { match x { \
+                   Foo::A => Some(1), _ => return None, } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_arm_with_return_option_none_body() {
+        // Issue #6207: scoped `Option::None` form of the same early-exit.
+        let src = "fn f(x: Foo) -> Option<i32> { match x { \
+                   Foo::A => Some(1), _ => return Option::None, } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_arm_returning_plain_value() {
+        // True positive: `_ => return 0` is NOT a failure/absence early-exit;
+        // it returns a concrete value, swallowing the remaining enum variants.
+        let src = "fn f(x: Foo) -> i32 { match x { \
+                   Foo::A => 1, Foo::B => 2, _ => return 0, } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
