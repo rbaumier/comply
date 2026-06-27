@@ -392,21 +392,26 @@ fn method_non_self_param_count(function_item: tree_sitter::Node) -> usize {
 
 /// True for the builder field-setter convention: a `bool` parameter whose name
 /// is identical to the enclosing method's name, where the method is a fluent
-/// builder setter — it has a `self` receiver and returns a `Self`-shaped type,
-/// either by value (`pub fn fit_intercept(mut self, fit_intercept: bool) -> Self`)
-/// or by reference (`pub fn memory64(&mut self, memory64: bool) -> &mut Self`).
-/// Here the parameter name is dictated by the field it sets, named after that
-/// field per the builder convention, not chosen freely — so a predicate prefix
-/// would diverge the parameter from the field and method it mirrors.
+/// builder setter — it has a `self` receiver and returns a builder shape, either
+/// a `Self` form (`pub fn fit_intercept(mut self, fit_intercept: bool) -> Self`,
+/// `pub fn memory64(&mut self, memory64: bool) -> &mut Self`) or a named concrete
+/// type returned from a by-value `self` consuming receiver
+/// (`pub fn flatten_event(self, flatten_event: bool) -> Layer<S, F, W>`, where the
+/// generic builder's type parameters change between steps so the return cannot be
+/// bare `Self`). Here the parameter name is dictated by the field it sets, named
+/// after that field per the builder convention, not chosen freely — so a
+/// predicate prefix would diverge the parameter from the field and method it
+/// mirrors.
 ///
 /// Anchored on three AST signals so it cannot widen into a name allowlist: the
 /// node is a `parameter` whose name equals the enclosing `function_item`'s
-/// `name` field, that function has a `self` receiver, and its return type is a
-/// `Self` form (`Self` / `&Self` / `&mut Self`). A free function, a setter that
-/// returns `()` or some other type (a plain `&mut self` mutator, not a fluent
-/// builder), or any parameter whose name differs from the method name is
-/// unaffected and still flags. The walk stops at the first `closure_expression`
-/// boundary so a closure callback param is judged by its own scope.
+/// `name` field, that function has a `self` receiver, and it returns a builder
+/// shape (see [`method_returns_builder_shape`]). A free function, a setter that
+/// returns `()`, a borrowing `&self`/`&mut self` method returning a foreign
+/// non-`Self` type (a transform, not a consuming builder), or any parameter whose
+/// name differs from the method name is unaffected and still flags. The walk
+/// stops at the first `closure_expression` boundary so a closure callback param
+/// is judged by its own scope.
 fn is_builder_setter_field_param(
     node: tree_sitter::Node,
     name: &str,
@@ -427,7 +432,7 @@ fn is_builder_setter_field_param(
                 .is_some_and(|fn_name| fn_name == name);
             return name_matches_method
                 && method_has_self_receiver(parent)
-                && method_returns_self_type(parent, source);
+                && method_returns_builder_shape(parent, source);
         }
         cursor = parent;
     }
@@ -1596,12 +1601,47 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_setter_not_returning_self() {
-        // The method must return a `Self` form; a `self`-consuming method
-        // returning a different type is not the builder-setter shape.
-        let diags = run_on("impl X { fn scale(mut self, scale: bool) -> X { self } }");
+    fn allows_consuming_builder_setter_returning_named_generic() {
+        // Consuming builder whose method name equals the bool param name but whose
+        // return type is a named generic builder type rather than bare `Self`,
+        // because the type parameters change between builder steps
+        // (tracing-subscriber's `Layer` / `SubscriberBuilder` setters). The
+        // receiver consumes `self` by value, so this is the same field-setter
+        // intent as the `-> Self` case. (Closes #6154)
+        for src in [
+            "impl X { pub fn flatten_event(self, flatten_event: bool) -> Layer<S, format::JsonFields, format::Format<format::Json, T>, W> { self } }",
+            "impl X { pub fn log_internal_errors(self, log_internal_errors: bool) -> SubscriberBuilder<N, format::Format<L, T>, F, W> { self } }",
+            "impl X { fn scale(mut self, scale: bool) -> Builder { self } }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_borrowing_setter_returning_foreign_type() {
+        // Strictness preserved: the named-type return is exempt only from a
+        // by-value `self` consuming receiver. A borrowing `&self`/`&mut self`
+        // method returning a foreign non-`Self` type is a transform, not a
+        // consuming builder, so its param still flags.
+        for src in [
+            "impl X { fn scale(&self, scale: bool) -> Builder { todo!() } }",
+            "impl X { fn scale(&mut self, scale: bool) -> Layer<S, W> { todo!() } }",
+        ] {
+            let diags = run_on(src);
+            assert_eq!(diags.len(), 1, "`{src}` should still flag");
+            assert!(diags[0].message.contains("'scale'"));
+        }
+    }
+
+    #[test]
+    fn still_flags_consuming_builder_when_name_differs_from_method() {
+        // The param name must equal the method name even on the named-generic
+        // return path; a differently-named param consuming `self` and returning a
+        // generic builder type is not the field-setter shape and still flags.
+        let diags =
+            run_on("impl X { pub fn with_layer(self, flatten_event: bool) -> Layer<S, W> { self } }");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("'scale'"));
+        assert!(diags[0].message.contains("'flatten_event'"));
     }
 
     #[test]
