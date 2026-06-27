@@ -55,6 +55,18 @@ fn normalize_body(text: &str) -> String {
         .join("\n")
 }
 
+/// Count the body's lines that carry actual code, ignoring blank lines and
+/// own-line `//` comments. The trivial-body gate (`> 3`) is calibrated against
+/// brace-inclusive code lines so that a single-expression stub (`{ false }`,
+/// `{ 1 }`) stays below it; counting comment-only lines toward the total would
+/// let a `// ...`-padded stub cross the threshold and read as a duplicate.
+fn body_code_lines(text: &str) -> usize {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .count()
+}
+
 /// Collapse all whitespace (including newlines) into single spaces so that a
 /// formatting-only difference in a signature fragment doesn't read as a real
 /// signature difference.
@@ -234,8 +246,10 @@ fn collect_functions(
         "function_item" => {
             if let Some((name, line, body)) = extract_function_info(node, source) {
                 let normalized = normalize_body(&body);
-                // Only flag functions with >3 lines to avoid trivial matches.
-                if body.lines().count() > 3 {
+                // Only flag functions whose body has >3 code lines to avoid
+                // trivial matches; comment-only and blank lines don't count, so
+                // a comment-padded single-expression stub stays below the gate.
+                if body_code_lines(&body) > 3 {
                     functions.push(CollectedFn {
                         name,
                         line,
@@ -1200,5 +1214,54 @@ fn adds_zero(a: i32, b: i32) -> i32 {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_comment_padded_constant_stub_pair() {
+        // Issue #6303: tokio-rs/mio's `is_aio`/`is_lio` platform stubs each have
+        // a body that is the single constant `false`, padded with a
+        // `// Not supported.` comment. The comment line pushes the raw body to
+        // 4 lines and across the `> 3` trivial-body gate, but the
+        // comment-stripped body is a single expression, so the pair is a trivial
+        // stub match and must not be flagged.
+        let src = r#"
+pub(crate) fn is_aio(_: &Event) -> bool {
+    // Not supported.
+    false
+}
+
+pub(crate) fn is_lio(_: &Event) -> bool {
+    // Not supported.
+    false
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_comment_padded_multi_line_duplicate_body() {
+        // Negative-space guard for #6303: comment-only lines are discounted only
+        // for the line-count gate, not for body identity. Two functions with 4+
+        // identical CODE lines are genuine duplication and must still be flagged
+        // even when comments pad the body.
+        let src = r#"
+fn foo(x: i32) -> i32 {
+    // compute
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+
+fn bar(x: i32) -> i32 {
+    // compute
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
     }
 }
