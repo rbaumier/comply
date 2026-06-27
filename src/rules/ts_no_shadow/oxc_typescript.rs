@@ -97,6 +97,16 @@ impl OxcCheck for Check {
                 if is_named_fn_expr_self_reference(nodes, decl_node, name) {
                     continue;
                 }
+                // The tree-shakeable `@__PURE__` class idiom declares a class
+                // inside an arrow-function IIFE and names it after the `const`
+                // the IIFE initializes (`const H3 = (() => { class H3 extends
+                // H3Core {} return H3; })()`). The matching inner name only gives
+                // the class a stable identity in stack traces; the class
+                // declaration is scoped to the IIFE body, so it shadows nothing
+                // observable to outside callers, which see only the `const`.
+                if is_class_decl_iife_self_reference(nodes, decl_node, name) {
+                    continue;
+                }
                 // The UMD / module-factory idiom passes an outer binding into an
                 // immediately-invoked function expression whose parameter
                 // deliberately re-binds the same name to create a local alias
@@ -188,6 +198,69 @@ fn is_named_fn_expr_self_reference(nodes: &AstNodes, decl: NodeId, symbol_name: 
             BindingPattern::BindingIdentifier(id) => id.name.as_str() == symbol_name,
             _ => false,
         })
+}
+
+/// True when `decl` is a *class declaration* whose own name (`symbol_name`)
+/// matches the `const`/`let`/`var` declarator that an enclosing arrow-function
+/// IIFE initializes — the tree-shakeable `@__PURE__` class idiom `const H3 =
+/// (() => { class H3 extends H3Core {} return H3; })()`.
+///
+/// The discriminator is structural: the class sits directly in an arrow body
+/// (`Class → FunctionBody → ArrowFunctionExpression`), that arrow is the callee
+/// of the call invoking it in place (`ParenthesizedExpression` wrappers are
+/// transparent), and the call is the initializer of a declarator bound to the
+/// same name. The inner class name being identical to the IIFE-assigned const
+/// name is the self-reference signal: the class binding is confined to the IIFE
+/// scope and cannot shadow outward. A class assigned to a *differently* named
+/// const, or one not inside such an IIFE, has no self-reference and still flags.
+fn is_class_decl_iife_self_reference(nodes: &AstNodes, decl: NodeId, symbol_name: &str) -> bool {
+    use oxc_ast::ast::Expression;
+
+    let AstKind::Class(cls) = nodes.kind(decl) else {
+        return false;
+    };
+    if cls.id.as_ref().is_none_or(|id| id.name.as_str() != symbol_name) {
+        return false;
+    }
+
+    // The class must be a direct statement of an arrow-function body.
+    if !matches!(nodes.parent_kind(decl), AstKind::FunctionBody(_)) {
+        return false;
+    }
+    let body_id = nodes.parent_id(decl);
+    let AstKind::ArrowFunctionExpression(arrow) = nodes.parent_kind(body_id) else {
+        return false;
+    };
+    let arrow_span = arrow.span;
+
+    // The arrow must be the callee of the `CallExpression` invoking it in place;
+    // parenthesized wrappers around the arrow are transparent.
+    let mut current = nodes.parent_id(body_id);
+    while matches!(nodes.parent_kind(current), AstKind::ParenthesizedExpression(_)) {
+        current = nodes.parent_id(current);
+    }
+    let AstKind::CallExpression(call) = nodes.parent_kind(current) else {
+        return false;
+    };
+    let callee_span = match crate::oxc_helpers::peel_parens(&call.callee) {
+        Expression::ArrowFunctionExpression(a) => a.span,
+        _ => return false,
+    };
+    if callee_span != arrow_span {
+        return false;
+    }
+
+    // The call must initialize a declarator bound to the same name; parenthesized
+    // wrappers around the call are transparent.
+    let mut up = nodes.parent_id(current);
+    while matches!(nodes.parent_kind(up), AstKind::ParenthesizedExpression(_)) {
+        up = nodes.parent_id(up);
+    }
+    matches!(
+        nodes.parent_kind(up),
+        AstKind::VariableDeclarator(declarator)
+            if matches!(&declarator.id, BindingPattern::BindingIdentifier(id) if id.name.as_str() == symbol_name)
+    )
 }
 
 /// True when `decl` is a parameter of an immediately-invoked function expression
@@ -846,6 +919,42 @@ mod tests {
             "const int = 1;\n\
              function build({ int }: { int: number }) { return int; }",
         );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_pure_iife_class_declaration_matching_outer_const() {
+        // Issue #6395 reproduction: the tree-shakeable `@__PURE__` class idiom
+        // names the inner class after the const the IIFE initializes so stack
+        // traces show the right name; the inner class is scoped to the IIFE.
+        let d = run_on(
+            "export const H3 = /* @__PURE__ */ (() => {\n\
+             class H3 extends H3Core {\n\
+             constructor() { super(); }\n\
+             }\n\
+             return H3;\n\
+             })();",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_iife_class_declaration_matching_unrelated_outer_binding() {
+        // Negative space: the exemption keys off the inner class name matching
+        // the IIFE-assigned const. A class whose name matches a *different* outer
+        // binding (the const is `H3`, the shadow is `Other`) is a real shadow.
+        let d = run_on(
+            "class Other {}\n\
+             const H3 = (() => { class Other extends Base {} return Other; })();",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_class_declaration_shadowing_outer_class_not_via_iife() {
+        // Negative space: a class shadowing an outer same-named binding that is
+        // not inside an IIFE-assigned-to-matching-const is a genuine shadow.
+        let d = run_on("class H3 {} function f() { class H3 {} return H3; }");
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
 }
