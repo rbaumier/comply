@@ -122,7 +122,7 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
 /// True when the base URL of `new URL(...)` is structurally guaranteed to be a
 /// valid absolute URL, so the constructor cannot throw on the base.
 ///
-/// Two trusted base shapes:
+/// Four trusted base shapes:
 /// * `import.meta.url` — the URL the engine assigns when it loads the module.
 ///   Covers both ESM idioms: single-arg `new URL(import.meta.url)` (the sole
 ///   argument is the base) and two-arg `new URL(<relative>, import.meta.url)`
@@ -134,9 +134,17 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
 ///   `arg_is_trusted`. The scheme must be *leading* (an anchored RFC-3986
 ///   scheme), not an incidental `://` somewhere in a scheme-less path/query
 ///   (`'/redirect?to=http://x'`), which is still a relative base and throws.
+/// * a `Location.origin` getter — `location.origin`, or `.location.origin` on a
+///   standard host object (`window`/`globalThis`/`document`/`self`). The DOM
+///   spec defines it to always return a valid `scheme://host:port` absolute-URL
+///   origin. Anchored to the same `Location` receiver shape as `Location.href`
+///   so an arbitrary `obj.origin` (which may hold a non-URL value) still flags.
+/// * a `Node.baseURI` getter — a `.baseURI` read on any receiver. The DOM spec
+///   defines `Node.baseURI` to always return a valid absolute URL; this mirrors
+///   the any-receiver property-shape trust of the template `.protocol` origin.
 ///
-/// A dynamic base (any other second argument — a non-`import.meta.url`,
-/// non-string-literal expression) still flags.
+/// A dynamic base (any other second argument — e.g. a plain variable or a
+/// non-trusted member access) still flags.
 fn base_is_trusted_absolute_url(new_expr: &oxc_ast::ast::NewExpression) -> bool {
     use oxc_ast::ast::Expression;
     let base = match new_expr.arguments.len() {
@@ -155,8 +163,21 @@ fn base_is_trusted_absolute_url(new_expr: &oxc_ast::ast::NewExpression) -> bool 
     // against it cannot throw on the base. The same anchored-scheme test the
     // template-origin path uses, so an incidental `://` inside a scheme-less
     // path/query does not over-trust.
-    matches!(base, Expression::StringLiteral(lit)
+    if matches!(base, Expression::StringLiteral(lit)
         if leading_scheme_authority_prefix(lit.value.as_str()).is_some())
+    {
+        return true;
+    }
+    // A `Location.origin` getter always returns a valid absolute-URL origin, and
+    // a `Node.baseURI` getter always returns a valid absolute URL (both DOM
+    // spec), so resolving a relative reference against either cannot throw on the
+    // base. `.origin` is restricted to recognized `Location` receivers; `.baseURI`
+    // is trusted on any receiver, like the `.protocol` origin shape.
+    if let Expression::StaticMemberExpression(member) = base {
+        return (member.property.name == "origin" && object_is_location(&member.object))
+            || member.property.name == "baseURI";
+    }
+    false
 }
 
 /// True for the `import.meta.url` member read: a `.url` access whose object is
@@ -192,15 +213,20 @@ fn is_request_url_access(member: &oxc_ast::ast::StaticMemberExpression) -> bool 
 /// The browser only ever assigns `Location.href` a well-formed absolute URL, so
 /// `new URL(location.href)` cannot throw. An arbitrary `foo.href` still flags.
 fn is_location_href_access(member: &oxc_ast::ast::StaticMemberExpression) -> bool {
+    member.property.name == "href" && object_is_location(&member.object)
+}
+
+/// True for an expression denoting a browser `Location` object — the bare
+/// `location` global, or a `.location` read on a standard host object
+/// (`window`/`globalThis`/`document`/`self`). Shared by the `Location.href` and
+/// `Location.origin` trusts so both anchor on the same receiver shape.
+fn object_is_location(object: &oxc_ast::ast::Expression) -> bool {
     use oxc_ast::ast::Expression;
-    if member.property.name != "href" {
-        return false;
-    }
-    match &member.object {
-        // `location.href`
+    match object {
+        // `location`
         Expression::Identifier(id) => id.name == "location",
-        // `window.location.href` / `globalThis.location.href`
-        // / `document.location.href` / `self.location.href`
+        // `window.location` / `globalThis.location` / `document.location`
+        // / `self.location`
         Expression::StaticMemberExpression(inner) => {
             inner.property.name == "location"
                 && matches!(&inner.object, Expression::Identifier(host)
@@ -839,6 +865,34 @@ mod tests {
     #[test]
     fn still_flags_variable_base() {
         assert_eq!(run_on("const u = new URL(x, someVariable);").len(), 1);
+    }
+
+    // Regression for #6217: `Location.origin` is a DOM getter that always returns
+    // a valid `scheme://host:port` absolute-URL origin, so resolving a relative
+    // reference against it cannot throw on the base. Covers the bare `location`
+    // global and the standard host-object receivers.
+    #[test]
+    fn allows_location_origin_base() {
+        assert!(run_on("const u = new URL(href, location.origin);").is_empty());
+        assert!(run_on("const u = new URL(x, window.location.origin);").is_empty());
+        assert!(run_on("const u = new URL(x, globalThis.location.origin);").is_empty());
+        assert!(run_on("const u = new URL(x, document.location.origin);").is_empty());
+        assert!(run_on("const u = new URL(x, self.location.origin);").is_empty());
+    }
+
+    // Regression for #6217: `Node.baseURI` is a DOM getter spec-defined to always
+    // return a valid absolute URL on any receiver, so it is a safe base.
+    #[test]
+    fn allows_base_uri_base() {
+        assert!(run_on("const u = new URL(x, link.baseURI);").is_empty());
+        assert!(run_on("const u = new URL(x, element.baseURI);").is_empty());
+    }
+
+    // `.origin` on a receiver that is not a recognized `Location` object may hold
+    // any value (not necessarily a valid URL), so the base can still throw.
+    #[test]
+    fn still_flags_origin_on_non_location_object() {
+        assert_eq!(run_on("const u = new URL(x, someArbitraryObj.origin);").len(), 1);
     }
 
     #[test]
