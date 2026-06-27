@@ -127,6 +127,12 @@ pub(crate) fn mentions_history(raw: &str) -> bool {
             let char_pos = lower[..pos].chars().count();
             let raw_subject: String = raw.chars().take(char_pos).collect();
             if subject_is_code_artifact(&lower[..pos], &raw_subject) {
+                // "<artifact> was renamed in Node 23.3.0" documents an external
+                // API change pinned to a release, not this project's own history.
+                // The version-number token after an "in" clause is the anchor.
+                if documents_version_anchored_change(&lower[pos + phrase.len()..]) {
+                    continue;
+                }
                 return true;
             }
         }
@@ -204,6 +210,59 @@ fn subject_is_code_artifact(lower: &str, raw: &str) -> bool {
         || raw
             .split(|c: char| c.is_whitespace())
             .any(has_interior_uppercase)
+}
+
+/// True when the text following an ambiguous verb anchors the change to a
+/// released version: an `in` clause whose words lead to a semver-shaped token
+/// (`in Node 23.3.0`, `in v22.12.0`, `in 2.0.0`). Such a comment documents an
+/// external API change tied to a release, not this project's own code history.
+///
+/// Keyed on the version-number token *shape* (digits-dot-digits), never on the
+/// surrounding words, so it generalizes across libraries and version schemes.
+fn documents_version_anchored_change(suffix: &str) -> bool {
+    // The version-anchoring clause is "in [<runtime/product name>] <version>",
+    // so the version sits within a couple of words of the "in". Bounding the
+    // skip keeps an unrelated version further down the comment ("renamed in the
+    // migration to v2.0 schema") from suppressing genuine code history.
+    const MAX_WORDS_BEFORE_VERSION: usize = 2;
+    let tokens: Vec<&str> = suffix.split_whitespace().collect();
+    for (i, token) in tokens.iter().enumerate() {
+        if *token != "in" {
+            continue;
+        }
+        for following in tokens[i + 1..].iter().take(MAX_WORDS_BEFORE_VERSION + 1) {
+            if is_version_token(following) {
+                return true;
+            }
+            if !is_word_token(following) {
+                break;
+            }
+        }
+    }
+    false
+}
+
+/// True when `token` is semver-shaped: an optional `v` prefix then two or more
+/// dot-separated numeric components (`23.3.0`, `v22.12.0`, `2.0`). Surrounding
+/// punctuation (`(2.0.0)`, `23.3.0,`) is ignored.
+fn is_version_token(token: &str) -> bool {
+    let trimmed = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    let digits = trimmed.strip_prefix(['v', 'V']).unwrap_or(trimmed);
+    let mut parts = digits.split('.');
+    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    numeric(major) && numeric(minor) && parts.all(numeric)
+}
+
+/// True when `token` is a plain alphabetic/alphanumeric word once edge
+/// punctuation is stripped (`Node`, `v22`), i.e. filler between `in` and the
+/// version token. A token carrying interior punctuation (a version, a path) is
+/// not a word and stops the scan.
+fn is_word_token(token: &str) -> bool {
+    let trimmed = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    !trimmed.is_empty() && trimmed.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// True when a token contains an uppercase letter after its first character,
