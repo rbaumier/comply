@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, ObjectPropertyKind, TSType};
+use oxc_ast::ast::{Expression, ObjectExpression, ObjectPropertyKind, PropertyKey, TSType};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -57,6 +57,25 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A non-literal computed key (`{ [dynamicVar]: v }`) gives the object an
+        // implicit string index signature; `satisfies T` rejects that signature
+        // when `T` has no index signature, so the `as T` cast cannot be
+        // mechanically replaced. An array inherits this from any direct
+        // object-literal element (`[{ [k]: v }] as T[]`).
+        let has_non_literal_computed = match &as_expr.expression {
+            Expression::ObjectExpression(obj) => has_non_literal_computed_key(obj),
+            Expression::ArrayExpression(arr) => arr.elements.iter().any(|el| {
+                matches!(
+                    el.as_expression(),
+                    Some(Expression::ObjectExpression(obj)) if has_non_literal_computed_key(obj)
+                )
+            }),
+            _ => false,
+        };
+        if has_non_literal_computed {
+            return;
+        }
+
         // `satisfies unknown` / `satisfies any` are vacuously true — every
         // value satisfies `unknown`/`any`, so the suggestion validates
         // nothing. `literal as unknown` / `literal as any` is a deliberate
@@ -105,6 +124,19 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when the object literal has a computed property key that is not a
+/// string/number literal (`{ [expr]: v }` where `expr` is an identifier, member
+/// expression, substituting template literal, …). Such a key makes TypeScript
+/// infer an implicit string index signature, which `satisfies T` rejects against
+/// a target lacking an index signature. A literal computed key (`{ ['foo']: 1 }`,
+/// `{ [0]: 1 }`) names a known property and is unaffected.
+fn has_non_literal_computed_key(obj: &ObjectExpression<'_>) -> bool {
+    obj.properties.iter().any(|prop| {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else { return false };
+        p.computed && !matches!(p.key, PropertyKey::StringLiteral(_) | PropertyKey::NumericLiteral(_))
+    })
 }
 
 #[cfg(test)]
@@ -290,5 +322,54 @@ const s = {
             crate::rules::test_helpers::run_rule(&Check, "const s = { color: 'red' } as React.CSSProperties;", "t.tsx").len(),
             1
         );
+    }
+
+    // Regression test for #6280: a non-literal computed key (`[attr]`) gives the
+    // object an implicit string index signature; `satisfies T` rejects it when
+    // `T` (a named interface / discriminated union) has no index signature, so
+    // the `as T` cast is irreplaceable. Object case.
+    #[test]
+    fn allows_object_with_non_literal_computed_key() {
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "const r = { [metaKey]: `${prefix}:${type}`, content: value.url } as MetaGeneric;",
+                "t.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    // #6280: array of object literals with a non-literal computed key —
+    // `[{ [attr]: v, ...rest }] as T[]` must not be flagged.
+    #[test]
+    fn allows_array_of_objects_with_non_literal_computed_key() {
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "const a = [{ [attr]: fixedKey, ...sanitizedValue }] as UnheadMeta[];",
+                "t.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    // #6280 boundary: a literal computed key (`['lit']`, `[0]`) names a known
+    // property — no implicit index signature, `satisfies` works — so the cast
+    // must still be flagged.
+    #[test]
+    fn still_flags_literal_computed_key() {
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const x = { ['lit']: 1 } as T;", "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_numeric_computed_key() {
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const x = { [0]: 1 } as T;", "t.ts").len(), 1);
+    }
+
+    // #6280 boundary: an all-static-key object literal stays in scope.
+    #[test]
+    fn still_flags_all_static_keys() {
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const x = { a: 1, b: 2 } as T;", "t.ts").len(), 1);
     }
 }
