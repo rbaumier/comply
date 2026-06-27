@@ -84,6 +84,25 @@ fn is_message_property_value(line: &str, quote_pos: usize) -> bool {
         .any(|m| m.eq_ignore_ascii_case(prop))
 }
 
+/// Returns true if the string opening at `quote_pos` is the argument of a nested
+/// call sitting between the sign/verify open-paren (`args_start`) and the string,
+/// e.g. `ecc.sign(h('5e9f…'), …)`. There the hex is decoded to bytes by `h(…)` —
+/// it is not a bare credential string passed directly to the sign/verify call, so
+/// it is a converted value (test-vector message hash / key material), not a
+/// hardcoded secret. `args_start` is the byte index just after the `.sign(` /
+/// `.verify(` token; a real positional secret (`jwt.sign(payload, 'secret')`) has
+/// no identifier-opened `(` between that point and its opening quote.
+fn is_nested_call_value(line: &str, args_start: usize, quote_pos: usize) -> bool {
+    let before = line[args_start..quote_pos].trim_end();
+    let Some(prefix) = before.strip_suffix('(') else {
+        return false;
+    };
+    prefix
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
 fn has_hardcoded_secret(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
 
@@ -97,6 +116,7 @@ fn has_hardcoded_secret(line: &str) -> bool {
                 && looks_like_secret(secret)
                 && !is_web_crypto_algorithm(secret)
                 && !is_message_property_value(line, quote_pos)
+                && !is_nested_call_value(line, abs, quote_pos)
             {
                 return true;
             }
@@ -205,6 +225,24 @@ mod tests {
             run("const t = jwt.sign(payload, 'mySuperSecretKey123', { algorithm: 'HS256' });")
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn allows_hex_decoded_test_vector_in_ecc_sign() {
+        // bitcoinjs/bip32 testecc.ts: the hex is decoded to bytes by `h(...)`, a
+        // message hash / key in an ECC test vector, not a bare credential string.
+        assert!(
+            run("assert(tools.compare(ecc.sign(h('5e9f0a0d593efdcf78ac923bc3313e4e7d408d574354ee2b3288c0da9fbba6ed'), h('fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140')), h('54c4a33c6423d689378f160a7ff8b61330444abb58fb470f96ea16d99d4a2fed07082304410efa6b2943111b6a4e0aaa7b7db55a07e9861d1fb3cb1f421044a5')) === 0);")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_hex_decoded_test_vector_in_ecc_verify() {
+        assert!(
+            run("assert(ecc.verify(h('5e9f0a0d593efdcf78ac923bc3313e4e7d408d574354ee2b3288c0da9fbba6ed'), h('0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'), h('54c4a33c6423d689378f160a7ff8b61330444abb58fb470f96ea16d99d4a2fed07082304410efa6b2943111b6a4e0aaa7b7db55a07e9861d1fb3cb1f421044a5')));")
+                .is_empty()
         );
     }
 
