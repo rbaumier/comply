@@ -70,6 +70,16 @@ fn is_arithmetic_or_bitwise_consumer<'a>(
                     .any(|arg| arg.span() == current_span);
                 return is_argument && !is_string_from_char_code(parent_call);
             }
+            // `array[s.charCodeAt(i)]` — used as the computed array index. The
+            // code unit is consumed as a plain integer key, identical to
+            // arithmetic; `codePointAt()` would return `number | undefined` and
+            // `array[undefined]` silently changes runtime behavior without
+            // fixing any Unicode issue. Exempt only the index position, not the
+            // object (`s.charCodeAt(i)[0]`, where the call is indexed into).
+            AstKind::ComputedMemberExpression(member) => {
+                let current_span = semantic.nodes().get_node(current).kind().span();
+                return member.expression.span() == current_span;
+            }
             _ => return false,
         }
     }
@@ -223,6 +233,22 @@ mod tests {
     fn ignores_function_argument_with_offset_index() {
         let code = "const n2 = asciiToBase16(hex.charCodeAt(hi + 1));";
         assert!(run(code).is_empty(), "{:?}", run(code));
+    }
+
+    #[test]
+    fn ignores_computed_array_index() {
+        // undici lib/core/util.js — isValidHTTPToken: charCodeAt() keys a lookup
+        // table; the code unit is consumed as a plain integer index.
+        let code = "if (validTokenChars[characters.charCodeAt(i)] !== 1) {}";
+        assert!(run(code).is_empty(), "{:?}", run(code));
+    }
+
+    #[test]
+    fn flags_char_code_at_indexed_into() {
+        // `s.charCodeAt(i)[0]` — the call is the indexed object, not the index;
+        // the span guard must not exempt it.
+        let code = "const x = s.charCodeAt(i)[0];";
+        assert_eq!(run(code).len(), 1, "{:?}", run(code));
     }
 
     // ---- genuine text processing -> MUST still flag ----
