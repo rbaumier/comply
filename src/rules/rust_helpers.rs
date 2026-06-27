@@ -2607,8 +2607,9 @@ fn expr_is_ascii_check(expr: Node, operand: &str, source: &[u8]) -> bool {
 }
 
 /// True if `cast` (a `type_cast_expression`) narrows an identifier whose value
-/// an enclosing `if`/`else if` guard proves fits the unsigned target type, so
-/// the `as`-cast cannot overflow — e.g. `if val < 256 { val as u8 }`.
+/// an enclosing `if` guard or a preceding early-exit guard proves fits the
+/// unsigned target type, so the `as`-cast cannot overflow — e.g.
+/// `if val < 256 { val as u8 }` or `if val > 100 { return Err(…) } else { val as u8 }`.
 ///
 /// This is the canonical "pick the smallest representation that fits" encoder
 /// pattern: each branch is entered only when the value is within the target
@@ -2623,14 +2624,26 @@ fn expr_is_ascii_check(expr: Node, operand: &str, source: &[u8]) -> bool {
 ///   which proves the value is non-negative (lower bound 0). An unresolved or
 ///   signed source is not exempted: an upper-bound guard alone cannot rule out a
 ///   negative value wrapping on the cast;
-/// - an enclosing `if_expression`, reached through its `consequence` (the
-///   `then` block, never the `else` branch), has a condition that upper-bounds
-///   the SAME identifier against an integer literal `N` proving the value fits:
-///   `val < N` with `N <= 2^bits`, or `val <= N` with `N <= 2^bits - 1` (the
-///   symmetric `N > val` / `N >= val` forms count too);
+/// - the value is proven to fit by one of three dominating bounds, each on the
+///   SAME identifier against an integer literal `N`:
+///   - an enclosing `if_expression` reached through its `consequence` whose
+///     condition directly upper-bounds the value — `val < N` with `N <= 2^bits`,
+///     or `val <= N` with `N <= 2^bits - 1` (the symmetric `N > val` / `N >= val`
+///     forms count too);
+///   - an enclosing `if_expression` reached through its `alternative` (the `else`
+///     / `else if` branch), which is entered only when the condition is false, so
+///     the condition's negation upper-bounds the value — `val > N` (proves
+///     `val <= N`, fits when `N <= 2^bits - 1`) or `val >= N` (proves
+///     `val <= N - 1`, fits when `N - 1 <= 2^bits - 1`), and the mirrored
+///     `N < val` / `N <= val`;
+///   - a preceding early-exit guard `if val > N { … }` in the same block, with no
+///     `else`, whose `then` branch unconditionally diverges (`return` / `break` /
+///     `continue` / `panic!` / `unreachable!` / `todo!` / `unimplemented!`), so the
+///     cast is reached only when the condition is false (`val <= N`), with the same
+///     fit requirement as the `else` form;
 /// - the identifier is not re-bound (a shadowing `let val`) or reassigned
-///   (`val = …` / `val += …`) inside the branch before the cast, which would
-///   break the link between the guard's bound and the value the cast reads.
+///   (`val = …` / `val += …`) between the guard and the cast, which would break
+///   the link between the guard's bound and the value the cast reads.
 ///
 /// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
 /// otherwise flag the narrowing because the operand's bounded range is not
@@ -2662,6 +2675,7 @@ pub fn cast_operand_is_range_guarded(cast: Node, source: &[u8]) -> bool {
         return false;
     }
     enclosing_upper_bound_fits(cast, name, target_bits, source)
+        || preceding_exit_guard_upper_bounds(cast, name, target_bits, source)
 }
 
 /// True if `cast` (a `type_cast_expression`) casts a signed integer to an
@@ -3133,15 +3147,19 @@ fn unsigned_int_bits(type_text: &str) -> Option<u16> {
     }
 }
 
-/// True if some enclosing `if_expression`, entered via its `consequence`,
-/// upper-bounds `name` against an integer literal that proves a value fits an
-/// unsigned target of `target_bits` width.
+/// True if some enclosing `if_expression` bounds `name` against an integer
+/// literal that proves a value fits an unsigned target of `target_bits` width,
+/// whether the cast is reached through the `consequence` (the condition directly
+/// upper-bounds the value) or the `alternative` (the `else` / `else if` branch,
+/// where the condition's negation upper-bounds it).
 ///
-/// Ascends via `parent()`. Each step records whether the child we came from is
-/// the `consequence` of an enclosing `if_expression`; only then is that `if`'s
-/// condition a guard that dominates the cast (the `else` branch is the negation
-/// of the condition, so a guard reached through `alternative` does not apply).
-/// The walk stops at the enclosing `function_item` / `closure_expression`
+/// Ascends via `parent()`. At each enclosing `if_expression`, the child we came
+/// from is either its `consequence` — then the condition itself must upper-bound
+/// `name` (`condition_upper_bounds`) — or its `alternative` — then the
+/// condition's negation must upper-bound `name` (`negated_condition_upper_bounds`),
+/// since the `else` branch is entered exactly when the condition is false. Either
+/// way the bound holds only while `name` is unchanged between the branch entry and
+/// the cast. The walk stops at the enclosing `function_item` / `closure_expression`
 /// boundary.
 fn enclosing_upper_bound_fits(cast: Node, name: &str, target_bits: u16, source: &[u8]) -> bool {
     let mut child = cast;
@@ -3149,16 +3167,23 @@ fn enclosing_upper_bound_fits(cast: Node, name: &str, target_bits: u16, source: 
         match parent.kind() {
             "function_item" | "closure_expression" => return false,
             "if_expression" => {
-                if parent.child_by_field_name("consequence") == Some(child)
-                    && let Some(condition) = parent.child_by_field_name("condition")
-                    && condition_upper_bounds(condition, name, target_bits, source)
-                    // The guard proves the value of `name` only as long as it is
-                    // unchanged between the branch entry and the cast. A
-                    // re-binding (a shadowing `let name`) or a reassignment
-                    // (`name = …` / `name += …`) inside the branch before the
-                    // cast invalidates the bound.
-                    && !name_rebound_before_cast(child, cast, name, source)
-                {
+                let condition = parent.child_by_field_name("condition");
+                // Through the `consequence` the condition directly upper-bounds
+                // the value; through the `alternative` (the `else` branch, reached
+                // only when the condition is false) its negation does.
+                let bounded = if parent.child_by_field_name("consequence") == Some(child) {
+                    condition.is_some_and(|c| condition_upper_bounds(c, name, target_bits, source))
+                } else if parent.child_by_field_name("alternative") == Some(child) {
+                    condition
+                        .is_some_and(|c| negated_condition_upper_bounds(c, name, target_bits, source))
+                } else {
+                    false
+                };
+                // The guard proves the value of `name` only as long as it is
+                // unchanged between the branch entry and the cast. A re-binding (a
+                // shadowing `let name`) or a reassignment (`name = …` / `name += …`)
+                // inside the branch before the cast invalidates the bound.
+                if bounded && !name_rebound_before_cast(child, cast, name, source) {
                     return true;
                 }
             }
@@ -3167,6 +3192,101 @@ fn enclosing_upper_bound_fits(cast: Node, name: &str, target_bits: u16, source: 
         child = parent;
     }
     false
+}
+
+/// True if a preceding early-exit guard in the cast's enclosing `block` proves the
+/// operand `name` fits the unsigned target of `target_bits` width: a statement
+/// `if name > N { <diverges> }` (no `else`) whose `then` branch unconditionally
+/// diverges, so control reaches the cast only when the guard's condition is false
+/// (`name <= N`).
+///
+/// The guard's condition must lower-bound `name` against an integer literal whose
+/// negation fits the target (`negated_condition_upper_bounds`), the `then` branch
+/// must unconditionally diverge (`block_diverges`), and `name` must not be re-bound
+/// between the guard and the cast — otherwise the bound no longer holds at the cast
+/// site. Guards are scanned nearest-last: a closer guard whose window is clean
+/// still applies even if an earlier one was invalidated by a re-binding.
+fn preceding_exit_guard_upper_bounds(
+    cast: Node,
+    name: &str,
+    target_bits: u16,
+    source: &[u8],
+) -> bool {
+    let Some((block, cast_stmt)) = enclosing_block_statement(cast) else {
+        return false;
+    };
+    let cast_start = cast.start_byte();
+    let mut cursor = block.walk();
+    for stmt in block.named_children(&mut cursor) {
+        if stmt.id() == cast_stmt.id() {
+            break;
+        }
+        let Some(if_expr) = exit_guard_if(stmt) else {
+            continue;
+        };
+        let bounds = if_expr
+            .child_by_field_name("condition")
+            .is_some_and(|c| negated_condition_upper_bounds(c, name, target_bits, source));
+        if !bounds {
+            continue;
+        }
+        let diverges = if_expr
+            .child_by_field_name("consequence")
+            .is_some_and(|c| block_diverges(c, source));
+        if !diverges {
+            continue;
+        }
+        if !name_rebound_in_range(block, if_expr.end_byte(), cast_start, name, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// If `stmt` is (or wraps) an `if_expression` with no `else` branch — a pure
+/// early-exit guard — return that `if_expression`. An `if`/`else` is rejected: a
+/// value reaching a statement after the `if` would then also flow through the
+/// `else`, whose effects this analysis does not track.
+fn exit_guard_if(stmt: Node) -> Option<Node> {
+    let if_expr = match stmt.kind() {
+        "if_expression" => stmt,
+        "expression_statement" => stmt.named_child(0).filter(|c| c.kind() == "if_expression")?,
+        _ => return None,
+    };
+    if if_expr.child_by_field_name("alternative").is_some() {
+        return None;
+    }
+    Some(if_expr)
+}
+
+/// True if `block` (a `block` node) unconditionally diverges — its final element
+/// is a `return` / `break` / `continue` expression or a diverging macro
+/// (`panic!` / `unreachable!` / `todo!` / `unimplemented!`), so control never falls
+/// through to the statement following the block.
+fn block_diverges(block: Node, source: &[u8]) -> bool {
+    if block.kind() != "block" {
+        return false;
+    }
+    let mut cursor = block.walk();
+    block
+        .named_children(&mut cursor)
+        .last()
+        .is_some_and(|last| node_diverges(last, source))
+}
+
+/// True if `node` is a diverging tail — a `return` / `break` / `continue`
+/// expression, a diverging macro invocation, or an `expression_statement` wrapping
+/// one of those.
+fn node_diverges(node: Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "return_expression" | "break_expression" | "continue_expression" => true,
+        "expression_statement" => node.named_child(0).is_some_and(|c| node_diverges(c, source)),
+        "macro_invocation" => node
+            .child_by_field_name("macro")
+            .and_then(|m| m.utf8_text(source).ok())
+            .is_some_and(|n| matches!(n, "panic" | "unreachable" | "todo" | "unimplemented")),
+        _ => false,
+    }
 }
 
 /// True if `name` is re-bound or reassigned anywhere in `consequence` *before*
@@ -3251,6 +3371,70 @@ fn condition_upper_bounds(condition: Node, name: &str, target_bits: u16, source:
         // `name < N` proves `name <= N - 1`; safe when `N - 1 <= target_max`.
         // `checked_sub` rejects `name < 0` (an unsatisfiable guard) without
         // adding `1` to `target_max`, which would overflow for a u128 target.
+        bound.checked_sub(1).is_some_and(|max_value| max_value <= target_max)
+    }
+}
+
+/// True if the NEGATION of `condition` upper-bounds the identifier `name` against
+/// an integer literal proving a value fits an unsigned target of `target_bits`
+/// width — the bound that holds in the `else` / `alternative` branch of
+/// `if <condition> { … }`, where the condition is known to be false.
+///
+/// Recognized shapes (the literal *lower*-bounds `name` in the condition, so its
+/// negation is an *upper* bound in the else branch):
+/// - `name > N` (negates to `name <= N`) / `name >= N` (negates to `name < N`);
+/// - the mirrored `N < name` / `N <= name`.
+///
+/// `name <= N` fits when `N <= 2^bits - 1`; `name < N` proves `name <= N - 1`,
+/// which fits when `N - 1 <= 2^bits - 1`. A literal that does not parse, or a
+/// bound too large for the target, returns false.
+fn negated_condition_upper_bounds(
+    condition: Node,
+    name: &str,
+    target_bits: u16,
+    source: &[u8],
+) -> bool {
+    if condition.kind() != "binary_expression" {
+        return false;
+    }
+    let (Some(left), Some(op), Some(right)) = (
+        condition.child_by_field_name("left"),
+        condition
+            .child_by_field_name("operator")
+            .and_then(|o| o.utf8_text(source).ok()),
+        condition.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+
+    // The condition lower-bounds `name`; its negation upper-bounds it. `>` negates
+    // to an inclusive `<= N` bound, `>=` to an exclusive `< N` bound. `>` / `>=`
+    // carry the identifier on the left; the mirrored `<` / `<=` carry it on the
+    // right (`N < name` ≡ `name > N`).
+    let (lit_node, inclusive) = match op {
+        ">" => (ident_then_literal(left, right, name, source), true),
+        ">=" => (ident_then_literal(left, right, name, source), false),
+        "<" => (ident_then_literal(right, left, name, source), true),
+        "<=" => (ident_then_literal(right, left, name, source), false),
+        _ => return false,
+    };
+    let Some(bound) = lit_node.and_then(|n| parse_int_literal(n, source)) else {
+        return false;
+    };
+    // Max value the target can hold (2^bits - 1), computed without overflowing the
+    // `1u128 << 128` shift for a u128 target.
+    let target_max: u128 = if target_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << target_bits) - 1
+    };
+    if inclusive {
+        // `name <= N` proves `name <= N`; safe when `N <= target_max`.
+        bound <= target_max
+    } else {
+        // `name < N` proves `name <= N - 1`; safe when `N - 1 <= target_max`.
+        // `checked_sub` rejects an empty (`name < 0`) bound without adding `1` to
+        // `target_max`, which would overflow for a u128 target.
         bound.checked_sub(1).is_some_and(|max_value| max_value <= target_max)
     }
 }
@@ -6597,6 +6781,81 @@ mod tests {
             ("fn w(mut val: u64) -> u8 { if val < 256 { val += 9999; val as u8 } else { 0 } }", false),
             // A write AFTER the cast does not invalidate it.
             ("fn w(mut val: u64) -> u8 { if val < 256 { let r = val as u8; val = 9999; r } else { 0 } }", true),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_range_guarded(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_range_guarded mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_range_guarded_handles_else_and_exit_guard() {
+        let cases = [
+            // --- `else`-branch upper bound (issue #6173) ---
+            // The else is reached only when `value <= 100`, which fits u8.
+            ("fn n(value: u32) -> u8 { if value > 100 { 0 } else { value as u8 } }", true),
+            // `>=` negates to an exclusive `< N` upper bound.
+            ("fn n(value: u32) -> u8 { if value >= 256 { 0 } else { value as u8 } }", true),
+            // Inclusive `>` at exactly T::MAX.
+            ("fn n(value: u32) -> u8 { if value > 255 { 0 } else { value as u8 } }", true),
+            // Mirrored `N < val` / `N <= val` forms.
+            ("fn n(value: u32) -> u8 { if 100 < value { 0 } else { value as u8 } }", true),
+            ("fn n(value: u32) -> u8 { if 256 <= value { 0 } else { value as u8 } }", true),
+            // else-if chain: the outer `value > N` negation reaches the final else.
+            (
+                "fn n(value: u32, f: bool) -> u8 { if value > 100 { 0 } else if f { 1 } else { value as u8 } }",
+                true,
+            ),
+            // Bound too large for the target: the else does not prove a fit.
+            ("fn n(value: u32) -> u8 { if value > 256 { 0 } else { value as u8 } }", false),
+            ("fn n(value: u32) -> u8 { if value >= 257 { 0 } else { value as u8 } }", false),
+            // An upper-bound condition leaves only a LOWER bound in the else.
+            ("fn n(value: u32) -> u8 { if value < 100 { 0 } else { value as u8 } }", false),
+            // else-branch guard on a different variable.
+            (
+                "fn n(value: u32, other: u32) -> u8 { if other > 100 { 0 } else { value as u8 } }",
+                false,
+            ),
+            // Reassignment inside the else before the cast invalidates the bound.
+            (
+                "fn n(mut value: u32) -> u8 { if value > 100 { 0 } else { value = 9999; value as u8 } }",
+                false,
+            ),
+            // Signed source: an upper bound cannot rule out a negative value.
+            ("fn n(value: i32) -> u8 { if value > 100 { 0 } else { value as u8 } }", false),
+
+            // --- preceding early-exit guard (fallthrough) ---
+            ("fn g(value: u32) -> u8 { if value > 100 { return 0; } value as u8 }", true),
+            ("fn g(value: u32) -> u8 { if value > 100 { panic!(\"too big\"); } value as u8 }", true),
+            // Diverging tail without a trailing `;`.
+            ("fn g(value: u32) -> u8 { if value > 100 { unreachable!() } value as u8 }", true),
+            // Non-diverging then-branch: the large value flows through.
+            ("fn g(value: u32) -> u8 { if value > 100 { let _x = 1; } value as u8 }", false),
+            // A guard with an `else` is not a pure early-exit guard.
+            (
+                "fn g(value: u32) -> u8 { if value > 100 { return 0; } else { } value as u8 }",
+                false,
+            ),
+            // Guard on a different variable.
+            (
+                "fn g(value: u32, other: u32) -> u8 { if other > 100 { return 0; } value as u8 }",
+                false,
+            ),
+            // Reassignment between the guard and the cast invalidates the bound.
+            (
+                "fn g(mut value: u32) -> u8 { if value > 100 { return 0; } value = 9999; value as u8 }",
+                false,
+            ),
+            // Bound too large for the target.
+            ("fn g(value: u32) -> u8 { if value > 256 { return 0; } value as u8 }", false),
+            // Signed source.
+            ("fn g(value: i32) -> u8 { if value > 100 { return 0; } value as u8 }", false),
         ];
         for (src, expected) in cases {
             let tree = parse(src);

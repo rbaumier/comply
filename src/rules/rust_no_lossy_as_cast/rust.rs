@@ -1057,6 +1057,23 @@ mod tests {
     }
 
     #[test]
+    fn repro_6173_else_branch_upper_bound_not_flagged() {
+        // `if value > 100 { Err } else { value as u8 }`: the else is reached only
+        // when `value <= 100`, which fits u8.
+        let src =
+            "fn new(value: u32) -> Result<u8, ()> { if value > 100 { Err(()) } else { Ok(value as u8) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6173_early_exit_guard_not_flagged() {
+        // A preceding diverging guard proves the value fits before the fallthrough
+        // cast is reached.
+        let src = "fn g(value: u32) -> u8 { if value > 100 { return 0; } value as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn repro_5117_deref_ref_u16_as_i32_not_flagged() {
         // Issue #5117 (chumsky pratt.rs): `*x as i32` where `x: &u16`. The
         // deref yields u16, and `u16 as i32` is a widening cast — every u16
