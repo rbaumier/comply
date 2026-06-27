@@ -10,8 +10,9 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-typeof-prefer-schema",
-    description: "Validating an object's shape with chained `typeof` checks is \
-                  error-prone — use a schema validator (zod, valibot, …).",
+    description: "Validating the shape of freshly-deserialized data (`JSON.parse`, \
+                  `response.json()`) with chained `typeof` checks is error-prone — \
+                  use a schema validator (zod, valibot, …).",
     remediation: "Replace the chained `typeof` checks with a schema parsed at the \
                   boundary, e.g. `const User = z.object({ name: z.string(), age: \
                   z.number() }); User.parse(data)`. A single `typeof x === 'string'` \
