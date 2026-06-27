@@ -3,6 +3,8 @@
 //! argument (stabilized in Rust 1.81) nor a `//` comment. For a single-line
 //! attribute the comment may sit on the same line, the line above, or the line
 //! below; for a multiline attribute it may sit on any line the attribute spans.
+//! A comment above the first of a consecutive `#[allow]` cluster justifies every
+//! member of the cluster.
 
 use tree_sitter::Node;
 
@@ -39,7 +41,7 @@ const SELF_JUSTIFYING_LINTS: &[&str] = &[
 
 crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
-    if !text.starts_with("#[allow(") && !text.starts_with("#[allow (") {
+    if !is_allow_attribute(text) {
         return;
     }
 
@@ -84,7 +86,7 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         }
     });
 
-    let has_preceding_comment = row > 0 && lines.get(row - 1).is_some_and(|l| l.trim().starts_with("//"));
+    let has_preceding_comment = cluster_has_preceding_comment(node, source);
     let has_following_comment = lines.get(row + 1).is_some_and(|l| l.trim().starts_with("//"));
 
     let end_row = node.end_position().row;
@@ -102,6 +104,41 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         format!("`{text}` without justification — add a `//` comment explaining why."),
         Severity::Warning,
     ));
+}
+
+/// True if an `attribute_item`'s text is an `#[allow(...)]` attribute, with or
+/// without a space before the argument list.
+fn is_allow_attribute(text: &str) -> bool {
+    text.starts_with("#[allow(") || text.starts_with("#[allow (")
+}
+
+/// True when the flagged `#[allow(...)]` belongs to a consecutive cluster of
+/// `#[allow]` attributes whose first member is immediately preceded by a `//`
+/// (or `/* */`) comment — the comment documents the whole stacked cluster, so
+/// every member is justified.
+///
+/// Outer attributes and comments on an item are named siblings preceding it in
+/// tree-sitter-rust. Walking `prev_named_sibling` from the flagged attribute,
+/// each step must be physically adjacent — the sibling ends on the line directly
+/// above where the current cluster member begins. A blank line, or any
+/// intervening node that is not another `#[allow]`, ends the cluster. So a lone
+/// uncommented `#[allow]`, or one separated from the comment by a blank line or
+/// unrelated code, is not justified by this path.
+fn cluster_has_preceding_comment(node: Node, source: &[u8]) -> bool {
+    let mut current = node;
+    while let Some(prev) = current.prev_named_sibling() {
+        if prev.end_position().row + 1 != current.start_position().row {
+            return false;
+        }
+        match prev.kind() {
+            "line_comment" | "block_comment" => return true,
+            "attribute_item" if is_allow_attribute(prev.utf8_text(source).unwrap_or("")) => {
+                current = prev;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// True if the attribute carries an inline `reason = "..."` argument, the
@@ -467,5 +504,35 @@ mod tests {
         // Load-bearing guard: a multiline allow with no `//` in its span must
         // still be flagged — the inner scan must not blanket-exempt multiline.
         assert_eq!(run("#[allow(\n    foo,\n    bar,\n)]\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_subsequent_allow_in_commented_cluster() {
+        // #6196: a single `//` comment above the first of a consecutive `#[allow]`
+        // cluster documents the whole stack; the second allow is justified too.
+        assert!(
+            run("// allow(unknown_lints) can be removed at rust-version 1.86.0, see:\n// https://example.com\n#[allow(unknown_lints)]\n#[allow(clippy::double_ended_iterator_last)]\nfn choose_stable() {}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_cluster_with_multiline_first_member() {
+        // The adjacency walk keys on each sibling's *end* row, so a multiline
+        // first member (closing `)]` on its own line) keeps the cluster intact.
+        assert!(
+            run("// shared justification\n#[allow(\n    foo,\n)]\n#[allow(bar)]\nfn f() {}").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_allow_separated_from_comment_by_blank_line() {
+        // Load-bearing guard: a blank line breaks the cluster, so the comment no
+        // longer documents the second allow — it is flagged while the first
+        // (commented) allow is not.
+        assert_eq!(
+            run("// justification\n#[allow(unknown_lints)]\n\n#[allow(dead_code)]\nfn f() {}").len(),
+            1
+        );
     }
 }
