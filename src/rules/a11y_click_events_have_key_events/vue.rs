@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_elements, has_attr, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    extract_elements, has_attr, is_custom_component_tag, is_vue_file,
+};
 
 #[derive(Debug)]
 pub struct Check;
@@ -14,6 +16,11 @@ impl TextCheck for Check {
         }
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
+            // A `@click` on a custom component is a component event binding, not a
+            // DOM click handler, so the keyboard-handler requirement does not apply.
+            if is_custom_component_tag(elem.tag) {
+                continue;
+            }
             // Vue uses @click or v-on:click
             let has_click = has_attr(elem.attrs, "@click") || has_attr(elem.attrs, "v-on:click");
             if !has_click {
@@ -61,5 +68,25 @@ mod tests {
         let source =
             "<template>\n  <div @click=\"handler\" @keydown=\"handler\">Click</div>\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_pascalcase_component() {
+        // A custom component's `@click` is a component event binding, not a DOM
+        // click handler, so the keyboard-handler requirement does not apply.
+        let source = "<template>\n  <UButton @click=\"onClick($event, item)\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_hyphenated_custom_element() {
+        let source = "<template>\n  <my-widget @click=\"handler\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_native_span() {
+        let source = "<template>\n  <span @click=\"handler\">Click</span>\n</template>";
+        assert_eq!(run(source).len(), 1);
     }
 }
