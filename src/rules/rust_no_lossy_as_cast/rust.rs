@@ -1618,4 +1618,80 @@ mod tests {
                    val => val as u8 } } }";
         assert!(run_on(src).is_empty());
     }
+
+    #[test]
+    fn repro_6424_match_arm_tuple_struct_widening_not_flagged() {
+        // Issue #6424 (zesterer/chumsky): `*x as i32` where `x: &u16` is bound by
+        // a `Self::Left(x)` match arm over an in-file enum whose variant field is
+        // `u16`. `u16 as i32` is a provable widening, so resolving the source type
+        // from the variant field must exempt every arm.
+        let src = "enum Associativity { Left(u16), Right(u16), None(u16) } \
+                   impl Associativity { \
+                   fn left_power(&self) -> i32 { \
+                   match self { \
+                   Self::Left(x) => *x as i32 * 2, \
+                   Self::Right(x) => *x as i32 * 2 + 1, \
+                   Self::None(x) => *x as i32 * 2 } } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6424_match_arm_tuple_struct_narrowing_still_flagged() {
+        // A genuinely lossy match-arm cast must survive: the variant field is
+        // `u32` and the target `i16`, so `*x as i16` truncates. Resolving the
+        // source type must not exempt it.
+        let src = "enum Wide { Big(u32) } \
+                   impl Wide { \
+                   fn narrow(&self) -> i16 { match self { Self::Big(x) => *x as i16 } } }";
+        assert!(!run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6424_match_arm_explicit_enum_path_widening_not_flagged() {
+        // The variant path may name the enum explicitly (`Associativity::Left`)
+        // rather than `Self`; resolution walks the in-file enum the same way.
+        let src = "enum Associativity { Left(u16) } \
+                   fn power(a: &Associativity) -> i32 { \
+                   match a { Associativity::Left(x) => *x as i32 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6424_match_arm_imported_enum_stays_flagged() {
+        // When the matched enum is not defined in this file, the variant field
+        // type is unknown, so resolution returns `None` and the cast stays flagged
+        // conservatively — no behavior change, no panic.
+        let src = "fn power(a: &Imported) -> i32 { \
+                   match a { Imported::Left(x) => *x as i32 } }";
+        assert!(!run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6424_match_arm_wildcard_preceding_binding_widening_not_flagged() {
+        // A `_` placeholder before the binding consumes a positional slot, so `x`
+        // is field 1 (`u16`), not field 0 (`u64`). Miscounting to field 0 would
+        // read `u64`, flagging `u64 as i32` as a narrowing; the correct `u16 as
+        // i32` is a widening and must stay exempt.
+        let src = "enum Pair { V(u64, u16) } \
+                   fn power(p: &Pair) -> i32 { match p { Pair::V(_, x) => *x as i32 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6424_match_arm_wildcard_preceding_binding_narrowing_still_flagged() {
+        // The mirror: `x` is field 1 (`u32`), so `*x as i16` truncates and stays
+        // flagged. Miscounting to field 0 (`u8`) would wrongly exempt it.
+        let src = "enum Pair { W(u8, u32) } \
+                   fn narrow(p: &Pair) -> i16 { match p { Pair::W(_, x) => *x as i16 } }";
+        assert!(!run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6424_match_arm_rest_pattern_stays_flagged() {
+        // A `..` rest pattern makes the binding position ambiguous, so resolution
+        // returns `None` and the cast stays flagged conservatively.
+        let src = "enum Rec { M(u8, u32) } \
+                   fn narrow(r: &Rec) -> i16 { match r { Rec::M(.., x) => *x as i16 } }";
+        assert!(!run_on(src).is_empty());
+    }
 }

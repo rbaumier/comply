@@ -1775,11 +1775,17 @@ pub fn cast_operand_bit_width(cast: Node, source: &[u8]) -> Option<u16> {
 
 /// Resolve the declared type of a local binding named `name` that is visible at
 /// `node`. Walks up each enclosing scope (`function_item`, `closure_expression`,
-/// `block`, `source_file`) and, within it, finds the nearest `parameter` or
-/// `let_declaration` *before* `node` whose pattern binds `name` and carries an
-/// explicit `type` annotation, returning that type's source text (trimmed).
+/// `block`, `source_file`) and, within it, finds the nearest binding site
+/// *before* `node` that binds `name`:
 ///
-/// Only annotated bindings are resolved — an inferred `let x = ...;` yields
+/// - a `parameter` or `let_declaration` whose pattern binds `name` and carries an
+///   explicit `type` annotation, returning that type's source text (trimmed);
+/// - a `match_arm` `tuple_struct_pattern` (`Self::Left(x)`) binding `name`, whose
+///   type is read from the matched enum variant's tuple field at the binding
+///   position when the enum is defined in-file.
+///
+/// Only annotated `let`/`parameter` bindings and in-file-enum match-arm bindings
+/// are resolved — an inferred `let x = ...;` or an imported-enum match arm yields
 /// `None`. Shared by the numeric-cast rules, which use it to learn a cast
 /// operand's source type from the AST.
 pub fn find_identifier_type(node: Node, name: &str, source: &[u8]) -> Option<String> {
@@ -1810,6 +1816,21 @@ fn find_binding_type_before(node: Node, limit: usize, name: &str, source: &[u8])
         return Some(type_text.trim().to_string());
     }
 
+    // A `match self { Self::Left(x) => *x as i32 }` arm binds `x` through a
+    // `tuple_struct_pattern` with no type annotation; resolve its type from the
+    // matched enum variant's tuple field at the binding position. Gated on the
+    // arm that spans `limit` (the use site) so a same-named binding in a sibling
+    // arm — each arm may rebind `x` to a different variant's field — is never the
+    // one resolved here.
+    if node.kind() == "tuple_struct_pattern"
+        && let Some(arm) = match_arm_of_pattern(node)
+        && arm.start_byte() <= limit
+        && limit < arm.end_byte()
+        && let Some(found) = match_arm_binding_type(node, name, source)
+    {
+        return Some(found);
+    }
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if let Some(found) = find_binding_type_before(child, limit, name, source) {
@@ -1828,6 +1849,176 @@ fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool
     pattern
         .children(&mut cursor)
         .any(|child| pattern_contains_identifier(child, name, source))
+}
+
+/// Walk up from a `tuple_struct_pattern` through the arm's `match_pattern` wrapper
+/// and any `or_pattern`, returning the enclosing `match_arm`. Returns `None` for a
+/// tuple-struct pattern that is not a match-arm pattern (an `if let` / `let`
+/// binding, or one wrapped in a `reference_pattern`), so resolution stays limited
+/// to match arms.
+fn match_arm_of_pattern(pattern: Node) -> Option<Node> {
+    let mut current = pattern.parent();
+    while let Some(p) = current {
+        match p.kind() {
+            "or_pattern" | "match_pattern" => current = p.parent(),
+            "match_arm" => return Some(p),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Resolve the type of `name` when bound by a match-arm `tuple_struct_pattern`
+/// (`Self::Left(x)`), by reading the matched enum variant's tuple field at the
+/// binding position. Returns the field type's source text (e.g. `"u16"`), or
+/// `None` if any step can't be resolved from the current file: the variant path
+/// has no resolvable enum, the enum is not defined in-file, the variant is not a
+/// tuple variant, or the binding position is out of range. Never guesses.
+fn match_arm_binding_type(pattern: Node, name: &str, source: &[u8]) -> Option<String> {
+    let index = tuple_struct_binding_index(pattern, name, source)?;
+    let path = pattern.child_by_field_name("type")?.utf8_text(source).ok()?;
+    let segments: Vec<&str> = path.split("::").map(str::trim).filter(|s| !s.is_empty()).collect();
+    let (variant_name, enum_segment) = match segments.as_slice() {
+        [.., enum_seg, variant] => (*variant, Some(*enum_seg)),
+        [variant] => (*variant, None),
+        [] => return None,
+    };
+    let enum_name = match enum_segment {
+        Some("Self") => Some(enclosing_impl_self_type(pattern, source)?),
+        Some(seg) => Some(base_type_name(seg).to_string()),
+        None => None,
+    };
+    let root = root_node(pattern);
+    resolve_variant_field_type(root, enum_name.as_deref(), variant_name, index, source)
+}
+
+/// The position of `name`'s binding among a `tuple_struct_pattern`'s positional
+/// sub-patterns (the `type` path is skipped). Returns `None` if a `..` rest
+/// pattern precedes the binding — positional mapping would be ambiguous — or
+/// `name` is not bound.
+fn tuple_struct_binding_index(pattern: Node, name: &str, source: &[u8]) -> Option<usize> {
+    let mut cursor = pattern.walk();
+    let mut index = 0;
+    if cursor.goto_first_child() {
+        loop {
+            let child = cursor.node();
+            // Positional slots are the sub-patterns: the named `_pattern` children
+            // (excluding the `type` path) plus the unnamed `_` wildcard, which
+            // still consumes a position (`V(_, x)` binds `x` at index 1).
+            // Punctuation (`(` `,` `)`) is unnamed and not `_`, so it is skipped
+            // without consuming a slot.
+            let is_slot = cursor.field_name() != Some("type")
+                && (child.is_named() || child.kind() == "_");
+            if is_slot {
+                if child.kind() == "remaining_field_pattern" {
+                    return None;
+                }
+                if pattern_contains_identifier(child, name, source) {
+                    return Some(index);
+                }
+                index += 1;
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// The base name of the nearest enclosing `impl_item`'s `type`, with generic
+/// arguments and any path qualifier stripped (`impl path::Foo<T>` → `"Foo"`).
+/// Resolves the `Self` segment of a variant path.
+fn enclosing_impl_self_type(node: Node, source: &[u8]) -> Option<String> {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "impl_item" {
+            let ty = n.child_by_field_name("type")?.utf8_text(source).ok()?;
+            return Some(base_type_name(ty).to_string());
+        }
+        current = n.parent();
+    }
+    None
+}
+
+/// The bare type name of a possibly-qualified, possibly-generic type text: strip
+/// from the first `<`, then take the final `::` segment (`a::B<C>` → `"B"`).
+fn base_type_name(text: &str) -> &str {
+    let head = text.split('<').next().unwrap_or(text).trim();
+    head.rsplit("::").next().unwrap_or(head).trim()
+}
+
+/// The root node reached by walking up from `node` (the enclosing `source_file`).
+fn root_node(node: Node) -> Node {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        current = parent;
+    }
+    current
+}
+
+/// Search the file for an `enum_item` — by name when `enum_name` is `Some`,
+/// otherwise the first enum that has the variant — and return the source text of
+/// its `variant_name` tuple variant's field at `index`. `None` when no such
+/// in-file enum / variant / tuple-field exists.
+fn resolve_variant_field_type(
+    node: Node,
+    enum_name: Option<&str>,
+    variant_name: &str,
+    index: usize,
+    source: &[u8],
+) -> Option<String> {
+    if node.kind() == "enum_item" {
+        let name_matches = match enum_name {
+            Some(want) => {
+                node.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok()) == Some(want)
+            }
+            None => true,
+        };
+        if name_matches
+            && let Some(field_type) = variant_tuple_field_type(node, variant_name, index, source)
+        {
+            return Some(field_type);
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) =
+            resolve_variant_field_type(child, enum_name, variant_name, index, source)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The source text of `enum_node`'s `variant_name` variant's tuple field at
+/// `index`, or `None` when that variant is absent, is not a tuple variant
+/// (fieldless or struct-style), or has no field at `index`.
+fn variant_tuple_field_type(
+    enum_node: Node,
+    variant_name: &str,
+    index: usize,
+    source: &[u8],
+) -> Option<String> {
+    let body = enum_node.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    for variant in body.children(&mut cursor) {
+        if variant.kind() != "enum_variant"
+            || variant.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok())
+                != Some(variant_name)
+        {
+            continue;
+        }
+        let fields = variant.child_by_field_name("body")?;
+        if fields.kind() != "ordered_field_declaration_list" {
+            return None;
+        }
+        let mut field_cursor = fields.walk();
+        let field_type = fields.children_by_field_name("type", &mut field_cursor).nth(index)?;
+        return field_type.utf8_text(source).ok().map(|t| t.trim().to_string());
+    }
+    None
 }
 
 /// If `cast`'s operand is an index expression `base[idx]` whose `base` resolves to
