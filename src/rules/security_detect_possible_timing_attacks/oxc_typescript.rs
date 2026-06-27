@@ -2,7 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, expression_is_or_resolves_to_literal, receiver_root_identifier,
+    byte_offset_to_line_col, callback_first_param_name, expression_is_or_resolves_to_literal,
+    receiver_root_identifier,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression};
@@ -131,6 +132,143 @@ fn name_is_secret(expr: &Expression) -> bool {
     }
 }
 
+/// True when the comparison is structurally the returned predicate of an
+/// `Array.prototype.filter` callback, AND at least one operand reads a field of
+/// the iterated element (`sessions.filter(s => s.token !== revoked)`): the compare
+/// decides whether each element stays in a rebuilt sub-collection the caller
+/// already holds — list management, not a single-secret credential-equality gate
+/// on an authentication path.
+///
+/// Why `filter` only: it is the sole array-iteration method that never
+/// short-circuits — it evaluates the predicate for every element regardless of any
+/// individual result — so it leaks neither which element matched (no early exit)
+/// nor a guessable secret byte. Lookup / membership methods (`find` / `some` /
+/// `every` / `findIndex` / …) stop at the first match, so a non-constant-time
+/// compare in their predicate can leak via array-level timing; those stay flagged.
+///
+/// Soundness (this is a security rule):
+/// - Only the callback's *returned predicate* position is exempt. Climbing up from
+///   the comparison, the sole transparent parents are the boolean-combining
+///   operators that still feed the callback's result (`&&`/`||`/`??`, `!`,
+///   parentheses); the walk stops at the statement that yields the value. A
+///   comparison in any other position — an `if` test, a call argument, a variable
+///   initializer inside the callback body — is not the returned predicate and stays
+///   flagged, so a genuine auth gate written inside a filter callback is not missed.
+/// - The comparison must read the iterated element. A hoisted, element-independent
+///   credential check (`filter(s => token === secret && s.active)`) does not, so it
+///   stays flagged.
+fn is_filter_element_predicate<'a>(
+    bin_node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_span::GetSpan;
+    let AstKind::BinaryExpression(bin) = bin_node.kind() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+
+    // Phase 1: confirm the comparison is the callback's returned predicate, and
+    // capture the statement that yields it.
+    let (stmt_node, require_expression_arrow) = {
+        let mut cur = bin_node;
+        loop {
+            let parent = nodes.parent_node(cur.id());
+            if parent.id() == cur.id() {
+                return false;
+            }
+            match parent.kind() {
+                AstKind::LogicalExpression(_)
+                | AstKind::UnaryExpression(_)
+                | AstKind::ParenthesizedExpression(_) => cur = parent,
+                // Implicit-return arrow body (`s => s.token !== x`).
+                AstKind::ExpressionStatement(_) => break (parent, true),
+                // Explicit `return s.token !== x;` in a block-body callback.
+                AstKind::ReturnStatement(_) => break (parent, false),
+                _ => return false,
+            }
+        }
+    };
+
+    // Phase 2: resolve the nearest enclosing function. OXC can elide an inner
+    // block-body function from the parent chain, so when a `FunctionBody` is
+    // reached its owner is accepted only when their spans match; otherwise the
+    // statement cannot be soundly attributed and the comparison stays flagged.
+    let func = {
+        let mut cur = stmt_node;
+        loop {
+            let parent = nodes.parent_node(cur.id());
+            if parent.id() == cur.id() {
+                return false;
+            }
+            match parent.kind() {
+                AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => break parent,
+                AstKind::FunctionBody(fb) => {
+                    let owner = nodes.parent_node(parent.id());
+                    let owns = match owner.kind() {
+                        AstKind::ArrowFunctionExpression(a) => a.body.span() == fb.span(),
+                        AstKind::Function(f) => {
+                            f.body.as_ref().is_some_and(|b| b.span() == fb.span())
+                        }
+                        _ => false,
+                    };
+                    if owns {
+                        break owner;
+                    }
+                    return false;
+                }
+                _ => cur = parent,
+            }
+        }
+    };
+
+    // Phase 3: the function must be the callback argument of a `.filter(…)` call.
+    let func_span = match func.kind() {
+        AstKind::ArrowFunctionExpression(arrow) => {
+            if require_expression_arrow && !arrow.expression {
+                return false;
+            }
+            arrow.span()
+        }
+        AstKind::Function(f) => {
+            if require_expression_arrow {
+                return false;
+            }
+            f.span()
+        }
+        _ => return false,
+    };
+
+    let call = nodes.parent_node(func.id());
+    if call.id() == func.id() {
+        return false;
+    }
+    let AstKind::CallExpression(call_expr) = call.kind() else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call_expr.callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "filter" {
+        return false;
+    }
+    let is_callback_arg = call_expr
+        .arguments
+        .iter()
+        .any(|arg| arg.as_expression().is_some_and(|e| e.span() == func_span));
+    if !is_callback_arg {
+        return false;
+    }
+
+    // The compared value must be a field of the iterated element — list-membership
+    // management — not a hoisted, element-independent credential check. A
+    // destructured first parameter yields no element name, so it stays flagged.
+    let Some(param) = callback_first_param_name(call_expr) else {
+        return false;
+    };
+    receiver_root_identifier(&bin.left).as_deref() == Some(param.as_str())
+        || receiver_root_identifier(&bin.right).as_deref() == Some(param.as_str())
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::BinaryExpression]
@@ -182,6 +320,9 @@ impl OxcCheck for Check {
             return;
         }
         if !name_is_secret(&bin.left) && !name_is_secret(&bin.right) {
+            return;
+        }
+        if is_filter_element_predicate(node, semantic) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, bin.span.start as usize);
@@ -418,5 +559,85 @@ mod tests {
     #[test]
     fn flags_di_token_vs_lowercase_name() {
         assert_eq!(run(r#"if (token === name) {}"#).len(), 1);
+    }
+
+    // Regression for #6200: better-auth rebuilds a stored session list by
+    // dropping the current session (`internal-adapter.ts:391`). The comparison is
+    // the returned predicate of an `Array.prototype.filter` callback — list
+    // management over the caller's own sessions, not an authentication gate — so
+    // it is not a timing-attack surface.
+    #[test]
+    fn allows_token_compare_in_filter_predicate() {
+        let src = r#"list = list.filter((session) => session.expiresAt > now && session.token !== data.token);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #6200: `session.ts:943`, the comparison is the whole arrow
+    // body of a `.filter` callback.
+    #[test]
+    fn allows_token_compare_as_filter_arrow_body() {
+        let src = r#"const others = activeSessions.filter((session) => session.token !== ctx.context.session.session.token);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A block-body filter callback that returns the comparison is equally list
+    // management.
+    #[test]
+    fn allows_token_compare_in_filter_block_body() {
+        let src = r#"const kept = sessions.filter((s) => { return s.token !== data.token; });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Soundness guard: a credential-equality gate written *inside* a filter
+    // callback body — but not as the returned predicate — is a genuine auth check
+    // and stays flagged. Only the returned-predicate position is exempt.
+    #[test]
+    fn flags_auth_gate_inside_filter_callback_body() {
+        let src = r#"list.filter((x) => { if (token === secret) { grant(); } return x.active; });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Soundness guard: an element-independent credential check hoisted into a
+    // filter predicate (neither operand reads the iterated element `s`) is not
+    // list management and stays flagged.
+    #[test]
+    fn flags_element_independent_compare_in_filter() {
+        let src = r#"const kept = arr.filter((s) => token === secret && s.active);"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Security guard: lookup/membership methods short-circuit on the first match,
+    // so a non-constant-time compare in their predicate can leak via array-level
+    // timing. Only the non-short-circuiting `.filter` is exempt — `.find` stays
+    // flagged.
+    #[test]
+    fn flags_token_lookup_in_find_callback() {
+        let src = r#"const found = sessions.find((s) => s.token === requestToken);"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Negative space: `.map` is a transform, not the `.filter` list-rebuild
+    // method, so a secret comparison in its callback is not exempted.
+    #[test]
+    fn flags_token_compare_in_map_callback() {
+        let src = r#"const flags = users.map((u) => u.token === secret);"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Security guard: `.some` short-circuits on the first match, so it is not the
+    // exempt `.filter` and stays flagged even with an element-rooted operand.
+    #[test]
+    fn flags_token_lookup_in_some_callback() {
+        let src = r#"const present = tokens.some((s) => s.token === provided);"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Deliberate conservative choice: a destructured filter parameter yields no
+    // element binding name, so element-rooting cannot be confirmed and the
+    // comparison stays flagged (a residual false positive in the safe direction).
+    #[test]
+    fn flags_destructured_filter_param() {
+        let src = r#"const kept = sessions.filter(({ token }) => token !== data.token);"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
