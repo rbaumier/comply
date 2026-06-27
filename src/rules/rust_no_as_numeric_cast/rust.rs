@@ -1643,10 +1643,31 @@ name = "normal_lib"
 
     #[test]
     fn repro_5550_bare_pascal_type_binding_still_flagged() {
-        // A bare (unscoped) PascalCase type name is indistinguishable from a
-        // local numeric type alias (`type Decoration = u64`), so it stays
-        // conservatively flagged — only a module-qualified path is exempted.
+        // A bare (unscoped) type name with no matching `enum_item` in the file is
+        // indistinguishable from a local numeric type alias (`type Decoration =
+        // u64`), so it stays conservatively flagged. (A bare name that DOES resolve
+        // to an in-file fieldless enum is exempt — see the #6172 test below.)
         let src = "fn f(d: Decoration) -> u8 { d as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6172_from_fieldless_enum_for_int_not_flagged() {
+        // Issue #6172 (hyperium/tonic): `code as i32` inside
+        // `impl From<Code> for i32` where `Code` is a fieldless in-file enum reads
+        // the discriminant — the only way to implement that `From` (`i32::from`
+        // would recurse; no `TryFrom` exists). The bare-name operand resolves to an
+        // in-file fieldless `enum_item`, so it is exempt.
+        let src = "enum Code { Ok = 0, Cancelled = 1 } \
+                   impl From<Code> for i32 { fn from(code: Code) -> i32 { code as i32 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6172_data_carrying_enum_param_still_flagged() {
+        // A bare-name operand whose in-file enum carries data is not a plain
+        // discriminant read, so the cast stays flagged.
+        let src = "enum E { A(u32), B } fn f(e: E) -> u8 { e as u8 }";
         assert_eq!(run_on(src).len(), 1);
     }
 
