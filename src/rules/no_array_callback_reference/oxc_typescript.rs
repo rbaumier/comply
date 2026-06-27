@@ -10,13 +10,16 @@
 //! single-arity function (`scale: (x: number) => number`), including one
 //! destructured from a typed params object (`{ scale }: Params`) — that binds
 //! only the `element` argument are exempt: passing them directly is identical to
-//! wrapping them in an arrow.
+//! wrapping them in an arrow. A `this.method` reference is likewise exempt when
+//! `method` is an arrow-function class property (auto-bound to `this`) declaring
+//! at most one parameter.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Expression, FormalParameters, TSSignature, TSType, TSTypeAnnotation, TSTypeName,
+    ClassElement, Expression, FormalParameters, StaticMemberExpression, TSSignature, TSType,
+    TSTypeAnnotation, TSTypeName,
 };
 use std::sync::Arc;
 
@@ -197,6 +200,44 @@ fn is_namespace_import_binding(
     matches!(semantic.nodes().kind(decl), AstKind::ImportNamespaceSpecifier(_))
 }
 
+/// Returns `true` when `member` is `this.<method>` and `<method>` resolves, in
+/// the nearest enclosing class body, to an arrow-function class property whose
+/// formal parameter list ignores the extra iterator arguments
+/// (see [`callee_ignores_extra_args`]). An arrow class property
+/// (`private m = (x) => …`) is auto-bound to `this` at construction, so passing
+/// `this.m` bare keeps `this`; a single declared parameter then drops the
+/// injected `index`/`array`, making `arr.map(this.m)` identical to
+/// `arr.map(e => this.m(e))`. A normal (non-arrow) method loses `this` when
+/// passed bare, and a multi-arity arrow exposes the extra-args footgun — neither
+/// is exempt. This mirrors [`is_low_arity_local`] for the `this.method` form.
+fn is_low_arity_bound_class_property<'a>(
+    member: &StaticMemberExpression<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    if !matches!(member.object, Expression::ThisExpression(_)) {
+        return false;
+    }
+    let prop_name = member.property.name.as_str();
+    let nodes = semantic.nodes();
+    for kind in nodes.ancestor_kinds(node.id()) {
+        if let AstKind::Class(class) = kind {
+            return class.body.body.iter().any(|element| match element {
+                ClassElement::PropertyDefinition(prop) => {
+                    prop.key.static_name().as_deref() == Some(prop_name)
+                        && matches!(
+                            prop.value.as_ref(),
+                            Some(Expression::ArrowFunctionExpression(f))
+                                if callee_ignores_extra_args(&f.params)
+                        )
+                }
+                _ => false,
+            });
+        }
+    }
+    false
+}
+
 /// Returns `true` when `name` follows the PascalCase convention reserved for
 /// types, classes and constructors (leading uppercase, contains a lowercase
 /// letter). A PascalCase reference passed as the sole argument to a
@@ -313,6 +354,12 @@ impl OxcCheck for Check {
                 // (jscodeshift `root.find(j.ExportNamedDeclaration)`), not a
                 // per-element transform callback.
                 if is_pascal_case(inner_member.property.name.as_str()) {
+                    return;
+                }
+                // `this.method` where `method` is an auto-bound arrow class
+                // property declaring at most one parameter keeps `this` and
+                // drops the injected `index`/`array`, so passing it bare is safe.
+                if is_low_arity_bound_class_property(inner_member, node, semantic) {
                     return;
                 }
                 let text = &ctx.source
@@ -671,5 +718,42 @@ mod tests {
     #[test]
     fn flags_non_namespace_local_object() {
         assert_eq!(run_on("const obj = getThing(); obj.map(transform);").len(), 1);
+    }
+
+    // #6276 repro (statelyai/xstate): `this._toTestPath` is an arrow class
+    // property — auto-bound to `this` and single-parameter — so `paths.map(this._toTestPath)`
+    // keeps `this` and drops the injected `index`/`array`. Must not flag.
+    #[test]
+    fn allows_single_param_arrow_class_property_this_method() {
+        assert!(run_on(
+            "class M { private _toTestPath = (statePath: string): string => statePath; getPaths(paths: string[]) { return paths.map(this._toTestPath); } }"
+        )
+        .is_empty());
+    }
+
+    // #6276 negative space: a normal (non-arrow) method passed as `this.handler`
+    // loses `this` when detached, so the footgun applies — keep it flagged.
+    #[test]
+    fn flags_normal_method_this_reference() {
+        assert_eq!(
+            run_on(
+                "class M { handler(x: number): number { return x * 2; } run(arr: number[]) { return arr.map(this.handler); } }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    // #6276 negative space: a two-parameter arrow class property exposes the
+    // `(element, index)` footgun via map's injected args — keep it flagged.
+    #[test]
+    fn flags_two_param_arrow_class_property_this_method() {
+        assert_eq!(
+            run_on(
+                "class M { private _f = (a: number, b: number): number => a + b; run(arr: number[]) { return arr.map(this._f); } }"
+            )
+            .len(),
+            1
+        );
     }
 }
