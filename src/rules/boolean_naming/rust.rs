@@ -391,27 +391,33 @@ fn method_non_self_param_count(function_item: tree_sitter::Node) -> usize {
 }
 
 /// True for the builder field-setter convention: a `bool` parameter whose name
-/// is identical to the enclosing method's name, where the method is a fluent
+/// is dictated by the enclosing method's name, where the method is a fluent
 /// builder setter — it has a `self` receiver and returns a builder shape, either
 /// a `Self` form (`pub fn fit_intercept(mut self, fit_intercept: bool) -> Self`,
 /// `pub fn memory64(&mut self, memory64: bool) -> &mut Self`) or a named concrete
 /// type returned from a by-value `self` consuming receiver
 /// (`pub fn flatten_event(self, flatten_event: bool) -> Layer<S, F, W>`, where the
 /// generic builder's type parameters change between steps so the return cannot be
-/// bare `Self`). Here the parameter name is dictated by the field it sets, named
-/// after that field per the builder convention, not chosen freely — so a
-/// predicate prefix would diverge the parameter from the field and method it
-/// mirrors.
+/// bare `Self`). The parameter name is dictated by the method name in one of two
+/// idiomatic shapes: it equals the method name verbatim (`flatten_event`), or it
+/// equals the method name with a leading `with_` stripped — the `with_<field>`
+/// setter where the parameter carries the bare field name
+/// (`pub fn with_ansi(self, ansi: bool) -> Self`; forcing `is_ansi` would also
+/// collide with the `is_ansi` struct field the method sets). Either way the name
+/// is named after the field it sets per the builder convention, not chosen
+/// freely — so a predicate prefix would diverge the parameter from the field and
+/// method it mirrors.
 ///
 /// Anchored on three AST signals so it cannot widen into a name allowlist: the
 /// node is a `parameter` whose name equals the enclosing `function_item`'s
-/// `name` field, that function has a `self` receiver, and it returns a builder
-/// shape (see [`method_returns_builder_shape`]). A free function, a setter that
-/// returns `()`, a borrowing `&self`/`&mut self` method returning a foreign
-/// non-`Self` type (a transform, not a consuming builder), or any parameter whose
-/// name differs from the method name is unaffected and still flags. The walk
-/// stops at the first `closure_expression` boundary so a closure callback param
-/// is judged by its own scope.
+/// `name` field (or that name with a leading `with_` removed), that function has
+/// a `self` receiver, and it returns a builder shape (see
+/// [`method_returns_builder_shape`]). A free function, a setter that returns
+/// `()`, a borrowing `&self`/`&mut self` method returning a foreign non-`Self`
+/// type (a transform, not a consuming builder), or any parameter whose name
+/// matches neither the method name nor its `with_`-stripped form is unaffected
+/// and still flags. The walk stops at the first `closure_expression` boundary so
+/// a closure callback param is judged by its own scope.
 fn is_builder_setter_field_param(
     node: tree_sitter::Node,
     name: &str,
@@ -429,7 +435,9 @@ fn is_builder_setter_field_param(
             let name_matches_method = parent
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source).ok())
-                .is_some_and(|fn_name| fn_name == name);
+                .is_some_and(|fn_name| {
+                    fn_name == name || fn_name.strip_prefix("with_") == Some(name)
+                });
             return name_matches_method
                 && method_has_self_receiver(parent)
                 && method_returns_builder_shape(parent, source);
@@ -1574,6 +1582,51 @@ mod tests {
         ] {
             assert!(run_on(src).is_empty(), "`{src}` should be allowed");
         }
+    }
+
+    #[test]
+    fn allows_with_prefixed_builder_setter_field_param() {
+        // The `with_<field>(self, <field>: bool)` builder setter: the method name
+        // is the `with_`-prefixed form of the field, and the parameter carries the
+        // bare field name. The param name is determined by the method name, so a
+        // predicate prefix would diverge it from the field the method sets (and
+        // `is_ansi` would collide with the `is_ansi` struct field). Covers the
+        // `-> Self` form and the named-generic builder return. (Closes #6155)
+        for src in [
+            "impl X { pub fn with_ansi(self, ansi: bool) -> Self { self } }",
+            "impl X { pub fn with_ansi_sanitization(self, ansi_sanitization: bool) -> Self { self } }",
+            "impl X { pub fn with_ansi(self, ansi: bool) -> Format<F, T> { self } }",
+            "impl X { pub fn with_target(&mut self, target: bool) -> &mut Self { self } }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_with_prefixed_setter_when_stripped_name_differs_from_param() {
+        // The `with_`-stripped method name must equal the param name; a
+        // `with_<x>(self, <y>: bool)` where the stripped name differs from the
+        // param is not the field-setter shape and still requires a prefix.
+        let diags = run_on("impl X { pub fn with_color(self, ansi: bool) -> Self { self } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'ansi'"));
+    }
+
+    #[test]
+    fn still_flags_with_prefixed_setter_borrowing_and_returning_primitive() {
+        // A `with_<field>(&self, <field>: bool) -> bool` borrows `self` and
+        // returns a primitive — a predicate, not a builder that yields the
+        // reconfigured receiver — so the param still flags.
+        let diags = run_on("impl X { fn with_ansi(&self, ansi: bool) -> bool { ansi } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'ansi'"));
+    }
+
+    #[test]
+    fn still_flags_with_prefixed_setter_free_function() {
+        // No `self` receiver — a free function named `with_<field>` is not a
+        // builder setter; the bare-field param still requires a predicate prefix.
+        assert_eq!(run_on("fn with_ansi(ansi: bool) -> Self { }").len(), 1);
     }
 
     #[test]
