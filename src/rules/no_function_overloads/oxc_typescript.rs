@@ -165,6 +165,9 @@ impl OxcCheck for Check {
                     if preserves_concrete_param_discrimination(&sigs) {
                         continue;
                     }
+                    if preserves_pairwise_correlated_params(&sigs) {
+                        continue;
+                    }
                     for sig in sigs {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, sig.span_start as usize);
@@ -397,6 +400,75 @@ fn some_varying_position_tracks_return(sigs: &[OverloadSig], varying_positions: 
     })
 }
 
+/// True when the overloads form a SPARSE parameter-type correlation table that a
+/// single union signature cannot express. All overloads share the same fixed
+/// arity (no leading rest parameter), two or more parameter positions vary across
+/// the group, each overload binds a unique combination of types at those varying
+/// positions, and those combinations cover only a STRICT subset of the cartesian
+/// product of the per-position type sets. The strict subset is the load-bearing
+/// signal: the overloads pair specific types together (e.g. valtio
+/// `unstable_replaceInternalFunction`, where `name: 'objectIs'` must pair with
+/// `fn: (prev: typeof objectIs) => typeof objectIs`, covering 5 of the 25 possible
+/// `name`×`fn` combinations). Collapsing the varying positions into independent
+/// unions would admit the absent combinations (`name: 'objectIs'` with the
+/// `'newProxy'` fn), so the overloads are required regardless of the return type.
+///
+/// A group where only ONE position varies (`f(x: string): R; f(x: number): R;`)
+/// is NOT exempted — it collapses cleanly into `f(x: string | number): R`.
+/// Neither is a group whose combinations fill the FULL cartesian product (e.g.
+/// `f('x','on'); f('x','off'); f('y','on'); f('y','off')`), which is exactly
+/// `f('x' | 'y', 'on' | 'off')`: such groups still flag.
+///
+/// Type equality reuses the whitespace-normalized `param_types` strings, the same
+/// notion of "same type" the other exemptions compare on.
+fn preserves_pairwise_correlated_params(sigs: &[OverloadSig]) -> bool {
+    let arity = sigs[0].param_types.len();
+    if sigs.iter().any(|s| s.param_types.len() != arity) {
+        return false;
+    }
+    if sigs.iter().any(|s| s.first_param_is_rest) {
+        return false;
+    }
+    let varying_positions: Vec<usize> = (0..arity)
+        .filter(|&i| {
+            let first = sigs[0].param_types[i].as_str();
+            sigs.iter().any(|s| s.param_types[i] != first)
+        })
+        .collect();
+    if varying_positions.len() < 2 {
+        return false;
+    }
+    // Each overload's tuple of varying-position types must be unique: a repeated
+    // tuple is a duplicate signature that collapses away rather than encoding a
+    // distinct correlation.
+    let mut combinations: Vec<Vec<&str>> = Vec::with_capacity(sigs.len());
+    for sig in sigs {
+        let combo: Vec<&str> = varying_positions
+            .iter()
+            .map(|&pos| sig.param_types[pos].as_str())
+            .collect();
+        if combinations.contains(&combo) {
+            return false;
+        }
+        combinations.push(combo);
+    }
+    // The combinations must be a STRICT subset of the cartesian product of the
+    // per-position type sets. When they fill the whole product the overloads are
+    // exactly `f(p0a | p0b, p1a | p1b)` and collapse cleanly.
+    let mut product: usize = 1;
+    for &pos in &varying_positions {
+        let mut distinct: Vec<&str> = Vec::new();
+        for sig in sigs {
+            let ty = sig.param_types[pos].as_str();
+            if !distinct.contains(&ty) {
+                distinct.push(ty);
+            }
+        }
+        product = product.saturating_mul(distinct.len());
+    }
+    combinations.len() < product
+}
+
 /// Extract overload signature info if `stmt` is a function declaration without a body.
 fn extract_overload_sig(source: &str, stmt: &Statement) -> Option<OverloadSig> {
     match stmt {
@@ -577,17 +649,20 @@ export function isUnexpected(response: AllResponses): response is AllResponses {
     }
 
     #[test]
-    fn flags_overloads_when_only_some_return_predicate() {
-        // One overload returns a type predicate, the other returns a plain type
-        // — the group is not uniformly predicate-narrowing. Both params vary, so
-        // it is not single-parameter concrete discrimination either; it collapses
-        // into one union signature and still fires.
+    fn allows_mixed_predicate_overloads_with_correlated_params() {
+        // Only one overload returns a type predicate, so the uniform-predicate
+        // exemption does not fire. But the two parameter positions form a sparse
+        // correlation table — the pairs `(number, string)` and `(string, number)`,
+        // 2 of the 4 possible combinations — so collapsing into
+        // `foo(x: number | string, y: string | number)` would admit
+        // `foo(number, number)` and erase the predicate narrowing. The overloads
+        // are load-bearing and must not flag.
         let source = "
 function foo(x: number, y: string): x is number;
 function foo(x: string, y: number): string;
 function foo(x: number | string, y: string | number): boolean { return true; }
 ";
-        assert_eq!(run_on(source).len(), 2);
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
@@ -851,32 +926,126 @@ export function useStorage<T extends string | number | boolean | object | null>(
     }
 
     #[test]
-    fn flags_multi_position_variation_not_tracking_return() {
-        // Several positions vary with distinct return types, but no varying
-        // position's type argument tracks the return type: the positions vary
-        // independently and collapse into independent unions, so the group still
-        // fires. (`a`/`b` swap shapes; the return is unrelated to either.)
+    fn allows_pairwise_correlated_params_with_distinct_return_types() {
+        // Two positions vary together as a sparse correlation table — only the
+        // pairs `(number, string)` and `(string, number)` exist, 2 of the 4
+        // possible combinations. Collapsing into `foo(a: number | string,
+        // b: string | number)` would admit `foo(number, number)`, which the
+        // overloads forbid, so they are load-bearing regardless of return type.
         let source = "
 function foo(a: number, b: string): Date;
 function foo(a: string, b: number): RegExp;
 function foo(a: any, b: any): any { return a; }
 ";
-        assert_eq!(run_on(source).len(), 2);
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
-    fn flags_multi_position_when_tracking_breaks_in_one_signature() {
-        // A candidate position tracks the return type in all but the last
-        // signature (`Box`/`Opt`/return all carry `string`, then `number`), but
-        // the third signature's params carry `boolean` while the return carries
-        // `bigint`. Tracking must hold for EVERY signature, so the correlation
-        // fails and the group still fires — guarding the all-or-nothing boundary.
+    fn allows_pairwise_correlated_params_when_return_tracking_breaks() {
+        // Three overloads pair `Ref<X>` with `Opt<X>` for `X` in
+        // `{string, number, boolean}` — 3 of the 9 possible combinations. No
+        // varying position tracks the return type, but the pairs are a strict
+        // subset of the cartesian product, so a union signature would admit the
+        // forbidden cross-combinations; the overloads are load-bearing.
         let source = "
 function box(a: Ref<string>, b: Opt<string>): Out<string>;
 function box(a: Ref<number>, b: Opt<number>): Out<number>;
 function box(a: Ref<boolean>, b: Opt<boolean>): Out<bigint>;
 function box(a: any, b: any): any { return a; }
 ";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_pairwise_correlated_void_overloads() {
+        // Regression for #6290: valtio `unstable_replaceInternalFunction` binds
+        // each `name` string literal to a specific `fn` type and returns `void`
+        // for every overload. Two positions co-vary as a sparse correlation table
+        // (5 of 25 `name`×`fn` combinations); collapsing into
+        // `f(name: 'objectIs' | ..., fn: FnA | ...)` would let `name: 'objectIs'`
+        // pair with the `'newProxy'` fn, breaking the per-name type safety.
+        let source = r#"
+export function unstable_replaceInternalFunction(
+  name: 'objectIs',
+  fn: (prev: typeof objectIs) => typeof objectIs,
+): void;
+export function unstable_replaceInternalFunction(
+  name: 'newProxy',
+  fn: (prev: typeof newProxy) => typeof newProxy,
+): void;
+export function unstable_replaceInternalFunction(
+  name: 'canProxy',
+  fn: (prev: typeof canProxy) => typeof canProxy,
+): void;
+export function unstable_replaceInternalFunction(
+  name: 'createSnapshot',
+  fn: (prev: typeof createSnapshot) => typeof createSnapshot,
+): void;
+export function unstable_replaceInternalFunction(
+  name: 'createHandler',
+  fn: (prev: typeof createHandler) => typeof createHandler,
+): void;
+export function unstable_replaceInternalFunction(
+  name: 'objectIs' | 'newProxy' | 'canProxy' | 'createSnapshot' | 'createHandler',
+  fn: (prev: any) => any,
+) {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_minimal_two_position_correlated_void_pair() {
+        // A minimal sparse correlation table returning `void`: two positions vary,
+        // only the diagonal pairs exist (2 of 4), so the overloads cannot collapse
+        // into independent unions without admitting the off-diagonal calls.
+        let source = "
+function f(name: 'a', fn: (x: A) => A): void;
+function f(name: 'b', fn: (x: B) => B): void;
+function f(name: 'a' | 'b', fn: (x: any) => any): void {}
+";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_single_varying_position_collapsible_to_union() {
+        // Negative control: only ONE parameter position varies, so the group is
+        // not a multi-position correlation table — it collapses cleanly into
+        // `f(x: string | number): void` and must still flag.
+        let source = "
+function f(x: string): void;
+function f(x: number): void;
+function f(x: string | number): void {}
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn flags_duplicated_varying_combination() {
+        // Two overloads bind the IDENTICAL pair `('x', number)` and differ only by
+        // return type, so the group is not a clean correlation table — the repeated
+        // combination is a redundant signature. The duplicate-combination guard
+        // declines the sparse-correlation exemption, so the group still flags.
+        let source = "
+function f(a: 'x', b: number): R1;
+function f(a: 'x', b: number): R2;
+function f(a: 'y', b: string): R3;
+function f(a: any, b: any): any { return a; }
+";
         assert_eq!(run_on(source).len(), 3);
+    }
+
+    #[test]
+    fn flags_full_cartesian_product_multi_position() {
+        // Two positions vary and every combination is unique, but they fill the
+        // FULL cartesian product ({'x','y'} × {'on','off'} = 4 of 4), so the
+        // overloads are exactly `f('x' | 'y', 'on' | 'off')` and still flag.
+        let source = "
+function f(a: 'x', b: 'on'): void;
+function f(a: 'x', b: 'off'): void;
+function f(a: 'y', b: 'on'): void;
+function f(a: 'y', b: 'off'): void;
+function f(a: 'x' | 'y', b: 'on' | 'off'): void {}
+";
+        assert_eq!(run_on(source).len(), 4);
     }
 }
