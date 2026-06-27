@@ -62,103 +62,17 @@ fn has_this_typed_jsdoc(
     false
 }
 
-/// True when `expr` is a call to the global `Object.create(...)`, whatever its
-/// argument. `Object.create(proto)` yields a plain object that inherits from
-/// `proto` and is conventionally used as a prototype itself, so a function
-/// assigned to one of its members is a method whose `this` is the instance at
-/// call time. Matches only `Object.create`, not a local `create()` or some
-/// other `foo.create()`.
-fn is_object_create_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else {
-        return false;
-    };
-    matches!(
-        &call.callee,
-        Expression::StaticMemberExpression(member)
-            if member.property.name == "create"
-                && matches!(
-                    &member.object,
-                    Expression::Identifier(ident) if ident.name == "Object"
-                )
-    )
-}
-
-/// True when `expr` is a prototype-object initializer — either a `*.prototype`
-/// member access (`Foo.prototype`) or an `Object.create(...)` call. A binding
-/// initialized from one of these is a receiver of the prototype-patching idiom.
-fn is_prototype_initializer(expr: &Expression) -> bool {
-    matches!(
-        expr,
-        Expression::StaticMemberExpression(member) if member.property.name == "prototype"
-    ) || is_object_create_call(expr)
-}
-
-/// True when `expr` is a `module.exports` / `exports` assignment (directly or
-/// through a chain like `exports = module.exports = {}`). A binding initialized
-/// from such a chain is the CommonJS namespace object; a function assigned to one
-/// of its members is invoked as `obj.method()`, so `this` is the namespace object.
-fn is_module_exports_initializer(expr: &Expression) -> bool {
-    let Expression::AssignmentExpression(assign) = expr else {
-        return false;
-    };
-    // LHS is `exports` (identifier) or `module.exports` (member).
-    let lhs_is_exports = match &assign.left {
-        AssignmentTarget::AssignmentTargetIdentifier(id) => id.name == "exports",
-        AssignmentTarget::StaticMemberExpression(member) => {
-            member.property.name == "exports"
-                && matches!(&member.object, Expression::Identifier(o) if o.name == "module")
-        }
-        _ => false,
-    };
-    // ... OR a deeper link in the chain is (recurse on the RHS).
-    lhs_is_exports || is_module_exports_initializer(&assign.right)
-}
-
-/// True when `expr` is a `*.prototype` member access (e.g. `Foo.prototype`), or
-/// an identifier bound to a method receiver — either a prototype-object
-/// initializer (a `*.prototype` access `var proto = Foo.prototype` or an
-/// `Object.create(...)` call `var res = Object.create(http.ServerResponse.prototype)`)
-/// or a CommonJS namespace object built from a `module.exports` / `exports`
-/// assignment chain (`var app = exports = module.exports = {}`). These are the
-/// receivers of the prototype-patching / namespace-augmentation idioms, where a
-/// function assigned to one of their members gains the receiver as `this` at call
-/// time.
-fn is_prototype_object(
-    expr: &Expression,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    match expr {
-        Expression::StaticMemberExpression(member) => member.property.name == "prototype",
-        Expression::Identifier(ident) => {
-            let Some(ref_id) = ident.reference_id.get() else {
-                return false;
-            };
-            let scoping = semantic.scoping();
-            let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-                return false;
-            };
-            let decl = scoping.symbol_declaration(sym_id);
-            let AstKind::VariableDeclarator(declarator) =
-                semantic.nodes().kind(decl)
-            else {
-                return false;
-            };
-            declarator.init.as_ref().is_some_and(|init| {
-                is_prototype_initializer(init) || is_module_exports_initializer(init)
-            })
-        }
-        _ => false,
-    }
-}
-
-/// True when `func_id` is a function expression assigned to a member of a method
-/// receiver — a prototype object (`proto[m] = function() {}` /
-/// `Foo.prototype.m = function() {}`) or a CommonJS namespace object bound from a
-/// `module.exports` / `exports` chain (`app.init = function () {}` where
-/// `var app = exports = module.exports = {}`). In those idioms `this` is bound to
-/// the receiver at call time (`obj.method()`), so `this` inside the function body
-/// is valid.
-fn is_prototype_method_assignment(
+/// True when `func_id` is a `function` expression that is the right-hand side of
+/// an assignment whose left-hand side is a member expression — `obj.method =
+/// function () {…}` (static) or `obj[key] = function () {…}` (computed). When the
+/// method is later invoked as `obj.method(...)`, `this` is bound to the receiver
+/// `obj` at call time, so `this` inside the function body is the receiver and is
+/// valid. This is the general method-patching (monkey-patching) idiom — e.g.
+/// `md.parse = function () { return _parse.call(this, …) }` — of which the
+/// `*.prototype` and `module.exports` / `exports` member assignments are special
+/// cases. A function whose assignment target is a bare identifier (`f =
+/// function () {…}`) has no receiver and is not matched.
+fn is_method_property_assignment(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
@@ -166,12 +80,11 @@ fn is_prototype_method_assignment(
     let AstKind::AssignmentExpression(assign) = nodes.kind(nodes.parent_id(func_id)) else {
         return false;
     };
-    let object = match &assign.left {
-        AssignmentTarget::StaticMemberExpression(member) => &member.object,
-        AssignmentTarget::ComputedMemberExpression(member) => &member.object,
-        _ => return false,
-    };
-    is_prototype_object(object, semantic)
+    matches!(
+        assign.left,
+        AssignmentTarget::StaticMemberExpression(_)
+            | AssignmentTarget::ComputedMemberExpression(_)
+    )
 }
 
 /// True when `func_id` is a `function` expression that is the initializer of a
@@ -642,10 +555,12 @@ fn is_valid_this_context(
                 if is_typed_callable_binding(ancestor.id(), semantic) {
                     return true;
                 }
-                // Prototype-patching idiom: a function assigned to a member
-                // of a `*.prototype` object is a method — `this` is the
-                // instance at call time, so it's valid.
-                if is_prototype_method_assignment(ancestor.id(), semantic) {
+                // Method-property assignment: a function assigned to a member
+                // of any object (`obj.method = function () {…}`, `obj[k] = …`)
+                // is a method — when invoked as `obj.method(...)`, `this` is
+                // bound to the receiver at call time, so `this` is valid. This
+                // subsumes the `*.prototype` and `module.exports` patching idioms.
+                if is_method_property_assignment(ancestor.id(), semantic) {
                     return true;
                 }
                 // Mocha callback: a `function` passed to `describe`/`it`/hooks
@@ -884,10 +799,30 @@ mod tests {
     }
 
     #[test]
-    fn flags_this_in_non_prototype_member_assignment() {
-        // A function assigned to a plain (non-prototype) object member is still
-        // a standalone function — `this` is unbound and must fire.
-        let diags = run_on("obj.m = function () { return this.x; };");
+    fn allows_this_in_method_patching_assignment() {
+        // Regression for #6166: the markdown-it method-patching idiom assigns a
+        // `function` to a plain object member (`md.parse = function () {…}`).
+        // When invoked as `md.parse(src, env)`, `this` is bound to `md`, and
+        // `_parse.call(this, …)` forwards that receiver — `this` is valid.
+        let src = "const _parse = md.parse;\nmd.parse = function (src, env) {\n  return _parse.call(this, src, env);\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_computed_member_method_assignment() {
+        // Regression for #6166: the computed-member form (`obj['m'] = function
+        // () {…}`) binds `this` to `obj` at call time exactly like the static
+        // member form, so `this` in the body is valid.
+        let src = "obj['m'] = function () {\n  return this.x;\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_identifier_target_assignment() {
+        // Negative-space guard for #6166: a `function` assigned to a bare
+        // identifier target (`f = function () {…}`, not a member of any object)
+        // has no receiver — `this` is unbound and must fire.
+        let diags = run_on("let f;\nf = function () {\n  return this.x;\n};");
         assert_eq!(diags.len(), 1);
     }
 
@@ -899,17 +834,6 @@ mod tests {
         // `res.status(200)`, so `this` is the instance at call time.
         let src = "var res = Object.create(http.ServerResponse.prototype);\nres.status = function status(code) {\n  this.statusCode = code;\n  return this;\n};";
         assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn flags_this_in_non_object_create_member_assignment() {
-        // Negative-space guard for #3386: the `Object.create` exemption keys on
-        // the global `Object.create`. A method assigned to a binding initialized
-        // by some other `create()` call is not recognized — `this` stays unbound
-        // and must fire.
-        let src = "var obj = factory.create();\nobj.m = function () { return this.x; };";
-        let diags = run_on(src);
-        assert_eq!(diags.len(), 1);
     }
 
     #[test]
@@ -944,15 +868,6 @@ mod tests {
         // also yields the CommonJS namespace object.
         let src = "var app = exports = {};\napp.bar = function () { return this.y; };";
         assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn flags_this_in_plain_object_member_method() {
-        // Negative-space guard for #3643: a function assigned to a member of a
-        // plain `var obj = {}` (no `module.exports`/`exports` chain) is still a
-        // standalone function — `this` is unbound and must fire.
-        let diags = run_on("var obj = {};\nobj.m = function () { return this.x; };");
-        assert_eq!(diags.len(), 1);
     }
 
     #[test]
