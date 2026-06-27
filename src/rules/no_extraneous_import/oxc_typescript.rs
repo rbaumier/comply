@@ -96,6 +96,16 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // Relaxed-convention directories — documentation (`docs/`), demonstration
+        // code (`examples/`, `demo(s)/`, `samples/`), benchmarks (`benches/`),
+        // and test fixtures (`fixtures/`, `__fixtures__/`) — are never published.
+        // comply classifies them through the shared `RELAXED_SEGMENTS` lever
+        // (`ctx.file.path_segments.is_relaxed_dir`), and each is a directory where
+        // importing a devDependency is legitimate (e.g. rollup's `docs/repl/` Vue
+        // REPL demo importing `vue`/`pinia` — issue #6294).
+        if ctx.file.path_segments.is_relaxed_dir {
+            return;
+        }
         // Performance benchmark files, recognized by the shared benchmark
         // predicate: a `bench`/`benchmark`/`benches` directory, a `.bench.`
         // filename infix, a `_bench`/`-bench` stem marker, or a stem that is
@@ -1156,6 +1166,36 @@ import Benchmark from "benchmark";
         let d = run_with_pkg_at_path(pkg, "src/app/features/auth/login.ts", src);
         assert_eq!(d.len(), 1, "production code should still flag: {d:?}");
         assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_docs_dir() {
+        // Issue #6294: rollup's `docs/repl/stores/modules.ts` is part of a Vue
+        // REPL demo bundled as documentation for the rollup website, not
+        // published library code. It imports `pinia` and `vue` from
+        // devDependencies, which is correct — `docs/` is a comply relaxed
+        // directory (`RELAXED_SEGMENTS`) whose files never ship.
+        let pkg = r#"{
+            "dependencies": {"@rollup/browser": "^4"},
+            "devDependencies": {"pinia": "^2", "vue": "^3"}
+        }"#;
+        let src = r#"
+import { defineStore } from 'pinia';
+import { ref } from 'vue';
+"#;
+        let d = run_with_pkg_at_path(pkg, "docs/repl/stores/modules.ts", src);
+        assert!(d.is_empty(), "docs/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_docs_dir() {
+        // Guard against over-relaxing: a path where "docs" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"vue":"^3"}}"#;
+        let src = r#"import { ref } from 'vue';"#;
+        let d = run_with_pkg_at_path(pkg, "src/docsBuilder/index.ts", src);
+        assert_eq!(d.len(), 1, "non-docs dir should still flag: {d:?}");
+        assert!(d[0].message.contains("vue"));
     }
 
     #[test]
