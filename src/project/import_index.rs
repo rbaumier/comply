@@ -112,6 +112,14 @@ pub struct ExportedSymbol {
     /// of a named binding (`export { Foo as default }`) rather than an
     /// unrelated default that merely coexists with a named `Foo`.
     pub local_name: Option<String>,
+    /// `true` when this is a single `const`/`let`/`var` binding initialized
+    /// directly with a string, number, or boolean literal (`export const X =
+    /// "lit"`). The exported value's bytes are then fully present in the module
+    /// source, so a consumer comparing against it leaks nothing through timing —
+    /// the cross-file analogue of `oxc_helpers::expression_is_or_resolves_to_literal`.
+    /// `false` for any other export shape (destructuring binding, function,
+    /// class, call/member/template/compound initializer, re-export, type).
+    pub is_primitive_literal: bool,
 }
 
 /// Kind of an imported symbol.
@@ -1372,6 +1380,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             params: Vec::new(),
             is_type_only: false,
             local_name: None,
+            is_primitive_literal: false,
         });
     }
 
@@ -2050,6 +2059,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 params: Vec::new(),
                 is_type_only: false,
                 local_name: None,
+                is_primitive_literal: false,
             });
             return;
         }
@@ -2061,6 +2071,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             params: Vec::new(),
             is_type_only: false,
             local_name: None,
+            is_primitive_literal: false,
         });
         return;
     }
@@ -2102,6 +2113,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 params: Vec::new(),
                 is_type_only: false,
                 local_name,
+                is_primitive_literal: false,
             });
         }
         return;
@@ -2120,6 +2132,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             params: Vec::new(),
             is_type_only: false,
             local_name: None,
+            is_primitive_literal: false,
         });
         return;
     }
@@ -2154,6 +2167,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             params: extract_params(inner, source),
                             is_type_only: false,
                             local_name: None,
+                            is_primitive_literal: false,
                         });
                     }
                 } else {
@@ -2201,6 +2215,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     params,
                     is_type_only: false,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
         }
@@ -2217,6 +2232,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     params: Vec::new(),
                     is_type_only: false,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
         }
@@ -2237,6 +2253,12 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                 else {
                     continue;
                 };
+                // Only a single plain-identifier binding has one value to
+                // attribute; a destructuring pattern (`{ a } = obj`) binds
+                // several names from one initializer, none of them a standalone
+                // literal.
+                let is_primitive_literal = name_node.kind() == "identifier"
+                    && declarator_binds_primitive_literal(decl, source);
                 let mut names = Vec::new();
                 collect_pattern_names(name_node, source, &mut names);
                 for name in names {
@@ -2248,6 +2270,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                         params: Vec::new(),
                         is_type_only: false,
                         local_name: None,
+                        is_primitive_literal,
                     });
                 }
             }
@@ -2265,6 +2288,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     params: Vec::new(),
                     is_type_only: true,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
         }
@@ -2281,6 +2305,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     params: Vec::new(),
                     is_type_only: false,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
         }
@@ -2298,6 +2323,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     params: Vec::new(),
                     is_type_only: false,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
         }
@@ -2329,6 +2355,27 @@ fn is_binding_pattern_kind(kind: &str) -> bool {
         kind,
         "identifier" | "object_pattern" | "array_pattern" | "rest_pattern"
     )
+}
+
+/// True when a `variable_declarator` initializes its binding directly with a
+/// string, number, or boolean literal (`= "lit"`, `= 12345`, `= true`). The
+/// tree-sitter analogue of `oxc_helpers::is_primitive_literal`: a `value` that
+/// is a call, member access, template string, or any compound expression is not
+/// a primitive literal and returns `false`, keeping a stored secret
+/// distinguishable from an inline constant.
+fn declarator_binds_primitive_literal(decl: Node, source: &[u8]) -> bool {
+    let Some(value) = decl.child_by_field_name("value") else {
+        return false;
+    };
+    match value.kind() {
+        "string" | "true" | "false" => true,
+        // tree-sitter-typescript has no `bigint` node: `123n` is a `number`
+        // whose text carries the `n` suffix. Exclude it so a BigInt literal is
+        // treated as non-literal, matching both the oxc extractor (distinct
+        // `BigIntLiteral`) and the same-file `oxc_helpers::is_primitive_literal`.
+        "number" => value.utf8_text(source).is_ok_and(|t| !t.ends_with('n')),
+        _ => false,
+    }
 }
 
 /// Walk a destructuring binding pattern and push every introduced
@@ -2517,6 +2564,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     params: Vec::new(),
                     is_type_only: false,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
             // `declare module '<specifier>' { … }` — a TypeScript module
@@ -3037,6 +3085,7 @@ fn oxc_extract_export_named(
                 params: Vec::new(),
                 is_type_only: false,
                 local_name,
+                is_primitive_literal: false,
             });
         }
         return;
@@ -3063,6 +3112,7 @@ fn oxc_extract_export_named(
                     params: oxc_extract_params(func),
                     is_type_only: false,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
         }
@@ -3076,11 +3126,28 @@ fn oxc_extract_export_named(
                     params: Vec::new(),
                     is_type_only: false,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
         }
         Declaration::VariableDeclaration(var) => {
+            use oxc_ast::ast::{BindingPattern, Expression};
             for decl in &var.declarations {
+                // Parity with the tree-sitter extractor (`declarator_binds_primitive_literal`):
+                // only a single plain-identifier binding initialized directly
+                // with a string/number/boolean literal is a primitive-literal
+                // export. A destructuring pattern, or a call/member/template/
+                // compound initializer, is not.
+                let is_primitive_literal =
+                    matches!(&decl.id, BindingPattern::BindingIdentifier(_))
+                        && decl.init.as_ref().is_some_and(|init| {
+                            matches!(
+                                init,
+                                Expression::StringLiteral(_)
+                                    | Expression::NumericLiteral(_)
+                                    | Expression::BooleanLiteral(_)
+                            )
+                        });
                 let mut names = Vec::new();
                 oxc_collect_pattern_names(&decl.id, &mut names);
                 for name in names {
@@ -3092,6 +3159,7 @@ fn oxc_extract_export_named(
                         params: Vec::new(),
                         is_type_only: false,
                         local_name: None,
+                        is_primitive_literal,
                     });
                 }
             }
@@ -3105,6 +3173,7 @@ fn oxc_extract_export_named(
                 params: Vec::new(),
                 is_type_only: true,
                 local_name: None,
+                is_primitive_literal: false,
             });
         }
         Declaration::TSInterfaceDeclaration(decl) => {
@@ -3116,6 +3185,7 @@ fn oxc_extract_export_named(
                 params: Vec::new(),
                 is_type_only: true,
                 local_name: None,
+                is_primitive_literal: false,
             });
         }
         Declaration::TSEnumDeclaration(decl) => {
@@ -3127,6 +3197,7 @@ fn oxc_extract_export_named(
                 params: Vec::new(),
                 is_type_only: false,
                 local_name: None,
+                is_primitive_literal: false,
             });
         }
         Declaration::TSModuleDeclaration(decl) => {
@@ -3143,6 +3214,7 @@ fn oxc_extract_export_named(
                     params: Vec::new(),
                     is_type_only: false,
                     local_name: None,
+                    is_primitive_literal: false,
                 });
             }
         }
@@ -3180,6 +3252,7 @@ fn oxc_extract_cjs_export(
             params: Vec::new(),
             is_type_only: false,
             local_name: None,
+            is_primitive_literal: false,
         });
     };
 
@@ -3293,6 +3366,7 @@ fn oxc_extract_export_all(
                 params: Vec::new(),
                 is_type_only: false,
                 local_name: None,
+                is_primitive_literal: false,
             });
         }
         // A string-literal namespace name (`export * as "ns"`) has no
@@ -3308,6 +3382,7 @@ fn oxc_extract_export_all(
         params: Vec::new(),
         is_type_only: false,
         local_name: None,
+        is_primitive_literal: false,
     });
 }
 
@@ -4208,6 +4283,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         params: Vec::new(),
         is_type_only: false,
         local_name: None,
+        is_primitive_literal: false,
     });
 }
 
@@ -4281,6 +4357,7 @@ fn extract_rust_use(
                 params: Vec::new(),
                 is_type_only: false,
                 local_name: None,
+                is_primitive_literal: false,
             });
         }
     }
@@ -6224,6 +6301,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn marks_primitive_literal_const_exports() {
+        let extract = extract_ts_treesitter(
+            "export const DEFAULT_SECRET = \"abc\";\n\
+             export const COUNT = 42;\n\
+             export const FLAG = true;\n\
+             export const COMPUTED = process.env.X;\n\
+             export const CALLED = getSecret();\n\
+             export const TEMPL = `abc`;\n\
+             export const BIG = 123n;\n\
+             export function f() {}\n\
+             export const { a, b } = obj;",
+            Language::TypeScript,
+        );
+        let is_lit = |name: &str| {
+            extract
+                .exports
+                .iter()
+                .find(|e| e.name == name)
+                .unwrap_or_else(|| panic!("missing export {name}"))
+                .is_primitive_literal
+        };
+        // A const bound directly to a string / number / boolean literal.
+        assert!(is_lit("DEFAULT_SECRET"));
+        assert!(is_lit("COUNT"));
+        assert!(is_lit("FLAG"));
+        // A member access, call, template string, or BigInt is not a primitive
+        // literal (BigInt mirrors the same-file `is_primitive_literal`, which has
+        // no `BigIntLiteral` arm).
+        assert!(!is_lit("COMPUTED"));
+        assert!(!is_lit("CALLED"));
+        assert!(!is_lit("TEMPL"));
+        assert!(!is_lit("BIG"));
+        // A function export, and a destructuring binding (no single attributable
+        // value), are never primitive literals.
+        assert!(!is_lit("f"));
+        assert!(!is_lit("a"));
+        assert!(!is_lit("b"));
+    }
+
     /// Every distinct case the oxc extractor must match, one source string each.
     const DIFF_CASES: &[&str] = &[
         // --- imports ---
@@ -6282,6 +6399,9 @@ mod tests {
         "export const a1 = 1, b1 = 2, c1 = 3;",
         "export let mutable = 0;",
         "export var legacy = 0;",
+        // BigInt has a distinct oxc node but no tree-sitter `bigint` kind; both
+        // extractors must agree it is NOT a primitive-literal export.
+        "export const big = 123n;",
         "declare const obj: any; export const { signIn, signOut } = obj;",
         "declare const obj: any; export const { foo: bar } = obj;",
         "declare const obj: any; export const { a = 1, b } = obj;",

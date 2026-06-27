@@ -83,6 +83,18 @@ impl OxcCheck for Check {
         if !left_hit && !right_hit {
             return;
         }
+        // A sensitively-named operand may be compared against a public named
+        // constant imported from another module — `secret === DEFAULT_SECRET`,
+        // where the other module declares `export const DEFAULT_SECRET = "…"`.
+        // The constant's bytes are present in the project source, so this is a
+        // default/sentinel check, not a secret comparison, and leaks nothing.
+        // Resolved cross-file via `ImportIndex`; the same-file form is already
+        // handled above by `expression_is_or_resolves_to_literal`.
+        if operand_is_imported_literal_const(&bin.left, ctx)
+            || operand_is_imported_literal_const(&bin.right, ctx)
+        {
+            return;
+        }
         // Skip confirmation-style comparisons where both operands come from
         // the same object (e.g. `data.password === data.confirmPassword`).
         if both_from_same_object(bin) {
@@ -313,6 +325,41 @@ fn both_from_same_object(bin: &BinaryExpression) -> bool {
     let left_obj = member_object_text(&bin.left);
     let right_obj = member_object_text(&bin.right);
     matches!((left_obj, right_obj), (Some(a), Some(b)) if a == b)
+}
+
+/// True when `expr` is a bare identifier imported from another project module
+/// whose matching export is a `const`/`let`/`var` bound directly to a string,
+/// number, or boolean literal. Such a constant's bytes are already public in the
+/// module source, so a comparison against it cannot leak a runtime secret
+/// through timing — the cross-file analogue of the same-file
+/// `expression_is_or_resolves_to_literal` guard.
+///
+/// Resolution is purely structural: the operand's local name is matched against
+/// the importing file's import records (`ImportIndex`) to recover the source
+/// module and the original export name, then that module's export table is
+/// checked for a primitive-literal binding. The identifier's spelling — its case
+/// convention — plays no role. A binding that does not resolve to a known
+/// exporting file, or resolves to a non-literal export (a stored secret, call,
+/// or member access), does not match and stays flagged.
+fn operand_is_imported_literal_const(expr: &Expression, ctx: &CheckCtx) -> bool {
+    let Expression::Identifier(ident) = expr else {
+        return false;
+    };
+    let name = ident.name.as_str();
+    let index = ctx.project.import_index();
+    if index.is_empty() {
+        return false;
+    }
+    let canon = index.canonical(ctx.path);
+    index.get_imports(&canon).iter().any(|imp| {
+        imp.local_name == name
+            && imp.source_path.as_deref().is_some_and(|src| {
+                index
+                    .get_exports(src)
+                    .iter()
+                    .any(|export| export.name == imp.imported_name && export.is_primitive_literal)
+            })
+    })
 }
 
 #[cfg(test)]
@@ -584,5 +631,90 @@ mod tests {
     fn flags_password_hash_comparison() {
         assert_eq!(run_on("if (passwordHash === storedHash) {}").len(), 1);
         assert_eq!(run_on("if (user.password_hash === expectedHash) {}").len(), 1);
+    }
+
+    /// Build a temp project from `(rel_path, source)` pairs, index it so the
+    /// cross-file `ImportIndex` is populated, and run the rule on `target_rel`.
+    fn run_on_project(files: &[(&str, &str)], target_rel: &str) -> Vec<Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        let target_path = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let canon = fs::canonicalize(&target_path).unwrap();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_oxc_check(&Check, &source, &canon, &project, file)
+    }
+
+    /// better-auth create-context.ts:61 / secret-utils.ts:104 — comparing a
+    /// runtime secret against `DEFAULT_SECRET`, an imported `const` bound to a
+    /// string literal in another module. The literal's bytes are public in the
+    /// source, so this is a default-sentinel check, not a secret comparison.
+    #[test]
+    fn allows_imported_string_literal_const() {
+        let files = &[
+            (
+                "utils/constants.ts",
+                r#"export const DEFAULT_SECRET = "better-auth-secret-12345678901234567890";"#,
+            ),
+            (
+                "context/create-context.ts",
+                "import { DEFAULT_SECRET } from '../utils/constants';\n\
+                 function f(secret) { return secret === DEFAULT_SECRET; }",
+            ),
+        ];
+        assert!(run_on_project(files, "context/create-context.ts").is_empty());
+    }
+
+    /// The `!==` form (secret-utils.ts:104) is exempt for the same reason.
+    #[test]
+    fn allows_imported_string_literal_const_inequality() {
+        let files = &[
+            (
+                "utils/constants.ts",
+                r#"export const DEFAULT_SECRET = "better-auth-secret-12345678901234567890";"#,
+            ),
+            (
+                "context/secret-utils.ts",
+                "import { DEFAULT_SECRET } from '../utils/constants';\n\
+                 function f(legacySecret) { return legacySecret !== DEFAULT_SECRET; }",
+            ),
+        ];
+        assert!(run_on_project(files, "context/secret-utils.ts").is_empty());
+    }
+
+    /// Over-exemption guard: an imported const bound to a NON-literal
+    /// (`process.env.SECRET`) is a stored secret, not a public inline value, and
+    /// the comparison must still flag.
+    #[test]
+    fn flags_imported_non_literal_const() {
+        let files = &[
+            (
+                "utils/constants.ts",
+                "export const SECRET = process.env.SECRET;",
+            ),
+            (
+                "context/create-context.ts",
+                "import { SECRET } from '../utils/constants';\n\
+                 function f(token) { return token === SECRET; }",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "context/create-context.ts").len(), 1);
     }
 }

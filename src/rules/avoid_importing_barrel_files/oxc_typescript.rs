@@ -361,6 +361,7 @@ mod tests {
             params: vec![],
             is_type_only: false,
             local_name: None,
+            is_primitive_literal: false,
         };
         let own = ExportedSymbol {
             name: "addBusinessDays".into(),
@@ -370,6 +371,7 @@ mod tests {
             params: vec![],
             is_type_only: false,
             local_name: None,
+            is_primitive_literal: false,
         };
         // Pure re-export hub → barrel.
         assert!(target_is_genuine_barrel(&[reexport.clone()]));
