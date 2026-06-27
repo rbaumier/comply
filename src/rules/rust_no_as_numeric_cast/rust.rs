@@ -92,7 +92,8 @@ use crate::rules::rust_helpers::{
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
-    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
+    is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -261,6 +262,12 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_operand_is_assert_bounded(node, source_bytes) {
+        return false;
+    }
+    // A guard-less wildcard `match` arm whose preceding sibling arms clamp every
+    // out-of-range value (`val if val < 0 => 0, val if val > 0xFF => 0xFF, val =>
+    // val as u8`) proves the cast operand fits the target exactly (#6150).
+    if cast_operand_is_sibling_arm_bounded(node, source_bytes) {
         return false;
     }
     if cast_is_pointer_sized_widening(node, source_bytes, target) {
@@ -1712,5 +1719,116 @@ name = "normal_lib"
             run_on_with_cargo(LIB_CARGO_TOML, "fn f(i: usize) -> u32 { i as u32 }").len(),
             1
         );
+    }
+
+    #[test]
+    fn repro_6150_saturating_wildcard_cast_not_flagged() {
+        // The Floyd-Steinberg saturation idiom: preceding arms clamp every value
+        // outside `[0, 0xFF]`, so the wildcard arm's `val as u8` is provably in
+        // range and must not be flagged.
+        let src = "fn f(x: i16) -> u8 { match x { \
+                   val if val < 0 => 0, \
+                   val if val > 0xFF => 0xFF, \
+                   val => val as u8 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6150_image_rs_snippet_not_flagged() {
+        // The issue's exact shape (image-rs/image colorops.rs `diffuse_err`).
+        let src = "fn diffuse_err<P: Pixel<Subpixel = u8>>(pixel: &mut P, error: [i16; 3], factor: i16) { \
+                   for (e, c) in error.iter().zip(pixel.channels_mut().iter_mut()) { \
+                   *c = match <i16 as From<_>>::from(*c) + e * factor / 16 { \
+                   val if val < 0 => 0, \
+                   val if val > 0xFF => 0xFF, \
+                   val => val as u8 } } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6150_inclusive_mirrored_bounds_not_flagged() {
+        // The `<= -1` floor and `>= N + 1` ceiling forms (decimal `256` == u8 max
+        // plus one) prove the same range.
+        let src = "fn f(x: i32) -> u8 { match x { \
+                   val if val <= -1 => 0, \
+                   val if val >= 256 => 255, \
+                   val => val as u8 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6150_lower_bound_only_still_flagged() {
+        // Only the floor arm is present; nothing bounds the value above 0xFF, so
+        // `val as u8` can still overflow and stays flagged.
+        let src = "fn f(x: i16) -> u8 { match x { \
+                   val if val < 0 => 0, \
+                   val => val as u8 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6150_upper_bound_only_still_flagged() {
+        // Only the ceiling arm is present; nothing rules out a negative value
+        // wrapping on the unsigned cast, so it stays flagged.
+        let src = "fn f(x: i16) -> u8 { match x { \
+                   val if val > 0xFF => 0xFF, \
+                   val => val as u8 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6150_mismatched_upper_bound_still_flagged() {
+        // The ceiling `0x1FF` (511) exceeds u8's max, so values 256..=511 fall
+        // through to the wildcard and `val as u8` truncates — still flagged.
+        let src = "fn f(x: i16) -> u8 { match x { \
+                   val if val < 0 => 0, \
+                   val if val > 0x1FF => 0xFF, \
+                   val => val as u8 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6150_guarded_wildcard_still_flagged() {
+        // The cast's own arm carries a guard, so it is not the catch-all the
+        // elimination proof relies on — the exemption must not apply.
+        let src = "fn f(x: i16) -> u8 { match x { \
+                   val if val < 0 => 0, \
+                   val if val > 0xFF => 0xFF, \
+                   val if val % 2 == 0 => val as u8, \
+                   val => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6150_shadowed_operand_in_wildcard_body_still_flagged() {
+        // A `let val` shadow in the wildcard body rebinds the operand to an
+        // out-of-range value, breaking the sibling-arm proof — still flagged.
+        let src = "fn f(x: i16) -> u8 { match x { \
+                   val if val < 0 => 0, \
+                   val if val > 0xFF => 0xFF, \
+                   val => { let val = 1000; val as u8 } } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6150_signed_target_still_flagged() {
+        // The exemption is unsigned-target-only: `0..=0xFF` does not fit `i8`
+        // (max 127), so values 128..=255 overflow and the cast stays flagged.
+        let src = "fn f(x: i16) -> i8 { match x { \
+                   val if val < 0 => 0, \
+                   val if val > 0xFF => 0x7F, \
+                   val => val as i8 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6150_mismatched_binding_identifier_still_flagged() {
+        // The bound arms bind `y` but the wildcard casts `val`; with no guard
+        // referencing `val`, the bounds do not constrain it — still flagged.
+        let src = "fn f(x: i16) -> u8 { match x { \
+                   y if y < 0 => 0, \
+                   y if y > 0xFF => 0xFF, \
+                   val => val as u8 } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
