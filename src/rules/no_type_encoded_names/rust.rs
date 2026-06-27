@@ -22,6 +22,18 @@ crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     if RUST_DOMAIN_PREFIXES.contains(&prefix) {
         return;
     }
+    // A type-abbreviation prefix is only Hungarian notation when the binding's
+    // actual type matches the type the prefix claims. When the declaration
+    // carries an explicit type annotation that contradicts the prefix — a
+    // generic `&T`, a reference, a non-float for `flt`/`dbl` — the prefix
+    // names a domain concept (`flt_id: &T` = VCF/BCF *filter* id), not the
+    // type, so it is not type-encoding. Bindings with no annotation keep
+    // firing on the prefix alone.
+    if let Some(ty) = explicit_type_annotation(node, source)
+        && !prefix_matches_type(prefix, ty)
+    {
+        return;
+    }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -51,6 +63,41 @@ fn is_declaration_site(node: tree_sitter::Node) -> bool {
         parent.kind(),
         "let_declaration" | "parameter" | "const_item" | "static_item"
     )
+}
+
+/// The text of the binding's explicit type annotation, if any. All four
+/// declaration sites expose it as the `type` field (`let x: T`, `p: T`,
+/// `const C: T`, `static S: T`); a `let` written without `: T` yields `None`.
+fn explicit_type_annotation<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    node.parent()?
+        .child_by_field_name("type")?
+        .utf8_text(source)
+        .ok()
+}
+
+const FLOAT_TYPES: &[&str] = &["f32", "f64"];
+const INT_TYPES: &[&str] = &[
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+];
+
+/// Whether an explicit annotation `ty` is the primitive type a legacy
+/// Hungarian prefix claims the value has. A genuine type-encoded name annotates
+/// the matching primitive (`flt_total: f64`); a domain abbreviation annotates
+/// something else (`flt_id: &T`), so the prefix is not a redundant type tag.
+/// `str`/`arr`/`bool` never reach here — they are filtered out earlier.
+fn prefix_matches_type(prefix: &str, ty: &str) -> bool {
+    let ty = ty.trim();
+    match prefix {
+        "flt" | "dbl" => FLOAT_TYPES.contains(&ty),
+        "lng" => INT_TYPES.contains(&ty),
+        "chr" => ty == "char",
+        "byt" => ty == "u8",
+        // `prom` (Promise) has no Rust primitive, so an explicit annotation can
+        // never confirm it — an annotated `prom_*` is a domain name.
+        "prom" => false,
+        // Unknown prefix: keep the pre-annotation behaviour (flag on prefix).
+        _ => true,
+    }
 }
 
 
@@ -155,5 +202,34 @@ mod tests {
         // The exclusion is for function *names* only — a value parameter that
         // genuinely type-encodes is still flagged.
         assert_eq!(run_on("fn f(dbl_value: f64) {}").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_flt_prefix_on_non_float_generic_param() {
+        // #6060: `flt` is the VCF/BCF *filter* abbreviation, not float
+        // Hungarian. The annotation is a generic `&T`, not `f32`/`f64`, so the
+        // prefix cannot be encoding a float type.
+        assert!(
+            run_on(
+                "struct R; impl R { \
+                 pub fn has_filter<T: FilterId + ?Sized>(&self, flt_id: &T) -> bool { false } }"
+            )
+            .is_empty()
+        );
+        assert!(
+            run_on(
+                "struct R; impl R { \
+                 pub fn set_filters<T: FilterId + ?Sized>(&mut self, flt_ids: &[&T]) {} }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_genuine_float_hungarian_param() {
+        // Strictness preserved: an explicit `f64` annotation confirms the `flt`
+        // prefix is a redundant float type tag.
+        assert_eq!(run_on("fn f(flt_total: f64) {}").len(), 1);
+        assert_eq!(run_on("fn f() { let flt_total: f32 = 0.0; }").len(), 1);
     }
 }
