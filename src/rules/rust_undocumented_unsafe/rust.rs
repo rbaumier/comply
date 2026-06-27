@@ -43,7 +43,9 @@ impl AstCheck for Check {
         if is_in_test_context(node, ctx.source.as_bytes()) {
             return;
         }
-        if has_safety_comment_above(node, ctx.source) {
+        if has_safety_comment_above(node, ctx.source)
+            || has_safety_comment_inside_block(node, ctx.source)
+        {
             return;
         }
         let pos = node.start_position();
@@ -160,6 +162,31 @@ fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
         cur = p.parent();
     }
     false
+}
+
+/// True if the FIRST named child inside the unsafe block's body is a
+/// `// SAFETY:` comment (the inline-first convention). The safety
+/// justification is placed as the opening line *inside* `unsafe { ... }`
+/// rather than above the `unsafe` keyword; Clippy's
+/// `undocumented_unsafe_blocks` — this rule's stated equivalent — accepts
+/// that form. Only the first inner item is consulted: a SAFETY comment
+/// buried after real statements documents that statement, not the block
+/// opening, so it does not suppress the block.
+fn has_safety_comment_inside_block(node: tree_sitter::Node, source: &str) -> bool {
+    let mut cursor = node.walk();
+    let Some(block) = node.children(&mut cursor).find(|c| c.kind() == "block") else {
+        return false;
+    };
+    let mut block_cursor = block.walk();
+    let Some(first) = block.named_children(&mut block_cursor).next() else {
+        return false;
+    };
+    if !matches!(first.kind(), "line_comment" | "block_comment") {
+        return false;
+    }
+    first
+        .utf8_text(source.as_bytes())
+        .is_ok_and(|text| is_safety_marker(text.trim_start()))
 }
 
 /// True if `node` is the `{ … }` body of a `while`/`loop`/`for` expression.
@@ -726,6 +753,79 @@ mod tests {
                       let b = other(\n\
                       unsafe { ptr.read() }\n\
                       );\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_inline_first_safety_comment_issue_6265() {
+        // Issue #6265: tokio-rs/bytes src/bytes_mut.rs — the `// SAFETY:`
+        // comment is the first line *inside* the unsafe block body
+        // (inline-first convention, accepted by Clippy's
+        // `undocumented_unsafe_blocks`), not above the `unsafe` keyword.
+        let source = "fn f(at: usize) -> Self {\n\
+                      unsafe {\n\
+                      // SAFETY: `shallow_clone` increments the reference count\n\
+                      // and returns a bitwise copy of the handle.\n\
+                      let mut other = self.shallow_clone();\n\
+                      // SAFETY: We've checked that `at` <= `self.capacity()`.\n\
+                      other.advance_unchecked(at);\n\
+                      other\n\
+                      }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_first_block_comment_safety_issue_6265() {
+        // A `/* SAFETY: ... */` block comment as the first inner line also
+        // documents the block (the `block_comment` arm).
+        let source = "fn f(p: *const u8) {\n\
+                      unsafe {\n\
+                      /* SAFETY: p is non-null and valid. */\n\
+                      let _ = *p;\n\
+                      }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_inline_first_non_safety_first_line_issue_6265() {
+        // Negative control: an unsafe block with no SAFETY comment above and
+        // whose first inner line is a plain statement still fires.
+        let source = "fn f(p: *const u8) {\n\
+                      unsafe {\n\
+                      let x = compute();\n\
+                      let _ = *p;\n\
+                      }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_non_safety_first_comment_issue_6265() {
+        // Negative control: a non-SAFETY comment as the first inner line does
+        // not document the block.
+        let source = "fn f(p: *const u8) {\n\
+                      unsafe {\n\
+                      // increment the counter first\n\
+                      let _ = *p;\n\
+                      }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_safety_comment_not_first_issue_6265() {
+        // Negative control: a `// SAFETY:` comment buried after a real
+        // statement documents that statement, not the block opening — the
+        // block stays flagged.
+        let source = "fn f(p: *const u8) {\n\
+                      unsafe {\n\
+                      let x = compute();\n\
+                      // SAFETY: x is in bounds.\n\
+                      let _ = *p;\n\
+                      }\n\
                       }";
         assert_eq!(run_on(source).len(), 1);
     }
