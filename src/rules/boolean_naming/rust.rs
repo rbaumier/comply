@@ -325,11 +325,10 @@ fn is_setter_value_placeholder_param(
 /// Anchored on four AST signals so it cannot widen into a name allowlist: the
 /// node is a `parameter` named exactly `yes`/`no`, its directly-enclosing
 /// `function_item` declares a `self_parameter` receiver, has exactly one non-self
-/// parameter (this one), and returns a builder shape — a `Self`-form
-/// (`Self`/`&Self`/`&mut Self`) OR a by-value-`self` method returning a named
-/// type (`Config`). A method returning a primitive (`-> bool`/`-> u32`) or one
-/// that borrows `&self` while returning a fresh value (`-> String`) is a
-/// predicate/transform, not a builder, and still flags. A meaningful boolean
+/// parameter (this one), and returns a builder shape (see
+/// [`method_returns_builder_shape`]). A method returning a primitive
+/// (`-> bool`/`-> u32`) or one that borrows `&self` while returning a fresh value
+/// (`-> String`) is a predicate/transform, not a builder, and still flags. A meaningful boolean
 /// param (`emit`, `enabled`, `drop`) in the same builder shape still flags — only
 /// the placeholders `yes`/`no` match. A `yes: bool` param in a free function, a
 /// method with no `self` receiver, a method taking other non-self params, or a
@@ -359,13 +358,17 @@ fn is_toggle_yes_no_placeholder_param(node: tree_sitter::Node, source: &[u8]) ->
     false
 }
 
-/// True if `function_item` returns a fluent-builder shape: either a `Self`-form
-/// (`Self`/`&Self`/`&mut Self`, the borrowing-builder return) or a named type
-/// returned from a by-value `self` receiver (the consuming-builder return,
-/// e.g. `mut self -> Config`). A method returning a primitive (`-> bool`,
-/// `-> u32`) is a predicate; a `&self` method returning a fresh named value
-/// (`-> String`) is a transform — neither yields the reconfigured receiver, so
-/// neither matches.
+/// True if `function_item` returns a fluent-builder shape, in any of three
+/// forms: a `Self`-form (`Self`/`&Self`/`&mut Self`); a named type returned
+/// from a by-value `self` receiver (the consuming-builder return, e.g.
+/// `mut self -> Config`); or a `&mut self` receiver returning `&mut <T>` where
+/// `<T>` names the enclosing `impl` block's self type — a borrowing builder
+/// that spells `&mut Self` with the concrete type name
+/// (`impl AhoCorasickBuilder { … -> &mut AhoCorasickBuilder }`). A method
+/// returning a primitive (`-> bool`, `-> u32`) is a predicate; a `&self` method
+/// returning a fresh named value (`-> String`) is a transform; a `&mut self`
+/// method returning `&mut <other type>` borrows a field, not the builder —
+/// none yield the reconfigured receiver, so none match.
 fn method_returns_builder_shape(function_item: tree_sitter::Node, source: &[u8]) -> bool {
     if method_returns_self_type(function_item, source) {
         return true;
@@ -377,7 +380,11 @@ fn method_returns_builder_shape(function_item: tree_sitter::Node, source: &[u8])
         return_type.kind(),
         "type_identifier" | "scoped_type_identifier" | "generic_type"
     );
-    returns_named_type && method_consumes_self_by_value(function_item)
+    if returns_named_type && method_consumes_self_by_value(function_item) {
+        return true;
+    }
+    method_has_mut_self_receiver(function_item)
+        && return_type_is_mut_ref_to_impl_self_type(function_item, return_type, source)
 }
 
 /// True if `function_item`'s receiver is `self`/`mut self` taken by value (the
@@ -392,6 +399,32 @@ fn method_consumes_self_by_value(function_item: tree_sitter::Node) -> bool {
         child.kind() == "self_parameter" && {
             let mut sc = child.walk();
             !child.children(&mut sc).any(|c| c.kind() == "&")
+        }
+    })
+}
+
+/// True if `function_item`'s receiver is `&mut self`: a `self_parameter` that
+/// carries both a `&` reference child and a `mutable_specifier`, as a borrowing
+/// builder does. A by-value `self`/`mut self` or a shared `&self` receiver is
+/// not `&mut self`.
+fn method_has_mut_self_receiver(function_item: tree_sitter::Node) -> bool {
+    let Some(params) = function_item.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = params.walk();
+    params.children(&mut cursor).any(|child| {
+        child.kind() == "self_parameter" && {
+            let mut sc = child.walk();
+            let mut has_ref = false;
+            let mut has_mut = false;
+            for c in child.children(&mut sc) {
+                match c.kind() {
+                    "&" => has_ref = true,
+                    "mutable_specifier" => has_mut = true,
+                    _ => {}
+                }
+            }
+            has_ref && has_mut
         }
     })
 }
@@ -474,6 +507,61 @@ fn method_returns_self_type(function_item: tree_sitter::Node, source: &[u8]) -> 
         .child_by_field_name("return_type")
         .and_then(|n| n.utf8_text(source).ok())
         .is_some_and(|t| matches!(t, "Self" | "&Self" | "&mut Self"))
+}
+
+/// True if `return_type` is `&mut <T>` (a `reference_type` carrying a
+/// `mutable_specifier` whose `type` field is a bare `type_identifier`) and `<T>`
+/// names the enclosing `impl` block's self type — i.e. it returns `&mut Self`
+/// spelled with the concrete builder name (`impl AhoCorasickBuilder { … ->
+/// &mut AhoCorasickBuilder }`). A `&mut self` method returning `&mut <other
+/// type>` borrows a field, not the builder, and does not match.
+fn return_type_is_mut_ref_to_impl_self_type(
+    function_item: tree_sitter::Node,
+    return_type: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    if return_type.kind() != "reference_type" {
+        return false;
+    }
+    let is_mut = return_type
+        .children(&mut return_type.walk())
+        .any(|c| c.kind() == "mutable_specifier");
+    if !is_mut {
+        return false;
+    }
+    let Some(referent) = return_type.child_by_field_name("type") else {
+        return false;
+    };
+    if referent.kind() != "type_identifier" {
+        return false;
+    }
+    let Ok(returned_name) = referent.utf8_text(source) else {
+        return false;
+    };
+    impl_self_type_name(function_item, source) == Some(returned_name)
+}
+
+/// The enclosing `impl` block's self-type name: the text of the nearest
+/// ancestor `impl_item`'s `type` field when it is a bare `type_identifier`
+/// (`AhoCorasickBuilder` for `impl AhoCorasickBuilder { … }`). Returns `None`
+/// when the method is not inside an `impl`, or when the impl's self type is not
+/// a bare `type_identifier` (a generic or scoped target).
+fn impl_self_type_name<'a>(
+    function_item: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    let mut cursor = function_item.parent();
+    while let Some(parent) = cursor {
+        if parent.kind() == "impl_item" {
+            let type_node = parent.child_by_field_name("type")?;
+            if type_node.kind() != "type_identifier" {
+                return None;
+            }
+            return type_node.utf8_text(source).ok();
+        }
+        cursor = parent.parent();
+    }
+    None
 }
 
 /// True for a `bool` parameter named exactly `expected`/`actual` on a
@@ -1377,6 +1465,42 @@ mod tests {
         // `yes` inside a builder method is not the method's own param.
         let diags =
             run_on("impl X { fn flag(&mut self) -> &mut Self { let f = |yes: bool| {}; self } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'yes'"));
+    }
+
+    #[test]
+    fn allows_yes_no_in_borrowing_builder_returning_concrete_type() {
+        // BurntSushi/aho-corasick convention: a `&mut self` builder spells its
+        // return type with the concrete name (`&mut AhoCorasickBuilder`) instead
+        // of `&mut Self`. The shape is structurally `&mut Self`, so `yes`/`no`
+        // is the same content-free toggle placeholder. (Closes #6250)
+        for src in [
+            "impl AhoCorasickBuilder { pub fn ascii_case_insensitive(&mut self, yes: bool) \
+             -> &mut AhoCorasickBuilder { self } }",
+            "impl Builder { pub fn x(&mut self, yes: bool) -> &mut Builder { self } }",
+            "impl Builder { pub fn x(&mut self, no: bool) -> &mut Builder { self } }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_meaningful_bool_param_in_borrowing_builder_concrete_type() {
+        // Name strictness preserved: the exemption is anchored to the
+        // placeholders `yes`/`no`. A meaningful boolean param in the same
+        // `&mut self -> &mut Builder` shape still requires a predicate prefix.
+        let diags = run_on("impl Builder { fn set(&mut self, emit: bool) -> &mut Builder { self } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'emit'"));
+    }
+
+    #[test]
+    fn still_flags_yes_param_when_mut_ref_return_is_not_impl_self_type() {
+        // Return-type tightness: `&mut OtherType` is a borrowed field, not the
+        // builder itself, so the `&mut self -> &mut <impl self type>` shape does
+        // not match and `yes` still flags.
+        let diags = run_on("impl Builder { fn inner(&mut self, yes: bool) -> &mut OtherType { todo!() } }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("'yes'"));
     }
