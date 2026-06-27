@@ -157,6 +157,25 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `obj[key][0]` where `obj` is a same-scope `const` bound to an object
+        // literal whose every property value is a non-empty array literal.
+        // Whichever array the dynamic `key` selects is statically non-empty, so the
+        // first-element read is in-bounds — the rule's "empty array yields
+        // `undefined`" concern cannot apply, since no value in the object is an
+        // empty array. Covers the relative-time formatter idiom
+        // `const units = { days: ["day", "days"], … }; units[unit][0]`.
+        if is_first
+            && let Expression::ComputedMemberExpression(inner) = &member.object
+            && let Expression::Identifier(obj_ident) = &inner.object
+            && resolves_to_const_object_with_nonempty_arrays(
+                node,
+                obj_ident.name.as_str(),
+                semantic,
+            )
+        {
+            return;
+        }
+
         // `parts[0]` / `parts[parts.length - 1]` where `parts` is a same-scope
         // `const` bound to a `String.prototype.split` call (`str.split(sep)`).
         // `split` is specified to always return an array with at least one element
@@ -1166,6 +1185,73 @@ fn is_static_nonempty_array(arr: &ArrayExpression) -> bool {
     !arr.elements
         .iter()
         .any(|el| matches!(el, ArrayExpressionElement::SpreadElement(_)))
+}
+
+/// Returns true when `name` resolves to a same-scope `const` whose initializer is
+/// an object literal with at least one property and EVERY property value a
+/// statically non-empty array literal — making `name[key][0]` provably in-bounds
+/// for any key the object actually holds. Mirrors
+/// [`resolves_to_nonempty_array_literal`]: walks ancestor scopes innermost-first so
+/// the closest binding wins, and only a direct `const` qualifies (a `let` may be
+/// reassigned). The proof is purely structural — whichever value `name[key]`
+/// selects is one of the literal's array values, each of known length `>= 1`, so
+/// the first-element read can never hit an empty array. A spread property, a
+/// getter/setter, a non-array value, an empty array, an array containing a spread,
+/// or an empty object disqualifies: any of those leaves a value whose length is not
+/// provably `>= 1`.
+fn resolves_to_const_object_with_nonempty_arrays(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let stmts: &[Statement] = match ancestor.kind() {
+            AstKind::Program(prog) => &prog.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::BlockStatement(block) => &block.body,
+            _ => continue,
+        };
+        for stmt in stmts {
+            let Statement::VariableDeclaration(decl) = stmt else {
+                continue;
+            };
+            if decl.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for declarator in &decl.declarations {
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    continue;
+                };
+                if id.name.as_str() != name {
+                    continue;
+                }
+                // Closest binding wins: the first declarator matching `name`
+                // decides, even if its initializer is not a qualifying literal.
+                return matches!(
+                    &declarator.init,
+                    Some(Expression::ObjectExpression(obj))
+                        if object_values_all_nonempty_arrays(obj)
+                );
+            }
+        }
+    }
+    false
+}
+
+/// Returns true when `obj` has at least one property and every property is a plain
+/// (non-spread) entry whose value is a statically non-empty array literal. A spread
+/// property (`{ ...rest }`) or a getter/setter — whose value is not an array
+/// literal — fails the match, leaving a value of unknown length, so the object does
+/// not qualify.
+fn object_values_all_nonempty_arrays(obj: &ObjectExpression) -> bool {
+    if obj.properties.is_empty() {
+        return false;
+    }
+    obj.properties.iter().all(|prop| {
+        matches!(prop, ObjectPropertyKind::ObjectProperty(p)
+            if matches!(&p.value, Expression::ArrayExpression(arr) if is_static_nonempty_array(arr)))
+    })
 }
 
 /// The fixed-size array constructors whose first argument fixes the length:
@@ -2363,6 +2449,71 @@ mod tests {
     #[test]
     fn still_flags_index0_of_reassigned_let_issue_1967() {
         let src = "let colors = ['a', 'b']; const x = colors[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_of_const_object_of_nonempty_arrays_issue_6182() {
+        // `units` is a function-local `const` object whose every value is a
+        // non-empty array, so `units[unit][0]` is provably in-bounds.
+        let src = "function f(unit) { const units = { days: ['day', 'days'], hours: ['hour', 'hr.'] }; return `next ${units[unit][0]}`; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_of_const_object_in_ternary_issue_6182() {
+        let src = "function f(unit, narrow) { const units = { days: ['day', 'days'] }; const fmtUnit = narrow ? units[unit][0] : unit; return fmtUnit; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_of_let_object_issue_6182() {
+        // A `let` object may be reassigned to one with empty arrays.
+        let src = "function f(unit) { let units = { days: ['day'] }; return units[unit][0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_object_with_empty_array_value_issue_6182() {
+        let src = "function f(unit) { const units = { days: ['day'], hours: [] }; return units[unit][0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_param_object_issue_6182() {
+        let src = "function f(units, unit) { return units[unit][0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_object_with_nonarray_value_issue_6182() {
+        let src = "function f(unit) { const units = { days: ['day'], hours: getHours() }; return units[unit][0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_object_with_spread_array_value_issue_6182() {
+        let src = "function f(unit) { const units = { days: [...base] }; return units[unit][0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_object_with_spread_property_issue_6182() {
+        // An object-level spread (`...base`) can contribute empty arrays.
+        let src = "function f(unit) { const units = { days: ['day'], ...base }; return units[unit][0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_object_with_getter_value_issue_6182() {
+        // A getter value is not a statically known array literal.
+        let src = "function f(unit) { const units = { get days() { return []; } }; return units[unit][0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_empty_object_issue_6182() {
+        let src = "function f(unit) { const units = {}; return units[unit][0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
