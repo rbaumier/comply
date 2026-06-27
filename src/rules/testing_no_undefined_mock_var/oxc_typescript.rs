@@ -95,8 +95,11 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // If the mock is used as a spy (appears in expect()), the undefined return is fine.
-            if ctx.source_contains(&format!("expect({var_name})")) {
+            // If the mock is used as a spy (appears in expect() or its soft variant
+            // expect.soft()), the undefined return is fine.
+            if ctx.source_contains(&format!("expect({var_name})"))
+                || ctx.source_contains(&format!("expect.soft({var_name})"))
+            {
                 continue;
             }
 
@@ -187,6 +190,24 @@ mod tests {
         assert!(
             run("const handler = jest.fn(); expect(handler).toHaveBeenCalledWith('a', 'b');")
                 .is_empty()
+        );
+    }
+
+    // Regression for #6307: a spy asserted via Vitest's soft-assertion API
+    // `expect.soft(spy)` must not be flagged.
+    #[test]
+    fn allows_spy_in_expect_soft() {
+        assert!(run("const m = vi.fn(); expect.soft(m).toHaveBeenCalled();").is_empty());
+    }
+
+    // Negative control for #6307: the expect.soft() exemption is scoped to the
+    // asserted variable — an un-asserted sibling mock must still be flagged.
+    #[test]
+    fn flags_unasserted_mock_alongside_soft_asserted_one() {
+        assert_eq!(
+            run("const a = vi.fn(); const b = vi.fn(); expect.soft(b).toHaveBeenCalled();")
+                .len(),
+            1
         );
     }
 
