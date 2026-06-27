@@ -225,6 +225,45 @@ fn is_graph_entity_data_compound(name: &str) -> bool {
     last_is_data && first_is_graph_noun
 }
 
+/// True when `name` is an event-payload-data compound: a `…EventData` name whose
+/// `Event` segment is qualified by a specific, non-generic event-type noun
+/// (`FetchEventData`, `CacheChangeEventData`, `MessageEventData`, `CustomEventData`).
+/// The `Data` suffix on an `…Event` segment is the established convention for the
+/// typed payload an event carries (DOM `MessageEvent`/`CustomEvent`/`ErrorEvent`
+/// ecosystem, Node.js `EventEmitter`, custom event buses), so the qualifier turns
+/// the compound into a specific payload type, not the generic `data` blob.
+///
+/// Requires three structural facts: the last segment is `data`, the segment
+/// before it is `event`, and a qualifier segment precedes `event` whose leading
+/// word is meaningful — at least two characters and not itself a generic word.
+/// Unlike `is_graph_entity_data_compound`, which gates its qualifier on a positive
+/// graph-noun allowlist, the event-type qualifier is gated negatively: any word
+/// that is not itself generic qualifies. A bare `EventData` (no specific event
+/// type) or a generic-led compound (`ItemEventData`, `ValueEventData`) is not
+/// exempted, and a non-event `…Data` suffix (`updatedData`, `UserData`) is
+/// untouched.
+fn is_event_payload_data_compound(name: &str) -> bool {
+    let mut count = 0usize;
+    let mut first_is_meaningful = false;
+    let mut last_is_event = false;
+    let mut prev_is_event = false;
+    let mut last_is_data = false;
+    for_each_segment(name, |seg| {
+        if count == 0 {
+            first_is_meaningful = seg.len() >= 2
+                && !BANNED_WORDS.iter().any(|w| seg.eq_ignore_ascii_case(w))
+                && !BANNED_SEGMENTS.iter().any(|w| seg.eq_ignore_ascii_case(w));
+        }
+        prev_is_event = last_is_event;
+        last_is_event = seg.eq_ignore_ascii_case("event");
+        last_is_data = seg.eq_ignore_ascii_case("data");
+        count += 1;
+    });
+    // Need a qualifier, then `Event`, then `Data` — at least three segments, with
+    // `Data` trailing, `Event` immediately before it, and a meaningful qualifier.
+    count >= 3 && last_is_data && prev_is_event && first_is_meaningful
+}
+
 /// The `BANNED_SEGMENTS` noun occurring as a standalone segment of `name`, after
 /// the exemptions that turn a domain-suffixed compound (`dataType`, `DATA_DIR`)
 /// into a specific name.
@@ -238,6 +277,12 @@ fn matched_banned_segment(name: &str) -> Option<&'static str> {
     // the data payload attached to a graph primitive — a specific entity
     // container, not a generic `data` blob.
     if is_graph_entity_data_compound(name) {
+        return None;
+    }
+    // An event-payload-data compound (`FetchEventData`, `CacheChangeEventData`)
+    // names the typed payload a specific event carries — the established
+    // `…EventData` convention, not a generic `data` blob.
+    if is_event_payload_data_compound(name) {
         return None;
     }
     // A SCREAMING_SNAKE_CASE constant whose tail is a descriptive suffix
@@ -2571,6 +2616,38 @@ mod tests {
         assert_eq!(run("function getUserData() { return 1; }").len(), 1);
         assert_eq!(run("const data = fetchData();").len(), 1);
         assert_eq!(run("const nodeDataResponse = fetch();").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_event_payload_data_compound_issue_6074() {
+        // Regression for #6074 — a `…EventData` name is the established
+        // convention for the typed payload a specific event carries (DOM
+        // `MessageEvent`/`CustomEvent`/`ErrorEvent`, Node `EventEmitter`, custom
+        // buses). The event-type qualifier before `Event` makes the compound a
+        // precise payload type, not a generic `data` blob. Both PascalCase type
+        // names and a camelCase local holding the payload are clean.
+        let src = r#"
+            export interface FetchEventData { query: string }
+            export interface CacheChangeEventData { selection: number }
+            interface MessageEventData { value: string }
+            type CustomEventData = { detail: unknown };
+        "#;
+        assert!(run(src).is_empty(), "`*EventData` payload compounds must NOT flag");
+        assert!(run("const fetchEventData = makePayload();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_event_and_generic_data_compounds_issue_6074() {
+        // Negative space for #6074 — the exemption is scoped to a specific
+        // event-type qualifier directly before `Event`+`Data`. A bare `data`, a
+        // bare `EventData` (no specific event type), a generic-led event compound
+        // (`ItemEventData`), and a non-event `…Data` suffix (`UserData`,
+        // `updatedData`) all stay generic.
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        assert_eq!(run("export interface EventData { x: number }").len(), 1);
+        assert_eq!(run("export interface ItemEventData { x: number }").len(), 1);
+        assert_eq!(run("export type UserData = { id: string };").len(), 1);
+        assert_eq!(run("const updatedData = 1;").len(), 1);
     }
 
     #[test]
