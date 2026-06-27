@@ -4264,17 +4264,20 @@ fn byte_literal_value(text: &str) -> Option<i128> {
 ///   const reference (`mod::MAX_LEN`) or a function path (`mod::value`) has a
 ///   non-PascalCase final segment and is excluded; or
 /// - an `identifier` whose locally-declared type (a `let`/parameter annotation,
-///   resolved by `find_identifier_type`) is a module-qualified path
-///   (`spirv::SourceLanguage`) whose final segment is PascalCase —
-///   `source_language as u32` where `source_language: spirv::SourceLanguage`. An
-///   integer `as`-cast type-checks only when the operand is a numeric primitive,
-///   `char`, `bool`, a pointer, or a fieldless enum; a qualified non-primitive
-///   type that the cast compiles against is therefore an imported fieldless enum
-///   (a struct cannot be `as`-cast), and `as` is the only conversion the language
-///   offers (no `From<Enum> for {integer}`). This covers imported `#[repr(uN)]`
-///   enums whose repr is invisible to the AST. A BARE single-segment type name
-///   (`MyInt`) is NOT exempted here — it is just as likely a local numeric type
-///   alias, so it stays flagged conservatively.
+///   resolved by `find_identifier_type`) is either a module-qualified path
+///   (`spirv::SourceLanguage`) whose final segment is PascalCase, or a bare
+///   single-segment name resolving to a fieldless `enum_item` in the same file.
+///   The qualified form — `source_language as u32` where `source_language:
+///   spirv::SourceLanguage` — covers imported `#[repr(uN)]` enums whose repr is
+///   invisible to the AST: an integer `as`-cast type-checks only when the operand
+///   is a numeric primitive, `char`, `bool`, a pointer, or a fieldless enum, so a
+///   qualified non-primitive type the cast compiles against is an imported
+///   fieldless enum (a struct cannot be `as`-cast), and `as` is the only
+///   conversion the language offers (no `From<Enum> for {integer}`). The bare form
+///   — `code as i32` where `code: Code` and `Code` is a fieldless in-file enum —
+///   is the compiler-required `From<Code> for i32` idiom; the in-file `enum_item`
+///   is inspected directly, so a bare name resolving to a data-carrying enum or to
+///   a numeric type alias (no matching `enum_item`) stays flagged.
 ///
 /// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
 /// otherwise flag the cast because a fieldless-enum operand resolves to no
@@ -4292,21 +4295,29 @@ pub fn cast_operand_is_enum_discriminant(cast: Node, source: &[u8]) -> bool {
 }
 
 /// True if `value` (an `identifier` operand of `cast`) is a binding whose
-/// locally-declared type is a module-qualified path naming an imported fieldless
-/// enum read for its discriminant.
+/// locally-declared type names a fieldless enum read for its discriminant.
 ///
 /// The binding's type is resolved from its `let`/parameter annotation via
-/// `find_identifier_type`. An integer `as`-cast type-checks only when the operand
-/// is a numeric primitive, `char`, `bool`, a pointer, or a fieldless enum, so a
-/// type that is none of those (and that the cast compiles against) is a fieldless
-/// enum. The type qualifies when it is a MODULE-QUALIFIED path
-/// (`spirv::Decoration`, ≥ 2 `::`-segments) whose final segment is PascalCase —
-/// the same PascalCase gate the external-variant-path branch uses to exclude
-/// const (`mod::MAX_LEN`) and function (`mod::value`) paths. A bare single-segment
-/// name is rejected: it is indistinguishable from a local numeric type alias, so
-/// it stays conservatively flagged. A reference operand never reaches here — `&E
-/// as u32` does not compile, so a directly-`as`-castable enum binding is never a
-/// reference type.
+/// `find_identifier_type`, then matched in two shapes:
+///
+/// - a MODULE-QUALIFIED path (`spirv::Decoration`, a type text containing `::`)
+///   whose final segment is PascalCase. An integer `as`-cast type-checks only when
+///   the operand is a numeric primitive, `char`, `bool`, a pointer, or a fieldless
+///   enum, so a qualified non-primitive type the cast compiles against is an
+///   imported fieldless enum (its repr is invisible to the AST). The PascalCase
+///   gate — shared with the external-variant-path branch — excludes const
+///   (`mod::MAX_LEN`) and function (`mod::value`) paths; or
+/// - a BARE single-segment name (`Code`) that resolves to a fieldless `enum_item`
+///   defined in the same file. This is the `From<Code> for i32 { code as i32 }`
+///   idiom: `code` is a fieldless-enum binding and the `as`-cast reads its
+///   discriminant — the only way to implement that `From` (`i32::from(code)` would
+///   recurse; no `TryFrom` exists for the direction). The in-file `enum_item` is
+///   inspected directly, so a bare name resolving to a data-carrying enum is
+///   rejected and a bare numeric type alias (no matching `enum_item`) stays
+///   flagged.
+///
+/// A reference operand never reaches here — `&E as u32` does not compile, so a
+/// directly-`as`-castable enum binding is never a reference type.
 fn identifier_operand_is_enum_value(cast: Node, value: Node, source: &[u8]) -> bool {
     let Ok(name) = value.utf8_text(source) else {
         return false;
@@ -4314,11 +4325,19 @@ fn identifier_operand_is_enum_value(cast: Node, value: Node, source: &[u8]) -> b
     let Some(declared) = find_identifier_type(cast, name, source) else {
         return false;
     };
-    // Require a module-qualified path; a bare name may be a numeric type alias.
-    let Some((_, type_name)) = declared.trim().rsplit_once("::") else {
-        return false;
-    };
-    is_pascal_case(type_name)
+    let declared = declared.trim();
+    match declared.rsplit_once("::") {
+        // Module-qualified path (`spirv::SourceLanguage`): an imported enum whose
+        // repr the AST cannot see. A PascalCase final segment confirms it names a
+        // type, excluding const (`mod::MAX_LEN`) and function (`mod::value`) paths.
+        Some((_, type_name)) => is_pascal_case(type_name),
+        // Bare single-segment name (`Code`): resolve it in-file. It qualifies only
+        // when it names a fieldless `enum_item` defined here — then the binding is a
+        // fieldless-enum value and `code as i32` is the discriminant-read idiom (the
+        // only way to write `From<Code> for i32`). A data-carrying enum, or a name
+        // with no in-file `enum_item` (e.g. a numeric type alias), stays flagged.
+        None => find_enum_item(cast, declared, source).is_some_and(enum_is_fieldless),
+    }
 }
 
 /// True if `cast` (a `type_cast_expression`) reads a struct field typed as a
@@ -5357,6 +5376,23 @@ mod tests {
             ("fn f() -> u8 { module::value as u8 }", false),
             // External path with a SCREAMING_SNAKE final segment is a const.
             ("fn f() -> u8 { limits::MAX_LEN as u8 }", false),
+            // The `From<FieldlessEnum> for i32` idiom: the parameter binding `code`
+            // is typed as a fieldless in-file enum, so `code as i32` reads the
+            // discriminant (issue #6172).
+            (
+                "enum Code { Ok = 0, Cancelled = 1 } \
+                 impl From<Code> for i32 { fn from(code: Code) -> i32 { code as i32 } }",
+                true,
+            ),
+            // A `let`-annotated binding of a fieldless in-file enum, same idiom.
+            ("enum E { A, B } fn f() -> u8 { let e: E = E::A; e as u8 }", true),
+            // A parameter typed as a DATA-carrying in-file enum: the `as`-cast is
+            // not a plain discriminant read.
+            ("enum E { A(u32), B } fn f(e: E) -> u8 { e as u8 }", false),
+            // A parameter typed as a non-enum in-file type (a struct).
+            ("struct W(u32); fn f(w: W) -> u8 { w as u8 }", false),
+            // A bare numeric local stays flagged — `i32` names no in-file enum.
+            ("fn f() -> u8 { let n: i32 = 0; n as u8 }", false),
         ];
         for (src, expected) in cases {
             let tree = parse(src);

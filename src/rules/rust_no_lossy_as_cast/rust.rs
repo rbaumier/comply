@@ -1436,11 +1436,22 @@ mod tests {
 
     #[test]
     fn repro_5550_bare_type_name_binding_owned_by_numeric_cast() {
-        // A bare (unqualified) PascalCase type name is indistinguishable from a
-        // local numeric alias, so the discriminant exemption must NOT apply. The
-        // narrowing stays a finding — owned by `rust-no-as-numeric-cast`, so this
+        // A bare (unqualified) type name with no matching in-file `enum_item` gets
+        // no discriminant exemption — it could be a local numeric alias. The
+        // narrowing stays a finding owned by `rust-no-as-numeric-cast`, so this
         // rule cedes the span.
         let src = "fn f(d: Decoration) -> u8 { d as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6172_from_fieldless_enum_for_int_not_flagged() {
+        // Issue #6172 (hyperium/tonic): `code as i32` inside
+        // `impl From<Code> for i32` where `Code` is a fieldless in-file enum reads
+        // the discriminant; `i32` is a narrowing target, so this rule sees the cast
+        // and must exempt it via the shared discriminant predicate.
+        let src = "enum Code { Ok = 0, Cancelled = 1 } \
+                   impl From<Code> for i32 { fn from(code: Code) -> i32 { code as i32 } }";
         assert!(run_on(src).is_empty());
     }
 
