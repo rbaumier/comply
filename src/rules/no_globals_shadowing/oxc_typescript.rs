@@ -3,7 +3,8 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::Framework;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
-use oxc_ast::ast::{Expression, TSType};
+use oxc_ast::ast::{BindingPattern, Expression, TSType};
+use oxc_span::Span;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -226,6 +227,90 @@ fn initializer_is_global_capture(init: &Expression) -> bool {
     }
 }
 
+/// True when the symbol is bound by an object-destructuring property defaulted
+/// to a non-trivial expression, e.g. `const { window = defaultWindow } = options`.
+/// This is the "configurable global" dependency-injection idiom (the VueUse
+/// SSR-safe composable pattern): an option defaults to an SSR-safe reference and
+/// deliberately shadows the same-named global so all downstream code uses the
+/// injected value.
+///
+/// The structural signal is `{ name = <non-trivial expr> }`: an
+/// `AssignmentPattern` whose binding is an *object* property (not an array
+/// element) and whose default is neither a primitive literal nor `undefined`.
+/// A bare `{ name }` (no default), a primitive default (`= null` / `= 0`), an
+/// `= undefined` default, an array-destructuring default (`[name = x]`), and a
+/// plain `const name = x` are all genuine shadows and stay flagged.
+fn is_destructured_with_nontrivial_default<'a>(
+    symbol_id: oxc_semantic::SymbolId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let scoping = semantic.scoping();
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    // A destructured binding's declaration node is the enclosing
+    // `VariableDeclarator`; the pattern (and its `AssignmentPattern` defaults) are
+    // children of `decl.id`, not ancestors of the binding identifier.
+    let AstKind::VariableDeclarator(decl) = semantic.nodes().kind(decl_node_id) else {
+        return false;
+    };
+    object_property_has_nontrivial_default(&decl.id, scoping.symbol_span(symbol_id))
+}
+
+/// True when `pattern` binds the identifier at `target` as an object-destructuring
+/// property defaulted to a non-trivial expression. The recursion descends through
+/// nested patterns but only an *object* property default counts: an
+/// `AssignmentPattern` reached as an array element or as a default's own left
+/// sub-pattern is walked into, never treated as the exempting signal.
+fn object_property_has_nontrivial_default(pattern: &BindingPattern, target: Span) -> bool {
+    match pattern {
+        BindingPattern::ObjectPattern(obj) => {
+            for prop in &obj.properties {
+                if let BindingPattern::AssignmentPattern(assign) = &prop.value
+                    && let BindingPattern::BindingIdentifier(ident) = &assign.left
+                    && ident.span == target
+                    && !is_trivial_default(&assign.right)
+                {
+                    return true;
+                }
+                if object_property_has_nontrivial_default(&prop.value, target) {
+                    return true;
+                }
+            }
+            obj.rest
+                .as_ref()
+                .is_some_and(|rest| object_property_has_nontrivial_default(&rest.argument, target))
+        }
+        BindingPattern::ArrayPattern(arr) => {
+            arr.elements
+                .iter()
+                .flatten()
+                .any(|elem| object_property_has_nontrivial_default(elem, target))
+                || arr
+                    .rest
+                    .as_ref()
+                    .is_some_and(|rest| object_property_has_nontrivial_default(&rest.argument, target))
+        }
+        BindingPattern::AssignmentPattern(assign) => {
+            object_property_has_nontrivial_default(&assign.left, target)
+        }
+        BindingPattern::BindingIdentifier(_) => false,
+    }
+}
+
+/// True when `expr` is a primitive literal or the `undefined` identifier — a
+/// default that injects no dependency. `= null` / `= 0` / `= ''` / `= false` /
+/// `= undefined` are trivial; `= defaultWindow` / `= getWindow()` are not.
+fn is_trivial_default(expr: &Expression) -> bool {
+    match expr {
+        Expression::NullLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::StringLiteral(_) => true,
+        Expression::Identifier(ident) => ident.name.as_str() == "undefined",
+        _ => false,
+    }
+}
+
 /// True when the symbol's declaration is a TypeScript ambient declaration:
 /// `declare const`/`declare let`/`declare var`, `declare function`, or a
 /// declaration nested inside `declare global { … }` / an ambient
@@ -335,6 +420,9 @@ impl OxcCheck for Check {
                 continue;
             }
             if is_captured_from_global(symbol_id, semantic) {
+                continue;
+            }
+            if is_destructured_with_nontrivial_default(symbol_id, semantic) {
                 continue;
             }
             let span = scoping.symbol_span(symbol_id);
@@ -777,5 +865,96 @@ mod tests {
         // the global — the import exemption must not leak to runtime declarations.
         assert_eq!(run_on("const globalThis = {};").len(), 1);
         assert_eq!(run_on("let global = {};").len(), 1);
+    }
+
+    #[test]
+    fn allows_configurable_window_default() {
+        // Issue #6132: VueUse SSR-safe "configurable global" idiom — the option
+        // defaults to an SSR-safe ref and deliberately shadows the global so all
+        // downstream code uses the injected reference.
+        assert!(run_on_browser("const { window = defaultWindow } = options;").is_empty());
+    }
+
+    #[test]
+    fn allows_configurable_document_default() {
+        // Issue #6132: the `document` variant (e.g. vueuse `useFavicon`).
+        assert!(run_on_browser("const { document = defaultDocument } = options;").is_empty());
+    }
+
+    #[test]
+    fn allows_configurable_window_call_default() {
+        // A call-expression default is likewise an injected dependency, not a
+        // primitive — intentional configurable-global shadowing.
+        assert!(run_on_browser("const { window = getCustomWindow() } = options;").is_empty());
+    }
+
+    #[test]
+    fn allows_configurable_window_default_with_trivial_sibling() {
+        // Issue #6132 real snippet (vueuse `useElementSize`): the global-named
+        // property carries the non-trivial default; sibling props are irrelevant.
+        assert!(
+            run_on_browser("const { window = defaultWindow, box = 'content-box' } = options;")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_destructured_window_no_default() {
+        // Negative space: a bare `{ window }` has no SSR-safe default — it could
+        // be an accidental shadow and stays flagged.
+        assert_eq!(run_on_browser("const { window } = options;").len(), 1);
+    }
+
+    #[test]
+    fn flags_destructured_window_null_default() {
+        // Negative space: a primitive (`null`) default injects no dependency.
+        assert_eq!(run_on_browser("const { window = null } = options;").len(), 1);
+    }
+
+    #[test]
+    fn flags_destructured_window_primitive_literal_defaults() {
+        // Negative space: numeric and string literal defaults are primitives,
+        // not injected dependencies — they stay flagged.
+        assert_eq!(run_on_browser("const { window = 0 } = options;").len(), 1);
+        assert_eq!(run_on_browser("const { window = '' } = options;").len(), 1);
+    }
+
+    #[test]
+    fn allows_nested_object_configurable_window_default() {
+        // A configurable-global default nested one object level deep is the same
+        // DI idiom — the recursion must reach it.
+        assert!(
+            run_on_browser("const { opts: { window = defaultWindow } } = config;").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_destructured_window_undefined_default() {
+        // Negative space: `= undefined` is the absence of a value, not injection.
+        assert_eq!(run_on_browser("const { window = undefined } = options;").len(), 1);
+    }
+
+    #[test]
+    fn flags_destructured_window_no_default_with_defaulted_sibling() {
+        // Negative space: the exemption is per-binding by span — a non-trivial
+        // default on a SIBLING property must not exempt the bare `window`.
+        assert_eq!(
+            run_on_browser("const { window, box = makeBox() } = options;").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_array_destructured_window_default() {
+        // Negative space: an array-element default is positional, not the
+        // configurable-global object-property idiom — it stays flagged.
+        assert_eq!(run_on_browser("const [window = defaultWindow] = arr;").len(), 1);
+    }
+
+    #[test]
+    fn flags_window_simple_const_init() {
+        // Negative space: a plain `const window = anything` is a genuine shadow,
+        // not an object-destructuring default.
+        assert_eq!(run_on_browser("const window = anything;").len(), 1);
     }
 }
