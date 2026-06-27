@@ -957,4 +957,64 @@ mod tests {
         let d = run_on("class H3 {} function f() { class H3 {} return H3; }");
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
+
+    #[test]
+    fn allows_async_named_fn_expr_as_direct_const_init() {
+        // Issue #6423 reproduction: a named function expression assigned as the
+        // direct init of a `const` whose name it mirrors is the self-reference
+        // display-name idiom (the name lets the function recurse / appear in
+        // stack traces, e.g. `Error.captureStackTrace`). The `async` modifier
+        // does not defeat the match.
+        let d = run_on("const f = async function f() { return f; };");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_named_fn_expr_as_direct_const_init() {
+        // The same idiom without `async`.
+        let d = run_on("const g = function g() {};");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_named_fn_expr_direct_init_name_differs_from_const() {
+        // Negative space: the exemption keys off the self-reference identity
+        // (inner function-expression name == enclosing declarator name). A
+        // direct-init function expression whose name differs from the const but
+        // collides with a different outer binding is a real shadow.
+        let d = run_on(
+            "const g = 1;\n\
+             const f = function g() { return g; };",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_named_fn_expr_init_shadowing_different_outer_binding() {
+        // Negative space: a named function expression assigned to a *different*
+        // variable whose own name collides with an outer binding (not the
+        // declarator it initializes) is a genuine shadow.
+        let d = run_on(
+            "let f = 1;\n\
+             const x = function f() { return f; };",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_generic_async_named_fn_expr_as_typed_const_init() {
+        // Issue #6423 real shape (unjs/ofetch): a generic async named function
+        // expression with a type annotation on the const, self-referenced for
+        // `Error.captureStackTrace`. The type annotation and type parameters do
+        // not change the function-expression-name == declarator-name identity.
+        let d = run_on(
+            "const $fetchRaw: $Fetch[\"raw\"] = async function $fetchRaw<\n\
+             T = any,\n\
+             R extends ResponseType = \"json\",\n\
+             >(_request: FetchRequest, _options: FetchOptions<R> = {}) {\n\
+             if (Error.captureStackTrace) { Error.captureStackTrace(error, $fetchRaw); }\n\
+             };",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
 }
