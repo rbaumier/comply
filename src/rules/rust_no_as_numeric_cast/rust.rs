@@ -1186,6 +1186,31 @@ name = "normal_lib"
     }
 
     #[test]
+    fn repro_6173_else_branch_upper_bound_not_flagged() {
+        // The tonic xds pattern: `if value > 100 { Err } else { value as u8 }`.
+        // The else is reached only when `value <= 100`, which fits u8.
+        let src =
+            "fn new(value: u32) -> Result<u8, ()> { if value > 100 { Err(()) } else { Ok(value as u8) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6173_early_exit_guard_not_flagged() {
+        // A preceding early-exit guard whose `then` branch diverges proves the
+        // value fits before the fallthrough cast is reached.
+        let src = "fn g(value: u32) -> u8 { if value > 100 { return 0; } value as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6173_non_diverging_guard_still_flagged() {
+        // The `then` branch does not diverge, so a large value flows through to the
+        // cast — still a real finding.
+        let src = "fn g(value: u32) -> u8 { if value > 100 { let _x = 1; } value as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn repro_5034_assert_max_bound_not_flagged() {
         // The issue's shape (hyper encode.rs): an `assert!(x <= u8::MAX as u64)`
         // on a preceding line proves the value fits the target.
