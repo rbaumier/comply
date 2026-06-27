@@ -37,6 +37,13 @@ impl OxcCheck for Check {
         if is_react_component_param(semantic, node) {
             return;
         }
+        // A parameter of a type-level function signature (`(ctx: {...}) => R`)
+        // is part of a type declaration, not a function implementation. The
+        // inline shape IS the type contract — there is no body to drift from
+        // and nothing to extract for reuse — so the rule does not apply.
+        if is_type_level_signature_param(semantic, node) {
+            return;
+        }
         let name = match &param.pattern {
             BindingPattern::BindingIdentifier(id) => id.name.as_str(),
             _ => "<param>",
@@ -94,6 +101,26 @@ fn is_react_component_param<'a>(
                 }
                 return false;
             }
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// True when the nearest function-like ancestor of `node` is a type-level
+/// function signature (`TSFunctionType` / `TSConstructorType`) rather than a
+/// real `Function` / `ArrowFunctionExpression`. The first function-like
+/// ancestor reached decides it, so a parameter of a callback type used as an
+/// interface property type or `type` alias is exempt, while an implementation
+/// parameter whose type merely contains a nested function type is not.
+fn is_type_level_signature_param<'a>(
+    semantic: &'a Semantic<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()).skip(1) {
+        match ancestor.kind() {
+            AstKind::TSFunctionType(_) | AstKind::TSConstructorType(_) => return true,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
             _ => continue,
         }
     }
@@ -183,5 +210,36 @@ mod tests {
     #[test]
     fn allows_props_named_param() {
         assert!(run_on("const f = (props: { id: string }) => props.id;").is_empty());
+    }
+
+    #[test]
+    fn allows_inline_param_in_interface_function_type_property() {
+        assert!(
+            run_on("interface CoreHeadHooks { 'entries:normalize': (ctx: { tags: HeadTag[] }) => SyncHookResult }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_inline_param_in_optional_function_type_property() {
+        assert!(
+            run_on("interface HeadEntryOptions { onRendered?: (ctx: { renders: DomRenderTagContext[] }) => void | Promise<void> }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_inline_param_in_type_alias_function() {
+        assert!(run_on("type Fn = (ctx: { a: number }) => void;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_implementation_function_param() {
+        assert_eq!(run_on("function f(ctx: { a: number }) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_implementation_arrow_param() {
+        assert_eq!(run_on("const g = (ctx: { a: number }) => {};").len(), 1);
     }
 }
