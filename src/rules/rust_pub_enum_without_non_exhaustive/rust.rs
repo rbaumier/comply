@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{has_doc_hidden, is_in_test_context, is_under_tests_dir};
 use std::path::{Path, PathBuf};
 
 const KINDS: &[&str] = &["enum_item"];
@@ -31,6 +31,14 @@ impl AstCheck for Check {
             return;
         }
         if has_non_exhaustive(node, source_bytes) {
+            return;
+        }
+        // `#[doc(hidden)]` enum: rustdoc omits the type and consumers are not
+        // expected to name, construct, or match on it. `#[non_exhaustive]` is a
+        // cross-crate contract for types consumers can see, so it is inapplicable
+        // here — the `pub` is typically forced by trait associated-type visibility,
+        // not an intent to expose. Reuses the shared `has_doc_hidden` lever.
+        if has_doc_hidden(node, source_bytes) {
             return;
         }
         // Uninhabited (zero-variant) enum: a `pub enum Never {}` has no variants
@@ -449,6 +457,24 @@ mod tests {
         // #5310 negative space: a `pub enum` with variants is still flagged —
         // the uninhabited exemption must not weaken the rule for real enums.
         assert_eq!(run_on("pub enum Foo { A, B }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_doc_hidden_pub_enum() {
+        // #6309: the serde-json `State` enum — `#[doc(hidden)]` means rustdoc
+        // omits the type and consumers cannot name/construct/match it. The `pub`
+        // is forced by trait associated-type visibility, not intent to expose, so
+        // `#[non_exhaustive]` (a cross-crate API contract) is inapplicable.
+        let source = "#[doc(hidden)]\n#[derive(Eq, PartialEq)]\npub enum State { Empty, First, Rest }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_pub_enum_with_doc_string_attribute() {
+        // #6309 negative space: only `#[doc(hidden)]` exempts. A `#[doc = "..."]`
+        // doc-comment attribute is part of the documented public API surface, so
+        // the enum stays flagged — the exemption keys on `hidden`, not any `doc`.
+        assert_eq!(run_on("#[doc = \"visible API\"]\npub enum E { A, B }").len(), 1);
     }
 
     #[test]
