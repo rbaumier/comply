@@ -256,6 +256,25 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `m[0]` inside the body of an enclosing `while (<test>)` whose `<test>`
+        // proves `m` is non-null on every iteration — `m != null`, `m !== null`,
+        // or a bare truthy `m` — where `m` is bound to a `RegExp.prototype.exec` /
+        // `String.prototype.match` call. This is the canonical exec/match
+        // consumption loop `let m = re.exec(s); while (m != null) { …m[0]…; m = re.exec(s); }`:
+        // the loop condition IS the null narrowing (no separate `if (!m) …` guard),
+        // and a non-null exec/match result is a `RegExpExecArray`/`RegExpMatchArray`
+        // whose index 0 (the full match) always exists, so the first-element read is
+        // in-bounds. The exec/match provenance is essential — a bare
+        // `while (arr != null) { arr[0] }` on an arbitrary array stays flagged,
+        // since a non-null empty array (`[]`) still has no index 0.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_regex_match(node, obj_ident.name.as_str(), semantic)
+            && is_in_while_non_null_loop_on(node, obj_ident.name.as_str(), semantic)
+        {
+            return;
+        }
+
         // `match[0]` where `match` is the element bound by
         // `for (const match of <expr>.matchAll(...))`. Each element yielded by
         // `String.prototype.matchAll` is a `RegExpMatchArray` whose index 0 (the
@@ -2138,6 +2157,56 @@ fn condition_truthy_narrows(expr: &Expression, name: &str) -> bool {
     }
 }
 
+/// Returns true when the boundary access at `node` sits inside the body of an
+/// enclosing `while (<test>)` loop whose `<test>` proves `name` is non-null on
+/// every iteration (see [`while_test_proves_non_null`]). Walks ancestors
+/// innermost-first and stops at a function boundary, so a `while` in an enclosing
+/// function does not vouch for an access in a nested one. The caller pairs this
+/// with [`resolves_to_regex_match`]: the exec/match provenance is what makes a
+/// non-null `name` guarantee index 0, so this predicate alone does not exempt an
+/// arbitrary `while (arr != null) { arr[0] }`.
+fn is_in_while_non_null_loop_on(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let node_span = node.kind().span();
+    for ancestor in nodes.ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::WhileStatement(while_stmt) => {
+                if while_test_proves_non_null(&while_stmt.test, name)
+                    && span_contains(while_stmt.body.span(), node_span)
+                {
+                    return true;
+                }
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns true when `expr` is a loop test whose truth implies `name` is
+/// non-nullish inside the body: `name != null`, `name !== null`,
+/// `name != undefined`, `name !== undefined` (order-insensitive), or a bare truthy
+/// `name` (including `name && …`). The truthy cases reuse
+/// [`condition_truthy_narrows`].
+fn while_test_proves_non_null(expr: &Expression, name: &str) -> bool {
+    match expr {
+        Expression::BinaryExpression(bin) => {
+            matches!(
+                bin.operator,
+                BinaryOperator::StrictInequality | BinaryOperator::Inequality
+            ) && binary_compares_identifier_to_nullish(&bin.left, &bin.right, name)
+        }
+        _ => condition_truthy_narrows(expr, name),
+    }
+}
+
 /// Returns true when the boundary access at `node` sits in the truthy branch of a
 /// same-variable truthiness guard on the indexed binding `ident`, AND that binding
 /// is known to be a string. A truthy string is non-empty (`""` is the only falsy
@@ -2782,6 +2851,46 @@ mod tests {
         // (`null`), where the access is unsafe — only the truthy consequent is
         // narrowed, so the alternate-branch read stays flagged.
         let src = "function f(s, def) { const m = re.exec(s); return m ? def : m[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_regex_exec_index0_while_loose_null_loop_issue_6334() {
+        // The issue's exact pattern: `token[0]` inside `while (token != null)`
+        // where `token` is reassigned each iteration from `RE.exec(string)`. The
+        // loop condition is the null narrowing, and a non-null exec result always
+        // has a full match at index 0, so the read is in-bounds.
+        let src = "function f(string) { let token = RE.exec(string); while (token != null) { const len = token[0].length; token = RE.exec(string); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_regex_match_index0_while_strict_null_loop_issue_6334() {
+        let src = "function f(s) { let m = s.match(RE); while (m !== null) { use(m[0]); m = s.match(RE); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_regex_exec_index0_while_truthy_loop_issue_6334() {
+        // Bare-truthy loop condition `while (m)` — a non-null exec result is truthy.
+        let src = "function f(s) { let m = re.exec(s); while (m) { use(m[0]); m = re.exec(s); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_regex_exec_index0_no_while_or_guard_issue_6334() {
+        // Negative control: `m[0]` from an exec result with NO while-condition and
+        // NO null guard narrowing it stays flagged — the result may be `null`.
+        let src = "function f(s) { const m = re.exec(s); return m[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_arbitrary_array_index0_in_while_null_loop_issue_6334() {
+        // Negative space (soundness): a `while (arr != null)` on an arbitrary array
+        // (not from exec/match) proves `arr` is non-null but not non-empty — a
+        // non-null empty array still has no index 0, so the read stays flagged.
+        let src = "function f(arr) { while (arr != null) { use(arr[0]); arr = next(); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
