@@ -384,12 +384,16 @@ fn has_side_effects(expr: &Expression) -> bool {
             true
         }
 
-        // Getter assertions: `expect(x).to.be.true` (Chai) and
-        // `expectTypeOf(x).toBeString` (expect-type) access a getter that
-        // checks the value — the property access IS the assertion. Recognise a
-        // member-access chain rooted at an assertion call.
-        Expression::StaticMemberExpression(_)
-        | Expression::ComputedMemberExpression(_) => chain_roots_at_assertion(expr),
+        // A bare member access on `this` (`this.epoch`, `this[k]`) can always
+        // trigger a getter or a Proxy `get` trap on `this`, so reading the
+        // property is a real side effect — the subscription mechanism in
+        // Proxy-based reactive libraries (e.g. valtio), never provably dead.
+        // Otherwise, a getter-assertion chain rooted at an assertion call
+        // (`expect(x).to.be.true`, `expectTypeOf(x).toBeString`) accesses a
+        // getter that checks the value — the property access IS the assertion.
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
+            is_member_access_on_this(expr) || chain_roots_at_assertion(expr)
+        }
 
         _ => false,
     }
@@ -402,6 +406,25 @@ fn chain_element_has_side_effects(elem: &ChainElement) -> bool {
     match elem {
         ChainElement::CallExpression(_) => true,
         ChainElement::TSNonNullExpression(inner) => has_side_effects(&inner.expression),
+        _ => false,
+    }
+}
+
+/// True when `expr` is a member access whose object is the `this` keyword
+/// (`this.epoch`, `this[k]`). Reading a property on `this` can always trip a
+/// JavaScript getter or a Proxy `get` trap, so the access is a real side
+/// effect — never provably dead. In Proxy-based reactive libraries (e.g.
+/// valtio) a bare `this.<prop>` statement is precisely how a method registers a
+/// reactive subscription. Conservative to a direct `this` object: a deeper
+/// chain (`this.a.b`) is not matched here.
+fn is_member_access_on_this(expr: &Expression) -> bool {
+    match expr {
+        Expression::StaticMemberExpression(m) => {
+            matches!(&m.object, Expression::ThisExpression(_))
+        }
+        Expression::ComputedMemberExpression(m) => {
+            matches!(&m.object, Expression::ThisExpression(_))
+        }
         _ => false,
     }
 }
@@ -814,6 +837,36 @@ mod tests {
         // type-assertion const; other unused expressions must keep flagging.
         assert_eq!(run_on("const a = 1; const b = 2; a && b;").len(), 1);
         assert_eq!(run_on("foo.bar;").len(), 1);
+    }
+
+    // Regression #6288: a bare `this.<prop>` member-access statement inside a
+    // method can trip a getter or a Proxy `get` trap on `this` — reading the
+    // property is a real side effect (valtio's reactive-subscription
+    // mechanism), so it must not be flagged as an unused expression.
+    #[test]
+    fn allows_bare_this_member_access_issue_6288() {
+        let src = r#"const o = { get(key) { this.epoch; return undefined; } };"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+        let src2 = r#"const o = { has(key) { this.size; return true; } };"#;
+        assert!(run_on(src2).is_empty(), "{:?}", run_on(src2));
+        // Computed `this[k]` access on `this` is covered too.
+        let src3 = r#"const o = { m(k) { this[k]; return 0; } };"#;
+        assert!(run_on(src3).is_empty(), "{:?}", run_on(src3));
+    }
+
+    #[test]
+    fn still_flags_member_access_on_non_this_object_issue_6288() {
+        // The exemption is scoped to an object that is `this`; a bare member
+        // access on an ordinary local is the rule's common dead-code surface
+        // and must still flag.
+        assert_eq!(run_on("obj.epoch;").len(), 1);
+        assert_eq!(run_on("foo.bar;").len(), 1);
+        // A deeper chain rooted at `this` is not the reported shape and stays
+        // flagged (conservative match on a direct `this` object).
+        assert_eq!(run_on("const o = { m() { this.a.b; } };").len(), 1);
+        // Bare identifiers and literals must still flag.
+        assert_eq!(run_on("let foo = 1; foo;").len(), 1);
+        assert_eq!(run_on("0;").len(), 1);
     }
 
     #[test]
