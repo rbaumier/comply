@@ -1,9 +1,11 @@
 //! ts-overload-signature-order OXC backend — overloads ordered specific-to-general.
 //!
-//! Strictly-ascending-arity progressive groups (each overload takes more required
-//! params than the previous — the `flow`/`pipe`/`compose` pipeline idiom) are exempt
-//! from the arity-based check: TypeScript dispatches by arity, so this order is
-//! required and never misorders. Same-arity type-specificity checks still apply.
+//! Non-decreasing-arity progressive groups (each overload takes at least as many
+//! required params as the previous — the `flow`/`pipe`/`compose` pipeline idiom,
+//! plus runs of same-arity type-discriminated sibling overloads) are exempt from
+//! the arity-based check: TypeScript dispatches by arity, and by declaration order
+//! within one arity, so this order is required and never misorders. Same-arity
+//! type-specificity checks still apply.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -65,8 +67,8 @@ struct SigInfo {
     has_body: bool,
     /// Whether the signature ends in a rest parameter (`...items`). A rest tail
     /// makes the overload a variadic catch-all: it accepts any arity at or above
-    /// its fixed params, so when it terminates an ascending-arity pipeline its
-    /// (low) counted required-param total must not break the progressive order.
+    /// its fixed params, so when it terminates a non-decreasing-arity pipeline its
+    /// (low) counted required-param total must not break the non-decreasing order.
     has_rest: bool,
 }
 
@@ -251,25 +253,29 @@ fn check_statements(
 
         if group.len() >= 2 {
             // A pipeline/composition idiom (`flow`, `pipe`, `compose`, zod
-            // `partial`/`required`): each successive overload takes strictly more
-            // required params than the one before. TypeScript dispatches by arity,
-            // so this ascending order is required and correct — it never intercepts
-            // a call meant for a higher-arity overload. Do not apply the arity-based
-            // misorder flag to such groups.
+            // `partial`/`required`), or a run of same-arity type-discriminated
+            // sibling overloads (valibot `multipleOf`/`guard`/`required`: a
+            // number/bigint pair at arity 1, then the same pair at arity 2): each
+            // successive overload takes at least as many required params as the one
+            // before (non-decreasing arity). TypeScript dispatches by arity — and by
+            // declaration order within one arity — so this order is required and
+            // correct; it never intercepts a call meant for a higher-arity overload.
+            // Do not apply the arity-based misorder flag to such groups. Same-arity
+            // siblings remain subject to the type-specificity check below.
             //
             // A final variadic catch-all (`pipe(schema, ...items)`) is the
             // most-general tail of such a pipeline. Its `...items` lands in OXC's
             // `params.rest`, so `count_required_params` counts only the fixed
             // leading params — a total below the specific overloads it generalizes.
-            // Exclude that rest tail from the ascending check so it does not break
-            // the progressive sequence; the specific overloads alone must ascend.
+            // Exclude that rest tail from the non-decreasing check so it does not
+            // break the sequence; the specific overloads alone must not decrease.
             let specific = match group.last() {
                 Some(last) if last.has_rest => &group[..group.len() - 1],
                 _ => &group[..],
             };
             let progressive_arity = specific
                 .windows(2)
-                .all(|w| w[0].required_params < w[1].required_params);
+                .all(|w| w[0].required_params <= w[1].required_params);
             'outer: for a in 0..group.len() {
                 for b in (a + 1)..group.len() {
                     // Disjoint first-parameter types mean the overloads accept
@@ -576,6 +582,63 @@ function f(a: A, b: B, c: C): void;
 function f(a: A, b: B): void;
 function f(...rest: unknown[]): void;
 function f(...rest: unknown[]): void {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn same_arity_type_discriminated_groups_within_ascending_do_not_flag() {
+        // Issue #6161: valibot `multipleOf` — a number/bigint pair at arity 1,
+        // then the same pair at arity 2 (required-param sequence 1, 1, 2, 2).
+        // Arity is non-decreasing, so TypeScript dispatches the group correctly in
+        // declaration order; the same-arity number/bigint siblings are
+        // type-discriminated, not a specific-to-general misorder. Must not flag.
+        let src = "\
+export function multipleOf<TInput extends number, TRequirement extends number>(
+  requirement: TRequirement
+): MultipleOfAction<TInput, TRequirement, undefined>;
+export function multipleOf<TInput extends bigint, TRequirement extends bigint>(
+  requirement: TRequirement
+): MultipleOfAction<TInput, TRequirement, undefined>;
+export function multipleOf<TInput extends number, TRequirement extends number, TMessage>(
+  requirement: TRequirement, message: TMessage
+): MultipleOfAction<TInput, TRequirement, TMessage>;
+export function multipleOf<TInput extends bigint, TRequirement extends bigint, TMessage>(
+  requirement: TRequirement, message: TMessage
+): MultipleOfAction<TInput, TRequirement, TMessage>;
+export function multipleOf(requirement: unknown, message?: unknown): unknown {
+  return requirement;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn non_monotonic_arity_still_flags() {
+        // Negative space for #6161: relaxing the progressive check to
+        // non-decreasing must not silence a genuinely non-monotonic group. Arity
+        // 1 → 3 → 2 decreases at the end, so it is not a clean pipeline; the
+        // 1-param overload preceding the 3-param one is a real specific-to-general
+        // arity misorder and must still flag.
+        let src = "\
+function f(a: A): void;
+function f(a: A, b: B, c: C): void;
+function f(a: A, b: B): void;
+function f(a: unknown, b?: unknown, c?: unknown): void {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn non_decreasing_group_still_flags_same_arity_type_misorder() {
+        // Negative space for #6161: the non-decreasing exemption gates only the
+        // arity check, never the type-specificity check. Within an otherwise
+        // non-decreasing group (1, 1, 2, 2), a same-arity pair declared
+        // general-before-specific (`Foo | Bar` then `Foo`) is a genuine
+        // specific-to-general misorder and must still flag.
+        let src = "\
+function f(a: Foo | Bar): void;
+function f(a: Foo): void;
+function f(a: Foo, b: X): void;
+function f(a: Foo, b: Y): void;
+function f(a: unknown, b?: unknown): void {}";
         assert_eq!(run(src).len(), 1);
     }
 }
