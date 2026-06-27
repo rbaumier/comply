@@ -63,6 +63,11 @@ struct SigInfo {
     first_param_heads: Option<BTreeSet<String>>,
     span: oxc_span::Span,
     has_body: bool,
+    /// Whether the signature ends in a rest parameter (`...items`). A rest tail
+    /// makes the overload a variadic catch-all: it accepts any arity at or above
+    /// its fixed params, so when it terminates an ascending-arity pipeline its
+    /// (low) counted required-param total must not break the progressive order.
+    has_rest: bool,
 }
 
 fn extract_sig_info(stmt: &Statement, source: &str) -> Option<SigInfo> {
@@ -82,6 +87,7 @@ fn extract_sig_info(stmt: &Statement, source: &str) -> Option<SigInfo> {
         first_param_heads: first_param_type_heads(&f.params),
         span: f.span,
         has_body: f.body.is_some(),
+        has_rest: f.params.rest.is_some(),
     })
 }
 
@@ -250,7 +256,18 @@ fn check_statements(
             // so this ascending order is required and correct — it never intercepts
             // a call meant for a higher-arity overload. Do not apply the arity-based
             // misorder flag to such groups.
-            let progressive_arity = group
+            //
+            // A final variadic catch-all (`pipe(schema, ...items)`) is the
+            // most-general tail of such a pipeline. Its `...items` lands in OXC's
+            // `params.rest`, so `count_required_params` counts only the fixed
+            // leading params — a total below the specific overloads it generalizes.
+            // Exclude that rest tail from the ascending check so it does not break
+            // the progressive sequence; the specific overloads alone must ascend.
+            let specific = match group.last() {
+                Some(last) if last.has_rest => &group[..group.len() - 1],
+                _ => &group[..],
+            };
+            let progressive_arity = specific
                 .windows(2)
                 .all(|w| w[0].required_params < w[1].required_params);
             'outer: for a in 0..group.len() {
@@ -526,5 +543,39 @@ function f(a: Foo): void;
 function f(a: Foo, b: Bar): void;
 function f(a: Foo, b?: Bar): void {}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn progressive_ascending_arity_with_variadic_tail_does_not_flag() {
+        // Issue #6160: valibot `pipe` — specific overloads ascend in arity
+        // (2 → 3 → 4) and the final overload before the implementation is a
+        // variadic catch-all `(schema, ...items)`. Its `...items` is a rest
+        // param, so it counts only 1 required param; that low total must not
+        // break the progressive sequence, since TypeScript dispatches the group
+        // correctly without reordering.
+        let src = "\
+export function pipe<TSchema, TItem1>(schema: TSchema, item1: TItem1): Out;
+export function pipe<TSchema, TItem1, TItem2>(schema: TSchema, item1: TItem1, item2: TItem2): Out;
+export function pipe<TSchema, TItem1, TItem2, TItem3>(schema: TSchema, item1: TItem1, item2: TItem2, item3: TItem3): Out;
+export function pipe<TSchema, TItems extends readonly unknown[]>(schema: TSchema, ...items: TItems): Out;
+export function pipe(...pipe: unknown[]): unknown {
+    return pipe;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn variadic_tail_does_not_forgive_internal_misorder() {
+        // Negative space for #6160: the rest-tail exemption only excludes the
+        // final variadic catch-all from the ascending check; a genuine misorder
+        // among the specific overloads (1 → 3 → 2, not strictly ascending) must
+        // still flag despite the trailing `...rest` overload.
+        let src = "\
+function f(a: A): void;
+function f(a: A, b: B, c: C): void;
+function f(a: A, b: B): void;
+function f(...rest: unknown[]): void;
+function f(...rest: unknown[]): void {}";
+        assert_eq!(run(src).len(), 1);
     }
 }
