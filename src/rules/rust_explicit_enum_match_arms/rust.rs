@@ -40,6 +40,14 @@
 //! every variant turns a new upstream variant into a compile error here — does
 //! not hold across the crate boundary, so the wildcard is correct.
 //!
+//! A PascalCase-rooted arm path (`Expr::Call`) reads as a local enum type, but
+//! the type may be pulled in unqualified from a foreign crate via a `use` import
+//! (`use syn::{..., Expr, ...}`). When every enum-like arm names a qualified enum
+//! whose type resolves — through this file's own imports — to a `use` rooted at
+//! an external crate, the scrutinee enum is foreign and the same cross-crate
+//! reasoning applies: the `_` arm is upstream-driven (and compiler-mandated for
+//! `#[non_exhaustive]`), so the match is exempt.
+//!
 //! Matches with a non-wildcard arm carrying a match guard (`pat if cond`)
 //! are exempt as a whole: a guarded arm never counts toward exhaustiveness
 //! (the guard may be false at runtime), so the `_` arm is compiler-mandated
@@ -161,6 +169,17 @@ impl AstCheck for Check {
             .iter()
             .all(|p| arm_path_is_externally_rooted(*p, source_bytes))
         {
+            return;
+        }
+        // A PascalCase-rooted arm path (`Expr::Call`) reads as a local enum type,
+        // but the type may be imported unqualified from a foreign crate
+        // (`use syn::{..., Expr, ...}`). When every enum-like arm names a qualified
+        // enum whose type resolves — through this file's own `use` imports — to an
+        // external crate, the scrutinee enum is foreign: an upstream author can add
+        // variants and a `#[non_exhaustive]` enum makes the `_` arm
+        // compiler-mandated, so listing every variant never turns an upstream
+        // addition into a compile error here. Skip the whole match.
+        if match_covers_externally_imported_enum(node, &enum_like_arms, source_bytes) {
             return;
         }
         // If the scrutinee enum is defined in *this* file and has a
@@ -468,6 +487,131 @@ fn arm_path_is_externally_rooted(pattern: tree_sitter::Node, source: &[u8]) -> b
     // PascalCase root (`Direction`) is the local enum type, not a crate.
     root.starts_with(|c: char| c.is_ascii_lowercase())
         && root.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// True if the match's scrutinee is an enum imported unqualified from an external
+/// crate (`use syn::{..., Expr, ...}`).
+///
+/// A PascalCase-rooted arm path (`Expr::Call`) reads as a local enum type, so it
+/// escapes `arm_path_is_externally_rooted`; this complementary check resolves the
+/// type through the file's own imports. Reads the enum name from each qualified
+/// arm pattern (`Expr::Call` → `Expr`) and requires *every* enum-like arm to be
+/// qualified — a bare variant (`North`) leaves the enum unresolved. The match is
+/// exempt only when each distinct enum name is brought into scope by a `use`
+/// declaration rooted at an external crate. In valid code an externally-imported
+/// name cannot also be a same-file `enum_item` (it would be a name clash), so a
+/// match over a locally-defined enum is never exempted here and still flags.
+fn match_covers_externally_imported_enum(
+    match_node: tree_sitter::Node,
+    enum_like_arms: &[tree_sitter::Node],
+    source: &[u8],
+) -> bool {
+    let names: Vec<&str> = enum_like_arms
+        .iter()
+        .filter_map(|p| qualified_enum_name(*p, source))
+        .collect();
+    if names.is_empty() || names.len() != enum_like_arms.len() {
+        return false;
+    }
+    let mut current = match_node.parent();
+    while let Some(node) = current {
+        if node.kind() == "source_file" {
+            return names
+                .iter()
+                .all(|name| enum_name_is_externally_imported(node, name, source));
+        }
+        current = node.parent();
+    }
+    false
+}
+
+/// True if `name` (a PascalCase enum type like `Expr`) is brought into scope by a
+/// `use` declaration rooted at an external crate. Walks every `use_declaration` in
+/// `source_file`; one whose leading segment is an external crate name and that
+/// imports a leaf identifier exactly equal to `name` means the type is foreign.
+fn enum_name_is_externally_imported(
+    source_file: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    let mut cursor = source_file.walk();
+    let mut stack = vec![source_file];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "use_declaration" {
+            if use_declaration_has_external_root(node, source)
+                && use_declaration_imports_name(node, name, source)
+            {
+                return true;
+            }
+            // A `use` tree contains no nested `use_declaration`, so stop here.
+            continue;
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if a `use_declaration`'s leading path segment is an external crate name:
+/// a lowercase ASCII identifier that is not `crate`/`super`/`self`/`Self`. Mirrors
+/// the root classification in `arm_path_is_externally_rooted`.
+fn use_declaration_has_external_root(use_decl: tree_sitter::Node, source: &[u8]) -> bool {
+    let Ok(text) = use_decl.utf8_text(source) else {
+        return false;
+    };
+    let trimmed = text.trim_start();
+    // Strip a leading visibility modifier (`pub`, `pub(crate)`, …) and `use`.
+    let after_pub = trimmed
+        .strip_prefix("pub(crate)")
+        .or_else(|| trimmed.strip_prefix("pub(super)"))
+        .or_else(|| trimmed.strip_prefix("pub"))
+        .unwrap_or(trimmed)
+        .trim_start();
+    let Some(rest) = after_pub.strip_prefix("use") else {
+        return false;
+    };
+    let root = rest
+        .trim_start()
+        .split([':', '{', ' ', ';', '*'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if root.is_empty() || matches!(root, "crate" | "super" | "self" | "Self") {
+        return false;
+    }
+    root.starts_with(|c: char| c.is_ascii_lowercase())
+        && root.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// True if a `use_declaration` brings a leaf named `name` into scope. Walks the
+/// use tree but skips every `path`-field child, so an identifier is matched only
+/// in a leaf position (the `name` of a `scoped_identifier`, a `use_list` member,
+/// or a `use_as_clause` alias) — never as a qualifier segment. This keeps a name
+/// reused as a variant-import qualifier (`use foo::Bar::Variant`, where `Bar` is
+/// a path segment) from being read as the imported item.
+fn use_declaration_imports_name(use_decl: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut cursor = use_decl.walk();
+    let mut stack = vec![use_decl];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "identifier" {
+            if node.utf8_text(source).is_ok_and(|t| t == name) {
+                return true;
+            }
+            continue;
+        }
+        // Descend into every child except the qualifier path: a `path`-field
+        // segment names a crate/module/enum used to reach the leaf, not the
+        // leaf itself.
+        let path_child = node.child_by_field_name("path");
+        for child in node.named_children(&mut cursor) {
+            if path_child.is_some_and(|p| p.id() == child.id()) {
+                continue;
+            }
+            stack.push(child);
+        }
+    }
+    false
 }
 
 /// True if the `match_arm`'s body is a `Some(...)` constructor call — the
@@ -1145,6 +1289,53 @@ mod tests {
         let src = "fn f(x: Foo) -> i32 { match x { \
                    multer::Error::StreamReadFailed(_) => 1, \
                    Direction::North => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_on_externally_imported_pascal_enum() {
+        // Issue #6158: tracing-attributes proc-macro code matching `syn::Expr`,
+        // imported unqualified via `use syn::{..., Expr, ...}`. `Expr` is a
+        // PascalCase-rooted path that reads as a local enum, but resolves through
+        // this file's own import to the external `syn` crate, where the
+        // `#[non_exhaustive]` enum makes the `_` arm compiler-mandated.
+        let src = "use syn::{Block, Expr, ExprCall, Path};\n\
+                   fn f(last_expr: Expr) -> i32 { match last_expr { \
+                   Expr::Call(ExprCall { func, args, .. }) => 1, _ => 0, } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_on_same_file_pascal_enum_not_imported() {
+        // Issue #6158 negative space: a PascalCase enum defined in this file
+        // (not imported from any crate) has a developer-controlled variant set,
+        // so the `_` arm is a real catch-all and must still flag. The external
+        // exemption keys on an external `use` import, not on a PascalCase name.
+        let src = "enum Expr { Call(C), Path(P), Lit(L) }\n\
+                   fn f(e: Expr) -> i32 { match e { Expr::Call(c) => 1, _ => 0, } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_on_crate_imported_pascal_enum() {
+        // Issue #6158 negative space: an enum imported from a local path
+        // (`use crate::...`) is same-crate, so the `_` arm is a real catch-all.
+        // The exemption requires a `use` rooted at an external crate, not a
+        // `crate`/`super`/`self` root.
+        let src = "use crate::ast::Expr;\n\
+                   fn f(e: Expr) -> i32 { match e { Expr::Call(c) => 1, _ => 0, } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_when_external_use_only_qualifies_local_enum_name() {
+        // Issue #6158 review: a same-file enum `Bar` must still flag even when an
+        // unrelated external `use` mentions `Bar` only as a variant-import
+        // qualifier (`use foo::Bar::Variant`). `Bar` is a path segment there, not
+        // the imported leaf, so the external-import exemption must not fire.
+        let src = "use foo::Bar::Variant;\n\
+                   enum Bar { Call(C), Lit(L) }\n\
+                   fn f(b: Bar) -> i32 { match b { Bar::Call(c) => 1, _ => 0, } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
