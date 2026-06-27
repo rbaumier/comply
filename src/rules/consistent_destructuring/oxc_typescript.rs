@@ -185,6 +185,30 @@ impl OxcCheck for Check {
 
                     let obj_text = &source[member.object.span().start as usize..member.object.span().end as usize];
                     let prop_text = member.property.name.as_str();
+
+                    // Skip when this access sits in the initializer of a
+                    // `const`/`let` whose binding name equals the property:
+                    // destructuring that property from the same object would
+                    // introduce a second block-scoped binding of the same name
+                    // in the same scope (a redeclaration error), so the access
+                    // cannot be mechanically rewritten to the destructured
+                    // variable. A member expression can only reach a
+                    // `VariableDeclarator` ancestor through its `init`, so a
+                    // name match is sufficient.
+                    let mut in_same_name_init = false;
+                    for anc in nodes.ancestors(node.id()) {
+                        if let AstKind::VariableDeclarator(decl) = anc.kind()
+                            && let BindingPattern::BindingIdentifier(id) = &decl.id
+                            && id.name.as_str() == prop_text
+                        {
+                            in_same_name_init = true;
+                            break;
+                        }
+                    }
+                    if in_same_name_init {
+                        continue;
+                    }
+
                     let obj_symbol = identifier_symbol(&member.object, semantic);
 
                     candidates.push(Candidate {
@@ -524,6 +548,47 @@ mod tests {
         let diags = run(code);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("imgSrc"));
+    }
+
+    #[test]
+    fn skips_access_in_same_name_const_init() {
+        // Issue #6315: `args.format` / `args.target` appear in the
+        // initializer of `const format = ...` / `const target = ...`.
+        // Destructuring `format`/`target` from `args` would create a second
+        // `const` of the same name in the same scope (a redeclaration error),
+        // so these accesses must not be flagged.
+        let code = r#"
+            async function main(args) {
+                const { input, output, outDir } = args;
+                const format =
+                    args.format === 'esm'
+                        ? 'es'
+                        : args.format || 'es';
+                const target = args.target || 'es2020';
+                return { input, output, outDir, format, target };
+            }
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag an access in the initializer of a same-named const"
+        );
+    }
+
+    #[test]
+    fn flags_access_in_different_name_const_init() {
+        // Negative-space guard: the declared name (`externals`) differs from
+        // the property (`external`), so no redeclaration would occur and the
+        // access stays flagged.
+        let code = r#"
+            function build(args) {
+                const { input, output } = args;
+                const externals = [].concat(args.external || []);
+                return externals;
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("external"));
     }
 }
 
