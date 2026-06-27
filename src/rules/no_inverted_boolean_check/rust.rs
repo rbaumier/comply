@@ -30,6 +30,15 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // In Rust `!` on an integer is bitwise NOT, not logical NOT. Comparing a
+    // `bool` to a numeric literal is a type error, so a numeric literal on the
+    // opposite side proves the `!` is bitwise complement (`!digit != 0` means
+    // "digit is not all-ones") — not the inverted-boolean footgun this targets.
+    let Some(right) = node.child_by_field_name("right") else { return };
+    if matches!(right.kind(), "integer_literal" | "float_literal") {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -84,5 +93,30 @@ mod tests {
     #[test]
     fn allows_negated_result() {
         assert!(run_on("fn f(a: i32, b: i32) { if !(a == b) {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_bitwise_not_compared_to_integer_literal() {
+        // `!digit` is bitwise complement here; comparing a bool to an integer
+        // would be a type error, so `!` cannot be logical NOT.
+        assert!(
+            run_on("fn f() { let _ = [0u32].iter().position(|&digit| !digit != 0); }").is_empty()
+        );
+        assert!(run_on("fn f(x: u32) { if !x == 0 {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_bitwise_not_compared_to_float_literal() {
+        assert!(run_on("fn f(x: u32) { if !x != 0.0 {} }").is_empty());
+    }
+
+    #[test]
+    fn flags_not_flag_equals_bool_literal() {
+        assert_eq!(run_on("fn f(flag: bool) { if !flag == false {} }").len(), 1);
+    }
+
+    #[test]
+    fn flags_not_ready_not_equals_bool_literal() {
+        assert_eq!(run_on("fn f(ready: bool) { if !ready != true {} }").len(), 1);
     }
 }
