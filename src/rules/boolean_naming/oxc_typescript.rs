@@ -42,6 +42,15 @@ const ALLOWED_NAMES: &[&str] = &[
     "noValidate", "value", "defaultOpen", "defaultChecked", "hour12",
 ];
 
+/// The three boolean-valued attributes of an ECMAScript property descriptor
+/// (ECMA-262 §6.2.6: `enumerable`, `writable`, `configurable`). A wrapper around
+/// `Object.defineProperty` must forward these under their exact spelling, and a
+/// shorthand `{ enumerable }` forces the forwarding identifier to equal the key,
+/// so the parameter's name is structurally fixed. Used only together with the
+/// shorthand-into-`defineProperty` use-site (see `is_define_property_descriptor_param`),
+/// never as a standalone name allowlist.
+const DESCRIPTOR_BOOLEAN_KEYS: &[&str] = &["enumerable", "writable", "configurable"];
+
 /// Standard Web Audio / media-element / audio-mixer boolean property names. A
 /// `set name(name: boolean)` accessor that mirrors one of these is bound to the
 /// platform's exact spelling — `loop` mirrors `AudioBufferSourceNode.loop` /
@@ -301,6 +310,70 @@ fn setter_key_matches(key: &PropertyKey, param_name: &str) -> bool {
     }
 }
 
+/// True when the call is `Object.defineProperty(...)` / `Reflect.defineProperty(...)`,
+/// whose third argument is the property descriptor object.
+fn is_define_property_call(call: &CallExpression) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    member.property.name.as_str() == "defineProperty"
+        && matches!(
+            &member.object,
+            Expression::Identifier(obj) if matches!(obj.name.as_str(), "Object" | "Reflect")
+        )
+}
+
+/// True when the boolean parameter `param_name` is forwarded — as a *shorthand*
+/// property whose key is a boolean property-descriptor attribute (`enumerable`,
+/// `writable`, `configurable`) — into the descriptor (third) argument of an
+/// `Object.defineProperty` / `Reflect.defineProperty` call. A shorthand property
+/// requires `identifier == key`, so the fixed ECMAScript descriptor key
+/// structurally forces the parameter's exact name; renaming it to `isEnumerable`
+/// would break both the shorthand and the descriptor contract.
+///
+/// Anchored on the use-site shape, not a name list: the same descriptor-key name
+/// as a plain variable, a non-shorthand forwarding (`{ enumerable: flag }`), or a
+/// shorthand inside any object literal that is not a `defineProperty` descriptor
+/// argument, all still require a predicate prefix.
+fn is_define_property_descriptor_param(
+    symbol_id: Option<oxc_semantic::SymbolId>,
+    param_name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_span::GetSpan;
+
+    if !DESCRIPTOR_BOOLEAN_KEYS.contains(&param_name) {
+        return false;
+    }
+    let Some(symbol_id) = symbol_id else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    scoping.get_resolved_references(symbol_id).any(|reference| {
+        let ref_node = reference.node_id();
+        // The reference is the value of a shorthand object property
+        // (`{ enumerable }` — the identifier equals the key).
+        let AstKind::ObjectProperty(prop) = nodes.kind(nodes.parent_id(ref_node)) else {
+            return false;
+        };
+        if !prop.shorthand {
+            return false;
+        }
+        // Grandparent is the descriptor object literal; its parent must be the
+        // `defineProperty` call carrying it as the descriptor (third) argument.
+        let object_id = nodes.parent_id(nodes.parent_id(ref_node));
+        let AstKind::ObjectExpression(descriptor) = nodes.kind(object_id) else {
+            return false;
+        };
+        let AstKind::CallExpression(call) = nodes.kind(nodes.parent_id(object_id)) else {
+            return false;
+        };
+        is_define_property_call(call)
+            && call.arguments.get(2).is_some_and(|arg| arg.span() == descriptor.span)
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::VariableDeclarator, AstType::FormalParameter]
@@ -403,6 +476,15 @@ impl OxcCheck for Check {
                 if MEDIA_API_BOOLEAN_PROPS.contains(&name)
                     && is_setter_accessor_param(node, semantic, name)
                 {
+                    return;
+                }
+                // A required boolean parameter forwarded as a shorthand property
+                // into an `Object.defineProperty` / `Reflect.defineProperty`
+                // descriptor is bound to the ECMAScript descriptor attribute's
+                // exact name (`enumerable` / `writable` / `configurable`); the
+                // shorthand forces identifier == key, so an `is*` prefix would
+                // break the descriptor contract.
+                if is_define_property_descriptor_param(id.symbol_id.get(), name, semantic) {
                     return;
                 }
                 (name, id.span, true)
@@ -878,5 +960,47 @@ mod tests {
         assert_eq!(run("let active: boolean = false;").len(), 1);
         assert_eq!(run("let active = false;").len(), 1);
         assert_eq!(run("let active: boolean | undefined = false;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_define_property_descriptor_shorthand_param() {
+        // `enumerable` / `writable` / `configurable` are the boolean attributes of
+        // an ECMAScript property descriptor (§6.2.6). A wrapper forwarding them as
+        // shorthand properties into `Object.defineProperty` is bound to their exact
+        // spelling — the shorthand forces identifier == key — so an `is*` prefix
+        // would break the descriptor contract. (Closes #6049)
+        assert!(
+            run("const dpew = (obj: any, attr: string, enumerable: boolean, writable: boolean): any =>\n  Object.defineProperty(obj, attr, {\n    enumerable,\n    writable,\n  });")
+                .is_empty()
+        );
+        // `Reflect.defineProperty` mirrors the same descriptor-argument signature.
+        assert!(
+            run("function dp(obj: any, key: string, configurable: boolean) {\n  Reflect.defineProperty(obj, key, { configurable });\n}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_descriptor_name_without_define_property_use_site() {
+        // Strictness preserved — the exemption is the use-site shape, not the name:
+        // an `enumerable`-named boolean parameter that is not forwarded as a
+        // shorthand descriptor property still requires a predicate prefix.
+        assert_eq!(run("function f(enumerable: boolean) { if (enumerable) {} }").len(), 1);
+        // A shorthand descriptor key in a non-`defineProperty` call still flags.
+        assert_eq!(run("function f(writable: boolean) { foo({ writable }); }").len(), 1);
+        // Only the descriptor (third) argument is the forcing position — a
+        // shorthand in the target (first) argument still flags.
+        assert_eq!(
+            run("function f(writable: boolean) { Object.defineProperty({ writable }, k, v); }").len(),
+            1
+        );
+        // Non-shorthand forwarding (`{ enumerable: enumerable }`) does not force
+        // the name, so the parameter still needs a prefix.
+        assert_eq!(
+            run("function f(enumerable: boolean) { Object.defineProperty(o, k, { enumerable: enumerable }); }").len(),
+            1
+        );
+        // The plain-variable form is unaffected by the parameter exemption.
+        assert_eq!(run("const enumerable: boolean = true;").len(), 1);
     }
 }
