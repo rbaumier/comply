@@ -180,6 +180,64 @@ fn is_method_of_implementing_class(
     enclosing_class(member.id(), nodes).is_some_and(|class| ClassShape::of(class).has_implements)
 }
 
+/// Check if the async function is the value of an assignment `this.X = async
+/// () => {...}` whose enclosing class declares an `async X()` method. Reassigning
+/// the method on the instance must preserve its `Promise`-returning type: callers
+/// do `await instance.X()`, so the replacement has to stay `async` to satisfy the
+/// declared method's contract — dropping it would change the return type from
+/// `Promise<void>` to `void` and break every `await` call site. Same
+/// external-contract class as the call-argument and object-property exemptions.
+///
+/// The matching `async` method declared in the same class body is the
+/// load-bearing discriminator: a non-`this` target (`obj.X = async () => {}`), a
+/// missing `async X()` declaration, a same-named non-async method, or a method
+/// inherited from a superclass all keep the diagnostic firing. Computed targets
+/// (`this[x] = ...`) are not covered.
+fn is_async_method_override_on_this(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::{AssignmentTarget, ClassElement, Expression, PropertyKey};
+
+    let nodes = semantic.nodes();
+    let parent = nodes.parent_node(func_node.id());
+    let AstKind::AssignmentExpression(assign) = parent.kind() else {
+        return false;
+    };
+    // The function must be the assigned value (RHS), not a sub-expression of the
+    // target.
+    if assign.right.span() != func_node.kind().span() {
+        return false;
+    }
+    // LHS must be `this.<name>` — a static member rooted directly at `this`.
+    let AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
+        return false;
+    };
+    if !matches!(member.object, Expression::ThisExpression(_)) {
+        return false;
+    }
+    let property_name = member.property.name.as_str();
+
+    // The enclosing class must declare an `async` method with the same name.
+    let Some(class) = enclosing_class(parent.id(), nodes) else {
+        return false;
+    };
+    class.body.body.iter().any(|element| {
+        let ClassElement::MethodDefinition(method) = element else {
+            return false;
+        };
+        if !method.value.r#async {
+            return false;
+        }
+        let key_name = match &method.key {
+            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+            PropertyKey::StringLiteral(s) => s.value.as_str(),
+            _ => return false,
+        };
+        key_name == property_name
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -275,6 +333,16 @@ impl OxcCheck for Check {
             // Promise<T>`) even when the body declares resources synchronously or
             // never awaits.
             if is_object_property_in_call_arg(node, semantic) {
+                continue;
+            }
+
+            // Async function reassigned to `this.X` where the class declares an
+            // `async X()` method (`this.flush = async () => {...}` overriding
+            // `async flush()`). Callers do `await instance.X()`, so the
+            // replacement must stay `async` to keep returning `Promise<void>`;
+            // dropping it would break every `await` call site. The matching
+            // `async` method ties the reassignment to the method's type contract.
+            if is_async_method_override_on_this(node, semantic) {
                 continue;
             }
 
@@ -633,6 +701,72 @@ mod tests {
     fn allows_empty_block_body_async_function() {
         // Same shape as a standalone async function declaration with an empty body.
         assert!(run_on("async function noop() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_async_arrow_override_of_async_class_method() {
+        // Regression for rbaumier/comply#6215 — sindresorhus/got `Request.flush`.
+        // The async arrow is reassigned to `this.flush`, which the class declares
+        // as `async flush()`. Callers do `await request.flush()`, so the
+        // replacement must stay async (return `Promise<void>`); dropping `async`
+        // would change the return type to `void` and break every await call site.
+        let src = r#"class Request extends Duplex {
+            async flush() {
+                if (this._flushed) { return; }
+                this._flushed = true;
+                await this._doFlush();
+            }
+            _init() {
+                this.flush = async () => {
+                    this.flush = async () => {};
+                    process.nextTick(() => {
+                        this._beforeError(new Error("x"));
+                    });
+                };
+            }
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_this_override_without_matching_async_method() {
+        // Negative space for #6215: `this.foo = async () => {...}` with NO
+        // `async foo()` declared in the class has no method contract to preserve
+        // — it stays flagged.
+        let src = r#"class C {
+            _init() {
+                this.foo = async () => { doSync(); };
+            }
+        }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_override_on_non_this_target() {
+        // Negative space for #6215: `obj.foo = async () => {...}` targets an
+        // external object, not `this`, even when a same-named async method exists
+        // — the class-method contract does not apply, so it stays flagged.
+        let src = r#"class C {
+            async foo() { await work(); }
+            _init() {
+                obj.foo = async () => { doSync(); };
+            }
+        }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_this_override_when_method_not_async() {
+        // Negative space for #6215: `this.foo = async () => {...}` where the class
+        // declares a *non-async* `foo()` has no Promise contract mandating
+        // `async` — it stays flagged.
+        let src = r#"class C {
+            foo() { return 1; }
+            _init() {
+                this.foo = async () => { doSync(); };
+            }
+        }"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
