@@ -120,12 +120,21 @@ const LICENSE_NAMES: &[&str] =
     &["mit", "apache", "bsd", "isc", "gpl", "lgpl", "agpl", "mpl", "mozilla", "unlicense"];
 
 /// A merged comment block is excluded when it carries any directive or banner
-/// marker, or is a license header named in prose. Matched by content, not file
-/// position, so a banner below `#![attr]` / `'use client'` / a shebang is still
-/// caught and a Rust `//!` module doc is not.
+/// marker, is a license header named in prose, or carries a safety marker.
+/// Matched by content, not file position, so a banner below `#![attr]` /
+/// `'use client'` / a shebang is still caught and a Rust `//!` module doc is not.
+///
+/// A safety marker (`SAFETY:` / `Safety:` / `safety:` / `safety.` / `# Safety`,
+/// per the shared `is_safety_marker` predicate) documents the invariants that
+/// make a specific unsafe operation sound; when two unsafe blocks perform the
+/// same operation their safety rationale is identical because the invariant is
+/// the same. Restating that invariant at every call site is the idiomatic Rust
+/// practice (the same marker `rust-undocumented-unsafe` requires), so the
+/// repetition is local safety documentation, not a copy-paste smell.
 fn is_excluded_comment(lower: &str) -> bool {
     DIRECTIVE_MARKERS.iter().chain(BANNER_MARKERS).any(|m| lower.contains(m))
         || is_named_license_banner(lower)
+        || crate::rules::rust_helpers::is_safety_marker(lower)
 }
 
 /// A license header that declares its license by name in prose rather than by an
@@ -2116,6 +2125,52 @@ type Clock = MacClock;
         let b = write(&dir, "b.rs", &format!("pub enum B {{\n{doc}    Beta = 0,\n}}\n"));
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "identical doc on differently-named variants is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_repeated_safety_invariant_comments_issue_6264() {
+        // Regression (#6264): tokio-rs/bytes restates the same `// SAFETY:`
+        // invariant above two unsafe blocks that both call `shallow_clone`. The
+        // rationale is identical because the invariant is the same — restating
+        // it at every call site is idiomatic local safety documentation, not a
+        // copy-paste smell. The comment is long/distinctive enough to clear the
+        // word and entropy gates, so only the SAFETY-marker exclusion keeps it out.
+        let dir = tempfile::tempdir().unwrap();
+        let safety = "\
+fn split_off(&mut self, at: usize) {
+    // SAFETY: `shallow_clone` increments the reference count (or promotes to
+    // shared) and returns a bitwise copy of the handle. The caller immediately
+    // adjusts both handles so they represent disjoint regions of one buffer.
+    let other = self.shallow_clone();
+}
+";
+        let a = write(&dir, "bytes_mut.rs", safety);
+        let b = write(&dir, "bytes.rs", safety);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "repeated // SAFETY: invariant comments must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_repeated_plain_prose_without_safety_marker_issue_6264() {
+        // Over-exclusion guard for #6264: the same shape WITHOUT a `// SAFETY:`
+        // marker is ordinary duplicated prose copy-pasted across files and must
+        // still flag — the exclusion is keyed on the structural safety marker.
+        let dir = tempfile::tempdir().unwrap();
+        let prose = "\
+fn split_off(&mut self, at: usize) {
+    // `shallow_clone` increments the reference count (or promotes to shared)
+    // and returns a bitwise copy of the handle. The caller immediately adjusts
+    // both handles so they represent disjoint regions of one buffer.
+    let other = self.shallow_clone();
+}
+";
+        let a = write(&dir, "a.rs", prose);
+        let b = write(&dir, "b.rs", prose);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicated plain prose without a SAFETY marker is still a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
