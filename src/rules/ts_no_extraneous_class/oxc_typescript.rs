@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{ClassElement, MethodDefinitionKind};
+use oxc_ast::ast::{BindingPattern, ClassElement, ClassType, MethodDefinitionKind};
 use std::sync::Arc;
 
 pub struct Check;
@@ -62,6 +62,14 @@ impl OxcCheck for Check {
             .collect();
 
         if members.is_empty() {
+            // An empty class *expression* bound to a referenced variable is a
+            // constructor value (factory/prototype pattern:
+            // `const Ctor = class Foo {}; proto.constructor = Ctor`), not a
+            // static-only namespace. It is instantiated / introspected through
+            // its binding, so "use a module or namespace instead" does not apply.
+            if is_referenced_class_expression_value(node, class, semantic) {
+                return;
+            }
             // In NestJS, empty exported classes are idiomatic DI tokens / DTOs /
             // entities: `@Body() dto: CreateDogDto`, `class Dog {}`. NestJS's
             // ValidationPipe requires a runtime class (not an interface) to
@@ -148,6 +156,32 @@ impl OxcCheck for Check {
     }
 }
 
+/// True when `class` is a class *expression* whose enclosing variable binding
+/// is referenced elsewhere — i.e. the empty class is an intentional constructor
+/// *value* (a factory/prototype pattern such as
+/// `const Ctor = class Foo {}; prototype.constructor = Ctor`), not a static-only
+/// namespace declaration. A value that is instantiated or introspected through
+/// its binding cannot be replaced by a module/namespace, so it is not extraneous.
+fn is_referenced_class_expression_value(
+    node: &oxc_semantic::AstNode,
+    class: &oxc_ast::ast::Class,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    if !matches!(class.r#type, ClassType::ClassExpression) {
+        return false;
+    }
+    let AstKind::VariableDeclarator(decl) = semantic.nodes().parent_node(node.id()).kind() else {
+        return false;
+    };
+    let BindingPattern::BindingIdentifier(ident) = &decl.id else {
+        return false;
+    };
+    let Some(symbol_id) = ident.symbol_id.get() else {
+        return false;
+    };
+    semantic.symbol_references(symbol_id).next().is_some()
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -215,5 +249,31 @@ mod tests {
         let diags = run_in_nestjs("export class Utils { static foo() {} }", "src/utils.ts");
         assert_eq!(diags.len(), 1, "static-only namespace class must still fire in NestJS");
         assert!(diags[0].message.contains("static"));
+    }
+
+    // Regression for #6144: an empty class *expression* bound to a referenced
+    // variable is a constructor value in a factory/prototype pattern (pino's
+    // `const constructor = class Pino {}` used as `prototype.constructor`), not a
+    // static-only namespace, so it must not fire.
+    #[test]
+    fn allows_empty_class_expression_used_as_constructor_value() {
+        let src = "const constructor = class Pino {}\n\
+                   const prototype = {\n  constructor,\n}\n\
+                   module.exports = function () { return Object.create(prototype) }\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/proto.js");
+        assert!(
+            diags.is_empty(),
+            "referenced empty class expression used as a constructor value must not fire"
+        );
+    }
+
+    // Negative-space guard: the exemption is gated on the binding being
+    // referenced, not on "any class expression" — an empty class expression
+    // whose binding is never used is still extraneous and must fire.
+    #[test]
+    fn still_flags_unreferenced_empty_class_expression() {
+        let diags = crate::rules::test_helpers::run_rule(&Check, "const unused = class {}", "src/widget.js");
+        assert_eq!(diags.len(), 1, "unreferenced empty class expression must still fire");
+        assert!(diags[0].message.contains("empty"));
     }
 }
