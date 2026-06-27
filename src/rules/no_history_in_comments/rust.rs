@@ -139,4 +139,27 @@ mod tests {
         assert_eq!(run("// previously called fooBar\nfn f() {}").len(), 1);
         assert_eq!(run("// this method was previously called oldName\nfn f() {}").len(), 1);
     }
+
+    #[test]
+    fn allows_version_anchored_external_change() {
+        // Regression for issue #6145: a code-artifact subject followed by a
+        // version-anchored "in" clause documents an external API change tied to
+        // a release, not this project's own history.
+        assert!(run("// getCallSite was renamed in Node 23.3.0 / 22.12.0\nfn f() {}").is_empty());
+        assert!(run("// fooBar was removed in v2.0.0\nfn f() {}").is_empty());
+        assert!(run("// fooBar was renamed in 2.0\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_rename_without_version_anchor() {
+        // Negative space for #6145: an internal rename with no version anchor is
+        // still code-history narration and must fire.
+        assert_eq!(run("// getCallSite was renamed to getCallSites\nfn f() {}").len(), 1);
+        // A version anchored to an "in" clause is required: a bare version in the
+        // subject, a single-component version, or a version several words past
+        // the "in" does not document an external release change.
+        assert_eq!(run("// fooBar 2.0 was renamed\nfn f() {}").len(), 1);
+        assert_eq!(run("// fooBar was renamed in v22\nfn f() {}").len(), 1);
+        assert_eq!(run("// fooBar was renamed in the migration to v2.0 schema\nfn f() {}").len(), 1);
+    }
 }
