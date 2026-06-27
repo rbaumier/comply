@@ -48,6 +48,24 @@ fn are_different_packages(a: Option<&std::path::Path>, b: Option<&std::path::Pat
     matches!((a, b), (Some(a), Some(b)) if a != b)
 }
 
+/// Whether any identifier used in both bodies resolves to an `import` in each
+/// file under the same local name but from a *different* module specifier. The
+/// two functions share a `(name, signature)` bucket, so their body-token streams
+/// — and therefore their identifier sets — are identical; iterating one side's
+/// `body_idents` is enough. Such a divergence means the same alias calls a
+/// different package per file, so the copies are not interchangeable.
+fn any_divergent_import_source(
+    a: &FnEntry,
+    b: &FnEntry,
+    import_maps: &[FxHashMap<String, String>],
+) -> bool {
+    let map_a = &import_maps[a.file_idx];
+    let map_b = &import_maps[b.file_idx];
+    a.body_idents.iter().any(|name| {
+        matches!((map_a.get(name), map_b.get(name)), (Some(sa), Some(sb)) if sa != sb)
+    })
+}
+
 /// Whether the declaration at `decl` is `export`ed: a TS/JS `export` keyword
 /// wraps the declaration in an `export_statement` ancestor. Walks up because a
 /// `const` binding sits two levels under the `export_statement` (via its
@@ -81,6 +99,11 @@ struct FnEntry {
     /// body: each leaf token's `(kind_id, text)`, in order. Two functions are
     /// duplicates iff their signatures are byte-equal.
     signature: Vec<u8>,
+    /// Identifier names referenced in the body that are not the function's own
+    /// parameters — an over-approximation of its free variables. Compared against
+    /// each file's import map so a same-named alias resolving to a different
+    /// module specifier per file is not treated as the same call.
+    body_idents: FxHashSet<String>,
 }
 
 #[must_use]
@@ -119,14 +142,22 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
     // `[rules.<id>]` block, so the `Language` passed to the lookup is immaterial.
     let min_body_tokens = config.threshold(RULE_ID, "min_body_tokens", Language::TypeScript);
 
-    let entries: Vec<FnEntry> = files
+    // Each file yields its functions and its import map (local-name →
+    // module-specifier). `collect` preserves file order, so `import_maps[idx]`
+    // is the map of the file whose functions carry `file_idx == idx`.
+    let per_file: Vec<(Vec<FnEntry>, FxHashMap<String, String>)> = files
         .par_iter()
         .enumerate()
         .map_init(Parser::new, |parser, (idx, file)| {
             extract_functions(parser, file, idx, min_body_tokens)
         })
-        .flatten()
         .collect();
+    let mut entries: Vec<FnEntry> = Vec::new();
+    let mut import_maps: Vec<FxHashMap<String, String>> = Vec::with_capacity(per_file.len());
+    for (file_entries, imports) in per_file {
+        entries.extend(file_entries);
+        import_maps.push(imports);
+    }
 
     let mut buckets: FxHashMap<(&str, &[u8]), Vec<usize>> = FxHashMap::default();
     for (i, entry) in entries.iter().enumerate() {
@@ -196,6 +227,17 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             {
                 continue;
             }
+            // Platform/runtime entry files (h3's `_entries/{bun,node,deno}.ts`)
+            // carry byte-identical bodies that call a same-named local alias
+            // resolving to a different runtime package per file — `import { serve
+            // as srvxServe } from "srvx/bun"` vs `"srvx/node"`. The platform is
+            // encoded in the import path, not a parameter, so the bodies cannot be
+            // hoisted into one shared module: they are not interchangeable. Skip
+            // when a body identifier resolves to imports with diverging module
+            // specifiers across the two files.
+            if any_divergent_import_source(entry, canonical, &import_maps) {
+                continue;
+            }
             diags.push(Diagnostic {
                 path: std::sync::Arc::from(files[entry.file_idx].path.as_path()),
                 line: entry.line,
@@ -223,9 +265,9 @@ fn extract_functions(
     file: &SourceFile,
     file_idx: usize,
     min_body_tokens: usize,
-) -> Vec<FnEntry> {
+) -> (Vec<FnEntry>, FxHashMap<String, String>) {
     let Ok(source) = std::fs::read_to_string(&file.path) else {
-        return Vec::new();
+        return (Vec::new(), FxHashMap::default());
     };
     // Minified/bundled files (e.g. `*-min.js`, `*.min.js`, webpack bundles, or a
     // multi-KB single payload line) are machine-emitted build artifacts whose
@@ -236,17 +278,21 @@ fn extract_functions(
     if crate::rules::file_ctx::is_generated_content(&source)
         || crate::rules::file_ctx::scan_minified(&file.path, &source)
     {
-        return Vec::new();
+        return (Vec::new(), FxHashMap::default());
     }
     let Some(tree) = parse_with_grammar(parser, file.language, source.as_bytes()) else {
-        return Vec::new();
+        return (Vec::new(), FxHashMap::default());
     };
     let bytes = source.as_bytes();
 
     let mut entries = Vec::new();
+    let mut import_map = FxHashMap::default();
     let mut cursor = tree.walk();
     loop {
         let node = cursor.node();
+        if node.kind() == "import_statement" {
+            collect_import(node, bytes, &mut import_map);
+        }
         if let Some((name, decl, sig_node, body)) = named_function_parts(node) {
             if let Some(entry) =
                 build_entry(name, decl, sig_node, body, bytes, file_idx, min_body_tokens)
@@ -262,10 +308,79 @@ fn extract_functions(
                 break;
             }
             if !cursor.goto_parent() {
-                return entries;
+                return (entries, import_map);
             }
         }
     }
+}
+
+/// Record every local binding an `import` statement introduces as
+/// `local-name → module-specifier`. Default (`import d from "m"`), namespace
+/// (`import * as n from "m"`), and named (`import { a as b } from "m"`) clauses
+/// are covered; for an aliased named import the *local* name (`b`) is the key.
+fn collect_import(node: Node, source: &[u8], map: &mut FxHashMap<String, String>) {
+    let Some(specifier) = import_specifier_text(node, source) else {
+        return;
+    };
+    let Some(clause) = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "import_clause")
+    else {
+        return;
+    };
+    let mut cursor = clause.walk();
+    for child in clause.named_children(&mut cursor) {
+        match child.kind() {
+            "identifier" => insert_local(child, source, &specifier, map),
+            "namespace_import" => {
+                if let Some(id) = child
+                    .named_children(&mut child.walk())
+                    .find(|c| c.kind() == "identifier")
+                {
+                    insert_local(id, source, &specifier, map);
+                }
+            }
+            "named_imports" => {
+                let mut nested = child.walk();
+                for spec in child.named_children(&mut nested) {
+                    if spec.kind() != "import_specifier" {
+                        continue;
+                    }
+                    // `{ a }` → local `a`; `{ a as b }` → local `b`. The local
+                    // binding is the last identifier of the specifier.
+                    if let Some(local) = spec
+                        .named_children(&mut spec.walk())
+                        .filter(|c| c.kind() == "identifier")
+                        .last()
+                    {
+                        insert_local(local, source, &specifier, map);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Insert `local-name → specifier` for an identifier node, skipping empties.
+fn insert_local(id: Node, source: &[u8], specifier: &str, map: &mut FxHashMap<String, String>) {
+    if let Ok(name) = id.utf8_text(source)
+        && !name.is_empty()
+    {
+        map.insert(name.to_string(), specifier.to_string());
+    }
+}
+
+/// The unquoted module specifier of an `import` statement — its `string` child.
+fn import_specifier_text(node: Node, source: &[u8]) -> Option<String> {
+    let str_node = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "string")?;
+    let raw = str_node.utf8_text(source).ok()?;
+    Some(
+        raw.trim_matches(|c| c == '\'' || c == '"' || c == '`')
+            .to_string(),
+    )
 }
 
 /// The `(name, declaration, signature node, body)` of a named function at
@@ -330,6 +445,19 @@ fn build_entry(
         return None;
     }
 
+    // Free-ish variables: identifiers used in the body minus the function's own
+    // parameters, so a parameter named like an import is not mistaken for a
+    // reference to that import. Property accesses (`property_identifier`) and
+    // type-level names (`type_identifier`) are different node kinds and are not
+    // captured here.
+    let mut params_idents = FxHashSet::default();
+    if let Some(params) = sig_node.child_by_field_name("parameters") {
+        collect_identifiers(params, source, &mut params_idents);
+    }
+    let mut body_idents = FxHashSet::default();
+    collect_identifiers(body, source, &mut body_idents);
+    body_idents.retain(|n| !params_idents.contains(n));
+
     let pos = name.start_position();
     Some(FnEntry {
         file_idx,
@@ -339,7 +467,26 @@ fn build_entry(
         span: (decl.start_byte(), decl.end_byte() - decl.start_byte()),
         is_exported: is_exported(decl),
         signature,
+        body_idents,
     })
+}
+
+/// Insert the text of every `identifier` leaf under `node` into `out`. Property
+/// accesses (`property_identifier`) and type references (`type_identifier`) are
+/// distinct node kinds and so are not collected.
+fn collect_identifiers(node: Node, source: &[u8], out: &mut FxHashSet<String>) {
+    if node.kind() == "identifier" {
+        if let Ok(text) = node.utf8_text(source)
+            && !text.is_empty()
+        {
+            out.insert(text.to_string());
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_identifiers(child, source, out);
+    }
 }
 
 /// Append every leaf token under `node` (comments excluded) to `sig` as
@@ -779,5 +926,70 @@ function toOption(e: ScopeEntity): Option {
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "exported cross-package duplicates are still flagged");
         assert!(diags[0].message.contains("`ascR`"));
+    }
+
+    // A platform entry's `serve`, parameterized by the runtime package it calls
+    // through the `srvxServe` alias.
+    fn serve_entry(specifier: &str) -> String {
+        format!(
+            "import {{ serve as srvxServe }} from \"{specifier}\";\n\
+             export function serve(app: H3, options?: ServerOptions): Server {{\n\
+            \x20 freezeApp(app);\n\
+            \x20 return srvxServe({{ fetch: app.fetch, ...options }});\n\
+             }}\n"
+        )
+    }
+
+    #[test]
+    fn divergent_import_specifier_not_flagged() {
+        // Issue #6394 (unjs/h3): `h3/src/_entries/{bun,node}.ts` carry
+        // byte-identical `serve` bodies, each calling `srvxServe` aliased from a
+        // different runtime package (`srvx/bun` vs `srvx/node`). The platform is
+        // encoded in the import path, not a parameter, so they cannot be hoisted
+        // to one shared module — not a true duplicate.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "bun.ts", &serve_entry("srvx/bun"));
+        let b = write(&dir, "node.ts", &serve_entry("srvx/node"));
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "identical bodies whose alias resolves to different packages are exempt"
+        );
+    }
+
+    #[test]
+    fn same_import_specifier_still_flagged() {
+        // Negative control: when the same-named alias resolves to the *same*
+        // package in both files, there is no divergence and the copy-paste is a
+        // genuine duplicate — still flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.ts", &serve_entry("srvx/node"));
+        let b = write(&dir, "b.ts", &serve_entry("srvx/node"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "same import specifier is still a duplicate");
+        assert!(diags[0].message.contains("`serve`"));
+    }
+
+    #[test]
+    fn pure_body_without_imports_still_flagged() {
+        // Negative control: a hoistable pure helper referencing no imports (only
+        // params, locals, and globals) is a genuine duplicate. This proves the
+        // exemption is keyed on import-source divergence, not a blanket pass.
+        let pure = "\
+export function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+";
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.ts", pure);
+        let b = write(&dir, "b.ts", pure);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "an import-free pure duplicate is still flagged");
+        assert!(diags[0].message.contains("`shallowEqual`"));
     }
 }
