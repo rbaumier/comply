@@ -39,14 +39,21 @@ impl OxcCheck for Check {
             return;
         }
 
-        // An empty object literal can never satisfy a type with required
-        // members, so `{} satisfies T` fails to compile (TS1360). `{} as T`
-        // is the canonical deliberate-coercion idiom (default/fallback props,
-        // empty option bags) — skip it. An empty *array* is exempt from this:
-        // `[] satisfies T[]` compiles, so it still flags below.
-        if let Expression::ObjectExpression(obj) = &as_expr.expression
-            && obj.properties.is_empty()
-        {
+        // Empty literals are exempt: `satisfies` cannot supply the widening
+        // their `as` provides.
+        //   - `{} satisfies T` fails to compile (TS1360) when `T` has required
+        //     members, so `{} as T` is the canonical deliberate-coercion idiom
+        //     (default/fallback props, empty option bags).
+        //   - `[]` infers as `never[]`; `[] as T[]` widens it to `T[]` so the
+        //     value can seed a typed accumulator or accept later `.push(t)`.
+        //     `[] satisfies T[]` compiles but leaves the type `never[]`, losing
+        //     the widening — the `as` is semantically irreplaceable.
+        let is_empty_literal = match &as_expr.expression {
+            Expression::ObjectExpression(obj) => obj.properties.is_empty(),
+            Expression::ArrayExpression(arr) => arr.elements.is_empty(),
+            _ => false,
+        };
+        if is_empty_literal {
             return;
         }
 
@@ -168,11 +175,43 @@ mod tests {
         assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const x = { a: 1 } as T;", "t.ts").len(), 1);
     }
 
-    // An empty array still flags: `[] satisfies T[]` compiles fine, so the
-    // empty-object exemption must not extend to arrays.
+    // Regression test for #6195: `[]` infers as `never[]`; `[] as T[]` widens
+    // it to `T[]` so subsequent `.push()`/accumulation type-checks.
+    // `[] satisfies T[]` does not widen (stays `never[]`), so the `as` is
+    // irreplaceable — an empty array literal cast must not be flagged.
     #[test]
-    fn still_flags_empty_array_literal_cast() {
-        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const a = [] as T[];", "t.ts").len(), 1);
+    fn allows_empty_array_literal_cast() {
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const a = [] as T[];", "t.ts").is_empty());
+    }
+
+    // #6195: empty-array reduce accumulator seed — `as T[]` widens the seed so
+    // the accumulator parameter is typed; `satisfies` cannot.
+    #[test]
+    fn allows_empty_array_reduce_seed() {
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "const r = data.reduce((acc, d) => { acc.push(d); return acc; }, [] as LocaleObjectData[]);",
+                "t.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    // #6195: union-element empty array — same widening requirement.
+    #[test]
+    fn allows_empty_array_union_element_cast() {
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const children = [] as (Node | string)[];", "t.ts").is_empty()
+        );
+    }
+
+    // #6195 boundary: only the empty array literal is structurally unusable
+    // with `satisfies` (a `never[]` value can accept no element). A non-empty
+    // literal carries its own inferred element type, so it stays in scope.
+    #[test]
+    fn still_flags_non_empty_array_literal_cast() {
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const a = [x, y] as T[];", "t.ts").len(), 1);
     }
 
     #[test]
