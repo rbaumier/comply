@@ -14,7 +14,12 @@
 //! (`FileCtx::in_benchmark_dir`) are exempt too: in a Criterion `b.iter(|| { let
 //! _ = f(black_box(..)) })` closure the discard is the idiomatic way to run a
 //! call for its timing without consuming the result, and benchmark code never
-//! ships to production.
+//! ships to production. cargo-fuzz harness files (a `fuzz_targets/` directory
+//! segment, via `FileCtx::path_segments.in_fuzz_targets`) are exempt
+//! for the same reason: `let _ = f(fuzzer_input)` is the canonical idiom for
+//! exercising a function under fuzzing — success vs. failure is deliberately
+//! ignored, only "does not panic" matters, and fuzz harnesses never ship to
+//! production.
 //!
 //! Four non-error idioms are also exempted:
 //! - `let _ = expr?`: the `?` operator already propagates any `Err`/`None` to
@@ -122,16 +127,20 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Skip inside tests, Kani harnesses, and benchmarks — `let _ = …` there is
-    // "call and don't care". Covers a `#[test]`/`#[cfg(test)]` attribute context,
-    // a Kani verification harness (`#[kani::proof]`/`#[kani::proof_for_contract]`),
-    // a file under a `tests/` directory (plain helper fns there are test
-    // infrastructure), and benchmark files (`benches/`, `_bench.rs`): a Criterion
-    // `b.iter` closure discards the result to time the call without consuming it.
+    // Skip inside tests, Kani harnesses, benchmarks, and fuzz harnesses —
+    // `let _ = …` there is "call and don't care". Covers a `#[test]`/`#[cfg(test)]`
+    // attribute context, a Kani verification harness
+    // (`#[kani::proof]`/`#[kani::proof_for_contract]`), a file under a `tests/`
+    // directory (plain helper fns there are test infrastructure), benchmark files
+    // (`benches/`, `_bench.rs`) where a Criterion `b.iter` closure discards the
+    // result to time the call, and cargo-fuzz harness files (a `fuzz_targets/`
+    // directory segment) where `let _ = f(fuzzer_input)` exercises a call only
+    // to assert it does not panic.
     if is_in_test_context(node, source)
         || is_in_kani_proof(node, source)
         || is_under_tests_dir(ctx.path)
         || ctx.file.in_benchmark_dir()
+        || ctx.file.path_segments.in_fuzz_targets
     {
         return;
     }
@@ -1161,6 +1170,28 @@ mod tests {
         let bench_marker = run_on_path(src, "src/varint_bench.rs");
         assert!(bench_dir.is_empty());
         assert!(bench_marker.is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_in_fuzz_target() {
+        // Regression for #6417: in a cargo-fuzz harness `let _ = f(fuzzer_input)`
+        // exercises a call only to assert it does not panic — success vs. failure
+        // is deliberately ignored. The issue's exact proc-macro2
+        // `fuzz/fuzz_targets/parse_token_stream.rs` example.
+        let src = r#"
+            fn do_fuzz(bytes: &[u8]) {
+                let Ok(string) = str::from_utf8(bytes) else { return };
+                let _ = string.parse::<proc_macro2::TokenStream>();
+            }
+        "#;
+        let fuzz_target = run_on_path(src, "fuzz/fuzz_targets/parse_token_stream.rs");
+        assert!(fuzz_target.is_empty());
+
+        // Negative control: the SAME discarded fallible call in production code
+        // (not under `fuzz/fuzz_targets/`) genuinely swallows the error and must
+        // fire — confirming the fixture path drives the `in_fuzz_targets` flag.
+        let prod = run_on_path(src, "src/lib.rs");
+        assert_eq!(prod.len(), 1);
     }
 
     #[test]
