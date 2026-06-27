@@ -6,6 +6,11 @@
 //! Borrowed "view" structs (a lifetime parameter plus at least one
 //! reference-typed field) are excluded: they intentionally mirror an owned
 //! struct's field names but cannot be merged with it.
+//!
+//! A shared subset whose every field is typed solely by the host struct's own
+//! declared generic type parameters (e.g. `g: G`, `init: Init`,
+//! `r: PhantomData<R>`) is also excluded: extracting it yields a struct that
+//! must re-declare the same parameters, so no duplication is removed.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -15,23 +20,37 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    let mut struct_fields: Vec<(usize, Vec<String>)> = Vec::new();
+    let mut struct_fields: Vec<StructFields> = Vec::new();
     collect_structs(node, source, &mut struct_fields);
 
-    // For each 3-field subset, count how many structs contain it.
-    let mut subset_occurrences: FxHashMap<Vec<String>, Vec<usize>> = FxHashMap::default();
-    for (line, fields) in &struct_fields {
-        for combo in combinations(fields, 3) {
-            subset_occurrences.entry(combo).or_default().push(*line);
+    // For each 3-field subset, record every struct that contains it, noting
+    // whether that struct types the subset entirely with its own declared
+    // generic parameters (in which case extraction removes no duplication).
+    let mut subset_occurrences: FxHashMap<Vec<String>, Vec<(usize, bool)>> = FxHashMap::default();
+    for sf in &struct_fields {
+        for combo in combinations(&sf.names, 3) {
+            let all_generic = combo.iter().all(|f| sf.generic_param_only.contains(f));
+            subset_occurrences
+                .entry(combo)
+                .or_default()
+                .push((sf.line, all_generic));
         }
     }
 
     let mut flagged_lines: FxHashSet<usize> = FxHashSet::default();
     let mut results: Vec<(usize, String)> = Vec::new();
 
-    for (subset, lines) in &subset_occurrences {
-        if lines.len() >= 2 {
-            for &line in lines {
+    for (subset, occurrences) in &subset_occurrences {
+        // A struct whose every subset field is one of its own generic
+        // parameters cannot be merged into a shared type, so it does not count
+        // toward the clump.
+        let flaggable: Vec<usize> = occurrences
+            .iter()
+            .filter(|&&(_, all_generic)| !all_generic)
+            .map(|&(line, _)| line)
+            .collect();
+        if flaggable.len() >= 2 {
+            for &line in &flaggable {
                 if flagged_lines.insert(line) {
                     results.push((
                         line,
@@ -39,7 +58,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                             "Fields [{}] appear together in {} structs \
                              \u{2014} extract into a shared type.",
                             subset.join(", "),
-                            lines.len(),
+                            flaggable.len(),
                         ),
                     ));
                 }
@@ -61,14 +80,25 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     }
 }
 
+/// Per-struct field data gathered for clump detection.
+struct StructFields {
+    line: usize,
+    names: Vec<String>,
+    /// Field names whose type is determined solely by the struct's own declared
+    /// generic type parameters.
+    generic_param_only: FxHashSet<String>,
+}
+
 /// Recursively collect struct field sets from the AST.
-fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(usize, Vec<String>)>) {
+fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructFields>) {
     if node.kind() == "struct_item" {
         if crate::rules::rust_helpers::is_in_test_context(node, source) {
             return;
         }
+        let declared = declared_type_param_names(node, source);
         // Look for field_declaration_list child.
         let mut names: Vec<String> = Vec::new();
+        let mut generic_param_only: FxHashSet<String> = FxHashSet::default();
         let child_count = node.named_child_count();
         for i in 0..child_count {
             if let Some(child) = node.named_child(i)
@@ -82,6 +112,11 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(usize,
                         && let Ok(name) = name_node.utf8_text(source)
                     {
                         names.push(name.to_string());
+                        if let Some(ty) = field.child_by_field_name("type")
+                            && type_is_generic_param_only(ty, &declared, source)
+                        {
+                            generic_param_only.insert(name.to_string());
+                        }
                     }
                 }
             }
@@ -89,7 +124,11 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(usize,
         names.sort();
         names.dedup();
         if names.len() >= 3 && !is_borrowed_view_struct(node) {
-            out.push((node.start_position().row + 1, names));
+            out.push(StructFields {
+                line: node.start_position().row + 1,
+                names,
+                generic_param_only,
+            });
         }
     }
 
@@ -102,6 +141,61 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(usize,
             }
         }
     }
+}
+
+/// True when `ty` is determined solely by the host struct's own declared
+/// generic type parameters: a bare `type_identifier` that is one of `declared`,
+/// or a `generic_type` (e.g. `PhantomData<R>`, `Option<G>`) whose
+/// `type_arguments` are all `type_identifier`s in `declared`. The wrapper
+/// constructor (`PhantomData`/`Option`/`Box`…) is ignored; only the type
+/// arguments must be struct-declared parameters.
+fn type_is_generic_param_only(ty: tree_sitter::Node, declared: &[&str], source: &[u8]) -> bool {
+    match ty.kind() {
+        "type_identifier" => ty.utf8_text(source).is_ok_and(|t| declared.contains(&t)),
+        "generic_type" => {
+            let Some(args) = ty.child_by_field_name("type_arguments") else {
+                return false;
+            };
+            let mut cursor = args.walk();
+            let mut saw_type_arg = false;
+            for arg in args.named_children(&mut cursor) {
+                match arg.kind() {
+                    "type_identifier" => {
+                        saw_type_arg = true;
+                        if !arg.utf8_text(source).is_ok_and(|t| declared.contains(&t)) {
+                            return false;
+                        }
+                    }
+                    "lifetime" => {}
+                    _ => return false,
+                }
+            }
+            saw_type_arg
+        }
+        _ => false,
+    }
+}
+
+/// Names of the `type_identifier` generic parameters declared on the struct's
+/// `type_parameters` node (skipping lifetimes and const generics).
+fn declared_type_param_names<'a>(struct_node: tree_sitter::Node, source: &'a [u8]) -> Vec<&'a str> {
+    let Some(type_params) = struct_node.child_by_field_name("type_parameters") else {
+        return Vec::new();
+    };
+    let mut cursor = type_params.walk();
+    let mut names = Vec::new();
+    for param in type_params.children(&mut cursor) {
+        if param.kind() != "type_parameter" {
+            continue;
+        }
+        if let Some(name_node) = param.child_by_field_name("name")
+            && name_node.kind() == "type_identifier"
+            && let Ok(text) = name_node.utf8_text(source)
+        {
+            names.push(text);
+        }
+    }
+    names
 }
 
 /// True if `struct_node` is a borrowed "view" type: it has a lifetime
@@ -330,6 +424,64 @@ struct ArgVals {
     id: String,
     netns: Option<String>,
     new_pid_ns: bool,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn allows_generic_param_combinators_issue_6202() {
+        let src = r#"
+use std::marker::PhantomData;
+
+pub struct FoldMany0<F, G, Init, R> {
+    parser: F,
+    g: G,
+    init: Init,
+    r: PhantomData<R>,
+}
+
+pub struct FoldMany1<F, G, Init, R> {
+    parser: F,
+    g: G,
+    init: Init,
+    r: PhantomData<R>,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_concrete_typed_clump_issue_6202() {
+        let src = r#"
+struct CreateAccount {
+    name: String,
+    id: u64,
+    email: String,
+}
+
+struct UpdateAccount {
+    name: String,
+    id: u64,
+    email: String,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn concrete_field_in_generic_clump_still_flags() {
+        let src = r#"
+struct Left<T, U> {
+    a: T,
+    b: U,
+    name: String,
+}
+
+struct Right<T, U> {
+    a: T,
+    b: U,
+    name: String,
 }
 "#;
         assert_eq!(run_on(src).len(), 2);
