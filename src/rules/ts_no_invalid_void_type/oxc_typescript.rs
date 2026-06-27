@@ -258,6 +258,32 @@ fn is_tuple_element_type(
     false
 }
 
+// `function f(this: void, ...)` / `formatDate(this: void, ...)` — `void` as the
+// type annotation of the synthetic `this` pseudo-parameter is valid TypeScript:
+// it declares the function/method as not `this`-dependent. The `this` parameter
+// is erased at runtime and exists only at the type level. Represented by a
+// dedicated `TSThisParameter` node, distinct from a real `FormalParameter`, so a
+// regular `(value: void) => ...` parameter still fires.
+fn is_this_parameter_annotation(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::TSThisParameter(_) => return true,
+            AstKind::FormalParameter(_)
+            | AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSMethodSignature(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSVoidKeyword]
@@ -293,6 +319,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_tuple_element_type(node, semantic) {
+            return;
+        }
+        if is_this_parameter_annotation(node, semantic) {
             return;
         }
 
@@ -539,6 +568,39 @@ mod tests {
         // Negative space: the tuple exemption is type-position-scoped — a
         // `void` parameter of a function-typed tuple element still fires.
         let src = "type T = [(x: void) => string];";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_void_in_interface_method() {
+        // Regression for rbaumier/comply#6314 — formatjs/formatjs: `this: void`
+        // annotation on an interface method declares it as non-`this`-dependent.
+        let src = "interface IntlFormatters { formatDate(this: void, value: string): string }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_void_in_function_declaration() {
+        // Regression for rbaumier/comply#6314 — formatjs/formatjs useIntl:
+        // `this: void` annotation on a function declaration.
+        let src = "function useIntl(this: void): IntlShape { return ctx; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_void_in_class_method() {
+        // Regression for rbaumier/comply#6314 — `this: void` on a class method
+        // (carried by a `Function` under a `MethodDefinition`).
+        let src = "class C { foo(this: void): number { return 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_regular_void_param_alongside_this_void() {
+        // Negative space: the `this: void` exemption is scoped to the synthetic
+        // `this` pseudo-parameter — a real `(value: void)` parameter still fires.
+        let src = "const f = (value: void) => value;";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
