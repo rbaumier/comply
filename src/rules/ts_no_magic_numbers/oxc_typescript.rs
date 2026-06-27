@@ -1442,6 +1442,23 @@ fn is_allowed_context(
             // (indexed-access `T[501]` and union literals `200 | 501` are already
             // covered by `TSLiteralType`).
             AstKind::TSPropertySignature(_) | AstKind::TSIndexSignature(_) => return true,
+            // A numeric literal that is the *key* of an object-literal property
+            // (`{ 50: '#f8fafc' }`, `{ [950]: '#020420' }`) is the property's
+            // name, not a runtime value — the value-level analogue of the
+            // `TSPropertySignature` type-key case above. It cannot be extracted
+            // into a named constant: it *is* the property's identity. Only the
+            // key position is exempt: a literal in the value position
+            // (`{ timeout: 5000 }`) or nested inside a computed-key expression
+            // (`{ [SHIFT * 7]: x }`) has a span distinct from the key node, so
+            // it keeps flagging.
+            AstKind::ObjectProperty(prop) => {
+                let key_span = prop.key.span();
+                match nodes.get_node(current_id).kind() {
+                    AstKind::NumericLiteral(n) if n.span == key_span => return true,
+                    AstKind::UnaryExpression(u) if u.span == key_span => return true,
+                    _ => {}
+                }
+            }
             // `satisfies`/`as` operand: `7 satisfies NodeTypes.DIRECTIVE`,
             // `3 as Priority`. The annotation binds the literal to a named type
             // at compile time, giving it the same semantic context a named
@@ -1514,6 +1531,34 @@ mod tests {
         assert!(run(r#"Object.assign(F, { "MAX_COLUMN": 16384 });"#).is_empty());
         // Negative-valued constant.
         assert!(run("Object.assign(F, { MIN_OFFSET: -2958465 });").is_empty());
+    }
+
+    // Regression for rbaumier/comply#6399: numeric literals used as object
+    // property KEYS (Tailwind color-scale steps `{ slate: { 50: '#f8fafc' } }`)
+    // are property names, not runtime values — the value-level analogue of the
+    // already-exempt `TSPropertySignature` type-key case. `export default` keeps
+    // the object out of a `const` initializer so the key exemption is what is
+    // exercised, not the const-initializer one.
+    #[test]
+    fn allows_numeric_object_property_keys() {
+        let src = r#"export default { theme: { extend: { colors: { slate: { 50: '#f8fafc', 100: '#f1f5f9', 900: '#0f172a' } } } } };"#;
+        assert!(run(src).is_empty());
+        // A computed numeric key (`{ [950]: ... }`) is still the key node.
+        assert!(run(r#"export default { [950]: '#020420' };"#).is_empty());
+        // A negative computed numeric key (`{ [-5000]: ... }`) is the key node
+        // too — the literal's parent unary negation spans the whole key.
+        assert!(run(r#"export default { [-5000]: '#000' };"#).is_empty());
+    }
+
+    // The exemption is keyed on the literal being the property KEY: a literal in
+    // the value position, or nested inside a computed-key expression, has a span
+    // distinct from the key node and stays flagged.
+    #[test]
+    fn flags_numeric_object_property_value_and_computed_key_expr() {
+        // Value position (`Object.assign` avoids the const-initializer exemption).
+        assert_eq!(run("Object.assign(F, { timeout: 5000 });").len(), 1);
+        // Literal nested in a computed-key expression is not the key node.
+        assert_eq!(run("Object.assign(F, { [SHIFT * 7]: x });").len(), 1);
     }
 
     #[test]
