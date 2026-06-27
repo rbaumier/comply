@@ -4735,6 +4735,30 @@ pub fn is_constant_index_expression(
     }
 }
 
+/// True when the function/arrow node `func_id` is the direct callee of a call
+/// expression — an IIFE (`(() => ...)()`). An IIFE runs immediately at its
+/// definition site, so its body executes exactly once per execution of the
+/// IIFE's own enclosing context rather than once per call of a reusable
+/// function. Parenthesized wrappers around the callee are transparent: the
+/// callee span is then the wrapper's, so the comparison tracks the span of the
+/// child node just below each ancestor.
+pub fn function_is_immediately_invoked(
+    nodes: &oxc_semantic::AstNodes,
+    func_id: oxc_semantic::NodeId,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+    let mut child_span = nodes.kind(func_id).span();
+    for ancestor_id in nodes.ancestor_ids(func_id) {
+        match nodes.kind(ancestor_id) {
+            AstKind::ParenthesizedExpression(_) => child_span = nodes.kind(ancestor_id).span(),
+            AstKind::CallExpression(call) => return call.callee.span() == child_span,
+            _ => return false,
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod oxc_helpers_tests {
     use super::{byte_offset_to_line_col, mask_comments, reset_file_caches, source_contains};

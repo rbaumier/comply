@@ -2982,33 +2982,12 @@ fn reference_is_deferred(nodes: &oxc_semantic::AstNodes, ref_node_id: oxc_semant
     for ancestor_id in nodes.ancestor_ids(ref_node_id) {
         match nodes.kind(ancestor_id) {
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
-                return !oxc_function_is_immediately_invoked(nodes, ancestor_id);
+                return !crate::oxc_helpers::function_is_immediately_invoked(nodes, ancestor_id);
             }
             AstKind::MethodDefinition(_) => return true,
             AstKind::PropertyDefinition(prop) => return !prop.r#static,
             AstKind::StaticBlock(_) | AstKind::Program(_) => return false,
             _ => {}
-        }
-    }
-    false
-}
-
-/// True when the function/arrow node `func_id` is the direct callee of a call
-/// expression — an IIFE (`(() => ...)()`). An IIFE runs immediately in the
-/// synchronous module-evaluation flow, so a reference inside it is not deferred.
-/// Parenthesized wrappers around the callee are transparent.
-fn oxc_function_is_immediately_invoked(
-    nodes: &oxc_semantic::AstNodes,
-    func_id: oxc_semantic::NodeId,
-) -> bool {
-    use oxc_ast::AstKind;
-    use oxc_span::GetSpan;
-    let mut child_span = nodes.get_node(func_id).kind().span();
-    for ancestor_id in nodes.ancestor_ids(func_id) {
-        match nodes.kind(ancestor_id) {
-            AstKind::ParenthesizedExpression(_) => child_span = nodes.kind(ancestor_id).span(),
-            AstKind::CallExpression(call) => return call.callee.span() == child_span,
-            _ => return false,
         }
     }
     false

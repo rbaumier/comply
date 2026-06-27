@@ -521,7 +521,7 @@ fn is_deferred_function_expression<'a>(
     func_id: NodeId,
     decl_start: u32,
 ) -> bool {
-    if is_immediately_invoked(nodes, func_id) {
+    if crate::oxc_helpers::function_is_immediately_invoked(nodes, func_id) {
         return false;
     }
     let Some(symbol_id) = function_expression_binding(nodes, func_id) else {
@@ -605,7 +605,7 @@ fn call_is_eagerly_reachable(nodes: &oxc_semantic::AstNodes, call_ref_id: NodeId
     for ancestor_id in nodes.ancestor_ids(call_ref_id) {
         match nodes.kind(ancestor_id) {
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
-                if !is_immediately_invoked(nodes, ancestor_id) {
+                if !crate::oxc_helpers::function_is_immediately_invoked(nodes, ancestor_id) {
                     return false;
                 }
             }
@@ -649,7 +649,7 @@ fn is_inside_deferred_call_argument<'a>(
         let node = nodes.get_node(ancestor_id);
         match node.kind() {
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
-                if is_immediately_invoked(nodes, ancestor_id) {
+                if crate::oxc_helpers::function_is_immediately_invoked(nodes, ancestor_id) {
                     return false;
                 }
                 return is_inside_decorator(nodes, ancestor_id)
@@ -707,7 +707,7 @@ fn is_inside_deferred_closure<'a>(
         let node = nodes.get_node(ancestor_id);
         match node.kind() {
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
-                if is_immediately_invoked(nodes, ancestor_id) {
+                if crate::oxc_helpers::function_is_immediately_invoked(nodes, ancestor_id) {
                     return false;
                 }
                 return decl_scope_encloses(scoping, decl_scope_id, node.scope_id());
@@ -730,28 +730,6 @@ fn decl_scope_encloses(
     scoping
         .scope_ancestors(node_scope_id)
         .any(|scope_id| scope_id == decl_scope_id)
-}
-
-/// True when `func_id` is a function/arrow expression that is the direct callee
-/// of a call expression — an IIFE (`(() => ...)()`). Such a closure runs
-/// immediately in the synchronous flow, so a forward reference inside it is a
-/// real TDZ hazard. Parenthesized wrappers around the callee (`(() => ...)()`,
-/// kept in the AST) are transparent: the callee span is then the wrapper's, so
-/// the comparison tracks the span of the child node just below each ancestor.
-fn is_immediately_invoked<'a>(
-    nodes: &'a oxc_semantic::AstNodes<'a>,
-    func_id: NodeId,
-) -> bool {
-    let mut child_span = nodes.get_node(func_id).span();
-    for ancestor_id in nodes.ancestor_ids(func_id) {
-        let node = nodes.get_node(ancestor_id);
-        match node.kind() {
-            AstKind::ParenthesizedExpression(_) => child_span = node.span(),
-            AstKind::CallExpression(call) => return call.callee.span() == child_span,
-            _ => return false,
-        }
-    }
-    false
 }
 
 /// Test-runner registration functions whose callbacks are invoked after module

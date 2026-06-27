@@ -1,5 +1,8 @@
 //! prefer-static-regex — OXC backend.
-//! Flag regex literals inside functions (recompiled on each call).
+//! Flag regex literals inside repeatedly-callable functions (recompiled on each
+//! call). A regex inside an immediately-invoked function expression (IIFE) is
+//! exempt when no non-IIFE function encloses it: a module-scoped IIFE runs once
+//! at load time, so its regex literals are already constructed exactly once.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -37,11 +40,22 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Walk ancestors to check if inside a function.
+        // Walk ancestors to check if inside a repeatedly-callable function. A
+        // regex inside an immediately-invoked function expression (IIFE) is
+        // constructed once per execution of the IIFE's own enclosing context,
+        // not once per call of a reusable function. A module-scoped IIFE runs
+        // exactly once at load time, so its regex literals are already
+        // effectively static — there is nothing to hoist. Walk outward past IIFE
+        // boundaries and treat only a non-IIFE function (which can be called
+        // repeatedly) as the per-call recreation site.
+        let nodes = semantic.nodes();
         let mut inside_function = false;
-        for ancestor in semantic.nodes().ancestors(node.id()) {
+        for ancestor in nodes.ancestors(node.id()) {
             match ancestor.kind() {
                 AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                    if crate::oxc_helpers::function_is_immediately_invoked(nodes, ancestor.id()) {
+                        continue;
+                    }
                     inside_function = true;
                     break;
                 }
@@ -179,6 +193,39 @@ mod tests {
     fn flags_regex_in_function() {
         assert_eq!(run("function f() { return /abc/.test(s); }").len(), 1);
         assert_eq!(run("const f = () => /abc/.test(s)").len(), 1);
+    }
+
+    #[test]
+    fn allows_regex_in_module_level_iife_issue_6142() {
+        // Issue #6142: regex literals inside an IIFE at module scope run exactly
+        // once at module load (when the binding is initialized), so there is
+        // nothing to hoist — flagging them is a false positive.
+        let code = "const isMacOSWebView = (() =>\n\
+                    /Macintosh/.test(ua) &&\n\
+                    /AppleWebKit/.test(ua) &&\n\
+                    !/Safari/.test(ua))();";
+        assert!(run(code).is_empty(), "{:?}", run(code));
+        // The classic `function`-expression IIFE form is exempt too.
+        let fn_form = "const ok = (function () { return /Macintosh/.test(ua); })();";
+        assert!(run(fn_form).is_empty(), "{:?}", run(fn_form));
+    }
+
+    #[test]
+    fn flags_regex_in_iife_nested_in_function() {
+        // Negative space: an IIFE nested inside an ordinary function re-runs on
+        // every call of that function, so the regex is still recreated per call
+        // and must stay flagged.
+        let code = "function f(ua) { return (() => /abc/.test(ua))(); }";
+        assert_eq!(run(code).len(), 1, "{:?}", run(code));
+    }
+
+    #[test]
+    fn flags_regex_in_returned_arrow_from_module_iife() {
+        // Negative space: a module-scoped IIFE that *returns* an arrow yields a
+        // reusable function; the regex inside that returned arrow is recreated
+        // on each call of it, so it stays flagged.
+        let code = "const test = (() => (ua) => /abc/.test(ua))();";
+        assert_eq!(run(code).len(), 1, "{:?}", run(code));
     }
 
     #[test]
