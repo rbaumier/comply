@@ -25,6 +25,21 @@ fn is_write_position(parent: AstKind, member_span: Span) -> bool {
     }
 }
 
+/// True when the computed member at `member_span` is itself the `object` of an
+/// enclosing member expression — `arr[arr.length-1].prop` or
+/// `arr[arr.length-1][k]`. Rewriting to `.at(-1)` widens the type from `T` to
+/// `T | undefined`, so the chained access would need `!` or `?.` and change
+/// semantics; that position must not be flagged. Matched by span identity so
+/// only the `object` side is exempt: in `outer[arr[arr.length-1]]` the inner
+/// member is the computed property, not the object, and still flags.
+fn is_immediately_member_chained(parent: AstKind, member_span: Span) -> bool {
+    match parent {
+        AstKind::StaticMemberExpression(member) => member.object.span() == member_span,
+        AstKind::ComputedMemberExpression(member) => member.object.span() == member_span,
+        _ => false,
+    }
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -47,6 +62,13 @@ impl OxcCheck for Check {
                 // not be flagged — only reads.
                 let parent = semantic.nodes().parent_node(node.id());
                 if is_write_position(parent.kind(), member.span) {
+                    return;
+                }
+
+                // `arr.at(-1)` is `T | undefined`; when the bracket access is the
+                // object of an enclosing member expression (`arr[arr.length-1].prop`)
+                // the chained read would require `!`/`?.`, so it must not be flagged.
+                if is_immediately_member_chained(parent.kind(), member.span) {
                     return;
                 }
 
@@ -189,5 +211,26 @@ mod tests {
     #[test]
     fn flags_read_on_assignment_rhs() {
         assert_eq!(run("y = arr[arr.length - 1];").len(), 1);
+    }
+
+    // Regression for #6274: rewriting to `.at(-1)` widens to `T | undefined`, so
+    // an immediately member-chained read (`arr[arr.length-1].prop`) would need
+    // `!`/`?.` and must not be flagged.
+    #[test]
+    fn allows_immediately_property_chained() {
+        assert!(run("const e = path.steps[path.steps.length - 1].event;").is_empty());
+        assert!(run("const t = events[events.length - 1].transactionId;").is_empty());
+    }
+
+    #[test]
+    fn allows_immediately_computed_chained() {
+        assert!(run("const v = rows[rows.length - 1][key];").is_empty());
+    }
+
+    // The inner member is the computed property of `outer`, not its object, so
+    // the chain guard must not exempt it — it is a normal flaggable read.
+    #[test]
+    fn flags_when_used_as_computed_index() {
+        assert_eq!(run("const v = outer[arr[arr.length - 1]];").len(), 1);
     }
 }
