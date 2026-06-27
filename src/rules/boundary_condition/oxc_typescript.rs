@@ -233,6 +233,29 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `m[0]` inside the truthy branch of a same-variable truthiness guard on
+        // `m` — `m ? m[0] : d`, `m && m[0]`, or `if (m) { m[0] }` — where `m` is
+        // bound to a `RegExp.prototype.exec` / `String.prototype.match` call. A
+        // non-null exec/match result is a `RegExpExecArray`/`RegExpMatchArray`
+        // whose index 0 (the full match) always exists, and the truthiness test
+        // discards the `null` case, so the first-element read is in-bounds — the
+        // ternary/`&&` equivalent of the `if (!m) return; m[0]` null-exit guard
+        // above. The exec/match provenance is essential: a bare truthy-guarded
+        // array index stays flagged because an empty array (`[]`) is truthy, so
+        // truthiness alone does not prove non-emptiness for an arbitrary array.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_regex_match(node, obj_ident.name.as_str(), semantic)
+            && reference_in_truthy_narrowed_branch(
+                node.id(),
+                node.kind().span(),
+                obj_ident.name.as_str(),
+                semantic.nodes(),
+            )
+        {
+            return;
+        }
+
         // `match[0]` where `match` is the element bound by
         // `for (const match of <expr>.matchAll(...))`. Each element yielded by
         // `String.prototype.matchAll` is a `RegExpMatchArray` whose index 0 (the
@@ -2584,6 +2607,63 @@ mod tests {
     fn still_flags_regex_exec_last_index_after_null_guard_issue_1822() {
         // Only `[0]` (the full match) is guaranteed; `[length - 1]` is not.
         let src = "function f(s) { const m = re.exec(s); if (!m) return; return m[m.length - 1]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_regex_exec_index0_truthy_ternary_guard_issue_6193() {
+        // The issue's exact pattern: `m ? m[0] : def`. The ternary's truthy test on
+        // `m` discards the `null` exec result, and a non-null exec result always has
+        // index 0 — the ternary equivalent of the `if (!m) return; m[0]` guard.
+        let src = "function f(val, def) { const m = regex.exec(val); return m ? m[0] : def; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_regex_match_index0_truthy_and_guard_issue_6193() {
+        // The `&&` form: `m && m[0]` reaches `m[0]` only when `m` is truthy.
+        let src = "function f(s) { const m = s.match(/(\\d+)/); return m && m[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_regex_exec_index0_truthy_if_guard_issue_6193() {
+        // The `if (m) { m[0] }` form: the access lives in the truthy-narrowed branch.
+        let src = "function f(s) { const m = re.exec(s); if (m) { return m[0]; } return null; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_regex_exec_index0_truthy_guard_different_var_issue_6193() {
+        // Negative space: the truthiness test is on a different variable (`n`), so it
+        // does not narrow `m` — the `null` exec result is not discarded for `m[0]`.
+        let src = "function f(s, n, def) { const m = re.exec(s); return n ? m[0] : def; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_plain_array_index0_truthy_ternary_guard_issue_6193() {
+        // Negative space (soundness): an arbitrary array is not from exec/match, and
+        // an empty array (`[]`) is truthy — so a truthy-guarded `arr[0]` can still be
+        // `undefined`. The exec/match provenance requirement keeps this flagged.
+        let src = "function f(def) { const arr = getArr(); return arr ? arr[0] : def; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_regex_exec_last_index_truthy_ternary_guard_issue_6193() {
+        // Negative space: only `[0]` (the full match) is guaranteed for a non-null
+        // exec result, so the truthy-guarded `[length - 1]` last read stays flagged.
+        let src = "function f(s, def) { const m = re.exec(s); return m ? m[m.length - 1] : def; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_regex_exec_index0_in_ternary_alternate_issue_6193() {
+        // Negative space: `m[0]` in the ALTERNATE branch runs when `m` is falsy
+        // (`null`), where the access is unsafe — only the truthy consequent is
+        // narrowed, so the alternate-branch read stays flagged.
+        let src = "function f(s, def) { const m = re.exec(s); return m ? def : m[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
