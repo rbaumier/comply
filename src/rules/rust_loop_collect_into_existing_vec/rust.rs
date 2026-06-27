@@ -15,7 +15,10 @@
 //! A push argument containing a control-flow exit — `?` (a `try_expression`),
 //! `continue`, `break`, or `return` — is skipped: each exit acts on the
 //! enclosing `for` loop or function and cannot live inside a `map` closure, so
-//! `extend(...map(...))` would not compile.
+//! `extend(...map(...))` would not compile. A `macro_invocation` is treated the
+//! same way: macros are opaque at static-analysis time (we do not expand them),
+//! and a try-flavored macro can expand to an early `return`/`?`, so any macro in
+//! the push argument is conservatively assumed to affect control flow.
 //!
 //! `.push` exists on many non-`Vec` types (`VecDeque`, crossbeam `Worker`,
 //! `Injector`, custom queues), none of which `extend`s the same way, so we
@@ -87,9 +90,9 @@ impl AstCheck for Check {
             return;
         }
         // A push argument containing a control-flow exit (`?`, `continue`,
-        // `break`, `return`) acts on the enclosing loop or function and can't
-        // live inside a `map` closure, so the `extend(...map(...))` rewrite
-        // would not compile. Skip it.
+        // `break`, `return`, or an opaque macro) acts on the enclosing loop or
+        // function and can't live inside a `map` closure, so the
+        // `extend(...map(...))` rewrite would not compile. Skip it.
         if let Some(arguments) = call.child_by_field_name("arguments")
             && arg_contains_early_exit(arguments)
         {
@@ -132,13 +135,20 @@ impl AstCheck for Check {
 }
 
 /// Whether the subtree rooted at `node` contains a control-flow exit — `?`
-/// (`try_expression`), `continue`, `break`, or `return`. Used on the `push`
-/// argument list: such an exit acts on the enclosing loop or function and
-/// cannot be expressed inside the `map` closure of `extend(...map(...))`.
+/// (`try_expression`), `continue`, `break`, `return`, or a `macro_invocation`.
+/// Used on the `push` argument list: such an exit acts on the enclosing loop or
+/// function and cannot be expressed inside the `map` closure of
+/// `extend(...map(...))`. A `macro_invocation` is opaque — we cannot expand it,
+/// and a try-flavored macro can hide an early `return`/`?` — so any macro is
+/// conservatively treated as control-flow-affecting (no macro-name allowlist).
 fn arg_contains_early_exit(node: tree_sitter::Node) -> bool {
     if matches!(
         node.kind(),
-        "try_expression" | "continue_expression" | "break_expression" | "return_expression"
+        "try_expression"
+            | "continue_expression"
+            | "break_expression"
+            | "return_expression"
+            | "macro_invocation"
     ) {
         return true;
     }
@@ -311,6 +321,38 @@ mod tests {
     #[test]
     fn flags_match_push_without_early_exit_issue_6387() {
         let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(match x { 0 => 1, n => n }); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A try-flavored macro (`try_likely_ok!`) expands to an early `return`, so
+    // the push argument is fallible; the macro is opaque to comply, so any
+    // `macro_invocation` in the argument is skipped.
+    #[test]
+    fn allows_macro_invocation_in_push_argument_issue_6245() {
+        let src = "fn build(s: &str) -> Result<Vec<u32>, ()> { let mut items = Vec::with_capacity(2); for item in Tokenizer::new(s.as_bytes()) { items.push(try_likely_ok!(item)); } Ok(items) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // A `macro_invocation` nested deeper in the push argument is still opaque.
+    #[test]
+    fn allows_nested_macro_invocation_in_push_argument_issue_6245() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(wrap(my_macro!(x))); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative control: a plain function call (no macro, no early exit) is a
+    // valid `map`, so this still flags.
+    #[test]
+    fn flags_plain_call_push_argument_issue_6245() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(plain_fn(x)); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Negative control: a method call (no macro, no early exit) is a valid
+    // `map`, so this still flags.
+    #[test]
+    fn flags_method_call_push_argument_issue_6245() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(x.method()); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
