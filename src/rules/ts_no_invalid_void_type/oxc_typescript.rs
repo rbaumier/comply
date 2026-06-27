@@ -100,12 +100,13 @@ fn is_generic_param_default(
     false
 }
 
-// `void` as a member of a union type at the top level of a type alias or
-// conditional type (`type X = ... | void`, `T extends U ? A : B | void`) is
-// valid TypeScript: it marks the resolved value as discardable in a type-level
-// computation. Scoped to those two contexts — a `void` union inside a parameter
-// or return annotation is left to `is_return_type_context`, so crossing a
-// function/parameter boundary disqualifies the exemption.
+// `void` as a member of a union type at the top level of a type alias,
+// conditional type, or generic type-parameter constraint
+// (`type X = ... | void`, `T extends U ? A : B | void`, `<T extends A | void>`)
+// is valid TypeScript: it marks the resolved value as discardable in a
+// type-level computation. Scoped to those contexts — a `void` union inside a
+// parameter or return annotation is left to `is_return_type_context`, so
+// crossing a function/parameter boundary disqualifies the exemption.
 fn is_union_member_in_type_level_alias(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -114,7 +115,9 @@ fn is_union_member_in_type_level_alias(
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::TSUnionType(_) => saw_union = true,
-            AstKind::TSConditionalType(_) | AstKind::TSTypeAliasDeclaration(_) => {
+            AstKind::TSConditionalType(_)
+            | AstKind::TSTypeAliasDeclaration(_)
+            | AstKind::TSTypeParameter(_) => {
                 return saw_union;
             }
             // A function/parameter boundary means the union sits in a
@@ -396,8 +399,31 @@ mod tests {
 
     #[test]
     fn flags_void_as_generic_constraint() {
-        // The constraint position is still invalid, unlike the default.
+        // The bare constraint position is still invalid, unlike the default or
+        // a union constraint.
         let diags = run_on("type Fn<T extends void> = () => T;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_void_union_in_generic_constraint() {
+        // Regression for rbaumier/comply#6212 — elysiajs/elysia resolve method:
+        // `void` as a union member in a generic type-parameter constraint
+        // (`<R extends A | B | void>`) is a type-level position, equivalent to a
+        // type-alias union, not a value annotation.
+        let src = "class Elysia {\
+                   resolve<const Resolver extends Record<string, unknown> | ElysiaCustomStatusResponse<any> | void>(\
+                   resolver: (context: string) => Promise<Resolver>): Elysia { return this; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_void_value_alongside_generic_constraint_union() {
+        // Negative space: the constraint-union exemption is constraint-scoped —
+        // a `void` value annotation in the method body still fires.
+        let src = "class Elysia {\
+                   resolve<R extends string | void>(): void { let x: void; } }";
+        let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
 
