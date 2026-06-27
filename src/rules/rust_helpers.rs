@@ -3918,6 +3918,173 @@ fn expr_is_provably_nonneg(node: Node, source: &[u8]) -> bool {
     }
 }
 
+/// True when `cast` (a `type_cast_expression`) narrows `<recv>.min(<bound>) as uT`
+/// where the explicit `.min()` clamp proves the value fits the unsigned target —
+/// the saturation pattern `now.elapsed().as_nanos().min(u64::MAX as u128) as u64`.
+///
+/// `Ord::min(self, other: Self)` returns `min(recv, bound)`, a value that is at
+/// most `bound`. The cast is lossless when the result lands in `[0, uT::MAX]`:
+///
+/// - **upper bound** — `min(recv, bound) <= bound`, so a `bound` value `<= uT::MAX`
+///   caps the result within range;
+/// - **lower bound** — `.min()` only caps the upper side, so the result can equal a
+///   negative `recv`; `(-1i64).min(255) as u8` wraps to `255`. The result is `>= 0`
+///   only when `recv` is non-negative. Two structural proofs establish that:
+///   1. the `bound` is itself an **unsigned-typed** expression (`u64::MAX`, or
+///      `<expr> as u128`). Because `min` takes `other: Self`, the receiver shares
+///      that unsigned type, so `recv >= 0`;
+///   2. failing that, a bare integer-literal `bound` carries no type, so the
+///      receiver must be proven non-negative on its own via
+///      [`expr_is_provably_nonneg`].
+///
+/// The target must be **unsigned** (`u8`..`u128`/`usize`); a signed target's value
+/// could fall below `T::MIN`, which `.min()` cannot rule out, so it stays flagged.
+/// A non-`min` method, a wrong-direction `.max()`, a `bound` exceeding `uT::MAX`,
+/// an unparsable bound, or an unprovable receiver sign all keep flagging. Any
+/// `parenthesized_expression` layers around the operand are transparent.
+///
+/// Like the rest of this AST-heuristic family (`.len()` is `usize`, `%`/`&` are
+/// integer semantics), proof 1 assumes `.min` is `Ord::min`/`{f32,f64}::min`; a
+/// user type that shadows `min` with a divergent signature is out of contract.
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`.
+pub fn cast_operand_is_min_clamped(cast: Node, source: &[u8]) -> bool {
+    // Unsigned target only: the result's lower bound is 0 exactly when the receiver
+    // is non-negative; a signed target whose value could be `< T::MIN` is never
+    // exempt because `.min()` clamps only the upper side.
+    let Some(target_bits) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .and_then(unsigned_int_bits)
+    else {
+        return false;
+    };
+    let target_max: u128 = if target_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << target_bits) - 1
+    };
+
+    let Some(mut value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    while value.kind() == "parenthesized_expression" {
+        let Some(inner) = value.named_child(0) else {
+            return false;
+        };
+        value = inner;
+    }
+    // The operand must be a method call `<recv>.min(<bound>)`.
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    if function
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        != Some("min")
+    {
+        return false;
+    }
+    let Some(args) = value.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut arg_cursor = args.walk();
+    let bound_args: Vec<Node> = args.named_children(&mut arg_cursor).collect();
+    let [bound] = bound_args.as_slice() else {
+        return false;
+    };
+    let bound = *bound;
+
+    // Proof 1: an unsigned-typed bound forces (via `min`'s `other: Self`) the
+    // receiver to share that unsigned type, so `min(recv, bound) >= 0`; the bound's
+    // value caps it above.
+    if min_bound_unsigned_typed_value(bound, source).is_some_and(|v| v <= target_max) {
+        return true;
+    }
+    // Proof 2: a bare integer-literal bound proves nothing about the receiver's
+    // sign, so exempt only when the receiver is itself provably non-negative.
+    if bound.kind() == "integer_literal"
+        && function
+            .child_by_field_name("value")
+            .is_some_and(|recv| expr_is_provably_nonneg(recv, source))
+    {
+        return parse_int_literal(bound, source).is_some_and(|v| v <= target_max);
+    }
+    false
+}
+
+/// The value of a `.min()` clamp bound when its *type* is a provably unsigned
+/// integer and its value is statically known — the proof that the bound's receiver
+/// (sharing the type through `Ord::min`'s `Self`) is non-negative. Recognized
+/// shapes (parens transparent):
+/// - `<utype>::MAX` — value is that unsigned type's maximum;
+/// - `<inner> as <utype>` — an unsigned-target cast fixes the type; the value is
+///   `<inner>`'s static const/literal value, accepted only when it fits `<utype>`
+///   so the cast cannot truncate it (the canonical `u64::MAX as u128` widen).
+///
+/// Returns `None` for a bare (untyped) literal or any other shape — those cannot
+/// prove the receiver's sign here.
+fn min_bound_unsigned_typed_value(node: Node, source: &[u8]) -> Option<u128> {
+    let mut node = node;
+    while node.kind() == "parenthesized_expression" {
+        node = node.named_child(0)?;
+    }
+    match node.kind() {
+        "scoped_identifier" => static_int_value(node, source),
+        "type_cast_expression" => {
+            let utype_bits = node
+                .child_by_field_name("type")
+                .and_then(|t| t.utf8_text(source).ok())
+                .and_then(unsigned_int_bits)?;
+            let utype_max: u128 = if utype_bits >= 128 {
+                u128::MAX
+            } else {
+                (1u128 << utype_bits) - 1
+            };
+            let v = static_int_value(node.child_by_field_name("value")?, source)?;
+            (v <= utype_max).then_some(v)
+        }
+        _ => None,
+    }
+}
+
+/// The statically-known value of an integer literal or a `<utype>::MAX` scoped
+/// constant, irrespective of its type. Parens transparent. `None` for any other
+/// shape.
+fn static_int_value(node: Node, source: &[u8]) -> Option<u128> {
+    let mut node = node;
+    while node.kind() == "parenthesized_expression" {
+        node = node.named_child(0)?;
+    }
+    match node.kind() {
+        "integer_literal" => parse_int_literal(node, source),
+        "scoped_identifier" => {
+            if node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                != Some("MAX")
+            {
+                return None;
+            }
+            let bits = node
+                .child_by_field_name("path")
+                .and_then(|p| p.utf8_text(source).ok())
+                .and_then(unsigned_int_bits)?;
+            Some(if bits >= 128 {
+                u128::MAX
+            } else {
+                (1u128 << bits) - 1
+            })
+        }
+        _ => None,
+    }
+}
+
 /// True when `cast` (a `type_cast_expression`) is the argument of a
 /// `from_bits` call — `f32::from_bits(p as u32)`, `f64::from_bits(x as u64)`,
 /// or any `<T>::from_bits(..)`.
@@ -6865,6 +7032,66 @@ mod tests {
                 cast_operand_is_range_guarded(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_range_guarded mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_min_clamped_proves_bound() {
+        let cases = [
+            // --- proof 1: unsigned-typed bound (issue #6174) ---
+            // Canonical tonic pattern: `.min(u64::MAX as u128) as u64`.
+            ("fn f(x: u128) -> u64 { x.min(u64::MAX as u128) as u64 }", true),
+            // Symmetric form, bound type already matches the target.
+            ("fn f(x: u64) -> u64 { x.min(u64::MAX) as u64 }", true),
+            // `(n as u64).min(u32::MAX as u64) as u32`.
+            ("fn f(n: u32) -> u32 { (n as u64).min(u32::MAX as u64) as u32 }", true),
+            // Parens around the whole clamped operand are transparent.
+            ("fn f(x: u128) -> u64 { (x.min(u64::MAX as u128)) as u64 }", true),
+            // An unsigned-cast literal bound (`200 as u64`) is typed + in range.
+            ("fn f(x: u64) -> u8 { x.min(200 as u64) as u8 }", true),
+            // The unsigned-cast bound's inner value is read exactly: `1000 as u64`
+            // is typed-unsigned but exceeds u8, so it stays flagged.
+            ("fn f(x: u64) -> u8 { x.min(1000 as u64) as u8 }", false),
+            // Parens around a bare literal are not unwrapped in proof 2 (no type
+            // proof); conservatively kept flagging.
+            ("fn f(v: u32) -> u8 { v.min((255)) as u8 }", false),
+
+            // --- proof 2: bare literal bound + provably non-negative receiver ---
+            ("fn f(v: u32) -> u8 { v.min(255) as u8 }", true),
+            ("fn f(v: u32) -> u8 { v.min(0xFF) as u8 }", true),
+
+            // --- negative space: must keep flagging ---
+            // No `.min()` clamp at all.
+            ("fn f(n: u64) -> u8 { n as u8 }", false),
+            // Typed bound exceeds the target's range.
+            ("fn f(x: u128) -> u8 { x.min(u64::MAX as u128) as u8 }", false),
+            // Bare-literal bound exceeds the target's range.
+            ("fn f(v: u32) -> u8 { v.min(300) as u8 }", false),
+            // Wrong direction: `.max()` does not bound from above.
+            ("fn f(x: u128) -> u64 { x.max(u64::MAX as u128) as u64 }", false),
+            // Signed receiver, bare literal: `.min()` cannot rule out a negative
+            // value; `(-1i64).min(255) as u8` wraps to 255.
+            ("fn f(x: i64) -> u8 { x.min(255) as u8 }", false),
+            // Unresolved receiver type with a bare literal bound.
+            ("fn f(x: T) -> u8 { x.min(255) as u8 }", false),
+            // Signed target is never exempt (lower bound below T::MIN unprovable).
+            ("fn f(x: u64) -> i8 { x.min(127) as i8 }", false),
+            // A signed type's `::MAX` is not an unsigned-typed bound.
+            ("fn f(x: i64) -> u8 { x.min(i64::MAX) as u8 }", false),
+            // A non-`MAX` const bound carries no statically-known value.
+            ("fn f(x: u64) -> u8 { x.min(LIMIT) as u8 }", false),
+            // Zero-argument `.min()` (no clamp bound).
+            ("fn f(x: u64) -> u8 { x.min() as u8 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_min_clamped(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_min_clamped mismatch for `{src}`"
             );
         }
     }
