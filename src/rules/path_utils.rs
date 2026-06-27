@@ -1326,15 +1326,17 @@ pub fn is_react_router_routes_config(path: &Path) -> bool {
 /// section identifies the package as a module.
 const NUXT_MODULE_DEPS: &[&str] = &["@nuxt/kit", "@nuxt/module-builder"];
 
-/// True when `path` is Nuxt-module library code: a file under a `runtime/` or
-/// `client/` directory of a package that depends on `@nuxt/kit` or
-/// `@nuxt/module-builder`. Both are module build directories that the module
-/// ships separately from the consuming Nuxt application: `runtime/` (e.g.
-/// `src/runtime/composables/usePrefix.ts`) is compiled by `@nuxt/module-builder`,
-/// and `client/` (e.g. Nuxt DevTools' injected client-side app) is built as its
-/// own bundle. Nuxt's auto-import is not available in either build, so these
-/// files import composables explicitly from `#imports`/`#app`/`nuxt/app` — the
-/// Nuxt-blessed virtual modules — and removing those imports breaks compilation.
+/// True when `path` is Nuxt-module library code: a file under a `runtime/`,
+/// a `runtime-*` (e.g. `runtime-utils/`), or a `client/` directory of a package
+/// that depends on `@nuxt/kit` or `@nuxt/module-builder`. These are module build
+/// directories that the module ships separately from the consuming Nuxt
+/// application: the `runtime`/`runtime-*` family (e.g.
+/// `src/runtime/composables/usePrefix.ts`, `src/runtime-utils/components/RouterLink.ts`)
+/// is compiled by `@nuxt/module-builder`, and `client/` (e.g. Nuxt DevTools'
+/// injected client-side app) is built as its own bundle. Nuxt's auto-import is not
+/// available in either build, so these files import composables explicitly from
+/// `#imports`/`#app`/`nuxt/app` — the Nuxt-blessed virtual modules — and removing
+/// those imports breaks compilation.
 ///
 /// Both signals are required: the directory segment alone would exempt every
 /// `runtime/`/`client/` directory in any project, and the Nuxt-module dependency
@@ -1342,7 +1344,13 @@ const NUXT_MODULE_DEPS: &[&str] = &["@nuxt/kit", "@nuxt/module-builder"];
 /// the exemption to module build code, keeping a Nuxt *application* (which has no
 /// `@nuxt/kit`/`@nuxt/module-builder` dependency) subject to the rule.
 pub fn is_nuxt_module_runtime_file(path: &Path, project: &ProjectCtx) -> bool {
-    if !has_path_segment(path, &["runtime", "client"]) {
+    let is_runtime_seg = path.components().any(|c| {
+        matches!(c, std::path::Component::Normal(s)
+            if s.to_str().is_some_and(|seg| {
+                seg == "runtime" || seg == "client" || seg.starts_with("runtime-")
+            }))
+    });
+    if !is_runtime_seg {
         return false;
     }
     project

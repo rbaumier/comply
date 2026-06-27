@@ -225,6 +225,42 @@ mod tests {
         assert!(diags.is_empty(), "unexpected: {diags:?}");
     }
 
+    /// Regression for issue #6412: a Nuxt *module*'s `runtime-utils/` directory
+    /// (the `runtime-*` compiled-library family, e.g. `@nuxt/test-utils`) ships
+    /// without auto-import, like `runtime/`. Its explicit `#imports` value import
+    /// is required, so the rule must not flag it.
+    #[test]
+    fn allows_value_import_in_nuxt_module_runtime_utils_issue_6412() {
+        let pkg = r#"{"name":"@nuxt/test-utils","dependencies":{"@nuxt/kit":"^3.0.0"}}"#;
+        let src = "import { defineComponent, h, useRouter } from '#imports';\nexport default defineComponent({});\n";
+        let (_dir, diags) =
+            run_in_package(pkg, "src/runtime-utils/components/RouterLink.ts", src);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    /// Guard for issue #6412: the `runtime-` prefix must be precise. An explicit
+    /// `#imports` value import in a NON-runtime path of a Nuxt module package must
+    /// STILL fire — the runtime-segment gate remains required.
+    #[test]
+    fn still_flags_value_import_outside_runtime_utils_in_nuxt_module_issue_6412() {
+        let pkg = r#"{"name":"@nuxt/test-utils","dependencies":{"@nuxt/kit":"^3.0.0"}}"#;
+        let src = "import { useAppConfig } from '#imports';\nconst c = useAppConfig();\n";
+        let (_dir, diags) = run_in_package(pkg, "src/utils/foo.ts", src);
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
+    /// Guard for issue #6412: the exemption matches the hyphenated `runtime-*`
+    /// family, not any `runtime`-prefixed segment. A `runtimeconfig/` directory
+    /// (no hyphen) is ordinary source, so an explicit `#imports` value import
+    /// there must STILL fire.
+    #[test]
+    fn still_flags_value_import_in_runtimeconfig_in_nuxt_module_issue_6412() {
+        let pkg = r#"{"name":"@nuxt/test-utils","dependencies":{"@nuxt/kit":"^3.0.0"}}"#;
+        let src = "import { useAppConfig } from '#imports';\nconst c = useAppConfig();\n";
+        let (_dir, diags) = run_in_package(pkg, "src/runtimeconfig/foo.ts", src);
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
+
     /// Guard for issue #4485: a `client/` directory in a Nuxt *application*
     /// (no `@nuxt/kit`/`@nuxt/module-builder` dependency) is not module build
     /// code, so an explicit `#imports` value import there must STILL fire.
