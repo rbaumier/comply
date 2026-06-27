@@ -12,10 +12,10 @@
 //! cannot borrow the receiver while `extend` holds `&mut` it, so that rewrite
 //! would not compile; such loops are not flagged.
 //!
-//! A push argument containing `?` (a `try_expression`) is skipped: the `?`
-//! propagates to the enclosing function, and a fallible value cannot be lifted
-//! into a `map` closure (the `?` would return from the closure, not the
-//! function), so `extend(...map(...))` would not compile.
+//! A push argument containing a control-flow exit — `?` (a `try_expression`),
+//! `continue`, `break`, or `return` — is skipped: each exit acts on the
+//! enclosing `for` loop or function and cannot live inside a `map` closure, so
+//! `extend(...map(...))` would not compile.
 //!
 //! `.push` exists on many non-`Vec` types (`VecDeque`, crossbeam `Worker`,
 //! `Injector`, custom queues), none of which `extend`s the same way, so we
@@ -86,11 +86,12 @@ impl AstCheck for Check {
         if method != "push" {
             return;
         }
-        // A push argument that uses `?` propagates an error to the enclosing
-        // function; it can't be lifted into a `map` closure, so the
-        // `extend(...map(...))` rewrite would not compile. Skip it.
+        // A push argument containing a control-flow exit (`?`, `continue`,
+        // `break`, `return`) acts on the enclosing loop or function and can't
+        // live inside a `map` closure, so the `extend(...map(...))` rewrite
+        // would not compile. Skip it.
         if let Some(arguments) = call.child_by_field_name("arguments")
-            && arg_contains_try(arguments)
+            && arg_contains_early_exit(arguments)
         {
             return;
         }
@@ -130,15 +131,19 @@ impl AstCheck for Check {
     }
 }
 
-/// Whether the subtree rooted at `node` contains a `?` (`try_expression`)
-/// anywhere. Used on the `push` argument list: a fallible push value cannot be
-/// expressed as `extend(...map(...))`.
-fn arg_contains_try(node: tree_sitter::Node) -> bool {
-    if node.kind() == "try_expression" {
+/// Whether the subtree rooted at `node` contains a control-flow exit — `?`
+/// (`try_expression`), `continue`, `break`, or `return`. Used on the `push`
+/// argument list: such an exit acts on the enclosing loop or function and
+/// cannot be expressed inside the `map` closure of `extend(...map(...))`.
+fn arg_contains_early_exit(node: tree_sitter::Node) -> bool {
+    if matches!(
+        node.kind(),
+        "try_expression" | "continue_expression" | "break_expression" | "return_expression"
+    ) {
         return true;
     }
     let mut cursor = node.walk();
-    node.children(&mut cursor).any(arg_contains_try)
+    node.children(&mut cursor).any(arg_contains_early_exit)
 }
 
 /// True if any `identifier` in the push-argument subtree equals the receiver
@@ -275,6 +280,37 @@ mod tests {
     #[test]
     fn flags_infallible_transform_push_issue_3803() {
         let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(transform(x)); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A match arm uses `continue` to skip the push for one variant; `continue`
+    // acts on the `for` loop and can't live in a `map` closure, so
+    // `extend(...map(...))` would not compile.
+    #[test]
+    fn allows_continue_in_push_argument_issue_6387() {
+        let src = "fn f(p: P) { let mut segments = vec![]; for sp in p.into_inner() { segments.push(match sp.as_rule() { Rule::identity => continue, Rule::wildcard => Segment::Wildcard, _ => unreachable!() }); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // `break` in the push argument exits the loop — not expressible in a closure.
+    #[test]
+    fn allows_break_in_push_argument_issue_6387() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(if x == 0 { break } else { x }); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // `return` in the push argument exits the function — not expressible in a closure.
+    #[test]
+    fn allows_return_in_push_argument_issue_6387() {
+        let src = "fn f(src: Vec<u32>) -> Vec<u32> { let mut dst = Vec::new(); for x in src { dst.push(if x == 0 { return Vec::new() } else { x }); } dst }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative control: a `match` push argument with no control-flow exit — the
+    // `extend(...map(...))` rewrite is valid, so this still flags.
+    #[test]
+    fn flags_match_push_without_early_exit_issue_6387() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(match x { 0 => 1, n => n }); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
