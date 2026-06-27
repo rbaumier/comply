@@ -120,4 +120,23 @@ mod tests {
         assert_eq!(run("// the function was replaced with a hook\nfn f() {}").len(), 1);
         assert_eq!(run("// this method was replaced by useFoo\nfn f() {}").len(), 1);
     }
+
+    #[test]
+    fn allows_previously_called_runtime_invocation() {
+        // Regression for issue #6066: "next() was previously called" documents a
+        // prior runtime invocation of the iterator's next() method (state-machine
+        // doc), not a code rename. The subject is a call expression.
+        let src = "// next() was previously called, the current record has already been returned\nfn f() {}";
+        assert!(run(src).is_empty());
+        assert!(run("// self.poll() was previously called\nfn f() {}").is_empty());
+        assert!(run("// Iterator::next() was previously called\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_previously_called_rename() {
+        // The rename reading ("X was previously called oldName") still fires: the
+        // subject is a noun, not a call expression.
+        assert_eq!(run("// previously called fooBar\nfn f() {}").len(), 1);
+        assert_eq!(run("// this method was previously called oldName\nfn f() {}").len(), 1);
+    }
 }
