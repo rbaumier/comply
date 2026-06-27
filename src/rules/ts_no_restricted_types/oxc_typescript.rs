@@ -10,6 +10,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 /// Banned type names and replacement messages.
@@ -46,6 +47,18 @@ impl OxcCheck for Check {
                     let name = type_ref.type_name.to_string();
                     if let Some(&(_, msg)) = BANNED_TYPES.iter().find(|&&(t, _)| t == name.as_str())
                     {
+                        // `Function` as the `extends` operand of a conditional
+                        // type (`T extends Function ? A : B`) is the idiomatic
+                        // "is this callable?" predicate, not a value-type
+                        // annotation, and has no narrower replacement in that
+                        // position. Exempt only that constraint slot; `Function`
+                        // in parameter/return/property annotations still flags.
+                        if let AstKind::TSConditionalType(cond) =
+                            semantic.nodes().parent_node(node.id()).kind()
+                            && cond.extends_type.span() == type_ref.span
+                        {
+                            continue;
+                        }
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, type_ref.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -126,5 +139,49 @@ mod tests {
     #[test]
     fn still_flags_function_type_in_production_issue3324() {
         assert_eq!(run_at("const f: Function = () => {};", "src/widget.ts").len(), 1);
+    }
+
+    #[test]
+    fn exempts_function_in_conditional_extends_operand_issue6137() {
+        // honojs/hono src/context.ts:78 and src/utils/types.ts:98 — `extends
+        // Function` is the idiomatic "is callable?" predicate, not a value-type
+        // annotation, and has no narrower replacement in that position.
+        assert!(
+            run_on(
+                "export type Renderer = ContextRenderer extends Function ? ContextRenderer : DefaultRenderer;"
+            )
+            .is_empty()
+        );
+        assert!(
+            run_on(
+                "export type InterfaceToType<T> = T extends Function ? T : { [K in keyof T]: InterfaceToType<T[K]> };"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_function_in_parameter_position_issue6137() {
+        assert_eq!(run_on("function call(fn: Function) { return fn(); }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_function_in_return_position_issue6137() {
+        assert_eq!(run_on("function make(): Function { return () => {}; }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_function_inside_conditional_extends_array_issue6137() {
+        // Only the bare `extends Function` constraint slot is exempt; `Function`
+        // nested inside another type (here an array) in the `extends` operand is
+        // still a concrete usage with a narrower replacement, so it flags.
+        assert_eq!(run_on("type T<U> = U extends Function[] ? U : never;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_function_in_conditional_branch_issue6137() {
+        // `Function` in the true/false branch of a conditional type is a
+        // value-type annotation, not the constraint predicate — still flags.
+        assert_eq!(run_on("type T<U> = U extends string ? Function : never;").len(), 1);
     }
 }
