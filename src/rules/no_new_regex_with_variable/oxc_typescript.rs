@@ -32,11 +32,19 @@ impl OxcCheck for Check {
         }
 
         let Some(first_arg) = new_expr.arguments.first() else { return };
-        // String literal or template string is safe — flag everything else.
-        if matches!(
-            first_arg,
-            Argument::StringLiteral(_) | Argument::TemplateLiteral(_)
-        ) {
+        // A string/template literal is a fixed pattern. So is `RE.source`: `.source`
+        // yields a regex's pattern text, so `new RegExp(RE.source, flags)` (rebuilding
+        // a regex with different flags) carries no variable input. This rule has no
+        // symbol resolution, so it accepts any `.source` access rather than resolving
+        // the object to a const regex literal — the security rule
+        // `security-detect-non-literal-regexp` enforces that tighter check. A bare
+        // variable (`new RegExp(pattern)`) is still flagged — only `.source` is exempt.
+        let is_safe_first_arg = match first_arg {
+            Argument::StringLiteral(_) | Argument::TemplateLiteral(_) => true,
+            Argument::StaticMemberExpression(member) => member.property.name.as_str() == "source",
+            _ => false,
+        };
+        if is_safe_first_arg {
             return;
         }
 
@@ -121,5 +129,22 @@ mod tests {
             "src/router.ts",
         );
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_regex_source_member() {
+        // Issue #6282: `new RegExp(RE.source, flags)` rebuilds a regex with different
+        // flags from a regex literal — `.source` is the fixed pattern text, not input.
+        let src = r#"
+            const HEAD_SSR_FILTER_RE = /\bhead\.ssr\b/;
+            const HEAD_SSR_RE = new RegExp(HEAD_SSR_FILTER_RE.source, 'g');
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_plain_variable_not_source() {
+        // Negative control: a plain variable (not `.source`) is still flagged.
+        assert_eq!(run("const r = new RegExp(someStringVar);").len(), 1);
     }
 }
