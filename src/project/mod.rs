@@ -3458,6 +3458,11 @@ impl ProjectCtx {
     /// `devDependencies`, then `peerDependencies`). `None` when no such dependency
     /// is declared, or its range has no parseable leading version. Lets a rule gate
     /// itself on "feature available since version X" without re-implementing semver.
+    ///
+    /// A range written with pnpm's `catalog:` protocol (`"vue": "catalog:frontend"`)
+    /// is resolved through the nearest `pnpm-workspace.yaml` before parsing, so a
+    /// monorepo that centralizes its versions in a catalog gates identically to one
+    /// that pins the range inline. An unresolvable catalog reference yields `None`.
     pub fn nearest_dependency_version_min(&self, path: &Path, dep: &str) -> Option<(u32, u32)> {
         let pkg = self.nearest_package_json(path)?;
         let range = pkg
@@ -3465,7 +3470,39 @@ impl ProjectCtx {
             .get(dep)
             .or_else(|| pkg.dev_dependencies.get(dep))
             .or_else(|| pkg.peer_dependencies.get(dep))?;
-        parse_node_range_min(range)
+        match range.strip_prefix("catalog:") {
+            Some(catalog_name) => {
+                parse_node_range_min(&self.resolve_pnpm_catalog(path, catalog_name, dep)?)
+            }
+            None => parse_node_range_min(range),
+        }
+    }
+
+    /// Resolve a pnpm `catalog:` protocol dependency reference to the concrete
+    /// semver range declared in the nearest `pnpm-workspace.yaml`.
+    ///
+    /// In a pnpm monorepo a package may pin a dependency to a shared catalog entry
+    /// — `"vue": "catalog:frontend"` — instead of a literal range. `catalog_name` is
+    /// the suffix after `catalog:`: empty (bare `catalog:`) or `"default"` selects
+    /// the top-level `catalog:` map; any other name selects `catalogs.<name>`. The
+    /// range for `dep` is read from that map in the nearest `pnpm-workspace.yaml`
+    /// ascending from `path`.
+    ///
+    /// Returns `None` when no workspace file is found, the named catalog is absent,
+    /// or the catalog declares no entry for `dep` — leaving the caller's version
+    /// gate conservative rather than resolving to a wrong version.
+    fn resolve_pnpm_catalog(&self, path: &Path, catalog_name: &str, dep: &str) -> Option<String> {
+        let start_dir = path.parent()?;
+        let dir =
+            walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "pnpm-workspace.yaml")?;
+        let raw = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")).ok()?;
+        let value = serde_yaml::from_str::<serde_yaml::Value>(&raw).ok()?;
+        let catalog = if catalog_name.is_empty() || catalog_name == "default" {
+            value.get("catalog")?
+        } else {
+            value.get("catalogs")?.get(catalog_name)?
+        };
+        catalog.get(dep)?.as_str().map(String::from)
     }
 
     /// Resolve the nearest *substantive* `package.json` for `path`, returning
@@ -6349,6 +6386,59 @@ mod tests {
     #[test]
     fn nearest_dependency_version_min_none_without_manifest() {
         let dir = TempDir::new().unwrap();
+        let ctx = ProjectCtx::empty();
+        assert_eq!(
+            ctx.nearest_dependency_version_min(&dir.path().join("App.vue"), "vue"),
+            None
+        );
+    }
+
+    #[test]
+    fn nearest_dependency_version_min_resolves_pnpm_catalog() {
+        // Regression for #6163 — pnpm's `catalog:` protocol pins a dependency to a
+        // shared range declared in `pnpm-workspace.yaml` rather than the package.json,
+        // so the version gate must resolve through the workspace catalogs.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("pnpm-workspace.yaml"),
+            "catalog:\n  vite: ^5.0.0\n  esbuild: ^0.20.0\ncatalogs:\n  frontend:\n    vue: ^3.5.35\n",
+        )
+        .unwrap();
+        let client = dir.path().join("packages").join("client");
+        std::fs::create_dir_all(&client).unwrap();
+        std::fs::write(
+            client.join("package.json"),
+            r#"{"dependencies":{"vue":"catalog:frontend","vite":"catalog:","esbuild":"catalog:default","react":"catalog:missing","pinia":"catalog:frontend"}}"#,
+        )
+        .unwrap();
+        let src = client.join("App.vue");
+
+        let ctx = ProjectCtx::empty();
+        // Named catalog `catalogs.frontend.vue`.
+        assert_eq!(ctx.nearest_dependency_version_min(&src, "vue"), Some((3, 5)));
+        // Bare `catalog:` → top-level default catalog.
+        assert_eq!(ctx.nearest_dependency_version_min(&src, "vite"), Some((5, 0)));
+        // `catalog:default` → top-level default catalog.
+        assert_eq!(
+            ctx.nearest_dependency_version_min(&src, "esbuild"),
+            Some((0, 20))
+        );
+        // Unknown catalog name → conservative None, never a guessed version.
+        assert_eq!(ctx.nearest_dependency_version_min(&src, "react"), None);
+        // Dependency absent from an existing catalog → conservative None.
+        assert_eq!(ctx.nearest_dependency_version_min(&src, "pinia"), None);
+    }
+
+    #[test]
+    fn nearest_dependency_version_min_catalog_without_workspace_is_none() {
+        // A `catalog:` reference with no `pnpm-workspace.yaml` to resolve it stays
+        // conservative (None) instead of parsing the protocol string as a version.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"dependencies":{"vue":"catalog:frontend"}}"#,
+        )
+        .unwrap();
         let ctx = ProjectCtx::empty();
         assert_eq!(
             ctx.nearest_dependency_version_min(&dir.path().join("App.vue"), "vue"),
