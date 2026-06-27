@@ -86,6 +86,48 @@ fn param_type_texts(source: &str, f: &Function) -> Vec<String> {
         .collect()
 }
 
+/// When `s` is exactly a single generic application `Name<...>` — the angle
+/// bracket pair opened by the first `<` closes at the final character of `s` —
+/// return the text between those outermost angle brackets. Returns `None` when
+/// `s` has no `<`, or when the matching `>` is not `s`'s last character (e.g. a
+/// union such as `GraphQLList<any> | undefined`), i.e. `s` is not a lone
+/// generic application.
+fn strip_outer_generic(s: &str) -> Option<&str> {
+    let open = s.find('<')?;
+    let mut depth = 0usize;
+    let mut close = None;
+    for (i, &b) in s.as_bytes().iter().enumerate().skip(open) {
+        match b {
+            b'<' => depth += 1,
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    (close == s.len() - 1).then(|| s[open + 1..close].trim())
+}
+
+/// The whitespace-normalized text of `s`'s outermost generic argument list when
+/// `s` is a single `Wrapper<...>` application (e.g. `MaybeRefOrGetter<string>` →
+/// `string`, `UseStorageOptions<T>` → `T`, `RemovableRef<T>` → `T`,
+/// `Map<string, number>` → `string, number`). When `s` has no such wrapper, the
+/// whole annotation text is returned. Normalizing lets a parameter's argument
+/// list compare positionally against a return type's argument list.
+fn type_argument_text(s: &str) -> String {
+    let trimmed = s.trim();
+    strip_outer_generic(trimmed)
+        .unwrap_or(trimmed)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
@@ -275,20 +317,33 @@ fn extra_param_is_non_terminal(shorter: &[String], longer: &[String]) -> bool {
     false
 }
 
-/// True when the overloads discriminate on the concrete type of a single
-/// same-position parameter to narrow the return type per call site — every
-/// signature has the same arity and the same fixed-parameter types except in one
-/// position, AND the signatures carry at least two distinct return-type
-/// annotations. Each overload returns the specific type produced for its specific
-/// input type (e.g. graphql-js `typeFromAST(schema, NamedTypeNode)` →
-/// `GraphQLNamedType | undefined` vs `(schema, ListTypeNode)` →
-/// `GraphQLList<any> | undefined`). Collapsing the discriminating parameter into
-/// a union would widen the return to the union of all branches for ALL callers,
-/// erasing the per-input narrowing that is the entire point of the overloads.
+/// True when the overloads discriminate on the concrete type of their varying
+/// parameter(s) to narrow the return type per call site, with the same arity, no
+/// leading rest parameter, and at least two distinct return-type annotations.
 ///
-/// A group that varies its parameter type at a shared position but returns the
-/// SAME type (e.g. `f(a: string): X; f(a: number): X;`) is NOT exempted here — it
-/// collapses cleanly into `f(a: string | number): X` and must still be flagged.
+/// Two shapes qualify:
+///
+/// - **Single discriminant** — exactly one parameter position varies; its
+///   concrete type selects the return type (e.g. graphql-js
+///   `typeFromAST(schema, NamedTypeNode)` → `GraphQLNamedType | undefined` vs
+///   `(schema, ListTypeNode)` → `GraphQLList<any> | undefined`).
+///
+/// - **Correlated multi-position discriminant** — several parameter positions
+///   vary together because one type argument propagates through them, and at
+///   least one of those positions' type argument tracks the return type's type
+///   argument call-site by call-site (see [`some_varying_position_tracks_return`],
+///   e.g. vueuse `useStorage`, where `defaults` and `options` both carry the
+///   stored value type and the return is `RemovableRef<T>`).
+///
+/// In both shapes, collapsing the discriminating parameter(s) into a union would
+/// widen the return to the union of all branches for ALL callers, erasing the
+/// per-input narrowing that is the entire point of the overloads.
+///
+/// A group that varies its parameter type but returns the SAME type (e.g.
+/// `f(a: string): X; f(a: number): X;`) is NOT exempted — it collapses cleanly
+/// into `f(a: string | number): X` and must still be flagged. Likewise, several
+/// positions varying without any of them tracking the return type collapses into
+/// independent unions and is still flagged.
 fn preserves_concrete_param_discrimination(sigs: &[OverloadSig]) -> bool {
     if !has_distinct_return_types(sigs) {
         return false;
@@ -300,16 +355,46 @@ fn preserves_concrete_param_discrimination(sigs: &[OverloadSig]) -> bool {
     if sigs.iter().any(|s| s.first_param_is_rest) {
         return false;
     }
-    // Exactly one parameter position varies across the group; all others are
-    // identical in every signature. That single varying position is the
-    // discriminant whose concrete type selects the return type.
-    let varying_positions = (0..arity)
+    let varying_positions: Vec<usize> = (0..arity)
         .filter(|&i| {
             let first = sigs[0].param_types[i].as_str();
             sigs.iter().any(|s| s.param_types[i] != first)
         })
-        .count();
-    varying_positions == 1
+        .collect();
+    // A single varying position is the discriminant whose concrete type selects
+    // the return type.
+    if varying_positions.len() == 1 {
+        return true;
+    }
+    // Several positions vary; they are load-bearing only when their variation is
+    // correlated with the return type.
+    some_varying_position_tracks_return(sigs, &varying_positions)
+}
+
+/// True when some varying parameter position's per-overload type argument is
+/// identical, signature by signature, to the return type's per-overload type
+/// argument — i.e. that parameter's type argument determines the return type's
+/// type argument at every call site. When several parameter positions vary
+/// because one type argument propagates through them (e.g. vueuse `useStorage`'s
+/// `defaults: MaybeRefOrGetter<T>` and `options: UseStorageOptions<T>` with
+/// return `RemovableRef<T>`), collapsing the overloads into a single signature
+/// would sever that parameter↔return link and widen the return to a union for
+/// every caller, so the overloads are load-bearing. Returns false when any
+/// signature lacks a return-type annotation, or when no varying position tracks
+/// the return type (the positions vary independently and collapse cleanly).
+fn some_varying_position_tracks_return(sigs: &[OverloadSig], varying_positions: &[usize]) -> bool {
+    let Some(return_args) = sigs
+        .iter()
+        .map(|s| s.return_type.as_deref().map(type_argument_text))
+        .collect::<Option<Vec<String>>>()
+    else {
+        return false;
+    };
+    varying_positions.iter().any(|&pos| {
+        sigs.iter()
+            .zip(&return_args)
+            .all(|(sig, ret_arg)| type_argument_text(&sig.param_types[pos]) == *ret_arg)
+    })
 }
 
 /// Extract overload signature info if `stmt` is a function declaration without a body.
@@ -710,5 +795,88 @@ export function typeFromAST(
 }
 "#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_correlated_multi_position_discrimination_tracking_return() {
+        // Regression for #6133: vueuse `useStorage` discriminates on the concrete
+        // type of `defaults`, which propagates the same type argument to `options`
+        // (`UseStorageOptions<T>`) and to the return (`RemovableRef<T>`). Two
+        // parameter positions vary, but the `options` argument tracks the return
+        // type argument call-site by call-site, so the overloads are load-bearing:
+        // collapsing them would widen the return to
+        // `RemovableRef<string | boolean | number | T>` for every caller and
+        // sever the per-call-site narrowing.
+        let source = r#"
+export function useStorage(
+  key: MaybeRefOrGetter<string>,
+  defaults: MaybeRefOrGetter<string>,
+  storage?: StorageLike,
+  options?: UseStorageOptions<string>,
+): RemovableRef<string>;
+export function useStorage(
+  key: MaybeRefOrGetter<string>,
+  defaults: MaybeRefOrGetter<boolean>,
+  storage?: StorageLike,
+  options?: UseStorageOptions<boolean>,
+): RemovableRef<boolean>;
+export function useStorage(
+  key: MaybeRefOrGetter<string>,
+  defaults: MaybeRefOrGetter<number>,
+  storage?: StorageLike,
+  options?: UseStorageOptions<number>,
+): RemovableRef<number>;
+export function useStorage<T>(
+  key: MaybeRefOrGetter<string>,
+  defaults: MaybeRefOrGetter<T>,
+  storage?: StorageLike,
+  options?: UseStorageOptions<T>,
+): RemovableRef<T>;
+export function useStorage<T = unknown>(
+  key: MaybeRefOrGetter<string>,
+  defaults: MaybeRefOrGetter<null>,
+  storage?: StorageLike,
+  options?: UseStorageOptions<T>,
+): RemovableRef<T>;
+export function useStorage<T extends string | number | boolean | object | null>(
+  key: MaybeRefOrGetter<string>,
+  defaults: MaybeRefOrGetter<T>,
+  storage?: StorageLike,
+  options?: UseStorageOptions<T>,
+): RemovableRef<T> {
+  return {} as any;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_multi_position_variation_not_tracking_return() {
+        // Several positions vary with distinct return types, but no varying
+        // position's type argument tracks the return type: the positions vary
+        // independently and collapse into independent unions, so the group still
+        // fires. (`a`/`b` swap shapes; the return is unrelated to either.)
+        let source = "
+function foo(a: number, b: string): Date;
+function foo(a: string, b: number): RegExp;
+function foo(a: any, b: any): any { return a; }
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn flags_multi_position_when_tracking_breaks_in_one_signature() {
+        // A candidate position tracks the return type in all but the last
+        // signature (`Box`/`Opt`/return all carry `string`, then `number`), but
+        // the third signature's params carry `boolean` while the return carries
+        // `bigint`. Tracking must hold for EVERY signature, so the correlation
+        // fails and the group still fires — guarding the all-or-nothing boundary.
+        let source = "
+function box(a: Ref<string>, b: Opt<string>): Out<string>;
+function box(a: Ref<number>, b: Opt<number>): Out<number>;
+function box(a: Ref<boolean>, b: Opt<boolean>): Out<bigint>;
+function box(a: any, b: any): any { return a; }
+";
+        assert_eq!(run_on(source).len(), 3);
     }
 }
