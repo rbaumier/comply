@@ -66,12 +66,64 @@ fn is_inside_expect_argument(trimmed: &str, prop_pos: usize) -> bool {
     false
 }
 
+/// True when the `(` at byte index `open` in `trimmed` opens a function *call* —
+/// its callee sits immediately to the left — rather than a grouping / test paren
+/// such as `if (...)`, `while (...)`, or `(a) ? b : c`. A call paren is preceded,
+/// after skipping whitespace, by `)`, `]`, or an identifier that is not a
+/// control-flow / expression keyword; those keywords introduce a parenthesised
+/// sub-expression, so a `.length` inside stays a boolean coercion and must keep
+/// flagging.
+fn is_call_open_paren(trimmed: &str, open: usize) -> bool {
+    let bytes = trimmed.as_bytes();
+    let mut k = open;
+    while k > 0 && bytes[k - 1] == b' ' {
+        k -= 1;
+    }
+    if k == 0 {
+        return false;
+    }
+    let prev = bytes[k - 1];
+    // `foo()(x)` / `arr[i](x)` — calling the result of a call or index access.
+    if prev == b')' || prev == b']' {
+        return true;
+    }
+    if !(prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$') {
+        return false;
+    }
+    // The callee word ends at `k`; walk back to its start (ASCII-only, so byte
+    // indices are char boundaries).
+    let mut w = k;
+    while w > 0
+        && (bytes[w - 1].is_ascii_alphanumeric() || bytes[w - 1] == b'_' || bytes[w - 1] == b'$')
+    {
+        w -= 1;
+    }
+    !matches!(
+        &trimmed[w..k],
+        "if" | "while"
+            | "for"
+            | "switch"
+            | "return"
+            | "do"
+            | "else"
+            | "in"
+            | "of"
+            | "typeof"
+            | "await"
+            | "yield"
+            | "case"
+    )
+}
+
 /// True when the `.length`/`.size` whose `.` is at `prop_pos` is consumed as a
 /// numeric value rather than coerced to boolean. Shapes:
 ///   * right-hand operand of a comparison — `found.length !== other.length`
 ///     (`prefix.length` reached after a `===`/`!==`/`<`/`>`/`<=`/`>=`);
-///   * a non-leading call/bracket argument — `slice(0, prefix.length)`
-///     (the base is preceded by a `,` at the same nesting level).
+///   * any positional call argument — `substring(prefix.length)` (sole/first
+///     argument, base preceded by the call's `(`) or `slice(0, prefix.length)`
+///     (later argument, base preceded by a `,`); a call argument is always a
+///     value position. A `(` counts only when it opens a call
+///     (`is_call_open_paren`), never an `if`/`while` grouping/test paren.
 ///   * a ternary branch — `cond ? arr.length : 0` / `cond ? 0 : arr.length`
 ///     (the base is preceded by `?` or `:`), or an object-property value
 ///     (`{ k: arr.length }`); both are value positions, never boolean coercion.
@@ -127,6 +179,10 @@ fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
         // there it is followed by `.` (`?.`) and the access stays a boolean
         // coercion. A ternary `?` is followed by whitespace/the value.
         b'?' => bytes[j] != b'.',
+        // `(` left of the base opens the call the base is an argument of —
+        // `substring(token.raw.length)`, a value position — but only when it is a
+        // call paren, not an `if`/`while` grouping/test paren (`if ((arr.length))`).
+        b'(' => is_call_open_paren(trimmed, j - 1),
         _ => false,
     }
 }
@@ -408,11 +464,11 @@ mod tests {
         assert!(run_on(src).is_empty());
     }
 
+    // Regression #6247 — `.length` as the sole argument of any function call is a
+    // numeric value position, not the implicit boolean coercion the rule targets.
     #[test]
-    fn still_flags_length_in_unrelated_call() {
-        // `notExpect` is a regular function — still flags.
-        let src = "notExpect(arr.length);";
-        assert_eq!(run_on(src).len(), 1);
+    fn allows_length_as_sole_call_argument_issue_6247() {
+        assert!(run_on("notExpect(arr.length);").is_empty());
     }
 
     // Regression for #259: `.length` read as an object-property value is a
@@ -439,10 +495,12 @@ mod tests {
         assert!(run_on("return found.length === expected.length;").is_empty());
     }
 
-    // The boolean-coercion cases the rule exists for must still flag.
+    // Regression #6247 — `.length` handed to `Boolean(...)` is a call argument
+    // (value position); the explicit coercion is `Boolean`'s, so the bare
+    // `.length` is not the implicit truthy check the rule targets.
     #[test]
-    fn still_flags_bare_length_in_boolean_call_issue_589() {
-        assert_eq!(run_on("if (Boolean(arr.length)) {}").len(), 1);
+    fn allows_length_as_boolean_call_argument_issue_6247() {
+        assert!(run_on("if (Boolean(arr.length)) {}").is_empty());
     }
 
     // Regression #3914 — a ternary branch is a numeric value position, not a
@@ -549,5 +607,40 @@ mod tests {
     #[test]
     fn allows_size_after_addition_issue_3788() {
         assert!(run_on("const z = 5 + mySet.size;").is_empty());
+    }
+
+    // Regression #6247 — `.length` as the sole/first argument of a call is a
+    // numeric index, not a boolean coercion. The markedjs/marked repro plus the
+    // generic `foo(a.length)` / `indexOf(s.length)` shapes.
+    #[test]
+    fn allows_length_as_first_call_argument_issue_6247() {
+        assert!(run_on("src = src.substring(token.raw.length);").is_empty());
+    }
+
+    #[test]
+    fn allows_length_as_plain_call_argument_issue_6247() {
+        assert!(run_on("foo(a.length);").is_empty());
+    }
+
+    #[test]
+    fn allows_length_as_index_of_argument_issue_6247() {
+        assert!(run_on("indexOf(s.length);").is_empty());
+    }
+
+    // Soundness guard for #6247: a grouping/test paren is NOT a call paren, so a
+    // `.length` parenthesised inside a boolean test still flags.
+    #[test]
+    fn still_flags_parenthesised_length_in_if_issue_6247() {
+        assert_eq!(run_on("if ((arr.length)) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_parenthesised_length_in_while_issue_6247() {
+        assert_eq!(run_on("while ((list.length)) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_parenthesised_length_as_ternary_condition_issue_6247() {
+        assert_eq!(run_on("const x = (items.length) ? a : b;").len(), 1);
     }
 }
