@@ -6,7 +6,7 @@ use crate::oxc_helpers::{
 };
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
-use oxc_ast::ast::BindingPattern;
+use oxc_ast::ast::{BindingPattern, FunctionType};
 use oxc_semantic::{AstNodes, NodeId};
 use std::sync::Arc;
 
@@ -84,14 +84,16 @@ impl OxcCheck for Check {
                 {
                     continue;
                 }
-                // A named function expression passed as a call argument whose
-                // name matches the enclosing `const`/`let`/`var` binding is the
-                // self-reference display-name idiom (`const Foo = wrap(function
-                // Foo() {})`), used by `forwardRef`, `memo`, `observer`,
-                // `styled(...)`, and custom HOCs to give the wrapped component a
-                // stable name for stack traces. The function-expression's own
-                // name binding lives only in its own scope (ECMA-262 §15.2.4),
-                // so it shadows nothing observable to outside callers.
+                // A named function expression whose name matches the enclosing
+                // `const`/`let`/`var` binding it initializes is the
+                // self-reference display-name idiom — whether the expression is
+                // a call argument (`const Foo = wrap(function Foo() {})`, used by
+                // `forwardRef`, `memo`, custom HOCs), a `return` value, or a
+                // concise arrow body (the middleware-factory pattern `const mw =
+                // () => function mw() {}`). The name only gives the wrapped value
+                // a stable identity in stack traces; the function-expression's
+                // own name binding lives only in its own scope (ECMA-262
+                // §15.2.4), so it shadows nothing observable to outside callers.
                 if is_named_fn_expr_self_reference(nodes, decl_node, name) {
                     continue;
                 }
@@ -153,27 +155,29 @@ fn is_class_type_param(nodes: &AstNodes, decl: NodeId) -> bool {
         && matches!(nodes.parent_kind(nodes.parent_id(decl)), AstKind::Class(_))
 }
 
-/// True when `decl` is the self-binding of a named function expression passed as
-/// a call argument whose own name (`symbol_name`) matches the name of the
-/// `const`/`let`/`var` declarator the call initializes
-/// (`const Foo = wrap(function Foo() {})`).
+/// True when `decl` is the self-binding of a *named function expression* whose
+/// own name (`symbol_name`) matches the name of the `const`/`let`/`var`
+/// declarator it (transitively) initializes — the self-reference display-name
+/// idiom. This covers every position a named function expression can occupy,
+/// e.g. a call argument (`const Foo = wrap(function Foo() {})`), a `return` value
+/// (`const mw = () => { return function mw() {} }`), or a concise arrow body
+/// (`const mw = () => function mw() {}`).
 fn is_named_fn_expr_self_reference(nodes: &AstNodes, decl: NodeId, symbol_name: &str) -> bool {
-    // The shadowing symbol must be declared by a named function expression
-    // whose own identifier equals the symbol name.
+    // The shadowing symbol must be declared by a function *expression* whose own
+    // identifier equals the symbol name. A function *declaration*'s name enters
+    // the enclosing scope, so only a function expression's self-name is confined
+    // to its own scope (ECMA-262 §15.2.4) and cannot shadow outward.
     let AstKind::Function(func) = nodes.kind(decl) else {
         return false;
     };
+    if func.r#type != FunctionType::FunctionExpression {
+        return false;
+    }
     if func.id.as_ref().is_none_or(|id| id.name.as_str() != symbol_name) {
         return false;
     }
-    // It must be a direct argument of a call expression (a function
-    // *declaration* can never be a child of a `CallExpression`, so this also
-    // confirms it is an expression rather than a declaration).
-    if !matches!(nodes.parent_kind(decl), AstKind::CallExpression(_)) {
-        return false;
-    }
-    // The call initializes a `const`/`let`/`var` declarator whose bound name
-    // matches the function-expression name.
+    // The function-expression name must mirror the bound name of the nearest
+    // enclosing `const`/`let`/`var` declarator it initializes.
     nodes
         .ancestor_kinds(decl)
         .find_map(|kind| match kind {
@@ -661,6 +665,42 @@ mod tests {
         let d = run_on(
             "const handler = 1;\n\
              const Component = memo(function handler() { return null; });",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_factory_return_named_function_expression() {
+        // Issue #6136 reproduction: the middleware-factory idiom returns a named
+        // function expression whose name mirrors the enclosing const binding, so
+        // the name surfaces in stack traces without creating an outer shadow.
+        let d = run_on(
+            "export const logger = (fn = console.log) => {\n\
+             return async function logger(c, next) { return next(); };\n\
+             };",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_concise_arrow_body_named_function_expression() {
+        // Issue #6136 reproduction (concise-body variant): the factory's arrow
+        // body *is* the named function expression, same self-reference idiom.
+        let d = run_on(
+            "export const jsxRenderer = () =>\n\
+             function jsxRenderer(c, next) { return next(); };",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_returned_named_fn_expr_colliding_with_unrelated_outer_binding() {
+        // Negative space: a returned named function expression whose name matches
+        // an *unrelated* outer binding (not the enclosing const, which is `make`)
+        // is a genuine shadow and must still fire.
+        let d = run_on(
+            "const handler = 1;\n\
+             const make = () => { return function handler() { return null; }; };",
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
