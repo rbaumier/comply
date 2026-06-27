@@ -19,6 +19,13 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
     // declaration. Either way the name is not the author's free naming choice.
     if node.child_by_field_name("value").is_none() { return; }
 
+    // A direct associated `const` of a trait *implementation*
+    // (`impl Trait for Type`) carries a name mandated by the trait definition: the
+    // implementor must declare it with the exact same identifier and the compiler
+    // enforces this. Like a trait declaration, the casing is not the author's free
+    // choice, so it is exempt.
+    if is_associated_const_in_trait_impl(node) { return; }
+
     if allows_non_upper_case_globals(node, source) { return; }
 
     if has_deprecated_attr(node, source) { return; }
@@ -30,6 +37,24 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
         format!("Constant `{name}` is not in `SCREAMING_SNAKE_CASE`."),
         Severity::Warning,
     ));
+}
+
+/// True if `const_item` is a *direct* associated constant of a trait
+/// implementation (`impl Trait for Type { const NAME: … = …; }`).
+///
+/// Requires the const to be an immediate child of the impl's `declaration_list`
+/// body whose parent `impl_item` carries a `trait` field (present only for
+/// `impl Trait for Type`, absent for an inherent `impl Type`). A `const` nested
+/// deeper — e.g. a local item inside a method body of the same impl — is *not*
+/// exempt: only a directly associated const has a trait-mandated name; a local
+/// const's name remains the author's free choice.
+fn is_associated_const_in_trait_impl(const_item: Node) -> bool {
+    let Some(body) = const_item.parent() else { return false };
+    if body.kind() != "declaration_list" {
+        return false;
+    }
+    let Some(impl_item) = body.parent() else { return false };
+    impl_item.kind() == "impl_item" && impl_item.child_by_field_name("trait").is_some()
 }
 
 /// True if `name` contains no lowercase ASCII letter, meaning there is nothing
@@ -465,5 +490,57 @@ mod tests {
     fn no_lowercase_exemption_keeps_screaming_snake_accepted() {
         // The canonical form remains accepted unchanged.
         assert!(run("const MAX_LEN: usize = 16;").is_empty());
+    }
+
+    #[test]
+    fn allows_associated_const_in_trait_impl() {
+        // The serde-rs/json case from the issue: the trait `Read` mandates the
+        // const name `should_early_return_if_failed`; every implementor must
+        // declare it verbatim, so the implementor cannot rename it.
+        let src = "impl<'de, R: io::Read> Read<'de> for IoRead<R> {\n\
+            const should_early_return_if_failed: bool = true;\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_associated_const_in_inherent_impl() {
+        // Negative control: an inherent `impl Type { … }` const is the author's
+        // free naming choice, so a mis-cased name must still fire.
+        let src = "impl IoRead {\n\
+            const should_early_return_if_failed: bool = true;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("should_early_return_if_failed"));
+    }
+
+    #[test]
+    fn flags_local_const_in_trait_impl_method_body() {
+        // Negative control: a `const` nested in a method body of a trait impl is
+        // a local item whose name is the author's free choice — the exemption
+        // covers only *directly* associated consts, so this must still fire.
+        let src = "impl Trait for Foo {\n\
+            fn method() {\n\
+            const fooBar: u32 = 1;\n\
+            }\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fooBar"));
+    }
+
+    #[test]
+    fn trait_impl_exemption_is_scoped_to_the_impl() {
+        // Negative control: a free-standing module-level const sitting next to a
+        // trait impl must still fire — the exemption must not leak past the impl
+        // body to a sibling const.
+        let src = "const fooBar: u32 = 1;\n\
+            impl Trait for Foo {\n\
+            const should_early_return_if_failed: bool = true;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fooBar"));
     }
 }
