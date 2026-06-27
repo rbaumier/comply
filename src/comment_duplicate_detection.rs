@@ -561,6 +561,22 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             {
                 continue;
             }
+            // Implementation twins co-located in one file: an infallible `get_u8`
+            // and its fallible `try_get_u8`, or a safe `read` and its `read_ptr`
+            // fast path, frequently sit side by side in one trait or module and
+            // share a verbatim opening because they perform the same operation.
+            // The `a != b` guard is load-bearing: `are_impl_qualifier_twins`
+            // treats identical names as trivially equal roots, so without it a
+            // same-name intra-file copy-paste — the one case the cross-file
+            // restriction above guards against — would wrongly be exempted here.
+            if entry
+                .decl_name
+                .as_deref()
+                .zip(partner.decl_name.as_deref())
+                .is_some_and(|(a, b)| a != b && are_impl_qualifier_twins(a, b))
+            {
+                continue;
+            }
             // Parallel members of distinct owners: two enum variants of
             // *different* enums (`FlushCompress::None` / `FlushDecompress::None`
             // mirroring the same zlib flush mode for the two directions), or two
@@ -653,15 +669,17 @@ fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
         || are_impl_qualifier_twins(a, b)
 }
 
-/// Two declaration names are parallel-implementation twins when they reduce to
-/// the same root after stripping one leading/trailing implementation-direction
-/// qualifier segment (`read_integer` / `read_integer_ptr`, `duplicate` /
-/// `duplicate_slice`, `decode_simd` / `decode_scalar`). The shared root must
-/// still carry a segment, so a bare `ptr` / `safe` collapsing to nothing is not
-/// a twin. Because the names *differ*, this can only ever pair two distinct
-/// declarations — an exact-copy of one name onto itself stays caught by the
-/// `a == b` cross-file path, and an intra-file copy-paste does not become two
-/// differently-qualified names.
+/// Two declaration names are parallel-implementation twins when one is the
+/// fallible `try_`-prefixed variant of the other (`get_u8` / `try_get_u8`,
+/// `copy_to_slice` / `try_copy_to_slice`), or when they reduce to the same root
+/// after stripping one leading/trailing implementation-direction qualifier
+/// segment (`read_integer` / `read_integer_ptr`, `duplicate` / `duplicate_slice`,
+/// `decode_simd` / `decode_scalar`). The shared root must still carry a segment,
+/// so a bare `ptr` / `safe` collapsing to nothing is not a twin. Because the
+/// names *differ*, this can only ever pair two distinct declarations — an
+/// exact-copy of one name onto itself stays caught by the `a == b` cross-file
+/// path, and an intra-file copy-paste does not become two differently-qualified
+/// names.
 ///
 /// Unlike `is_variant_suffix_of`, a one-segment shared root (`run_safe` /
 /// `run_unsafe` → `run`) is accepted: the discriminating signal here is the
@@ -670,9 +688,23 @@ fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
 /// the arbitrary `_in_responses`-style suffix the variant path handles needs a
 /// long root to rule out two unrelated functions sharing a generic prefix.
 fn are_impl_qualifier_twins(a: &str, b: &str) -> bool {
+    if is_fallible_twin(a, b) {
+        return true;
+    }
     let root_a = strip_impl_qualifier(a);
     let root_b = strip_impl_qualifier(b);
     root_a == root_b && !root_a.is_empty()
+}
+
+/// True when one name is the other prefixed with `try_` — the canonical Rust
+/// fallible/infallible twin idiom (`get_u8` / `try_get_u8`). Checked as a
+/// whole-name relationship rather than through `strip_impl_qualifier` so it holds
+/// even when the shared root itself ends in a qualifier segment (`copy_to_slice` /
+/// `try_copy_to_slice`, where stripping `slice` independently from each side would
+/// leave mismatched roots). The `_` in the `try_` prefix keeps the match on a
+/// segment boundary, so a bare `tryout` never pairs with `out`.
+fn is_fallible_twin(a: &str, b: &str) -> bool {
+    a.strip_prefix("try_") == Some(b) || b.strip_prefix("try_") == Some(a)
 }
 
 /// `name` with one recognized implementation-direction qualifier removed from a
@@ -1422,6 +1454,104 @@ pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
         let b = write(&dir, "b.rs", &format!("{doc}pub fn init_db() {{}}\n"));
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "a non-qualifier suffix is not a parallel-impl signal");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn fallible_try_prefix_pairs_with_infallible_twin() {
+        // `try_X` is the canonical fallible variant of the infallible `X`; the
+        // relationship is a whole-name `try_` prefix, so it holds even when the
+        // shared root itself ends in a qualifier segment (`copy_to_slice`).
+        assert!(are_impl_qualifier_twins("get_u8", "try_get_u8"));
+        assert!(are_impl_qualifier_twins("try_get_u8", "get_u8"));
+        assert!(are_impl_qualifier_twins("copy_to_slice", "try_copy_to_slice"));
+        // The `_` boundary keeps a bare `tryout` from collapsing onto `out`, and
+        // two genuinely unrelated names are never twins.
+        assert!(!are_impl_qualifier_twins("out", "tryout"));
+        assert!(!are_impl_qualifier_twins("get_u8", "put_u8"));
+    }
+
+    #[test]
+    fn ignores_try_fallible_variant_twin_docs() {
+        // Regression (#6263): tokio-rs/bytes ships ~27 infallible/fallible method
+        // twins in one trait (`get_u8` / `try_get_u8`, `copy_to_slice` /
+        // `try_copy_to_slice`, …). The `try_` variant opens its doc verbatim like
+        // the infallible one and only swaps the `# Panics` clause for a
+        // `Returns Err(…)` clause — twin-by-design API documentation, not
+        // copy-paste drift. Both methods live in the same file, so the exemption
+        // must hold for co-located impl-qualifier twins, including a root that
+        // ends in a qualifier segment (`copy_to_slice`).
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\
+pub trait Buf {
+    /// Gets an unsigned 8 bit integer value from the current cursor inside `self`.
+    ///
+    /// The internal read position is then advanced by exactly one single byte.
+    ///
+    /// # Panics
+    ///
+    /// This call panics whenever there is not enough remaining data left to read.
+    fn get_u8(&mut self) -> u8 {
+        0
+    }
+
+    /// Gets an unsigned 8 bit integer value from the current cursor inside `self`.
+    ///
+    /// The internal read position is then advanced by exactly one single byte.
+    ///
+    /// Returns `Err(TryGetError)` whenever there is not enough remaining data left.
+    fn try_get_u8(&mut self) -> Result<u8, ()> {
+        Ok(0)
+    }
+
+    /// Copies bytes from `self` into the provided destination slice given by caller.
+    ///
+    /// The cursor is advanced by the total number of bytes that were copied over.
+    ///
+    /// # Panics
+    ///
+    /// This call panics when `self` does not contain enough bytes for the slice.
+    fn copy_to_slice(&mut self, _dst: &mut [u8]) {}
+
+    /// Copies bytes from `self` into the provided destination slice given by caller.
+    ///
+    /// The cursor is advanced by the total number of bytes that were copied over.
+    ///
+    /// Returns `Err(TryGetError)` when `self` does not contain enough remaining bytes.
+    fn try_copy_to_slice(&mut self, _dst: &mut [u8]) -> Result<(), ()> {
+        Ok(())
+    }
+}
+";
+        let a = write(&dir, "buf_impl.rs", content);
+        // A second file keeps the run active (a single-file run is a noop).
+        let filler = write(&dir, "filler.rs", "pub fn z() {}\n");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "try_/non-try_ infallible-fallible twin docs in one file must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_intra_file_duplicate_doc_on_non_twin_decls() {
+        // The co-located twin exemption stays surgical: two functions in one file
+        // whose names are not impl-qualifier twins (`encode` / `decode`) carrying
+        // a verbatim copy-pasted doc are real intra-file duplication and flag.
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\
+/// Builds the canonical pagination defaults derived from the shared schema so
+/// every list view stays consistent across the whole admin surface everywhere.
+pub fn encode() {}
+
+/// Builds the canonical pagination defaults derived from the shared schema so
+/// every list view stays consistent across the whole admin surface everywhere.
+pub fn decode() {}
+";
+        let a = write(&dir, "codec.rs", content);
+        // A second file keeps the run active (a single-file run is a noop).
+        let filler = write(&dir, "filler.rs", "pub fn z() {}\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "intra-file copy-paste on non-twin decls is real duplication");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
