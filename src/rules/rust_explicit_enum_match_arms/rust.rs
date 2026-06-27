@@ -182,6 +182,18 @@ impl AstCheck for Check {
         if match_covers_externally_imported_enum(node, &enum_like_arms, source_bytes) {
             return;
         }
+        // A glob import (`use ndk::audio::AudioError::*;`) strips the enum
+        // qualifier, leaving bare unqualified variant heads (`Disconnected`,
+        // `Unavailable`). When every enum-like arm is such a bare head and the
+        // file carries a glob import rooted at an external crate, the scrutinee
+        // enum is defined upstream: an author can add variants and a
+        // `#[non_exhaustive]` enum makes the `_` arm compiler-mandated, so the
+        // wildcard is correct. A glob rooted at `crate`/`super`/`self` is a local
+        // enum and does not qualify, and a bare head naming a same-file enum
+        // variant is local too — both still flag.
+        if match_covers_glob_imported_external_enum(node, &enum_like_arms, source_bytes) {
+            return;
+        }
         // If the scrutinee enum is defined in *this* file and has a
         // `#[cfg(...)]`-gated variant, its variant set is target-dependent:
         // listing every variant explicitly fails to compile on the excluded
@@ -615,6 +627,165 @@ fn use_declaration_imports_name(use_decl: tree_sitter::Node, name: &str, source:
             if path_child.is_some_and(|p| p.id() == child.id()) {
                 continue;
             }
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if the match's enum-like arms are all bare unqualified variant heads
+/// (`Disconnected`, `Timeout(_)` — no `::` qualifier) and the file carries a glob
+/// import (`use <path>::*`) rooted at an external crate.
+///
+/// A glob import strips the enum qualifier, so the arm heads lose their crate
+/// root and read as local; this resolves them through the file's glob imports
+/// instead. The exemption requires the glob to be rooted at an external crate
+/// (not `crate`/`super`/`self`) and requires that no bare head names a same-file
+/// `enum_item` variant — a local enum coexisting with an unrelated external glob
+/// (`use std::io::ErrorKind::*;` next to a local `enum Color`) must still flag.
+///
+/// Accepted limitation: the external glob and the bare heads are correlated only
+/// file-wide, not resolved to one import. A match over a *local* enum whose
+/// variants are glob-imported from another file (`use crate::dir::Dir::*;`) while
+/// any unrelated external glob is also in scope reads as external here (a rare
+/// under-flag, the same safe direction the other heuristics tolerate); and a
+/// same-file enum variant that merely shares a name with a genuinely external
+/// variant defeats the exemption (a re-flag, the safe direction).
+fn match_covers_glob_imported_external_enum(
+    match_node: tree_sitter::Node,
+    enum_like_arms: &[tree_sitter::Node],
+    source: &[u8],
+) -> bool {
+    let mut heads: Vec<&str> = Vec::new();
+    if !enum_like_arms
+        .iter()
+        .all(|p| collect_bare_variant_heads(*p, source, &mut heads))
+    {
+        return false;
+    }
+    let mut current = match_node.parent();
+    while let Some(node) = current {
+        if node.kind() == "source_file" {
+            return source_file_has_external_glob_import(node, source)
+                && !source_file_defines_any_variant(node, &heads, source);
+        }
+        current = node.parent();
+    }
+    false
+}
+
+/// Pushes every variant head of `pattern` into `heads` and returns true iff every
+/// head is a bare unqualified PascalCase identifier (`Disconnected`, `Timeout(_)`
+/// — no `::`). A qualified head (`Foo::Bar`) returns false: it carries an enum
+/// root handled by the other external-resolution exemptions, so the bare-glob
+/// path does not apply. Unwraps the `match_pattern` wrapper and recurses through
+/// `or_pattern` disjuncts, mirroring the other arm-classification helpers.
+fn collect_bare_variant_heads<'a>(
+    pattern: tree_sitter::Node,
+    source: &'a [u8],
+    heads: &mut Vec<&'a str>,
+) -> bool {
+    if pattern.kind() == "match_pattern" {
+        let mut cursor = pattern.walk();
+        return match pattern.named_children(&mut cursor).next() {
+            Some(inner) => collect_bare_variant_heads(inner, source, heads),
+            None => false,
+        };
+    }
+    if pattern.kind() == "or_pattern" {
+        let mut cursor = pattern.walk();
+        return pattern
+            .named_children(&mut cursor)
+            .all(|child| collect_bare_variant_heads(child, source, heads));
+    }
+    let Ok(text) = pattern.utf8_text(source) else {
+        return false;
+    };
+    let head = text.trim().split(['(', '{', ' ']).next().unwrap_or("").trim();
+    if head.is_empty() || head.contains("::") {
+        return false;
+    }
+    // PascalCase: uppercase lead with at least one lowercase letter — the same
+    // bare-variant shape `pattern_is_enum_like` accepts.
+    if head.starts_with(|c: char| c.is_ascii_uppercase())
+        && head.chars().any(|c| c.is_ascii_lowercase())
+    {
+        heads.push(head);
+        true
+    } else {
+        false
+    }
+}
+
+/// True if any `use_declaration` in `source_file` is a glob import (`use ...::*`)
+/// rooted at an external crate. Mirrors `enum_name_is_externally_imported`'s walk
+/// and reuses `use_declaration_has_external_root` for the root classification, so
+/// a glob rooted at `crate`/`super`/`self` (a local enum) does not qualify.
+fn source_file_has_external_glob_import(source_file: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = source_file.walk();
+    let mut stack = vec![source_file];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "use_declaration" {
+            if use_declaration_is_glob(node) && use_declaration_has_external_root(node, source) {
+                return true;
+            }
+            // A `use` tree contains no nested `use_declaration`, so stop here.
+            continue;
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if a `use_declaration` is a glob import (`use path::*;`, or a nested
+/// `use path::{sub::*}`): its tree contains a `use_wildcard` node. A brace list
+/// with no wildcard (`use path::{A, B};`) is not a glob.
+fn use_declaration_is_glob(use_decl: tree_sitter::Node) -> bool {
+    let mut cursor = use_decl.walk();
+    let mut stack = vec![use_decl];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "use_wildcard" {
+            return true;
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if any `enum_item` in `source_file` declares a variant whose name is in
+/// `variant_names`. Keeps the glob-import exemption from firing on a match over a
+/// locally-defined enum that merely coexists with an external glob import
+/// (`use std::io::ErrorKind::*;` next to a local `enum Color { Red, Green }`).
+fn source_file_defines_any_variant(
+    source_file: tree_sitter::Node,
+    variant_names: &[&str],
+    source: &[u8],
+) -> bool {
+    let mut cursor = source_file.walk();
+    let mut stack = vec![source_file];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "enum_item" {
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut body_cursor = body.walk();
+                if body
+                    .named_children(&mut body_cursor)
+                    .filter(|c| c.kind() == "enum_variant")
+                    .any(|variant| {
+                        variant
+                            .child_by_field_name("name")
+                            .and_then(|n| n.utf8_text(source).ok())
+                            .is_some_and(|name| variant_names.contains(&name))
+                    })
+                {
+                    return true;
+                }
+            }
+        }
+        for child in node.named_children(&mut cursor) {
             stack.push(child);
         }
     }
@@ -1502,6 +1673,49 @@ mod tests {
         let src = "use std::io::ErrorKind::*;\n\
                    enum Color { Red, Green, Blue }\n\
                    fn f(c: Color) -> u8 { match c { Red => 0, Green => 1, _ => 2 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_on_glob_imported_external_non_exhaustive_enum() {
+        // Issue #6242: cpal's `aaudio/convert.rs`. `ndk::audio::AudioError` is an
+        // external `#[non_exhaustive]` enum glob-imported via
+        // `use ndk::audio::AudioError::*`, so the arm heads are bare unqualified
+        // variants (`Disconnected`, `Timeout`). The glob is rooted at the external
+        // crate `ndk`, where the `_` arm is compiler-mandated, so it must not flag.
+        let src = "use ndk::audio::AudioError::*;\n\
+                   fn from(error: ndk::audio::AudioError) -> Error { match error { \
+                   Disconnected | Unavailable | NoService | InvalidHandle => a(), \
+                   WouldBlock | Timeout => b(), \
+                   _ => c(), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_on_crate_rooted_glob_imported_enum() {
+        // Issue #6242 negative space: a LOCAL enum whose variants are glob-imported
+        // via `use crate::MyEnum::*;` is crate-rooted, not external, so the `_` arm
+        // is a real catch-all and must still flag.
+        let src = "use crate::MyEnum::*;\n\
+                   fn f(x: MyEnum) -> i32 { match x { North => 1, South => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_on_qualified_arms_without_external_glob() {
+        // Issue #6242 negative space: qualified arms (`Foo::A | Foo::B`) carry an
+        // enum root and there is no external glob import, so the bare-variant glob
+        // exemption does not apply and the `_` arm still flags.
+        let src = "fn f(x: Foo) -> i32 { match x { Foo::A | Foo::B => 1, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_on_bare_pascal_arms_without_any_glob_import() {
+        // Issue #6242 negative space: bare PascalCase arms with NO glob import (the
+        // variants are defined in the same module) leave the scrutinee local, so
+        // the `_` arm is a real catch-all and must still flag.
+        let src = "fn f(x: Foo) -> i32 { match x { North => 1, South => 2, _ => 0 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
