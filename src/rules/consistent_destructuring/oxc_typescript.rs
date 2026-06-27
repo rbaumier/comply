@@ -165,6 +165,22 @@ impl OxcCheck for Check {
                                     continue;
                                 }
                             }
+                            AstKind::UnaryExpression(unary)
+                                if unary.operator == UnaryOperator::Delete =>
+                            {
+                                // `delete obj.prop` removes the property from the
+                                // object and requires the member-expression form.
+                                // `delete destructuredVar` would only delete the
+                                // local binding, not the property, so this access
+                                // cannot be rewritten — record the mutation and
+                                // skip candidate collection.
+                                if unary.argument.span().start == member.span().start
+                                    && unary.argument.span().end == member.span().end
+                                {
+                                    mutated_props.insert(write_key(member, source, semantic));
+                                    continue;
+                                }
+                            }
                             // Check grandparent for augmented assignment
                             _ => {
                                 // Walk up further to check for augmented assignment
@@ -178,6 +194,19 @@ impl OxcCheck for Check {
                                             mutated_props.insert(write_key(member, source, semantic));
                                             continue;
                                         }
+                                    // `delete (obj.prop)` — the member sits inside a
+                                    // parenthesized argument of a delete. Same
+                                    // mutation as the unparenthesized form.
+                                    if let AstKind::UnaryExpression(unary) = gp.kind()
+                                        && unary.operator == UnaryOperator::Delete
+                                        && matches!(
+                                            parent.kind(),
+                                            AstKind::ParenthesizedExpression(_)
+                                        )
+                                    {
+                                        mutated_props.insert(write_key(member, source, semantic));
+                                        continue;
+                                    }
                                 }
                             }
                         }
@@ -450,6 +479,51 @@ mod tests {
         let diags = run(code);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("bar"));
+    }
+
+    #[test]
+    fn skips_delete_of_destructured_property() {
+        // Issue #6234: `delete obj.prop` removes the property from the object
+        // and requires the member-expression form. `delete destructuredVar`
+        // would only delete the local binding, not the property, so the access
+        // cannot be rewritten to the destructured variable.
+        let code = r#"
+            const { createFastMessageEvent } = MessageEvent
+            delete MessageEvent.createFastMessageEvent
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag `delete obj.prop` after destructuring from obj"
+        );
+    }
+
+    #[test]
+    fn skips_delete_of_parenthesized_destructured_property() {
+        // Issue #6234, parenthesized form: `delete (obj.prop)` is the same
+        // mutation as `delete obj.prop` and likewise cannot be rewritten.
+        let code = r#"
+            const { createFastMessageEvent } = MessageEvent
+            delete (MessageEvent.createFastMessageEvent)
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag `delete (obj.prop)` after destructuring from obj"
+        );
+    }
+
+    #[test]
+    fn delete_skip_is_property_scoped() {
+        // Negative control for #6234: deleting one property must not exempt a
+        // read of a *different* destructured property — the delete-mutation is
+        // keyed on the property, so the sibling read stays the rule's target.
+        let code = r#"
+            const { gone, kept } = obj
+            delete obj.gone
+            someFn(obj.kept)
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("kept"));
     }
 
     #[test]
