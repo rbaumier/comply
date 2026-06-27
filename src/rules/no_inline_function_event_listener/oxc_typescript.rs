@@ -87,6 +87,28 @@ fn options_set_once_true(options: &Argument) -> bool {
     })
 }
 
+/// True when the `addEventListener` options argument is an object literal that
+/// carries a `signal` key. Any value counts: an `AbortSignal` reference makes the
+/// listener AbortController-managed, so the runtime removes it when the controller
+/// fires `abort()` — the missing stable reference is irrelevant. Unlike `once`
+/// (which needs a literal `true`), the mere presence of the key is the proof.
+fn options_has_signal_key(options: &Argument) -> bool {
+    let Argument::ObjectExpression(obj) = options else {
+        return false;
+    };
+    obj.properties.iter().any(|prop| {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+            return false;
+        };
+        let key_name = match &p.key {
+            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+            PropertyKey::StringLiteral(s) => s.value.as_str(),
+            _ => return false,
+        };
+        key_name == "signal"
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -139,8 +161,12 @@ impl OxcCheck for Check {
         // after its first fire, so the inability to `removeEventListener` an inline
         // function is moot. Without a literal `once: true` (no options, `{ once:
         // false }`, `{ capture: true }`, boolean `useCapture`, `{ once: someVar }`)
-        // the listener stays flagged.
-        if call.arguments.get(2).is_some_and(options_set_once_true) {
+        // the listener stays flagged. A `{ signal }` option is likewise exempt: the
+        // AbortController removes the listener when it fires `abort()`, so no stable
+        // reference is needed.
+        if call.arguments.get(2).is_some_and(options_set_once_true)
+            || call.arguments.get(2).is_some_and(options_has_signal_key)
+        {
             return;
         }
 
@@ -329,6 +355,42 @@ mod tests {
         // Shorthand `{ once }` carries an identifier value, not a literal `true`.
         assert_eq!(
             run("el.addEventListener('click', () => go(), { once });").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_inline_arrow_with_signal_option() {
+        // Issue #6306: a `{ signal }` option hands removal to the AbortController,
+        // which fires `abort()` to remove the listener — no stable reference needed.
+        let src = r#"
+            client.addEventListener(
+                'message',
+                (event) => { logOutgoingClientMessage(event) },
+                { signal: controller.signal },
+            );
+        "#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_inline_arrow_with_signal_option_string_key() {
+        assert!(
+            run(r#"el.addEventListener('click', () => go(), { "signal": s });"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_inline_arrow_with_no_options() {
+        // Negative control: no options object at all — still flagged.
+        assert_eq!(run("el.addEventListener('message', (e) => use(e));").len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_arrow_with_capture_only_options() {
+        // Negative control: options without `signal` or `once` — still flagged.
+        assert_eq!(
+            run("el.addEventListener('message', (e) => use(e), { capture: true });").len(),
             1
         );
     }
