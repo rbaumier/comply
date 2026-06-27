@@ -90,23 +90,29 @@ impl AstCheck for Check {
     }
 }
 
-/// Return the single simple identifier bound by `let X = …`. Returns
-/// `None` for destructuring patterns (`let (a, b) = …`, `let Foo { x } = …`).
+/// Return the name bound by a whole-value `let X = …` binding, i.e. one that
+/// binds the *entire* right-hand side to a single name:
+/// - `identifier` — `let x = …`
+/// - `mut_pattern` — `let mut x = …`
+///
+/// Returns `None` for destructuring patterns (`let (a, b) = …`,
+/// `let (q, _) = …`, `let Foo { x } = …`) and reference patterns
+/// (`let ref x = …`), which bind only *part* of the value or change its type:
+/// inlining `let (q, _) = expr; q` to `expr` would return the whole tuple
+/// instead of `q`. Only a whole-value binding is safe to inline.
 fn extract_let_var_name<'a>(let_node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     let pattern = let_node.child_by_field_name("pattern")?;
-    first_simple_identifier(pattern, source)
-}
-
-fn first_simple_identifier<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    if node.kind() == "identifier" {
-        return node.utf8_text(source).ok();
+    match pattern.kind() {
+        "identifier" => pattern.utf8_text(source).ok(),
+        "mut_pattern" => {
+            let mut cursor = pattern.walk();
+            pattern
+                .named_children(&mut cursor)
+                .find(|child| child.kind() == "identifier")
+                .and_then(|child| child.utf8_text(source).ok())
+        }
+        _ => None,
     }
-    let mut cursor = node.walk();
-    let children: Vec<_> = node.named_children(&mut cursor).collect();
-    if children.len() != 1 {
-        return None;
-    }
-    first_simple_identifier(children[0], source)
 }
 
 /// True if `node` is exactly `return X;` or the block's tail
@@ -204,9 +210,44 @@ mod tests {
     }
 
     #[test]
+    fn flags_mut_assign_then_tail_expr() {
+        // `let mut x = …; x` binds the whole value to one name — still a
+        // true positive. Negative control pinning the `mut` surface so the
+        // wildcard-destructuring fix below does not regress it.
+        let src = "fn f() -> i32 { let mut result = compute(); result }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn does_not_flag_destructuring_pattern() {
         // `let (a, b) = pair; return a;` — pattern is a tuple, skip.
         let src = "fn f() -> i32 { let (a, b) = pair(); return a; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_tuple_destructuring_with_wildcard() {
+        // `let (q, _) = …; q` returns one tuple element, not the whole value:
+        // inlining to `div_rem(a, b)` would change the type from `B` to
+        // `(B, B)`. The wildcard `_` is an anonymous node, so the
+        // `tuple_pattern` has a single named child (`q`) — the FP from #6285.
+        let src = "fn div(a: B, b: B) -> B { let (q, _) = div_rem(a, b); q }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_tuple_destructuring_second_element() {
+        // Mirror of the wildcard FP binding the second element.
+        let src = "fn rem(a: B, b: B) -> B { let (_, r) = div_rem(a, b); r }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_ref_pattern() {
+        // `let ref x = …; x` binds `x: &T` while the RHS is `T`; inlining to
+        // the expression would change the returned type, so `ref_pattern` is
+        // not a whole-value binding and must not be flagged.
+        let src = "fn f() -> &i32 { let ref x = make(); x }";
         assert!(run_on(src).is_empty());
     }
 
