@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if base_is_import_meta_url(new_expr) {
+        if base_is_trusted_absolute_url(new_expr) {
             return;
         }
 
@@ -119,23 +119,44 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
     }
 }
 
-/// True when the base URL of `new URL(...)` is `import.meta.url`, the URL the
-/// engine assigns when it loads the module. It is structurally guaranteed to be
-/// a valid absolute URL, so the constructor cannot throw on the base.
+/// True when the base URL of `new URL(...)` is structurally guaranteed to be a
+/// valid absolute URL, so the constructor cannot throw on the base.
 ///
-/// Covers both ESM idioms:
-/// * single-arg `new URL(import.meta.url)` — the sole argument is the base;
-/// * two-arg `new URL(<relative>, import.meta.url)` — the second argument is
-///   the base. A dynamic base (any non-`import.meta.url` second argument) still
-///   flags.
-fn base_is_import_meta_url(new_expr: &oxc_ast::ast::NewExpression) -> bool {
+/// Two trusted base shapes:
+/// * `import.meta.url` — the URL the engine assigns when it loads the module.
+///   Covers both ESM idioms: single-arg `new URL(import.meta.url)` (the sole
+///   argument is the base) and two-arg `new URL(<relative>, import.meta.url)`
+///   (the second argument is the base).
+/// * a string-literal base that opens with a `scheme://` authority prefix —
+///   `new URL(<relative>, 'http://a.com')` resolves against a compile-time
+///   constant absolute URL, so the base cannot throw. This is the symmetric
+///   two-arg counterpart of the single-arg string-literal trust in
+///   `arg_is_trusted`. The scheme must be *leading* (an anchored RFC-3986
+///   scheme), not an incidental `://` somewhere in a scheme-less path/query
+///   (`'/redirect?to=http://x'`), which is still a relative base and throws.
+///
+/// A dynamic base (any other second argument — a non-`import.meta.url`,
+/// non-string-literal expression) still flags.
+fn base_is_trusted_absolute_url(new_expr: &oxc_ast::ast::NewExpression) -> bool {
+    use oxc_ast::ast::Expression;
     let base = match new_expr.arguments.len() {
         1 => new_expr.arguments.first(),
         2 => new_expr.arguments.get(1),
         _ => None,
     };
-    base.and_then(|a| a.as_expression())
-        .is_some_and(is_import_meta_url)
+    let Some(base) = base.and_then(|a| a.as_expression()) else {
+        return false;
+    };
+    if is_import_meta_url(base) {
+        return true;
+    }
+    // A string-literal base opening with a leading `scheme://` authority prefix
+    // is a compile-time-constant absolute URL; resolving a relative reference
+    // against it cannot throw on the base. The same anchored-scheme test the
+    // template-origin path uses, so an incidental `://` inside a scheme-less
+    // path/query does not over-trust.
+    matches!(base, Expression::StringLiteral(lit)
+        if leading_scheme_authority_prefix(lit.value.as_str()).is_some())
 }
 
 /// True for the `import.meta.url` member read: a `.url` access whose object is
@@ -791,6 +812,33 @@ mod tests {
     #[test]
     fn still_flags_dynamic_base() {
         assert_eq!(run_on("const u = new URL(someVar, otherDynamicBase);").len(), 1);
+    }
+
+    // Regression for #6216: a string-literal base carrying a `://` scheme is a
+    // compile-time-constant absolute URL (VitePress uses `new URL(url, 'http://a.com')`
+    // as a URL-parsing utility), so resolution against it cannot throw on the
+    // base — the symmetric two-arg counterpart of the single-arg literal trust.
+    #[test]
+    fn allows_string_literal_absolute_base() {
+        assert!(run_on("const u = new URL(url, 'http://a.com');").is_empty());
+        assert!(run_on("const u = new URL(url, 'https://api.example.com/base/');").is_empty());
+    }
+
+    // A scheme-less string-literal base is not a valid absolute URL, so the
+    // constructor can still throw on the base — keep flagging. The check anchors
+    // on a *leading* scheme, so an incidental `://` inside a scheme-less path or
+    // query does not over-trust either.
+    #[test]
+    fn still_flags_scheme_less_string_literal_base() {
+        assert_eq!(run_on("const u = new URL(url, '/relative/base');").len(), 1);
+        assert_eq!(run_on("const u = new URL(url, '/redirect?to=http://x');").len(), 1);
+    }
+
+    // A non-literal base (a variable that is not `import.meta.url`) does not
+    // statically establish a valid absolute base — keep flagging.
+    #[test]
+    fn still_flags_variable_base() {
+        assert_eq!(run_on("const u = new URL(x, someVariable);").len(), 1);
     }
 
     #[test]
