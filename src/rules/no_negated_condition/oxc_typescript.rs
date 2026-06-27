@@ -2,8 +2,8 @@
 //! if/else (only when the negated branch is at least as large as the else)
 //! and ternaries. Two idiomatic shapes are exempt: a ternary whose arm renders
 //! JSX (`cond ? <X/> : null`), and any inequality against a presence sentinel
-//! (`x !== null` / `x !== undefined` / `x !== 0`), where the negation is the
-//! natural check and inverting the arms reads worse.
+//! (`x !== null` / `x !== undefined` / `x !== 0` / `typeof x !== 'undefined'`),
+//! where the negation is the natural check and inverting the arms reads worse.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -119,11 +119,12 @@ fn arm_renders_jsx(expr: &Expression) -> bool {
 }
 
 /// True when `expr` is an inequality (`!=` / `!==`) against a "presence"
-/// sentinel — `null`, `undefined`, or `0`. `x !== null` / `idx !== 0` read as
-/// idiomatic "is present / non-zero" checks, so the negation is natural and
-/// inverting the if/else or ternary arms reads worse. Note: `-1` (the `indexOf`
-/// "not found" sentinel) is deliberately NOT covered — that comparison belongs
-/// to `String#includes` / `Array#includes`, enforced by `prefer-includes`.
+/// sentinel — `null`, `undefined`, `0`, or the `typeof x !== 'undefined'`
+/// shape. `x !== null` / `idx !== 0` read as idiomatic "is present / non-zero"
+/// checks, so the negation is natural and inverting the if/else or ternary arms
+/// reads worse. Note: `-1` (the `indexOf` "not found" sentinel) is deliberately
+/// NOT covered — that comparison belongs to `String#includes` /
+/// `Array#includes`, enforced by `prefer-includes`.
 fn is_sentinel_inequality(expr: &Expression) -> bool {
     let Expression::BinaryExpression(binary) = expr.without_parentheses() else {
         return false;
@@ -134,7 +135,9 @@ fn is_sentinel_inequality(expr: &Expression) -> bool {
     ) {
         return false;
     }
-    is_presence_sentinel(&binary.left) || is_presence_sentinel(&binary.right)
+    is_presence_sentinel(&binary.left)
+        || is_presence_sentinel(&binary.right)
+        || is_typeof_undefined(&binary.left, &binary.right)
 }
 
 /// `null`, the `undefined` identifier, or the numeric literal `0`.
@@ -145,6 +148,31 @@ fn is_presence_sentinel(expr: &Expression) -> bool {
         Expression::NumericLiteral(num) => num.value == 0.0,
         _ => false,
     }
+}
+
+/// True for the AST shape `typeof X !== 'undefined'` (either operand order) —
+/// one side is a `typeof` unary expression, the other the string literal
+/// `'undefined'`. `'undefined'` is the language-defined `typeof` result for an
+/// undeclared/undefined binding, making this the only safe runtime-presence
+/// check when `X` may not be declared; it is the structural parallel of the
+/// `!== undefined` identifier sentinel.
+fn is_typeof_undefined(left: &Expression, right: &Expression) -> bool {
+    typeof_then_undefined_string(left, right) || typeof_then_undefined_string(right, left)
+}
+
+/// True when `typeof_side` is a `typeof` unary expression and `string_side` is
+/// the string literal `'undefined'`.
+fn typeof_then_undefined_string(typeof_side: &Expression, string_side: &Expression) -> bool {
+    let Expression::UnaryExpression(unary) = typeof_side.without_parentheses() else {
+        return false;
+    };
+    if unary.operator != UnaryOperator::Typeof {
+        return false;
+    }
+    matches!(
+        string_side.without_parentheses(),
+        Expression::StringLiteral(s) if s.value.as_str() == "undefined"
+    )
 }
 
 /// A condition is "negated" if it is:
@@ -303,6 +331,37 @@ mod tests {
     fn allows_undefined_sentinel_inequality() {
         assert!(run_on("if (x !== undefined) { a(); } else { b(); }").is_empty());
         assert!(run_on("const r = x !== undefined ? a : b;").is_empty());
+    }
+
+    #[test]
+    fn allows_typeof_undefined_inequality() {
+        // `typeof x !== 'undefined'` is the canonical runtime-presence check —
+        // the only safe form when `x` may be undeclared — exempt in both
+        // if/else and ternary, in either operand order.
+        assert!(run_on("if (typeof atob !== 'undefined') { a(); } else { b(); }").is_empty());
+        assert!(
+            run_on("const v = typeof data[key] !== 'undefined' ? data[key] : fallback;")
+                .is_empty()
+        );
+        assert!(run_on("const v = 'undefined' !== typeof atob ? a : b;").is_empty());
+        // Loose `!=` too — `typeof` always yields a string, so it is equivalent.
+        assert!(run_on("if (typeof atob != 'undefined') { a(); } else { b(); }").is_empty());
+    }
+
+    #[test]
+    fn flags_non_undefined_typeof_string_inequality() {
+        // `typeof x !== 'foo'` (or any non-'undefined' string) is a real
+        // negated comparison, not the presence sentinel — still flagged.
+        let d = run_on("if (typeof x !== 'function') { a(); } else { b(); }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_plain_string_inequality_not_via_typeof() {
+        // A bare string compare (no `typeof`) is not the presence sentinel —
+        // still a flagged negated condition.
+        let d = run_on("if (x !== 'foo') { a(); y(); } else { b(); }");
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
