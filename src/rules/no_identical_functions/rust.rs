@@ -30,9 +30,13 @@
 //! Pairs where either member carries an intentional-duplication attribute are
 //! exempt as well: a `#[deprecated]` function is a backward-compat alias that
 //! must keep doing exactly what its replacement does (deleting it breaks
-//! downstream callers), and a proc-macro entry point (`#[proc_macro_derive(...)]`,
+//! downstream callers), a proc-macro entry point (`#[proc_macro_derive(...)]`,
 //! `#[proc_macro]`, `#[proc_macro_attribute]`) cannot be merged or aliased —
-//! each macro name needs its own exported `fn` — so the identical body is
+//! each macro name needs its own exported `fn` — and a parameterized-test
+//! function (`#[rstest]`, `#[test_case]`) carries the shared test template as
+//! its body while the per-case data lives in the test attributes (rstest's
+//! `#[case]`/`#[values]`, or the `#[test_case(...)]` marker itself), so two such
+//! tests have identical bodies by design — so in each case the identical body is
 //! unavoidable. Free functions with identical signatures, and inherent methods
 //! on the same type with the same receiver and in the same module, are still
 //! flagged.
@@ -93,11 +97,13 @@ struct CollectedFn {
     /// merged into a shared helper, so they are never identical for this rule.
     modifiers: String,
     /// True if the function carries an intentional-duplication marker —
-    /// `#[deprecated]` (a backward-compat alias kept on purpose) or a
-    /// proc-macro entry-point attribute (`#[proc_macro_derive(...)]`,
-    /// `#[proc_macro]`, `#[proc_macro_attribute]`). Such a duplicate body cannot
-    /// be removed or aliased away, so a pair where either member is marked is
-    /// never flagged.
+    /// `#[deprecated]` (a backward-compat alias kept on purpose), a proc-macro
+    /// entry-point attribute (`#[proc_macro_derive(...)]`, `#[proc_macro]`,
+    /// `#[proc_macro_attribute]`), or a parameterized-test attribute
+    /// (`#[rstest]`, `#[test_case]`) whose body is the shared test template and
+    /// whose per-case variation lives in the test attributes rather than the
+    /// body. Such a duplicate body cannot be removed or aliased away, so a pair
+    /// where either member is marked is never flagged.
     intentional_dup: bool,
 }
 
@@ -122,10 +128,15 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             }
             // Intentional-duplication markers: a `#[deprecated]` backward-compat
             // alias keeps the old body on purpose (deleting it breaks downstream
-            // callers), and a proc-macro entry point (`#[proc_macro_derive(...)]`
+            // callers), a proc-macro entry point (`#[proc_macro_derive(...)]`
             // and siblings) cannot be merged or aliased — each derive name needs
-            // its own exported fn. If either member of the pair is so marked the
-            // identical body is unavoidable, not copy-paste — skip the pair.
+            // its own exported fn — and a parameterized-test fn (`#[rstest]`,
+            // `#[test_case]`) carries the shared test template as its body while
+            // the per-case data lives in the test attributes (rstest's
+            // `#[case]`/`#[values]`, or the `#[test_case(...)]` marker), so two
+            // such tests have identical bodies by design. If either member of the
+            // pair is so marked the identical body is unavoidable, not
+            // copy-paste — skip the pair.
             if functions[i].intentional_dup || functions[j].intentional_dup {
                 continue;
             }
@@ -239,6 +250,8 @@ fn collect_functions(
                                 "proc_macro_derive",
                                 "proc_macro",
                                 "proc_macro_attribute",
+                                "rstest",
+                                "test_case",
                             ],
                         ),
                     });
@@ -1045,5 +1058,74 @@ pub fn compute_copy(x: i32) -> i32 {
 "#;
         let d = run_on(src);
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_rstest_parameterized_tests_with_identical_bodies() {
+        // Issue #6129: ratatui's `#[rstest]` parameterized tests share one body
+        // (the test template) and vary only through `#[case(...)]` attributes.
+        // Two such tests have byte-identical bodies by design and cannot be
+        // merged — the discriminating data lives in the attributes, not the body.
+        let src = r#"
+#[rstest]
+#[case::len1(vec![Length(25), Length(25), Length(25)], vec![0..25, 25..50, 50..100])]
+fn constraint_length(
+    #[case] constraints: Vec<Constraint>,
+    #[case] expected: Vec<Range<u16>>,
+) {
+    let rect = Rect::new(0, 0, 100, 1);
+    let ranges = Layout::horizontal(constraints)
+        .flex(Flex::Legacy)
+        .split(rect)
+        .iter()
+        .map(|r| r.left()..r.right())
+        .collect_vec();
+    assert_eq!(ranges, expected);
+}
+
+#[rstest]
+#[case::min_len_max(vec![Min(25), Length(25), Max(25)], vec![0..50, 25..75, 75..100])]
+#[case::len_len_len_25(vec![Length(25), Length(25), Length(25)], vec![0..25, 25..50, 50..100])]
+fn length_is_higher_priority(
+    #[case] constraints: Vec<Constraint>,
+    #[case] expected: Vec<Range<u16>>,
+) {
+    let rect = Rect::new(0, 0, 100, 1);
+    let ranges = Layout::horizontal(constraints)
+        .flex(Flex::Legacy)
+        .split(rect)
+        .iter()
+        .map(|r| r.left()..r.right())
+        .collect_vec();
+    assert_eq!(ranges, expected);
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_test_case_parameterized_tests_with_identical_bodies() {
+        // Issue #6129: the `test-case` crate puts each case in a `#[test_case(...)]`
+        // marker and shares one body across cases, so two such tests have
+        // identical bodies by design and must not be flagged as copy-paste.
+        let src = r#"
+#[test_case(2, 3 => 5 ; "small")]
+#[test_case(10, 20 => 30 ; "large")]
+fn adds(a: i32, b: i32) -> i32 {
+    let sum = a + b;
+    let label = format!("{a}+{b}");
+    assert!(!label.is_empty());
+    sum
+}
+
+#[test_case(0, 0 => 0 ; "zero")]
+fn adds_zero(a: i32, b: i32) -> i32 {
+    let sum = a + b;
+    let label = format!("{a}+{b}");
+    assert!(!label.is_empty());
+    sum
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 }
