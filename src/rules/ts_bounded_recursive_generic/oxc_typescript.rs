@@ -90,6 +90,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Exempt mapped-key-index recursion: a recursive call whose argument is
+        // `T[K]`, where `K` is the key variable of an enclosing mapped type
+        // (`{ [K in keyof T]: Recurse<T[K]> }`). Indexing the input at the key
+        // currently being iterated lands on a direct child value, so each step
+        // descends one level into the input's finite nesting and the conditional's
+        // primitive branch is the base case. A naked `T[keyof T]`, where the index
+        // is not a mapped key, carries no such guarantee and is still flagged.
+        if recurses_on_mapped_key_index(&alias.type_annotation, name) {
+            return;
+        }
+
         let (line, column) =
             byte_offset_to_line_col(ctx.source, alias.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -512,7 +523,7 @@ fn recurses_on_nested_member_descent(
     alias_name: &str,
 ) -> bool {
     let mut found = false;
-    visit_self_call_args(annotation, alias_name, &mut |arg| {
+    visit_self_call_args(annotation, alias_name, &[], &mut |arg, _mapped_keys| {
         if is_nested_member_descent(arg) {
             found = true;
         }
@@ -521,20 +532,23 @@ fn recurses_on_nested_member_descent(
 }
 
 /// Walk every nested type and invoke `on_arg` for each top-level type-argument
-/// of a recursive call to `alias_name`.
+/// of a recursive call to `alias_name`. `mapped_keys` carries the key variables
+/// of the mapped types enclosing the current position (`K` in `[K in keyof T]`),
+/// so a callback can recognize a `T[K]` descent into the input.
 fn visit_self_call_args<'a>(
     ty: &'a oxc_ast::ast::TSType<'a>,
     alias_name: &str,
-    on_arg: &mut impl FnMut(&'a oxc_ast::ast::TSType<'a>),
+    mapped_keys: &[&'a str],
+    on_arg: &mut impl FnMut(&'a oxc_ast::ast::TSType<'a>, &[&'a str]),
 ) {
     use oxc_ast::ast::{TSType, TSTypeName};
 
     match ty {
         TSType::TSConditionalType(cond) => {
-            visit_self_call_args(&cond.check_type, alias_name, on_arg);
-            visit_self_call_args(&cond.extends_type, alias_name, on_arg);
-            visit_self_call_args(&cond.true_type, alias_name, on_arg);
-            visit_self_call_args(&cond.false_type, alias_name, on_arg);
+            visit_self_call_args(&cond.check_type, alias_name, mapped_keys, on_arg);
+            visit_self_call_args(&cond.extends_type, alias_name, mapped_keys, on_arg);
+            visit_self_call_args(&cond.true_type, alias_name, mapped_keys, on_arg);
+            visit_self_call_args(&cond.false_type, alias_name, mapped_keys, on_arg);
         }
         TSType::TSTypeReference(tref) => {
             let is_self_call = matches!(
@@ -544,57 +558,63 @@ fn visit_self_call_args<'a>(
             if let Some(args) = &tref.type_arguments {
                 for arg in &args.params {
                     if is_self_call {
-                        on_arg(arg);
+                        on_arg(arg, mapped_keys);
                     }
-                    visit_self_call_args(arg, alias_name, on_arg);
+                    visit_self_call_args(arg, alias_name, mapped_keys, on_arg);
                 }
             }
         }
-        TSType::TSArrayType(arr) => visit_self_call_args(&arr.element_type, alias_name, on_arg),
+        TSType::TSArrayType(arr) => {
+            visit_self_call_args(&arr.element_type, alias_name, mapped_keys, on_arg);
+        }
         TSType::TSIndexedAccessType(idx) => {
-            visit_self_call_args(&idx.object_type, alias_name, on_arg);
-            visit_self_call_args(&idx.index_type, alias_name, on_arg);
+            visit_self_call_args(&idx.object_type, alias_name, mapped_keys, on_arg);
+            visit_self_call_args(&idx.index_type, alias_name, mapped_keys, on_arg);
         }
         TSType::TSUnionType(u) => {
             for t in &u.types {
-                visit_self_call_args(t, alias_name, on_arg);
+                visit_self_call_args(t, alias_name, mapped_keys, on_arg);
             }
         }
         TSType::TSIntersectionType(i) => {
             for t in &i.types {
-                visit_self_call_args(t, alias_name, on_arg);
+                visit_self_call_args(t, alias_name, mapped_keys, on_arg);
             }
         }
         TSType::TSTupleType(tuple) => {
             for el in &tuple.element_types {
                 if let Some(inner) = tuple_element_as_type(el) {
-                    visit_self_call_args(inner, alias_name, on_arg);
+                    visit_self_call_args(inner, alias_name, mapped_keys, on_arg);
                 }
             }
         }
         TSType::TSNamedTupleMember(member) => {
             if let Some(inner) = tuple_element_as_type(&member.element_type) {
-                visit_self_call_args(inner, alias_name, on_arg);
+                visit_self_call_args(inner, alias_name, mapped_keys, on_arg);
             }
         }
         TSType::TSTypeOperatorType(op) => {
-            visit_self_call_args(&op.type_annotation, alias_name, on_arg);
+            visit_self_call_args(&op.type_annotation, alias_name, mapped_keys, on_arg);
         }
         TSType::TSParenthesizedType(paren) => {
-            visit_self_call_args(&paren.type_annotation, alias_name, on_arg);
+            visit_self_call_args(&paren.type_annotation, alias_name, mapped_keys, on_arg);
         }
         TSType::TSTemplateLiteralType(tpl) => {
             for t in &tpl.types {
-                visit_self_call_args(t, alias_name, on_arg);
+                visit_self_call_args(t, alias_name, mapped_keys, on_arg);
             }
         }
         TSType::TSMappedType(mapped) => {
-            visit_self_call_args(&mapped.constraint, alias_name, on_arg);
+            // The key `K` is bound by `in`, so it is out of scope in the
+            // constraint (`keyof T`) but in scope for the name and value types.
+            visit_self_call_args(&mapped.constraint, alias_name, mapped_keys, on_arg);
+            let mut inner_keys = mapped_keys.to_vec();
+            inner_keys.push(mapped.key.name.as_str());
             if let Some(name_type) = &mapped.name_type {
-                visit_self_call_args(name_type, alias_name, on_arg);
+                visit_self_call_args(name_type, alias_name, &inner_keys, on_arg);
             }
             if let Some(annotation) = &mapped.type_annotation {
-                visit_self_call_args(annotation, alias_name, on_arg);
+                visit_self_call_args(annotation, alias_name, &inner_keys, on_arg);
             }
         }
         _ => {}
@@ -618,12 +638,51 @@ fn tuple_element_as_type<'a>(
 /// `never` and the recursion is bounded by the union's cardinality.
 fn recurses_on_excluded_union(annotation: &oxc_ast::ast::TSType, alias_name: &str) -> bool {
     let mut found = false;
-    visit_self_call_args(annotation, alias_name, &mut |arg| {
+    visit_self_call_args(annotation, alias_name, &[], &mut |arg, _mapped_keys| {
         if is_exclude_application(arg) {
             found = true;
         }
     });
     found
+}
+
+/// Return true if `annotation` contains a recursive call to `alias_name` whose
+/// type argument is `T[K]`, where `T` is a bare type reference and `K` is the
+/// key variable of an enclosing mapped type (`{ [K in keyof T]: ... }`). Each
+/// such step indexes the input at the key currently being iterated, landing on a
+/// strictly-nested child value, so the recursion is bounded by the input's
+/// nesting depth and terminates at the conditional's primitive base case.
+fn recurses_on_mapped_key_index(annotation: &oxc_ast::ast::TSType, alias_name: &str) -> bool {
+    let mut found = false;
+    visit_self_call_args(annotation, alias_name, &[], &mut |arg, mapped_keys| {
+        if is_mapped_key_index(arg, mapped_keys) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Return true if `arg` is `T[K]`: an indexed access whose object is a bare type
+/// reference and whose index is a bare type reference naming one of
+/// `mapped_keys` — the key variables of the enclosing mapped types. `T[K]` reads
+/// the input at the key currently being iterated, a direct child value, so the
+/// recursion descends one level each step. A naked `T[keyof T]` (the index is
+/// `keyof T`, not a mapped key) or a free index variable is not matched.
+fn is_mapped_key_index(arg: &oxc_ast::ast::TSType, mapped_keys: &[&str]) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSIndexedAccessType(idx) = arg else {
+        return false;
+    };
+    if !is_bare_type_reference(&idx.object_type) {
+        return false;
+    }
+    let TSType::TSTypeReference(index_ref) = &idx.index_type else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(id) = &index_ref.type_name else {
+        return false;
+    };
+    index_ref.type_arguments.is_none() && mapped_keys.contains(&id.name.as_str())
 }
 
 /// Return true if `arg` is an application of the built-in `Exclude` utility type
@@ -993,6 +1052,52 @@ export type ShapeFromIdColumns<
         // the original input `T`, not `R`. The input does not shrink, so the
         // recursion stays unbounded and must still flag.
         let src = "type Loop<T> = T extends () => infer R ? Loop<T> : never;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_mapped_key_index_deep_readonly() {
+        // DeepReadonly recurses on `TValue[TKey]`, where `TKey` is the enclosing
+        // mapped type's key variable, descending one level into the input each
+        // step until the conditional's primitive branch terminates it.
+        let src = r#"
+export type DeepReadonly<TValue> = TValue extends
+  | Record<string, unknown>
+  | readonly unknown[]
+  ? { readonly [TKey in keyof TValue]: DeepReadonly<TValue[TKey]> }
+  : TValue;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_mapped_key_index_infer_fallbacks() {
+        // Minimal mapped-key-index recursion: `InferFallbacks<TEntries[TKey]>`
+        // inside a `-readonly [TKey in keyof TEntries]` mapped type body.
+        let src = r#"
+type InferFallbacks<TSchema> = TSchema extends Schema<infer TEntries>
+  ? { -readonly [TKey in keyof TEntries]: InferFallbacks<TEntries[TKey]> }
+  : never;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_free_index_variable_not_mapped_key() {
+        // The self-call argument `T[K]` uses `K`, a type parameter of the alias
+        // rather than the key variable of any enclosing mapped type, so it carries
+        // no descent guarantee and the recursion stays unbounded.
+        let src = "type Deep<T, K extends keyof T> = T extends object ? Deep<T[K], K> : T;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_index_by_free_variable_inside_mapped_type() {
+        // A mapped type encloses the recursive call, but the index `K` is a free
+        // alias parameter, not the mapped type's key variable `P`. Indexing by an
+        // unrelated variable does not descend per-key, so the recursion stays
+        // unbounded even though a mapped key (`P`) is in scope.
+        let src = "type Loop<T, K extends keyof T> = T extends object ? { [P in keyof T]: Loop<T[K], K> } : T;";
         assert_eq!(run_on(src).len(), 1);
     }
 }
