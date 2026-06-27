@@ -255,14 +255,16 @@ fn child_text<'a>(node: tree_sitter::Node, kind: &str, source: &'a [u8]) -> Opti
 
 /// The attribute name to validate, or `None` when the node is out of scope.
 ///
-/// - plain `attribute` → its `attribute_name`, unless the name contains a `:` or
-///   begins with `.`. A colon-bearing plain attribute is a namespaced /
-///   variant-prefixed name (an XML/SVG namespace like `xlink:href`, or a
-///   UnoCSS/Windi attributify utility like `md:grid-cols-2`). A name beginning
-///   with `.` is the trailing segment of a member-expression element tag like
-///   `<motion.div>` (motion-v), which the grammar splits into a `motion`
-///   `tag_name` plus a spurious `.div` attribute — the dot is part of the
-///   component identifier, not an attribute name. Both are skipped.
+/// - plain `attribute` → its `attribute_name`, unless the name contains a `:`,
+///   a `.`, or `--`. None of these characters can appear in a JavaScript
+///   identifier, so such a name is never a Vue prop or DOM attribute subject to
+///   the kebab-case convention. A `:` marks a namespaced / variant-prefixed name
+///   (an XML/SVG namespace like `xlink:href`, or a UnoCSS/Windi attributify
+///   variant like `md:grid-cols-2`). A `.` is either the trailing segment of a
+///   member-expression element tag (`<motion.div>` → `tag_name` `motion` plus a
+///   spurious `.div` attribute) or UnoCSS attributify decimal-value notation
+///   (`gap-0.5`, `px1.2`, `mx-1.25rem`). `--` is UnoCSS attributify
+///   negative-value notation (`me--4`, `z--1`, `inset-ie--10`). All are skipped.
 /// - `directive_attribute` with name `:`, `v-bind`, or `v-model` → its static
 ///   `directive_argument`. Dynamic arguments (`:[key]`), argument-less directives,
 ///   and any other directive (`v-on`, `@`, `v-if`, ...) are skipped.
@@ -277,11 +279,19 @@ fn checked_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str
             if name.contains(':') {
                 return None;
             }
-            // A name beginning with `.` is the segment after the dot in a
-            // member-expression element tag (`<motion.div>` → `tag_name` `motion`
-            // plus a spurious `.div` attribute). The whole `motion.div` is the
-            // component identifier; `.div` is not an attribute.
-            if name.starts_with('.') {
+            // A `.` cannot appear in a JS identifier, so a plain attribute name
+            // containing one is never a component prop or DOM attribute. It is
+            // either the segment after the dot in a member-expression element tag
+            // (`<motion.div>` → `tag_name` `motion` plus a spurious `.div`
+            // attribute) or UnoCSS attributify decimal-value notation
+            // (`gap-0.5`, `px1.2`, `mx-1.25rem`).
+            if name.contains('.') {
+                return None;
+            }
+            // Consecutive hyphens cannot appear in a kebab-case prop/DOM-attribute
+            // name; `--` is UnoCSS attributify negative-value notation (`me--4`,
+            // `z--1`, `inset-ie--10`), a utility token rather than a Vue prop.
+            if name.contains("--") {
                 return None;
             }
             Some(name)
@@ -615,6 +625,33 @@ mod tests {
         // `:fooBar` flows through the directive arm (argument validation), which the
         // plain-attribute colon guard does not touch → still flagged.
         assert_eq!(run(&wrap("<div :fooBar=\"x\" />")).len(), 1);
+    }
+
+    // --- UnoCSS attributify negative (`--`) and decimal (`.`) value notations ---
+
+    #[test]
+    fn allows_unocss_attributify_negative_value_notation() {
+        // Issue #6189: in UnoCSS attributify mode, negative values use a double
+        // hyphen (`me--4` = `margin-inline-end: -1rem`). `--` cannot appear in a
+        // kebab-case prop name, so these are utility tokens, not Vue props.
+        assert!(run(&wrap("<AccountHoverWrapper me--4 z--1 inset-ie--10 />")).is_empty());
+    }
+
+    #[test]
+    fn allows_unocss_attributify_decimal_value_notation() {
+        // Issue #6189: fractional/decimal values use a dot (`gap-0.5`, `px1.2`,
+        // `mx-1.25rem`). A `.` cannot appear in a JS identifier, so these are
+        // UnoCSS utility tokens, not Vue props or DOM attributes.
+        assert!(run(&wrap("<div gap-0.5 px1.2 py0.2 mx-1.25rem top--6px />")).is_empty());
+    }
+
+    #[test]
+    fn flags_camelcase_attribute_alongside_unocss_tokens() {
+        // The `--`/`.` guards only skip structurally-non-identifier UnoCSS tokens;
+        // a genuine camelCase prop on the same element is still flagged.
+        let diags = run(&wrap("<div me--4 someProp=\"x\" gap-0.5 />"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("someProp"));
     }
 
     // --- Member-expression element tags (`<Foo.bar>`, e.g. motion-v) ---
