@@ -50,6 +50,15 @@
 //!
 //! [logos]: https://github.com/maciejhirsz/logos
 //!
+//! FromStr-trait exception: a `Result<T, ()>` that is the return type of a
+//! function inside an `impl <…::>FromStr for T` block is mandated by the std
+//! `FromStr` trait, whose signature is `fn from_str(&str) -> Result<Self,
+//! Self::Err>`. The trait fixes the `Result` return — `Option` is not an
+//! available alternative — and when parsing is binary `type Err = ()` is the
+//! idiomatic no-detail error type. The enclosing impl's trait must name
+//! `FromStr` exactly or via a `::FromStr` path suffix (`std::str::FromStr`,
+//! `core::str::FromStr`); a user trait such as `MyFromStr` is not matched.
+//!
 //! Local-`Result`-alias exception: when the file declares its own
 //! `type Result<…> = …` alias (e.g. `type Result<'a, T> =
 //! core::result::Result<T, Box<Error<'a>>>`), the alias can reorder std's
@@ -100,6 +109,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     }
     if is_logos_lexer_callback(node, source) {
+        return;
+    }
+    if is_in_fromstr_impl(node, source) {
         return;
     }
     let pos = node.start_position();
@@ -219,6 +231,40 @@ fn type_is_mut_ref_to_lexer(ty: Node, source: &[u8]) -> bool {
     // `Lexer` (type_identifier) or `logos::Lexer` (scoped_type_identifier).
     base.utf8_text(source)
         .is_ok_and(|t| t == "Lexer" || t.ends_with("::Lexer"))
+}
+
+/// True when this `Result<T, ()>` is the return type of a function inside an
+/// `impl <…::>FromStr for T` block — the std `FromStr` trait, whose `from_str`
+/// signature is `fn(&str) -> Result<Self, Self::Err>`.
+///
+/// `FromStr` mandates a `Result` return, so `Option<T>` is not an available
+/// alternative; when parsing is binary, `type Err = ()` is the idiomatic
+/// no-detail error type. The `Result` must sit in the enclosing function's
+/// `return_type` — a `Result<_, ()>` in the body (a let binding, a closure)
+/// stays flagged. The enclosing impl's `trait` field must name `FromStr`
+/// exactly or via a `::FromStr` path suffix (`std::str::FromStr`,
+/// `core::str::FromStr`) — a user trait like `MyFromStr` is not matched.
+fn is_in_fromstr_impl(node: Node, source: &[u8]) -> bool {
+    // The Result must be the function's RETURN TYPE, not a body let binding.
+    let Some(func) = enclosing_fn(node) else {
+        return false;
+    };
+    let Some(ret) = func.child_by_field_name("return_type") else {
+        return false;
+    };
+    if node.start_byte() < ret.start_byte() || node.end_byte() > ret.end_byte() {
+        return false;
+    }
+    let Some(impl_item) = nearest_ancestor(node, "impl_item") else {
+        return false;
+    };
+    let Some(trait_node) = impl_item.child_by_field_name("trait") else {
+        return false;
+    };
+    let Ok(trait_text) = trait_node.utf8_text(source) else {
+        return false;
+    };
+    trait_text == "FromStr" || trait_text.ends_with("::FromStr")
 }
 
 /// True when this `Result<_, ()>` is an idiomatic axum/tower use of the unit
@@ -781,6 +827,105 @@ mod tests {
                  }"
             )
             .is_empty()
+        );
+    }
+
+    // --- FromStr trait: `type Err = ()` is idiomatic, Option inapplicable (#6389) ---
+
+    #[test]
+    fn allows_unit_error_in_fromstr_impl() {
+        // The insta repro: `impl std::str::FromStr` mandates `Result<Self,
+        // Self::Err>`; `type Err = ()` is the idiomatic no-detail error type and
+        // `Option` cannot satisfy the trait contract.
+        assert!(
+            run_on_src(
+                "impl std::str::FromStr for TestRunner {\n\
+                 \x20   type Err = ();\n\
+                 \x20   fn from_str(value: &str) -> Result<TestRunner, ()> {\n\
+                 \x20       match value {\n\
+                 \x20           \"auto\" => Ok(TestRunner::Auto),\n\
+                 \x20           _ => Err(()),\n\
+                 \x20       }\n\
+                 \x20   }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_error_in_bare_fromstr_impl() {
+        // A bare `impl FromStr` (no path qualifier) is the same trait contract.
+        assert!(
+            run_on_src(
+                "impl FromStr for Color {\n\
+                 \x20   type Err = ();\n\
+                 \x20   fn from_str(s: &str) -> Result<Color, ()> { Err(()) }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_free_parse_fn() {
+        // Load-bearing negative: a free function returning `Result<u32, ()>` is
+        // not a `FromStr` impl, so it stays flagged.
+        assert_eq!(
+            run_on_src("fn parse(s: &str) -> Result<u32, ()> { Err(()) }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_non_fromstr_trait_impl() {
+        // Load-bearing negative: a method inside a non-`FromStr` trait impl
+        // returning `Result<u32, ()>` stays flagged — the exemption is scoped to
+        // the `FromStr` contract.
+        assert_eq!(
+            run_on_src(
+                "impl SomeOtherTrait for T {\n\
+                 \x20   fn from_str(s: &str) -> Result<u32, ()> { Err(()) }\n\
+                 }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_fromstr_body_let_binding() {
+        // Load-bearing negative: the exemption is scoped to from_str's return
+        // type; a `Result<u32, ()>` let binding inside the body is a genuine
+        // discarded error and stays flagged.
+        assert_eq!(
+            run_on_src(
+                "impl FromStr for T {\n\
+                 \x20   type Err = ();\n\
+                 \x20   fn from_str(s: &str) -> Result<T, ()> {\n\
+                 \x20       let n: Result<u32, ()> = inner(s);\n\
+                 \x20       n.map(T)\n\
+                 \x20   }\n\
+                 }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_user_fromstr_named_trait_impl() {
+        // Load-bearing negative: a user trait `MyFromStr` ends in `FromStr` but
+        // is not the std trait; the path-segment boundary excludes it, so it
+        // stays flagged.
+        assert_eq!(
+            run_on_src(
+                "impl MyFromStr for T {\n\
+                 \x20   fn from_str(s: &str) -> Result<u32, ()> { Err(()) }\n\
+                 }"
+            )
+            .len(),
+            1
         );
     }
 
