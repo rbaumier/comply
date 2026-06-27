@@ -69,6 +69,22 @@ pub(super) fn is_format_template_arg(node: tree_sitter::Node<'_>, source: &[u8])
         .is_some_and(|first| first.id() == node.id())
 }
 
+/// True when `node` sits inside a `macro_rules!` definition body. The arm
+/// bodies of a `macro_definition` are raw token trees: a string literal there
+/// is template code spliced into every expansion (typically a `concat!`
+/// fragment or an attribute value), not an expression that can be hoisted to a
+/// `const`. Such literals must not count toward the duplicate tally.
+pub(super) fn is_in_macro_rules_body(node: tree_sitter::Node<'_>) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "macro_definition" {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -371,6 +387,39 @@ mod tests {
             #[deprecated(note = "use the new builder API instead")]
             pub fn old_three() {}
         "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_concat_fragment_inside_macro_rules_body() {
+        // The issue's FP (ratatui): a string fragment is an argument to
+        // `concat!()` inside `macro_rules!` arm bodies, spliced together with
+        // a `stringify!($metavar)`. The arm body is a raw token tree —
+        // `concat!` accepts only literals and the `#[must_use = ...]` value
+        // must be an inline literal — so the fragment cannot be hoisted to a
+        // `const`. The same suffix appears across both arms of two macros.
+        let src = r##"
+            macro_rules! color {
+                (pub const $variant:expr, $color:ident(), $on_color:ident() -> $ty:ty) => {
+                    #[must_use = concat!("`", stringify!($color), "` returns the modified style without modifying the original")]
+                    pub const fn $color(self) -> $ty {
+                        self.fg($variant)
+                    }
+                    #[must_use = concat!("`", stringify!($on_color), "` returns the modified style without modifying the original")]
+                    pub const fn $on_color(self) -> $ty {
+                        self.bg($variant)
+                    }
+                };
+            }
+            macro_rules! modifier {
+                (pub const $variant:expr, $modifier:ident(), $not_modifier:ident() -> $ty:ty) => {
+                    #[must_use = concat!("`", stringify!($modifier), "` returns the modified style without modifying the original")]
+                    pub const fn $modifier(self) -> $ty {
+                        self.add_modifier($variant)
+                    }
+                };
+            }
+        "##;
         assert!(run(src).is_empty());
     }
 
