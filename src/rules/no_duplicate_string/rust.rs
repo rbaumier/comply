@@ -424,6 +424,35 @@ mod tests {
     }
 
     #[test]
+    fn does_not_flag_feature_strings_in_macro_rules_template() {
+        // The issue's FP (dtolnay/syn): `#[cfg(feature = "...")]` /
+        // `#[cfg_attr(docsrs, doc(cfg(feature = "...")))]` repeated inside a
+        // `macro_rules!` arm. Tree-sitter parses the attribute syntax as raw
+        // tokens in a `token_tree`, so the literal has no `attribute_item`
+        // ancestor — but the arm is a single token template and the cfg
+        // strings are compiler-mandated inline literals that cannot be
+        // hoisted to a `const`.
+        let src = r#"
+            macro_rules! define_punctuation_structs {
+                ($name:ident) => {
+                    #[cfg(feature = "clone-impls")]
+                    #[cfg_attr(docsrs, doc(cfg(feature = "clone-impls")))]
+                    impl Copy for $name {}
+
+                    #[cfg(feature = "clone-impls")]
+                    #[cfg_attr(docsrs, doc(cfg(feature = "clone-impls")))]
+                    impl Clone for $name {
+                        fn clone(&self) -> Self {
+                            *self
+                        }
+                    }
+                };
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn flags_raw_string_duplicated_three_times() {
         // Same raw-string body three times → correctly flagged.
         let src = r###"
