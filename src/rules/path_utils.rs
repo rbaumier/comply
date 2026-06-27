@@ -45,7 +45,11 @@ fn canonicalize_cached(p: &Path) -> PathBuf {
 /// `.eslintrc.js`, `.babelrc.ts`), and the extensionless Knip config name
 /// (`knip.ts`/`knip.js`) — the Knip tool reads its config by filename and never
 /// `import`s it, so its `default` export has no static importer. `knip.config.*`
-/// is already covered by the `*.config.*` branch.
+/// is already covered by the `*.config.*` branch. A file whose base name is
+/// exactly `config.<ext>` (e.g. `config.ts`, a VitePress locale config such as
+/// `docs/ja/config.ts`) is a framework-/tooling-consumed configuration entry
+/// point loaded by filesystem convention, never statically `import`ed, so its
+/// `default` export has no in-project importer either.
 pub fn is_config_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -56,6 +60,12 @@ pub fn is_config_file(path: &Path) -> bool {
         return true;
     }
     if matches!(name, "knip.ts" | "knip.js") {
+        return true;
+    }
+    if matches!(
+        name,
+        "config.ts" | "config.js" | "config.mts" | "config.mjs" | "config.cjs" | "config.cts"
+    ) {
         return true;
     }
     false
@@ -1664,6 +1674,27 @@ pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
 mod aux_path_tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn exact_config_basename_is_config_file() {
+        // Issue #6218: VitePress auto-discovers `<locale>/config.ts` (and the
+        // root `config.ts`) by filesystem convention; no static `import` points
+        // to them, so their `export default` is not a dead export.
+        assert!(is_config_file(&PathBuf::from("docs/ja/config.ts")));
+        assert!(is_config_file(&PathBuf::from("docs/config.ts")));
+        assert!(is_config_file(&PathBuf::from("config.js")));
+        assert!(is_config_file(&PathBuf::from("config.mts")));
+        assert!(is_config_file(&PathBuf::from("config.mjs")));
+        assert!(is_config_file(&PathBuf::from("config.cjs")));
+        assert!(is_config_file(&PathBuf::from("config.cts")));
+        // `*.config.*` is already covered by the stem branch.
+        assert!(is_config_file(&PathBuf::from("app.config.ts")));
+        // Negative controls: base name is not exactly `config.<ext>`, so a dead
+        // export in these files must still be flagged.
+        assert!(!is_config_file(&PathBuf::from("src/configHelpers.ts")));
+        assert!(!is_config_file(&PathBuf::from("src/config-utils.ts")));
+        assert!(!is_config_file(&PathBuf::from("src/userconfig.ts")));
+    }
 
     #[test]
     fn aux_dir_segments_match() {
