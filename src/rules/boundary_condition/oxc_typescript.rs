@@ -269,6 +269,24 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `e[0]` where `e` is bound to an element of an `Object.entries(...)`
+        // result — either the loop variable of `for (const e of Object.entries(x))`
+        // or the first parameter of a `.map()` / `.forEach()` / `.flatMap()` (etc.)
+        // callback invoked on `Object.entries(x)`. `Object.entries` is specified to
+        // return `Array<[string, T]>`, so every element is a two-element tuple whose
+        // index 0 (the key) is always present — the first-element read is in-bounds
+        // with no length guard. Scoped to `Object.entries`: `Object.keys` yields
+        // `string` elements (where `[0]` is a possibly-out-of-bounds character index,
+        // e.g. an empty-string key) and `Object.values` yields scalar `T` elements,
+        // so neither is a guaranteed tuple access — both stay flagged.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && (is_object_entries_for_of_element(node, obj_ident.name.as_str(), semantic)
+                || is_object_entries_callback_param(node, obj_ident.name.as_str(), semantic))
+        {
+            return;
+        }
+
         // Cypress idiom: `$el[0]` inside a `.then(($el) => ...)` callback unwraps the
         // underlying DOM node from the jQuery wrapper. Cypress invokes the callback
         // only when the queried element exists (it fails the test otherwise), so the
@@ -1684,6 +1702,106 @@ fn is_matchall_call(expr: &Expression) -> bool {
         return false;
     };
     member.property.name.as_str() == "matchAll"
+}
+
+/// Returns true when `name` is the element binding of an enclosing
+/// `for (const name of Object.entries(...))` loop. Walks ancestors innermost-first
+/// so the closest binding for-of wins. Each element of `Object.entries` is a
+/// `[string, T]` tuple whose index 0 (the key) always exists, so `name[0]` in the
+/// loop body is in-bounds.
+fn is_object_entries_for_of_element(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let AstKind::ForOfStatement(for_of) = ancestor.kind() else {
+            continue;
+        };
+        if !for_of_binds_name(&for_of.left, name) {
+            continue;
+        }
+        return is_object_entries_call(&for_of.right);
+    }
+    false
+}
+
+/// Array iteration methods that pass each element to the callback as its first
+/// parameter. For a callback invoked on an `Object.entries(...)` result, that
+/// first parameter is therefore a `[string, T]` tuple. `reduce`/`reduceRight` are
+/// excluded — their first callback parameter is the accumulator, not the element.
+const ENTRIES_ELEMENT_ITERATORS: [&str; 10] = [
+    "map",
+    "forEach",
+    "flatMap",
+    "filter",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "some",
+    "every",
+];
+
+/// Returns true when the index access lives inside a callback whose first
+/// parameter is `name`, and that callback is the argument of an element-yielding
+/// array method (`.map`/`.forEach`/…) invoked on an `Object.entries(...)` call —
+/// i.e. `Object.entries(x).map((name) => ... name[0] ...)`. The first parameter
+/// is the element, a `[string, T]` tuple, so `name[0]` (the key) is in-bounds.
+fn is_object_entries_callback_param(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let params = match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(arrow) => &arrow.params,
+            AstKind::Function(func) => &func.params,
+            _ => continue,
+        };
+        // `name` must be this callback's first parameter — the element slot. If the
+        // closest enclosing callback binds `name` elsewhere (or not at all), it is
+        // not the Object.entries element binder.
+        if !first_param_is_name(params, name) {
+            return false;
+        }
+        let parent = nodes.parent_node(ancestor.id());
+        let AstKind::CallExpression(call) = parent.kind() else {
+            return false;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return false;
+        };
+        if !ENTRIES_ELEMENT_ITERATORS.contains(&member.property.name.as_str()) {
+            return false;
+        }
+        return is_object_entries_call(&member.object);
+    }
+    false
+}
+
+/// Returns true when `expr` is an `Object.entries(...)` call. The receiver must be
+/// the bare global identifier `Object`, so a project-local `foo.entries(...)` does
+/// not match.
+fn is_object_entries_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    member.property.name.as_str() == "entries"
+        && matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == "Object")
+}
+
+/// Returns true when the first formal parameter is a simple identifier named `name`.
+fn first_param_is_name(params: &FormalParameters, name: &str) -> bool {
+    matches!(
+        params.items.first().map(|param| &param.pattern),
+        Some(BindingPattern::BindingIdentifier(id)) if id.name.as_str() == name
+    )
 }
 
 /// Returns true when a preceding sibling statement in the same block exits early
@@ -3652,6 +3770,48 @@ mod tests {
         // Negative space: an unguarded last-element read used as a value stays
         // flagged — the `typeof` exemption is strictly about the operand position.
         let src = "function f(arr) { return arr[arr.length - 1].id; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_object_entries_map_callback_issue_6297() {
+        let src = "const _filters = Object.entries(filters || {}).map(e => `${e[0]}(${e[1]})`);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_object_entries_for_of_issue_6297() {
+        let src = "for (const e of Object.entries(data)) { const dep = { name: e[0], range: e[1] }; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_object_entries_array_literal_callback_issue_6297() {
+        let src = "Object.entries(options.alias).map(e => [e[0], e[1]]);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_ordinary_array_first_access_issue_6297() {
+        // Negative control: no `Object.entries` provenance — an ordinary array's
+        // first-element read stays flagged.
+        let src = "const arr = getArr(); const x = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_object_keys_for_of_first_access_issue_6297() {
+        // `Object.keys` elements are `string`, not tuples — `k[0]` is a character
+        // index that may be out of bounds (e.g. an empty-string key). Stays flagged.
+        let src = "for (const k of Object.keys(data)) { const c = k[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_object_values_map_callback_first_access_issue_6297() {
+        // `Object.values` elements are scalar `T`, not tuples — the callback-path
+        // exemption must reject a non-`entries` receiver. Stays flagged.
+        let src = "Object.values(o).map(e => e[0]);";
         assert_eq!(run_on(src).len(), 1);
     }
 }
