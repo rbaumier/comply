@@ -1,7 +1,7 @@
 //! OxcCheck backend for ts-no-empty-object-type — flag `{}` used as a type.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, span_contains};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSType;
 use std::sync::Arc;
@@ -28,6 +28,40 @@ fn is_type_system_empty_object_use(parent: &AstKind) -> bool {
 
 fn is_empty_object_type(ty: &TSType) -> bool {
     matches!(ty, TSType::TSTypeLiteral(lit) if lit.members.is_empty())
+}
+
+/// True when the empty `{}` is nested inside the **default** of a type parameter
+/// (`<T = { a: {} }>`). In that position `{}` is the idiomatic empty starting
+/// slot of a generic accumulator (e.g. elysia's `Singleton` default
+/// `{ decorator: {}, store: {} }`), not the value-level "matches any non-nullish
+/// value" footgun the rule targets.
+///
+/// Walks ancestors and exempts only when the `{}` lies within a `TSTypeParameter`
+/// default subtree (span-checked, so a `{}` in the parameter's *constraint*
+/// stays flagged), stopping at the first value-level boundary so a `{}` in a
+/// generic function's body (`function f<T>() { const x: {} = … }`) stays flagged.
+fn is_within_type_parameter_default(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_span::GetSpan;
+    let node_span = node.kind().span();
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::TSTypeParameter(param) => {
+                return param
+                    .default
+                    .as_ref()
+                    .is_some_and(|default| span_contains(default.span(), node_span));
+            }
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Class(_)
+            | AstKind::VariableDeclarator(_) => return false,
+            _ => {}
+        }
+    }
+    false
 }
 
 pub struct Check;
@@ -63,6 +97,13 @@ impl OxcCheck for Check {
         // (`Component<{}>`), mixin constructors (`Constructor<{}>`), and error/schema
         // factories (`TaggedError("x")<{}>()`).
         if matches!(parent.kind(), AstKind::TSTypeParameterInstantiation(_)) {
+            return;
+        }
+
+        // Skip `{}` nested inside a type-parameter default object (`<T = { a: {} }>`).
+        // The immediate parent there is `TSPropertySignature`, not `TSTypeParameter`,
+        // so the direct-parent check above misses it.
+        if is_within_type_parameter_default(node, semantic) {
             return;
         }
 
@@ -234,5 +275,57 @@ mod tests {
         let diags =
             crate::rules::test_helpers::run_rule(&Check, "const x: {} = foo;", "src/utils.ts");
         assert_eq!(diags.len(), 1);
+    }
+
+    // ── #6211 ─────────────────────────────────────────────────────────────
+
+    /// `{}` nested inside a type-parameter default object literal (elysia's
+    /// `Singleton` accumulator) is the idiomatic empty starting slot, not the
+    /// value-level footgun — exempt. Covers the direct default (`Route = {}`)
+    /// and the four nested `{}` property values inside `Singleton`'s default.
+    #[test]
+    fn allows_empty_object_nested_in_type_parameter_default() {
+        let src = r#"
+            export type ErrorContext<
+                in out Route extends RouteSchema = {},
+                in out Singleton extends SingletonBase = {
+                    decorator: {}
+                    store: {}
+                    derive: {}
+                    resolve: {}
+                },
+                Path extends string | undefined = undefined
+            > = Route;
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/context.ts");
+        assert!(diags.is_empty());
+    }
+
+    /// Negative space: `{}` nested in a type-parameter *constraint* (not the
+    /// default) keeps the footgun meaning and stays flagged.
+    #[test]
+    fn still_flags_empty_object_nested_in_type_parameter_constraint() {
+        assert_eq!(run_on("type Foo<T extends { x: {} }> = T;").len(), 1);
+    }
+
+    /// The span-disambiguation under test: with both a constraint and a default,
+    /// the constraint `{}` stays flagged while the default `{}` is exempt.
+    #[test]
+    fn flags_only_constraint_empty_object_when_param_has_constraint_and_default() {
+        assert_eq!(run_on("type Foo<T extends { x: {} } = { y: {} }> = T;").len(), 1);
+    }
+
+    /// Negative space: `{}` as a generic function's parameter annotation is a
+    /// value-level position (a sibling of the type-param list), still flagged.
+    #[test]
+    fn still_flags_empty_object_param_of_generic_function() {
+        assert_eq!(run_on("function f<T>(x: {}) { return x; }").len(), 1);
+    }
+
+    /// Negative space: `{}` in a generic function's body is a value-level
+    /// annotation, not a type-parameter default — the boundary stops the walk.
+    #[test]
+    fn still_flags_empty_object_in_generic_function_body() {
+        assert_eq!(run_on("function f<T = string>() { const x: {} = foo; }").len(), 1);
     }
 }
