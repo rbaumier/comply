@@ -235,7 +235,7 @@ fn receiver_is_request_call(call: &oxc_ast::ast::CallExpression) -> bool {
 /// is a valid absolute origin, whatever is appended in the path/query/fragment
 /// cannot make the constructor throw.
 ///
-/// Two ways a template fixes a trusted absolute origin:
+/// Three ways a template fixes a trusted absolute origin:
 ///
 /// * **config-rooted origin** — the template starts with an interpolation (its
 ///   first quasi is empty) that roots in trusted config, so the env-validated
@@ -244,7 +244,13 @@ fn receiver_is_request_call(call: &oxc_ast::ast::CallExpression) -> bool {
 ///   value, `${path}` is in the path), or
 /// * **literal scheme** — the first quasi spells out a `scheme://` prefix
 ///   (`https://api.example.com/${id}` — origin is literal, `${id}` is in the
-///   path).
+///   path), or
+/// * **`.protocol`-accessor origin** — the template opens with a URL-object
+///   `.protocol` getter immediately followed by the literal `//` separator
+///   (`${url.protocol}//${url.host}${path}`). Per the WHATWG URL spec a
+///   URL/Location object's `.protocol` always returns a syntactically valid
+///   scheme (with trailing `:`), so `${x.protocol}//` is guaranteed to form a
+///   valid `scheme://` origin.
 ///
 /// For a network scheme, any interpolation reached *inside the authority*
 /// (before the path `/`) must itself root in trusted config, or the origin is
@@ -261,6 +267,13 @@ fn receiver_is_request_call(call: &oxc_ast::ast::CallExpression) -> bool {
 /// throw — and these shapes do not occur in the HTTP-endpoint use case this rule
 /// targets. Widen only on a documented need.
 fn template_origin_is_trusted(tpl: &oxc_ast::ast::TemplateLiteral) -> bool {
+    // A template that opens with a URL-object `.protocol` accessor followed by
+    // the `//` authority separator forms a spec-guaranteed valid `scheme://`
+    // origin, so the constructor cannot throw on the origin.
+    if template_opens_with_protocol_origin(tpl) {
+        return true;
+    }
+
     let Some(first_quasi) = tpl.quasis.first() else {
         return false;
     };
@@ -318,6 +331,39 @@ fn template_origin_is_trusted(tpl: &oxc_ast::ast::TemplateLiteral) -> bool {
         }
     }
     true
+}
+
+/// True for a template that opens with a URL-object `.protocol` accessor
+/// immediately followed by the literal `//` origin separator —
+/// `` `${url.protocol}//${url.host}${path}` ``. Per the WHATWG URL spec a
+/// URL/Location object's `.protocol` getter always returns a syntactically
+/// valid scheme (with trailing `:`), so `${x.protocol}//` is structurally
+/// guaranteed to form a valid `scheme://` origin and `new URL` cannot throw.
+///
+/// Both parts are required: the `.protocol` accessor must be the very first
+/// thing in the template (leading quasi empty) and the quasi right after it
+/// must open with `//`. A bare `${x.protocol}` not followed by `//`
+/// (e.g. `${x.protocol}foo`) does not establish an origin and still flags.
+///
+/// The receiver of `.protocol` is intentionally unconstrained: it is the
+/// literal `//` separator (not the receiver shape) that supplies the structural
+/// `scheme://` guarantee here, unlike the receiver-anchored `request.url` /
+/// `location.href` exemptions above.
+fn template_opens_with_protocol_origin(tpl: &oxc_ast::ast::TemplateLiteral) -> bool {
+    use oxc_ast::ast::Expression;
+    // The accessor must be the very first thing in the template, so the leading
+    // quasi is empty.
+    if !tpl.quasis.first().is_some_and(|q| q.value.raw.trim().is_empty()) {
+        return false;
+    }
+    let first_interp_is_protocol = matches!(
+        tpl.expressions.first(),
+        Some(Expression::StaticMemberExpression(m)) if m.property.name == "protocol"
+    );
+    // The quasi immediately after the first interpolation must open with the
+    // `//` authority separator.
+    first_interp_is_protocol
+        && tpl.quasis.get(1).is_some_and(|q| q.value.raw.starts_with("//"))
 }
 
 /// If `quasi` opens with a literal `scheme://` authority separator, return the
@@ -543,6 +589,24 @@ mod tests {
     fn allows_template_with_literal_origin_and_untrusted_path() {
         let src = r#"const u = new URL(`https://api.example.com/users/${id}`);"#;
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Regression for #6312: a template whose origin is a URL object's
+    // `.protocol` accessor immediately followed by `//` — per the WHATWG URL
+    // spec `.protocol` always returns a valid scheme, so `${url.protocol}//…`
+    // is a structurally valid absolute origin and `new URL` cannot throw.
+    #[test]
+    fn allows_template_with_protocol_accessor_origin() {
+        let src = r#"const u = new URL(`${redirectURL.protocol}//${redirectURL.host}${uri}`);"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A bare `${x.protocol}` not followed by the `//` separator does not
+    // establish a valid origin, so the constructor can still throw — keep flagging.
+    #[test]
+    fn still_flags_protocol_accessor_without_double_slash() {
+        let src = r#"const u = new URL(`${x.protocol}foo`);"#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     // An untrusted interpolation *in the authority* (before the path) still
