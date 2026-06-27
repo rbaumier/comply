@@ -7,6 +7,12 @@
 //! - integer narrowing (`u32 as u8`, `i64 as i32`, etc.)
 //! - float to integer (`f64 as u32`)
 //!
+//! Tests are exempted — numeric scaffolding inside `#[test]` functions or
+//! `#[cfg(test)]` modules casts bounded fixture values, not runtime data, so the
+//! `try_into()`/`From` discipline adds noise without safety benefit. This matches
+//! the companion `rust-no-as-numeric-cast`, keeping the pair silent together on a
+//! test-code cast.
+//!
 //! Integer -> float casts (`x as f32` / `x as f64`) are not flagged when the
 //! operand resolves to an integer type: a lossy int -> float conversion has no
 //! `From`/`TryFrom` alternative in std (the trait impls exist only for the
@@ -83,7 +89,7 @@ use crate::rules::rust_helpers::{
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
-    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -133,6 +139,11 @@ impl AstCheck for Check {
         let Some(target_type) = numeric_type(target) else {
             return;
         };
+        // Test scaffolding casts bounded fixtures, not runtime data; the
+        // companion `rust-no-as-numeric-cast` exempts the same scope (#6130).
+        if is_in_test_context(node, source_bytes) {
+            return;
+        }
         if cast_in_const_context(node, source_bytes) {
             return;
         }
@@ -1480,5 +1491,37 @@ mod tests {
         // the narrowing stays a finding (owned by `rust-no-as-numeric-cast`).
         let src = "fn f(x: u64, offset: u32) -> u8 { (x.leading_zeros() + offset) as u8 }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6130_lossy_cast_in_cfg_test_module_not_flagged() {
+        // Issue #6130 (ratatui scrollbar.rs): a lossy `as u16` on a method-call
+        // operand inside a `#[cfg(test)] mod tests` is test scaffolding over
+        // bounded fixture data. In a test context `rust-no-as-numeric-cast`
+        // exempts the span (so its `fires_on_cast` dedup no longer suppresses
+        // here); without a matching guard this rule fired. The test-context guard
+        // restores parity so the pair stays silent.
+        let src = "#[cfg(test)]\n\
+                   mod tests {\n\
+                       fn render() {\n\
+                           let _ = Rect::new(0, 0, expected.width() as u16, 1);\n\
+                       }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6130_lossy_cast_in_test_fn_not_flagged() {
+        // A `#[test]` function is equally exempt: a lossy deref narrowing this
+        // rule solely owns (`*x as i8`, `x: &i64`) is silenced inside it.
+        assert!(run_on("#[test]\nfn t(x: &i64) { let _ = *x as i8; }").is_empty());
+    }
+
+    #[test]
+    fn repro_6130_owned_deref_narrowing_outside_test_still_flagged() {
+        // Negative space: the same lossy deref narrowing this rule solely owns
+        // keeps flagging outside any test context, so the guard is scope-bound,
+        // not a blanket silence.
+        assert_eq!(run_on("fn f(x: &i64) -> i8 { *x as i8 }").len(), 1);
     }
 }
