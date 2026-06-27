@@ -66,11 +66,12 @@ fn is_ident_char(b: u8) -> bool {
 /// entire right-hand side of a binding, return the bound variable name.
 ///
 /// Scans backward across the receiver expression (identifier chain, member and
-/// index access) to the `=` that starts the binding, then reads the identifier
-/// immediately to its left — the bound name, whether declared (`const r =`) or
-/// reassigned (`loadItems =`). Returns `None` when the match is not the head of
-/// a binding's right-hand side (e.g. it is itself an argument, or chained off
-/// another call).
+/// index access) to the `=` that starts the binding, then reads the bound name
+/// — the identifier immediately to the left of `=`, or, when the binding is
+/// typed (`name: Type =`), the identifier before the annotation's `:`. Works
+/// whether the binding is declared (`const r =`) or reassigned (`loadItems =`).
+/// Returns `None` when the match is not the head of a binding's right-hand side
+/// (e.g. it is itself an argument, or chained off another call).
 fn bound_variable_name(source: &str, match_offset: usize) -> Option<&str> {
     let bytes = source.as_bytes();
     let mut i = match_offset;
@@ -103,8 +104,12 @@ fn bound_variable_name(source: &str, match_offset: usize) -> Option<&str> {
     {
         return None;
     }
-    // Read the LHS identifier ending just before the `=`.
-    let mut end = eq;
+    // The binding may carry a type annotation (`name: Type = rhs`); the name
+    // then sits before the annotation's `:`, not immediately before `=`. Read
+    // the identifier ending just before that `:` when present, otherwise just
+    // before `=`.
+    let name_end = annotation_colon(bytes, eq).unwrap_or(eq);
+    let mut end = name_end;
     while end > 0 && (bytes[end - 1] == b' ' || bytes[end - 1] == b'\t') {
         end -= 1;
     }
@@ -116,6 +121,33 @@ fn bound_variable_name(source: &str, match_offset: usize) -> Option<&str> {
         return None;
     }
     Some(&source[start..end])
+}
+
+/// When the binding LHS ending at the `=` at byte `eq` carries a type
+/// annotation (`name: Type =`), return the byte offset of the `:` separating
+/// the name from its type. Scans backward from `=` tracking bracket depth so a
+/// `:` nested inside a generic argument or object type (`Record<K, V>`,
+/// `{ a: T }`) does not match, and stops at a statement boundary. Returns
+/// `None` when the LHS has no top-level annotation (plain `name =`).
+fn annotation_colon(bytes: &[u8], eq: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut p = eq;
+    while p > 0 {
+        match bytes[p - 1] {
+            b')' | b']' | b'}' | b'>' => depth += 1,
+            b'(' | b'[' | b'{' | b'<' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+            }
+            b':' if depth == 0 => return Some(p - 1),
+            b';' | b'\n' | b',' if depth == 0 => return None,
+            _ => {}
+        }
+        p -= 1;
+    }
+    None
 }
 
 /// True when `text` ends with the keyword `kw` as a whole word (not as the
@@ -352,6 +384,42 @@ mod tests {
         // sink consumes the promise array, so it still floats.
         let src = "const loadItems = arr.map(async (x) => fetchOne(x));\n\
                    const n = await loadItemsCount;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_generic_type_annotated_binding_then_promise_all() {
+        // Regression for #6213 (vitepress / got `source/core/index.ts`): the
+        // binding carries a generic TYPE ANNOTATION, but the `.map(async ...)`
+        // result is still captured and later awaited via Promise.all.
+        let src = "let promises: Array<Promise<unknown>> = rawCookies.map(async (rawCookie) => {\n\
+                   \x20\x20return rawCookie.toString();\n\
+                   });\n\
+                   await Promise.all(promises);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_array_shorthand_type_annotated_binding_then_promise_all() {
+        // `const x: Promise<T>[] = ...` array-shorthand annotation variant.
+        let src = "const tasks: Promise<Item>[] = items.map(async (x) => fetchOne(x));\n\
+                   const results = await Promise.all(tasks);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_type_annotated_binding_never_awaited() {
+        // Negative control: annotated binding whose result is never consumed by
+        // an awaiting sink still floats.
+        let src = "const tasks: Promise<Item>[] = items.map(async (x) => fetchOne(x));\n\
+                   console.log(tasks.length);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_map_async_expression_statement() {
+        // Negative space: result discarded, never captured/awaited/returned.
+        let src = "items.map(async (x) => { await save(x); });";
         assert_eq!(run(src).len(), 1);
     }
 }
