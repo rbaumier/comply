@@ -19,14 +19,20 @@
 //! A `.unwrap()` / `.expect()` whose receiver is `NonZero*::new(<arg>)` is also
 //! skipped when `<arg>` is statically non-zero: `NonZero*::new(n)` returns
 //! `None` only when `n == 0`. Two such shapes qualify — a non-zero integer
-//! literal (`NonZeroI64::new(1)`), and a numeric cast of a guaranteed-non-null
+//! literal (`NonZeroI64::new(1)`), a numeric cast of a guaranteed-non-null
 //! pointer (`NonZeroUsize::new(Arc::as_ptr(x) as usize)`): a live `Arc`/`Rc`/
-//! `Box`/`NonNull`/reference never points at address 0, so the cast is non-zero.
+//! `Box`/`NonNull`/reference never points at address 0, so the cast is non-zero;
+//! and a std `NonZero*`-typed `from` parameter's `.get()` accessor either with no
+//! cast (`NonZeroU16::new(p.get())` where `p: NonZeroU16`) or with an `as char`
+//! cast (`NonZeroChar::new(p.get() as char)` where `p: NonZeroU8`) — the inner
+//! value is non-zero by the type invariant and `as char` (valid only from `u8`)
+//! maps every non-zero `u8` to a non-zero `char`.
 //! Recognized non-null pointer sources are `Arc::as_ptr`/`Rc::as_ptr`/
 //! `Box::into_raw`/`NonNull::as_ptr` (including fully-qualified paths), any
 //! `.as_ptr()` method call, and a reference-to-raw cast `&x as *const _` /
 //! `&mut x as *mut _`. A cast of an arbitrary runtime integer that could be 0
-//! still flags.
+//! still flags, as does any other `as` cast of a `NonZero*` parameter's `.get()`
+//! (e.g. a truncating `as u8`) or a `.get()` on a non-`NonZero*` receiver.
 //! A `.unwrap()` / `.expect()` whose receiver is `<Type>::try_from(<ident>)`
 //! is also skipped when `<ident>` is the scrutinee of an enclosing `match`
 //! arm that has already matched a specific variant (the arm pattern is
@@ -291,11 +297,15 @@ fn expect_documents_invariant(call: tree_sitter::Node, source: &[u8]) -> bool {
 
 /// True when the `.unwrap()`/`.expect()` receiver is `NonZero*::new(<arg>)` whose
 /// `<arg>` is statically `Some`, so the unwrap cannot panic. `field_expr` is the
-/// `<receiver>.unwrap` field_expression. Two infallible argument shapes qualify:
+/// `<receiver>.unwrap` field_expression. Three infallible argument shapes qualify:
 ///   - a non-zero integer literal (`NonZeroI64::new(1)`);
 ///   - a numeric cast of a guaranteed-non-null pointer (`NonZeroUsize::new(
 ///     Arc::as_ptr(x) as usize)`): a live `Arc`/`Rc`/`Box`/`NonNull`/reference
-///     never points at address 0, so the cast yields a non-zero integer.
+///     never points at address 0, so the cast yields a non-zero integer;
+///   - a std `NonZero*`-typed `from` parameter's `.get()` accessor, with no cast
+///     (`NonZeroU16::new(p.get())`) or an `as char` cast (`NonZeroChar::new(
+///     p.get() as char)` with `p: NonZeroU8`): the inner value is non-zero by the
+///     type invariant and survives those total, non-truncating shapes.
 fn is_infallible_nonzero_new(field_expr: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(receiver) = field_expr.child_by_field_name("value") else {
         return false;
@@ -333,7 +343,196 @@ fn is_infallible_nonzero_new(field_expr: tree_sitter::Node, source: &[u8]) -> bo
     let Some(arg) = args.named_children(&mut cursor).next() else {
         return false;
     };
-    is_nonzero_int_literal(arg, source) || is_non_null_pointer_cast(arg, source)
+    is_nonzero_int_literal(arg, source)
+        || is_non_null_pointer_cast(arg, source)
+        || is_nonzero_param_get(arg, source)
+}
+
+/// True when `arg` is a provably-non-zero source for `NonZero*::new(arg)`: a
+/// `.get()` accessor call on a parameter of the enclosing `fn from` whose declared
+/// type is a std `NonZero*`. By the `NonZero*` invariant the inner value is never
+/// zero, so two casts-free / total-cast shapes feed an infallible `NonZero*::new`:
+///   - no cast: `p.get()` where `p: NonZero*` — if this typechecks into
+///     `NonZero*::new` the inner types match, so the non-zero value passes through
+///     unchanged;
+///   - `as char` cast: `p.get() as char` where `p: NonZeroU8` — `as char` is valid
+///     only from `u8`, is total, and maps every non-zero `u8` to a non-zero `char`.
+/// Any other `as` cast (`as u8`/`as u16`/…) can truncate to zero, and a `.get()` on
+/// a non-`NonZero*` receiver has no non-zero guarantee, so both still flag.
+fn is_nonzero_param_get(arg: tree_sitter::Node, source: &[u8]) -> bool {
+    // Peel an `as char` cast — the only total, zero-preserving cast here. Any other
+    // cast is rejected (it may truncate the inner value to zero).
+    let (get_call, requires_u8) = if arg.kind() == "type_cast_expression" {
+        let Some(ty) = arg.child_by_field_name("type") else {
+            return false;
+        };
+        if ty.utf8_text(source).map(str::trim) != Ok("char") {
+            return false;
+        }
+        let Some(value) = arg.child_by_field_name("value") else {
+            return false;
+        };
+        (value, true)
+    } else {
+        (arg, false)
+    };
+    let Some(recv) = receiver_of_get_call(get_call, source) else {
+        return false;
+    };
+    match enclosing_fn_param_nonzero_type(arg, recv, source) {
+        // `as char` is only valid from `u8`, so only a `NonZeroU8` param qualifies.
+        Some(ty) if requires_u8 => ty == "NonZeroU8",
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// If `node` is `<ident>.get()` (a `call_expression` whose function is a
+/// `field_expression` with field `get` over a plain identifier), return the
+/// identifier's text. `None` otherwise.
+fn receiver_of_get_call<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    if node.kind() != "call_expression" {
+        return None;
+    }
+    let func = node.child_by_field_name("function")?;
+    if func.kind() != "field_expression" {
+        return None;
+    }
+    if func.child_by_field_name("field")?.utf8_text(source).ok()? != "get" {
+        return None;
+    }
+    let recv = func.child_by_field_name("value")?;
+    if recv.kind() != "identifier" {
+        return None;
+    }
+    recv.utf8_text(source).ok()
+}
+
+/// Walk up from `node` to the enclosing `fn from` (`function_item`) and, if it
+/// declares a parameter whose binding identifier is `name` and whose type's final
+/// segment is a std `NonZero*` type, return that type's name. A `closure_expression`
+/// boundary stops the walk: a closure binds its own params, so a `.get()` inside one
+/// is not provably backed by the `from` parameter. A `let` rebinding `name` before
+/// the use site also disqualifies it — the shadowing local may hold a zero-able
+/// value, so the `.get()` would no longer be the `NonZero*` parameter.
+fn enclosing_fn_param_nonzero_type<'a>(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    let mut cur = node;
+    let func = loop {
+        let parent = cur.parent()?;
+        match parent.kind() {
+            "function_item" => break parent,
+            "closure_expression" | "source_file" => return None,
+            _ => cur = parent,
+        }
+    };
+    let params = func.child_by_field_name("parameters")?;
+    let mut cursor = params.walk();
+    for param in params.named_children(&mut cursor) {
+        if param.kind() != "parameter" {
+            continue;
+        }
+        let Some(pattern) = param.child_by_field_name("pattern") else {
+            continue;
+        };
+        if pattern.kind() != "identifier" || pattern.utf8_text(source).ok() != Some(name) {
+            continue;
+        }
+        // Parameter found (names are unique in a signature). It is provably non-zero
+        // only if its type is a std `NonZero*` and no earlier `let` shadows it.
+        let ty = param
+            .child_by_field_name("type")
+            .and_then(|t| type_last_segment(t, source))
+            .filter(|t| is_std_nonzero_type(t))?;
+        if param_rebound_before(func, name, node.start_byte(), source) {
+            return None;
+        }
+        return Some(ty);
+    }
+    None
+}
+
+/// True when a `let` declaration that fully ends before `use_byte` in `func`'s body
+/// binds `name`, shadowing the parameter. Conservative: any such `let name` (in any
+/// nested block) disqualifies the exemption, since the rule does no scope analysis.
+/// The `end_byte() <= use_byte` bound excludes the use sitting inside the `let`'s own
+/// initializer (`let p = NonZero::new(p.get())…`), where `p` is still the parameter.
+fn param_rebound_before(
+    func: tree_sitter::Node,
+    name: &str,
+    use_byte: usize,
+    source: &[u8],
+) -> bool {
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "let_declaration"
+            && n.end_byte() <= use_byte
+            && n.child_by_field_name("pattern")
+                .is_some_and(|p| pattern_binds_identifier(p, name, source))
+        {
+            return true;
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True when `pattern`'s subtree binds an identifier named `name` — covers
+/// `let name`, `let mut name`, and destructuring patterns that bind `name`.
+fn pattern_binds_identifier(pattern: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut stack = vec![pattern];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" && n.utf8_text(source).ok() == Some(name) {
+            return true;
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// The final segment of a type reference: the text of a `type_identifier`, or the
+/// `name` of a `scoped_type_identifier` (`std::num::NonZeroU8` -> `NonZeroU8`).
+fn type_last_segment<'a>(ty: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    match ty.kind() {
+        "type_identifier" => ty.utf8_text(source).ok(),
+        "scoped_type_identifier" => ty
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok()),
+        _ => None,
+    }
+}
+
+/// True for the closed std `NonZero*` type family — the integer widths plus
+/// `NonZeroChar`. Whatever it wraps is non-zero by construction.
+fn is_std_nonzero_type(name: &str) -> bool {
+    matches!(
+        name,
+        "NonZeroU8"
+            | "NonZeroU16"
+            | "NonZeroU32"
+            | "NonZeroU64"
+            | "NonZeroU128"
+            | "NonZeroUsize"
+            | "NonZeroI8"
+            | "NonZeroI16"
+            | "NonZeroI32"
+            | "NonZeroI64"
+            | "NonZeroI128"
+            | "NonZeroIsize"
+            | "NonZeroChar"
+    )
 }
 
 /// True when `arg` is a numeric cast (`<expr> as <int>`) whose cast operand is a
@@ -1629,5 +1828,131 @@ mod tests {
             }
         }"#;
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Closes #6418: `byte: NonZeroU8` is non-zero by its type invariant, so
+    /// `byte.get()` is a `u8` in `[1, 255]`; `as char` (valid only from `u8`) maps
+    /// it to a non-zero `char`, so `NonZeroChar::new(byte.get() as char)` is always
+    /// `Some` and the unwrap cannot panic. It must not be flagged.
+    #[test]
+    fn allows_unwrap_on_nonzero_char_new_param_get_as_char() {
+        let source = r#"impl From<NonZeroU8> for MixedUnit {
+            fn from(byte: NonZeroU8) -> Self {
+                if byte.get().is_ascii() {
+                    MixedUnit::Char(NonZeroChar::new(byte.get() as char).unwrap())
+                } else {
+                    MixedUnit::HighByte(byte)
+                }
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "NonZeroChar::new(byte.get() as char) with byte: NonZeroU8 is infallible"
+        );
+    }
+
+    /// The no-cast shape: `NonZeroU16::new(p.get())` where `p: NonZeroU16`. The
+    /// inner value is non-zero by the invariant and the types match (no cast, so no
+    /// truncation), so the unwrap is infallible and must not be flagged.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_param_get_no_cast() {
+        let source = r#"impl From<NonZeroU16> for B {
+            fn from(p: NonZeroU16) -> B {
+                B(NonZeroU16::new(p.get()).unwrap())
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A fully-qualified `core::num::NonZeroU32` parameter type resolves to the same
+    /// `NonZero*` invariant via the path's last segment and must not be flagged.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_qualified_param_get_no_cast() {
+        let source = r#"impl From<core::num::NonZeroU32> for B {
+            fn from(p: core::num::NonZeroU32) -> B {
+                B(NonZeroU32::new(p.get()).unwrap())
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// SOUNDNESS guard: a *truncating* `as u8` cast can re-introduce zero —
+    /// `wide: NonZeroU32` with `wide.get() == 0x100` truncates to `0u8`, so
+    /// `NonZeroU8::new(wide.get() as u8)` can be `None`. The unwrap is genuinely
+    /// fallible and must STILL flag. Only no-cast and `as char` are exempt.
+    #[test]
+    fn flags_unwrap_on_nonzero_new_param_get_truncating_cast() {
+        let source = r#"impl From<NonZeroU32> for B {
+            fn from(wide: NonZeroU32) -> B {
+                B(NonZeroU8::new(wide.get() as u8).unwrap())
+            }
+        }"#;
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a truncating `as u8` cast can produce 0; the unwrap still flags"
+        );
+    }
+
+    /// A `.get()` on a non-`NonZero*` receiver (here a `Cell<u8>` parameter) has no
+    /// non-zero guarantee — `cell.get()` may be 0 — so `NonZeroU8::new(cell.get())`
+    /// can be `None` and the unwrap must still flag.
+    #[test]
+    fn flags_unwrap_on_nonzero_new_non_nonzero_param_get() {
+        let source = r#"impl From<Cell<u8>> for B {
+            fn from(cell: Cell<u8>) -> B {
+                B(NonZeroU8::new(cell.get()).unwrap())
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A `.get()` on a value that is NOT a `from` parameter (here a local) is not
+    /// provably non-zero, so the unwrap must still flag.
+    #[test]
+    fn flags_unwrap_on_nonzero_new_local_get() {
+        let source = r#"impl From<A> for B {
+            fn from(a: A) -> B {
+                let map = a.into_map();
+                B(NonZeroU8::new(map.get()).unwrap())
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// SOUNDNESS guard: a `let` rebinding the parameter name before the use shadows
+    /// the `NonZero*` parameter with a possibly zero-able local, so `.get()` is no
+    /// longer provably non-zero — the unwrap must still flag.
+    #[test]
+    fn flags_unwrap_on_nonzero_new_shadowed_param_get() {
+        let source = r#"impl From<NonZeroU8> for B {
+            fn from(byte: NonZeroU8) -> B {
+                let byte = some_cell;
+                B(NonZeroU8::new(byte.get()).unwrap())
+            }
+        }"#;
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a local shadowing the NonZero param defeats the non-zero guarantee"
+        );
+    }
+
+    /// A self-referential rebind — the use sits inside the shadowing `let`'s own
+    /// initializer, where the receiver is still the `NonZero*` parameter — is
+    /// infallible and must not be flagged. The shadow only takes effect after the
+    /// `let` ends, so the `end_byte() <= use` bound preserves this exemption.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_self_referential_rebind() {
+        let source = r#"impl From<NonZeroU8> for B {
+            fn from(byte: NonZeroU8) -> B {
+                let byte = NonZeroChar::new(byte.get() as char).unwrap();
+                B(byte)
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "the `byte.get()` in the let's own initializer is still the NonZeroU8 param"
+        );
     }
 }
