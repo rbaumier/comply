@@ -108,7 +108,15 @@ pub(crate) fn mentions_history(raw: &str) -> bool {
         return false;
     }
     let lower = raw.to_lowercase();
-    if HISTORY_PHRASES.iter().any(|p| lower.contains(p)) {
+    for phrase in HISTORY_PHRASES {
+        let Some(pos) = lower.find(phrase) else { continue };
+        // "previously called" is the one history phrase with a runtime reading:
+        // "next() was previously called" documents a prior invocation of the
+        // `next()` method, not a rename ("X was previously called oldName").
+        // Skip it when its grammatical subject is a call expression.
+        if *phrase == "previously called" && subject_is_call_invocation(&lower[..pos]) {
+            continue;
+        }
         return true;
     }
     for phrase in AMBIGUOUS_PHRASES {
@@ -138,6 +146,40 @@ pub(crate) fn mentions_history(raw: &str) -> bool {
         }
     }
     false
+}
+
+/// True when the text preceding a "previously called" match has a call
+/// expression as its grammatical subject, e.g. `next()`, `self.poll()`,
+/// `Iterator::next()`. That marks the phrase as documenting a prior runtime
+/// invocation ("next() was previously called") rather than a rename ("the
+/// method was previously called oldName"). The subject is the last token after
+/// dropping a trailing auxiliary verb ("was"/"is"/"been"/...). A call-shaped
+/// subject is treated as runtime even when a rename target follows it; that
+/// phrasing ("foo() was previously called bar()") is not observed in practice.
+/// `subject` is already lowercased.
+fn subject_is_call_invocation(subject: &str) -> bool {
+    let mut tokens: Vec<&str> = subject.split_whitespace().collect();
+    while let Some(last) = tokens.last() {
+        if matches!(*last, "was" | "is" | "been" | "had" | "has" | "have") {
+            tokens.pop();
+        } else {
+            break;
+        }
+    }
+    tokens.last().is_some_and(|t| token_is_call(t))
+}
+
+/// True when a token is a call expression: an identifier-shaped callee followed
+/// by a `()` call suffix (`next()`, `self.poll()`, `Iterator::next()`).
+fn token_is_call(token: &str) -> bool {
+    let t = token
+        .trim_matches(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '(' | ')' | '.' | ':')));
+    if !t.ends_with(')') {
+        return false;
+    }
+    let Some(open) = t.find('(') else { return false };
+    let callee = t[..open].rsplit(['.', ':']).next().unwrap_or("");
+    !callee.is_empty() && callee.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// True when the comment text preceding an ambiguous verb names a code
