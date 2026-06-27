@@ -38,6 +38,14 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     if !left_hit && !right_hit {
         return;
     }
+    // A scalar-integer comparison is a single constant-time machine instruction,
+    // not a byte-by-byte one, so it cannot leak a secret through timing. When
+    // either operand is provably an integer (an integer literal, or a local bound
+    // to a count / dimension), the sensitively-named operand is a numeric count
+    // (e.g. `pin` = the length of an HMM initial-state vector), not a credential.
+    if comparison_is_scalar_integer(left, right, source) {
+        return;
+    }
 
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
@@ -58,6 +66,28 @@ fn operand_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a
             .child_by_field_name("field")
             .and_then(|f| f.utf8_text(source).ok()),
         _ => None,
+    }
+}
+
+/// True when the comparison is provably between scalar integers — either operand
+/// is an integer literal, or a bare identifier whose local binding proves it is
+/// an integer. Rust is statically typed, so one provably-integer operand means
+/// both sides are integers.
+fn comparison_is_scalar_integer(
+    left: tree_sitter::Node,
+    right: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    operand_is_scalar_integer(left, source) || operand_is_scalar_integer(right, source)
+}
+
+fn operand_is_scalar_integer(node: tree_sitter::Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "integer_literal" => true,
+        "identifier" => node.utf8_text(source).is_ok_and(|name| {
+            crate::rules::rust_helpers::local_binding_is_integer(node, name, source)
+        }),
+        _ => false,
     }
 }
 
@@ -361,6 +391,59 @@ impl PartialEq for Thing {
     #[test]
     fn flags_password_despite_integrity_exemption() {
         let src = "fn f(password: &str, input: &str) -> bool { password == input }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// rust-bio/src/stats/hmm/mod.rs:750 (#6052) — `pin` is a `usize` dimension
+    /// count (the length of the HMM initial-state probability vector), bound from
+    /// `initial.dim()` and compared against other dimension counts. A scalar
+    /// integer comparison is constant-time, not a timing-attack target.
+    #[test]
+    fn does_not_flag_hmm_dimension_count() {
+        let src = r#"
+fn validate(transition: &Mat, observation: &Mat, initial: &Vec) {
+    let (an0, an1) = transition.dim();
+    let (bn, bm) = observation.dim();
+    let pin = initial.dim();
+    if an0 != an1 || an0 != bn || an0 != pin {
+        return;
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// An integer-annotated local bound to a count is numeric, not a credential.
+    #[test]
+    fn does_not_flag_integer_annotated_pin() {
+        let src = "fn f(n: usize) -> bool { let pin: usize = n; pin != n }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Comparing a sensitively-named value against an integer literal is an
+    /// integer comparison (constant-time), so it is not a timing-attack target.
+    #[test]
+    fn does_not_flag_pin_against_integer_literal() {
+        let src = "fn f() -> bool { let pin = compute(); pin == 4 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Over-exemption guard: a genuine string PIN compared byte-by-byte is not a
+    /// scalar integer, so it must still flag.
+    #[test]
+    fn flags_string_pin_comparison() {
+        let src = "fn f(stored_pin: &str, entered: &str) -> bool { stored_pin == entered }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Over-exemption guard: `+` is `Add` (string concatenation yields a
+    /// `String`), so a secret bound to `prefix + suffix` is not a count and must
+    /// still flag — the integer exemption keys on length / dimension accessors,
+    /// not on arithmetic operators.
+    #[test]
+    fn flags_secret_bound_to_string_concat() {
+        let src =
+            "fn f(prefix: String, suffix: &str, input: &str) -> bool { let secret = prefix + suffix; secret == input }";
         assert_eq!(run_on(src).len(), 1);
     }
 }

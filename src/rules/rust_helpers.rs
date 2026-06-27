@@ -4770,6 +4770,82 @@ fn let_pattern_binds(pattern: Node, var: &str, source: &[u8]) -> bool {
     name == Some(var)
 }
 
+/// Whether a local binding for `var` in scope before `node` proves `var` is a
+/// scalar integer — an integer-annotated `let` / parameter (`let n: usize`,
+/// `fn f(n: u32)`), or an un-annotated `let` whose initializer is a call to a
+/// `usize`-returning length / dimension accessor (`let n = arr.dim();`).
+///
+/// Rust is statically typed, so the binding's annotation, or a length / dimension
+/// accessor on its initializer, settles that the value is a count rather than a
+/// string or byte sequence. Callers use this to tell a numeric comparison apart
+/// from a byte-by-byte one.
+pub fn local_binding_is_integer(node: Node, var: &str, source: &[u8]) -> bool {
+    if let Some(ty) = find_identifier_type(node, var, source)
+        && is_integer_primitive(ty.trim())
+    {
+        return true;
+    }
+    local_let_init_is_count(node, var, source)
+}
+
+/// True if `name` is an integer primitive — the fixed-width `u8`..`u128` /
+/// `i8`..`i128`, plus the platform-width `usize` / `isize`.
+fn is_integer_primitive(name: &str) -> bool {
+    is_fixed_width_int(name) || matches!(name, "usize" | "isize")
+}
+
+/// Whether an un-annotated `let` binding for `var`, declared before `node` in an
+/// enclosing scope, is initialized by a length / dimension accessor call.
+fn local_let_init_is_count(node: Node, var: &str, source: &[u8]) -> bool {
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        let mut cursor = parent.walk();
+        for sib in parent.children(&mut cursor) {
+            if sib.id() == child.id() {
+                break;
+            }
+            if sib.kind() == "let_declaration" && let_init_is_count(sib, var, source) {
+                return true;
+            }
+        }
+        child = parent;
+    }
+    false
+}
+
+/// Whether `let_node` binds `var` to a length / dimension accessor call.
+fn let_init_is_count(let_node: Node, var: &str, source: &[u8]) -> bool {
+    let Some(pattern) = let_node.child_by_field_name("pattern") else {
+        return false;
+    };
+    if !let_pattern_binds(pattern, var, source) {
+        return false;
+    }
+    let_node.child_by_field_name("value").is_some_and(|value| {
+        value.kind() == "call_expression" && call_is_count_accessor(value, source)
+    })
+}
+
+/// Whether `call` is a method call to a length / dimension accessor that returns
+/// a `usize` count (`x.len()`, `x.count()`, `arr.dim()`, …). These name the size
+/// of a collection or array, never a secret.
+fn call_is_count_accessor(call: Node, source: &[u8]) -> bool {
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    func.child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|method| {
+            matches!(
+                method,
+                "len" | "count" | "capacity" | "dim" | "dimension" | "ndim" | "nrows" | "ncols"
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
