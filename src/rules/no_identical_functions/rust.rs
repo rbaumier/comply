@@ -11,12 +11,16 @@
 //! `&mut self`) are exempt too: the idiomatic `as_x`/`as_x_mut` and
 //! `into_x`/`as_x` variants have syntactically identical bodies but
 //! incompatible types, so no shared helper can serve both. Free-function
-//! pairs whose bodies match but whose signatures differ (parameter list or
-//! `where`-clause / generic bounds) are exempt for the same reason: the
-//! immutable/mutable free-function pair (`visit_relations`/`visit_relations_mut`,
-//! the `iter`/`iter_mut` shape) has a textually identical body but dispatches
-//! through different traits and borrows, so no single generic helper can serve
-//! both. Functions in different `mod` blocks are exempt as well: Rust's path
+//! pairs whose bodies match but whose signatures differ (parameter list,
+//! `where`-clause / generic bounds, or return type) are exempt for the same
+//! reason: the immutable/mutable free-function pair
+//! (`visit_relations`/`visit_relations_mut`, the `iter`/`iter_mut` shape) has a
+//! textually identical body but dispatches through different traits and
+//! borrows, and a return-type-polymorphic pair (`decode -> Option<Vec<char>>`
+//! vs `decode_to_string -> Option<String>`, where the shared `.collect()` body
+//! resolves to a different concrete type per return annotation) is two distinct
+//! functions, so no single generic helper can serve both. Functions in
+//! different `mod` blocks are exempt as well: Rust's path
 //! system makes `a::f` and `b::f` distinct, and co-located test suites
 //! routinely repeat the same assertions in sibling modules. Same-name pairs
 //! where at least one carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate are exempt
@@ -329,13 +333,19 @@ fn extract_function_info(
 }
 
 /// Build a normalized signature from the parameter list, generic parameters,
-/// and `where`-clause. `parameters` and `type_parameters` are grammar fields;
-/// `where_clause` is a (non-field) named child of `function_item`, so it is
-/// found by scanning the named children. The three fragments capture the
-/// `&V`/`&mut V` parameter difference and the `Visit`/`VisitMut` bound
-/// difference that distinguish a forced borrow-variant free-function pair from
-/// a genuine duplicate. Whitespace is collapsed so formatting-only differences
-/// don't register as signature differences.
+/// return type, and `where`-clause. `parameters`, `type_parameters`, and
+/// `return_type` are grammar fields; `where_clause` is a (non-field) named
+/// child of `function_item`, so it is found by scanning the named children.
+/// The fragments capture the `&V`/`&mut V` parameter difference and the
+/// `Visit`/`VisitMut` bound difference that distinguish a forced borrow-variant
+/// free-function pair from a genuine duplicate, plus the return-type difference
+/// that distinguishes two functions whose identical body text resolves to
+/// different concrete types via return-type-polymorphic methods like
+/// `.collect()` (`-> Option<String>` vs `-> Option<Vec<char>>`). A function
+/// with no `-> T` contributes an empty return-type fragment on both sides, so
+/// two unit-returning identical functions still compare equal. Whitespace is
+/// collapsed so formatting-only differences don't register as signature
+/// differences.
 fn extract_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     let params = node
         .child_by_field_name("parameters")
@@ -343,6 +353,10 @@ fn extract_signature(node: tree_sitter::Node, source: &[u8]) -> String {
         .unwrap_or_default();
     let type_params = node
         .child_by_field_name("type_parameters")
+        .and_then(|n| n.utf8_text(source).ok())
+        .unwrap_or_default();
+    let return_type = node
+        .child_by_field_name("return_type")
         .and_then(|n| n.utf8_text(source).ok())
         .unwrap_or_default();
     let mut where_clause = "";
@@ -353,7 +367,9 @@ fn extract_signature(node: tree_sitter::Node, source: &[u8]) -> String {
             break;
         }
     }
-    normalize_signature(&format!("{type_params} {params} {where_clause}"))
+    normalize_signature(&format!(
+        "{type_params} {params} -> {return_type} {where_clause}"
+    ))
 }
 
 /// Classify a function's receiver from its `self_parameter`. The
@@ -676,6 +692,63 @@ fn bar(x: i32) -> i32 {
     let b = a * 2;
     println!("{}", b);
     b
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_free_functions_differing_only_in_return_type() {
+        // Issue #6291: servo/rust-url's `decode` / `decode_to_string` share a
+        // byte-identical body whose trailing `.collect()` is return-type
+        // polymorphic — it produces a `Vec<char>` under `-> Option<Vec<char>>`
+        // and a `String` under `-> Option<String>`. The bodies are semantically
+        // distinct; the return type is the structural signal that separates them.
+        let src = r#"
+pub fn decode_to_string(input: &str) -> Option<String> {
+    Some(
+        Decoder::default()
+            .decode::<u8, ExternalCaller>(input.as_bytes())
+            .ok()?
+            .collect(),
+    )
+}
+
+pub fn decode(input: &str) -> Option<Vec<char>> {
+    Some(
+        Decoder::default()
+            .decode::<u8, ExternalCaller>(input.as_bytes())
+            .ok()?
+            .collect(),
+    )
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_free_functions_identical_return_type_and_body() {
+        // Negative-space guard for #6291: two free functions with the SAME
+        // return type AND identical body are genuine duplication and must still
+        // be flagged — the return-type exemption must not over-suppress.
+        let src = r#"
+pub fn decode(input: &str) -> Option<Vec<char>> {
+    Some(
+        Decoder::default()
+            .decode::<u8, ExternalCaller>(input.as_bytes())
+            .ok()?
+            .collect(),
+    )
+}
+
+pub fn decode_copy(input: &str) -> Option<Vec<char>> {
+    Some(
+        Decoder::default()
+            .decode::<u8, ExternalCaller>(input.as_bytes())
+            .ok()?
+            .collect(),
+    )
 }
 "#;
         let d = run_on(src);
