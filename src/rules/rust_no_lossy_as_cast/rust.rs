@@ -89,7 +89,8 @@ use crate::rules::rust_helpers::{
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
-    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
+    is_in_enum_discriminant, is_in_test_context,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -196,6 +197,13 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_assert_bounded(node, source_bytes) {
+            return;
+        }
+        // A guard-less wildcard `match` arm whose preceding sibling arms clamp
+        // every out-of-range value (`val if val < 0 => 0, val if val > 0xFF =>
+        // 0xFF, val => val as u8`) proves the cast operand fits the target
+        // exactly (#6150).
+        if cast_operand_is_sibling_arm_bounded(node, source_bytes) {
             return;
         }
         if cast_operand_is_bitwise(node, source_bytes) {
@@ -1523,5 +1531,30 @@ mod tests {
         // keeps flagging outside any test context, so the guard is scope-bound,
         // not a blanket silence.
         assert_eq!(run_on("fn f(x: &i64) -> i8 { *x as i8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6150_saturating_wildcard_cast_not_flagged() {
+        // The saturation idiom: preceding arms clamp every value outside
+        // `[0, 0xFF]`, so the wildcard `val as u8` is provably in range. Without
+        // the exemption this rule fires once `rust-no-as-numeric-cast` cedes the
+        // span, so this verifies the exemption is wired here too.
+        let src = "fn f(x: i16) -> u8 { match x { \
+                   val if val < 0 => 0, \
+                   val if val > 0xFF => 0xFF, \
+                   val => val as u8 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6150_image_rs_snippet_not_flagged() {
+        // The issue's exact shape (image-rs/image colorops.rs `diffuse_err`).
+        let src = "fn diffuse_err<P: Pixel<Subpixel = u8>>(pixel: &mut P, error: [i16; 3], factor: i16) { \
+                   for (e, c) in error.iter().zip(pixel.channels_mut().iter_mut()) { \
+                   *c = match <i16 as From<_>>::from(*c) + e * factor / 16 { \
+                   val if val < 0 => 0, \
+                   val if val > 0xFF => 0xFF, \
+                   val => val as u8 } } }";
+        assert!(run_on(src).is_empty());
     }
 }

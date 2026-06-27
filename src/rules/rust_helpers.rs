@@ -2737,6 +2737,226 @@ pub fn cast_operand_is_non_negative_guarded(cast: Node, source: &[u8]) -> bool {
     enclosing_guard_proves_non_negative(cast, name, source)
 }
 
+/// True if `cast` (a `type_cast_expression`) is the body of a guard-less wildcard
+/// `match` arm whose preceding sibling arms have collectively eliminated every
+/// value outside the cast's unsigned target range — the saturating-clamp idiom:
+///
+/// ```ignore
+/// match scrutinee {
+///     val if val < 0 => 0,
+///     val if val > 0xFF => 0xFF,
+///     val => val as u8,   // reachable only when `0 <= val <= 0xFF`
+/// }
+/// ```
+///
+/// The wildcard arm is entered only when no preceding arm matched. A preceding
+/// arm `val if <guard> => …` whose pattern is the bare binding `val`
+/// (irrefutable) fails to match exactly when its guard is false, so the guard's
+/// negation holds in the wildcard arm. Two such arms — one whose guard is
+/// `val < 0` (negation `val >= 0`) and one whose guard is `val > N` where `N` is
+/// the target type's maximum (negation `val <= N`) — together prove
+/// `0 <= val <= N`, which fits the target exactly, so the cast cannot overflow.
+///
+/// The exemption is deliberately narrow to stay sound — every condition must
+/// hold:
+///
+/// - the operand is a bare `identifier` (`val`), the value bound by the wildcard
+///   arm;
+/// - the target is an **unsigned** integer (`u8`..`u128`/`usize`); its maximum
+///   `N` is computed from the target's bit width, not matched against a fixed
+///   literal set;
+/// - the cast is the wildcard arm's `value` body, that arm carries **no** guard,
+///   and binds the operand as a bare irrefutable `identifier`;
+/// - among the arms preceding the wildcard arm in the same `match`, one binds the
+///   operand as a bare `identifier` with a guard proving `val < 0` (`val < 0`,
+///   `val <= -1`, or the mirrored `0 > val` / `-1 >= val`), and one binds it with
+///   a guard proving `val > N` (`val > N`, `val >= N + 1`, or the mirrored
+///   `N < val` / `N + 1 <= val`), where `N` is the target's maximum.
+///
+/// A match missing either bound, an upper bound that is not the target's maximum,
+/// or a guarded wildcard arm is not exempted: the cast may still overflow.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag the cast because the multi-arm range proof is not visible from
+/// the cast in isolation.
+pub fn cast_operand_is_sibling_arm_bounded(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = value.utf8_text(source) else {
+        return false;
+    };
+    // Target must be an unsigned integer; compute its maximum value.
+    let Some(target_bits) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .and_then(unsigned_int_bits)
+    else {
+        return false;
+    };
+    let target_max: u128 = if target_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << target_bits) - 1
+    };
+
+    // The cast must be the value body of a guard-less wildcard arm that binds the
+    // operand as a bare irrefutable identifier.
+    let Some((wild_arm, match_block)) = enclosing_match_arm(cast) else {
+        return false;
+    };
+    let Some(wild_pattern) = wild_arm.child_by_field_name("pattern") else {
+        return false;
+    };
+    if wild_pattern.child_by_field_name("condition").is_some() {
+        return false;
+    }
+    if !pattern_is_bare_identifier(wild_pattern, name, source) {
+        return false;
+    }
+    // A shadowing `let val` or a reassignment in the wildcard arm body before the
+    // cast breaks the link between the sibling-arm bounds and the value the cast
+    // reads, so the bounds no longer prove the cast operand fits.
+    if let Some(body) = wild_arm.child_by_field_name("value")
+        && name_rebound_before_cast(body, cast, name, source)
+    {
+        return false;
+    }
+
+    // Scan the arms preceding the wildcard arm for a floor guard (`val < 0`) and a
+    // ceiling guard (`val > target_max`), each on a bare binding of `name`.
+    let mut has_floor = false;
+    let mut has_ceiling = false;
+    let mut cursor = match_block.walk();
+    for arm in match_block.children(&mut cursor) {
+        if arm == wild_arm {
+            break;
+        }
+        if arm.kind() != "match_arm" {
+            continue;
+        }
+        let Some(pattern) = arm.child_by_field_name("pattern") else {
+            continue;
+        };
+        if !pattern_is_bare_identifier(pattern, name, source) {
+            continue;
+        }
+        let Some(condition) = pattern.child_by_field_name("condition") else {
+            continue;
+        };
+        if guard_proves_below_zero(condition, name, source) {
+            has_floor = true;
+        }
+        if guard_proves_above_max(condition, name, target_max, source) {
+            has_ceiling = true;
+        }
+    }
+    has_floor && has_ceiling
+}
+
+/// Walk up from `cast` to the nearest enclosing `match_arm` reached through its
+/// `value` body, returning that arm and its parent `match_block`. Returns `None`
+/// if the nearest such ancestor is reached through the arm's `pattern` (a cast in
+/// a guard), if there is no enclosing arm before the `function_item` /
+/// `closure_expression` boundary, or if the arm's parent is not a `match_block`.
+fn enclosing_match_arm(cast: Node) -> Option<(Node, Node)> {
+    let mut child = cast;
+    while let Some(parent) = child.parent() {
+        match parent.kind() {
+            "function_item" | "closure_expression" => return None,
+            "match_arm" => {
+                if parent.child_by_field_name("value") != Some(child) {
+                    return None;
+                }
+                let match_block = parent.parent()?;
+                if match_block.kind() != "match_block" {
+                    return None;
+                }
+                return Some((parent, match_block));
+            }
+            _ => {}
+        }
+        child = parent;
+    }
+    None
+}
+
+/// True if `match_pattern`'s pattern is the bare binding `identifier` `name` (an
+/// irrefutable binding), ignoring any trailing guard. A refutable pattern
+/// (`Some(name)`, `_`, a literal) returns false, so the only reason a guarded arm
+/// with this pattern fails to match is its guard evaluating false.
+fn pattern_is_bare_identifier(match_pattern: Node, name: &str, source: &[u8]) -> bool {
+    match_pattern
+        .named_child(0)
+        .is_some_and(|inner| is_identifier_named(inner, name, source))
+}
+
+/// Split a comparison `condition` into `(left, operator, right)`, or `None` if it
+/// is not a `binary_expression`.
+fn comparison_parts(condition: Node) -> Option<(Node, Node, Node)> {
+    if condition.kind() != "binary_expression" {
+        return None;
+    }
+    Some((
+        condition.child_by_field_name("left")?,
+        condition.child_by_field_name("operator")?,
+        condition.child_by_field_name("right")?,
+    ))
+}
+
+/// True if `node` is the bare `identifier` `name`.
+fn is_identifier_named(node: Node, name: &str, source: &[u8]) -> bool {
+    node.kind() == "identifier" && node.utf8_text(source) == Ok(name)
+}
+
+/// True if `condition`'s failure proves `name >= 0` — i.e. the guard asserts the
+/// value is negative: `name < 0`, `name <= -1`, or the mirrored `0 > name`,
+/// `-1 >= name`.
+fn guard_proves_below_zero(condition: Node, name: &str, source: &[u8]) -> bool {
+    let Some((left, op, right)) = comparison_parts(condition) else {
+        return false;
+    };
+    let Ok(op) = op.utf8_text(source) else {
+        return false;
+    };
+    let ident_left = is_identifier_named(left, name, source);
+    let ident_right = is_identifier_named(right, name, source);
+    match op {
+        "<" if ident_left => signed_int_value(right, source) == Some(0),
+        "<=" if ident_left => signed_int_value(right, source) == Some(-1),
+        ">" if ident_right => signed_int_value(left, source) == Some(0),
+        ">=" if ident_right => signed_int_value(left, source) == Some(-1),
+        _ => false,
+    }
+}
+
+/// True if `condition`'s failure proves `name <= target_max` — i.e. the guard
+/// asserts the value exceeds the target's maximum: `name > MAX`,
+/// `name >= MAX + 1`, or the mirrored `MAX < name`, `MAX + 1 <= name`. For the
+/// widest target (`u128`, `MAX == u128::MAX`) the `>= MAX + 1` forms are
+/// unsatisfiable and correctly never match.
+fn guard_proves_above_max(condition: Node, name: &str, target_max: u128, source: &[u8]) -> bool {
+    let Some((left, op, right)) = comparison_parts(condition) else {
+        return false;
+    };
+    let Ok(op) = op.utf8_text(source) else {
+        return false;
+    };
+    let ident_left = is_identifier_named(left, name, source);
+    let ident_right = is_identifier_named(right, name, source);
+    let max_plus_one = target_max.checked_add(1);
+    match op {
+        ">" if ident_left => parse_int_literal(right, source) == Some(target_max),
+        ">=" if ident_left => max_plus_one.is_some_and(|m| parse_int_literal(right, source) == Some(m)),
+        "<" if ident_right => parse_int_literal(left, source) == Some(target_max),
+        "<=" if ident_right => max_plus_one.is_some_and(|m| parse_int_literal(left, source) == Some(m)),
+        _ => false,
+    }
+}
+
 /// The bit width of a signed-integer type name (`i8` → 8, … `isize` → host
 /// width), or `None` for any unsigned, float, or non-numeric type.
 fn signed_int_bits(type_text: &str) -> Option<u16> {
@@ -3053,17 +3273,27 @@ fn ident_then_literal<'a>(
     }
 }
 
-/// Parse an `integer_literal` node's value as `u128`, stripping a type suffix
-/// (`256u32`) and digit separators (`65_536`). Returns `None` if it does not
-/// parse (e.g. hex/binary forms or an out-of-range value).
+/// Parse an `integer_literal` node's value as `u128`, accepting decimal, hex
+/// (`0xFF`), octal (`0o77`), and binary (`0b1010`) forms, stripping a type suffix
+/// (`256u32`) and digit separators (`65_536`). Returns `None` for an empty digit
+/// run or an out-of-range value.
 fn parse_int_literal(node: Node, source: &[u8]) -> Option<u128> {
     let text = node.utf8_text(source).ok()?;
-    let digits: String = text
+    let (radix, body) = match text.as_bytes() {
+        [b'0', b'x' | b'X', ..] => (16, &text[2..]),
+        [b'0', b'o' | b'O', ..] => (8, &text[2..]),
+        [b'0', b'b' | b'B', ..] => (2, &text[2..]),
+        _ => (10, text),
+    };
+    let digits: String = body
         .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '_')
+        .take_while(|c| c.is_digit(radix) || *c == '_')
         .filter(|c| *c != '_')
         .collect();
-    digits.parse().ok()
+    if digits.is_empty() {
+        return None;
+    }
+    u128::from_str_radix(&digits, radix).ok()
 }
 
 /// True if `cast` (a `type_cast_expression`) narrows an identifier whose value a
