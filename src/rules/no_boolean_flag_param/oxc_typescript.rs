@@ -17,6 +17,10 @@
 //! callback's parameter list is the *caller's* invocation contract — the
 //! dispatcher invokes it positionally — so the author cannot rename it or split
 //! it into two named functions.
+//!
+//! A boolean parameter is also exempt when it is a class setter's parameter
+//! (`set foo(value: boolean) {}`). A setter has exactly one parameter — the
+//! value being assigned — and cannot be split into two named functions.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -95,6 +99,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A class setter's single parameter is the value being assigned, not a
+        // mode flag selecting between behaviors. A setter has exactly one
+        // parameter and cannot be split into two named functions, so the advice
+        // is structurally inapplicable.
+        if is_setter_param(node, semantic) {
+            return;
+        }
+
         if is_boolean_transform_subject(node, semantic) {
             return;
         }
@@ -143,6 +155,31 @@ fn is_runtime_function_param<'a>(
     matches!(
         nodes.parent_node(params_node.id()).kind(),
         AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+    )
+}
+
+/// True when the parameter belongs to a class setter accessor
+/// (`set foo(value: boolean) {}`). The enclosing chain is
+/// `FormalParameters → Function` (the setter body) `→ MethodDefinition` whose
+/// `kind` is `Set`. A setter has exactly one parameter — the value being
+/// assigned — so it cannot be split into two named functions.
+fn is_setter_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let params_node = nodes.parent_node(node.id());
+    if !matches!(params_node.kind(), AstKind::FormalParameters(_)) {
+        return false;
+    }
+    let func_node = nodes.parent_node(params_node.id());
+    if !matches!(func_node.kind(), AstKind::Function(_)) {
+        return false;
+    }
+    matches!(
+        nodes.parent_node(func_node.id()).kind(),
+        AstKind::MethodDefinition(method)
+            if method.kind == oxc_ast::ast::MethodDefinitionKind::Set
     )
 }
 
@@ -478,5 +515,30 @@ mod tests {
     fn still_flags_boolean_in_callback_inside_object_arg() {
         let src = "configure({ handler: (urgent: boolean) => { if (urgent) a(); else b(); } });";
         assert_eq!(run(src).len(), 1, "got {:#?}", run(src));
+    }
+
+    // Regression for #6214: a class setter's single parameter is the value being
+    // assigned, not a mode flag — it cannot be split into two named functions.
+    // Exact reproducer shape from sindresorhus/got.
+    #[test]
+    fn no_fp_class_setter_param_issue_6214() {
+        let src = "class Options {\
+                     set decompress(value: boolean) {\
+                       assert.boolean(value);\
+                       this.#internals.decompress = value;\
+                     }\
+                   }";
+        assert!(run(src).is_empty(), "got {:#?}", run(src));
+    }
+
+    // Guard: a regular method with a boolean flag parameter must STILL flag —
+    // only setters are exempt, not ordinary methods.
+    #[test]
+    fn still_flags_boolean_flag_param_in_regular_method_issue_6214() {
+        assert_eq!(
+            run("class Renderer { render(html: string, pretty: boolean) {} }").len(),
+            1,
+        );
+        assert_eq!(run("function f(flag: boolean) { if (flag) a(); else b(); }").len(), 1);
     }
 }
