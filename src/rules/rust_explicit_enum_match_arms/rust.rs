@@ -322,8 +322,14 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
         // domain, so its `_` arm is compiler-mandated. Bail out before the
         // textual PascalCase fallback, which would otherwise skip the
         // opening quote of `"AltLeft"` and misread the literal as a variant.
+        // A comment between or-pattern alternatives (`"a" | // note\n "b"`) is a
+        // named `line_comment`/`block_comment` node surfaced in
+        // `or_pattern.named_children()`; it can never represent a variant, so it
+        // must bail out before the textual fallback reads its text (`// Based …`)
+        // as a PascalCase variant.
         "string_literal" | "raw_string_literal" | "char_literal" | "integer_literal"
-        | "float_literal" | "boolean_literal" | "negative_literal" => return false,
+        | "float_literal" | "boolean_literal" | "negative_literal" | "line_comment"
+        | "block_comment" => return false,
         _ => {}
     }
 
@@ -1051,6 +1057,22 @@ mod tests {
                    \"!\" | \"Exclamationmark\" => Self::Exclamationmark, \
                    \"IntlBackslash\" => Self::IntlBackslash, \
                    _ => return None, }) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_str_literal_arms_with_comment_in_or_pattern() {
+        // Issue #6222: syn's `accept_as_ident`. The scrutinee is a `&str` and
+        // every arm pattern is a string literal, but a `// Based on …` line
+        // comment sits between or-pattern alternatives. That comment is a named
+        // `line_comment` node in `or_pattern.named_children()`; it must not be
+        // read as a PascalCase variant (`Based`), so the `_ => true` arm is not
+        // flagged.
+        let src = "fn accept_as_ident(ident: &str) -> bool { match ident { \
+                   \"_\" | \n\
+                   // Based on https://doc.rust-lang.org/1.65.0/reference/keywords.html\n\
+                   \"abstract\" | \"as\" | \"async\" | \"await\" | \"become\" | \"box\" | \"break\" => false, \
+                   _ => true, } }";
         assert!(run_on(src).is_empty());
     }
 
