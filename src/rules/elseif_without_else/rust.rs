@@ -19,6 +19,7 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
     let mut current: tree_sitter::Node = node;
     let mut last_else_if_node: tree_sitter::Node = node;
     let mut all_branches_diverge = if_consequence_diverges(node, source);
+    let mut all_branches_assert = if_consequence_is_pure_assertion(node, source);
 
     loop {
         let Some(alt) = current.child_by_field_name("alternative") else {
@@ -40,6 +41,8 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
                     found_nested_if = true;
                     all_branches_diverge =
                         all_branches_diverge && if_consequence_diverges(child, source);
+                    all_branches_assert =
+                        all_branches_assert && if_consequence_is_pure_assertion(child, source);
                     break;
             }
         }
@@ -55,6 +58,14 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
 
     // Every branch diverges — the missing `else` is the fall-through case.
     if all_branches_diverge {
+        return;
+    }
+
+    // Every branch body is solely standard assertion-macro calls — a
+    // "selective assertion guard". An assertion fires or is statically elided
+    // in release, so the absent `else` hides no silent no-op data bug; the
+    // chain is intentional.
+    if all_branches_assert {
         return;
     }
 
@@ -119,6 +130,61 @@ fn is_never_returning_macro(node: tree_sitter::Node, source: &[u8]) -> bool {
     node.child_by_field_name("macro")
         .and_then(|name| name.utf8_text(source).ok())
         .is_some_and(|name| matches!(name, "panic" | "unreachable" | "todo" | "unimplemented"))
+}
+
+/// The closed, language-defined set of std assertion macros. A chain whose
+/// every branch body consists solely of these guards nothing on the missing
+/// case: an assertion fires or is statically elided, never a silent no-op.
+const ASSERTION_MACROS: [&str; 6] = [
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+];
+
+/// True when the `if_expression`'s consequence is a pure assertion-guard block.
+fn if_consequence_is_pure_assertion(if_node: tree_sitter::Node, source: &[u8]) -> bool {
+    if_node
+        .child_by_field_name("consequence")
+        .is_some_and(|block| is_pure_assertion_block(block, source))
+}
+
+/// A `block` is a pure assertion guard when it holds at least one statement and
+/// every statement is an `expression_statement` wrapping a single assertion
+/// `macro_invocation` (comments are ignored). An empty block, or one holding
+/// any non-assertion statement, is not — those carry the genuine no-op risk
+/// the rule exists to catch.
+fn is_pure_assertion_block(block: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut assertions = 0usize;
+    let count = block.named_child_count();
+    for i in 0..count {
+        let Some(stmt) = block.named_child(i) else {
+            return false;
+        };
+        if matches!(stmt.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        if stmt.kind() != "expression_statement" || stmt.named_child_count() != 1 {
+            return false;
+        }
+        let Some(inner) = stmt.named_child(0) else {
+            return false;
+        };
+        if inner.kind() != "macro_invocation" {
+            return false;
+        }
+        let is_assert = inner
+            .child_by_field_name("macro")
+            .and_then(|name| name.utf8_text(source).ok())
+            .is_some_and(|name| ASSERTION_MACROS.contains(&name));
+        if !is_assert {
+            return false;
+        }
+        assertions += 1;
+    }
+    assertions > 0
 }
 
 #[cfg(test)]
@@ -248,6 +314,103 @@ fn f(a: bool, b: bool) {
         panic!("a");
     } else if b {
         unreachable!();
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_selective_assertion_guard() {
+        // Repro from time-rs/time: each branch asserts an invariant for its
+        // sub-case; `seconds == 0` legitimately needs no assertion.
+        let src = r#"
+fn new_ranged_unchecked(seconds: i64) {
+    if seconds < 0 {
+        debug_assert!(seconds <= 0); // flagged: no final `else`
+    } else if seconds > 0 {
+        debug_assert!(seconds >= 0);
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mixed_assertion_macros_with_multiple_statements() {
+        let src = r#"
+fn f(a: bool, b: bool) {
+    if a {
+        assert!(a);
+        debug_assert_eq!(1, 1);
+    } else if b {
+        assert_ne!(1, 2);
+        debug_assert!(b);
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_branch_with_non_assertion_macro() {
+        let src = r#"
+fn f(a: bool, b: bool) {
+    if a {
+        assert!(a);
+    } else if b {
+        println!("b");
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "elseif-without-else");
+    }
+
+    #[test]
+    fn flags_branch_with_real_statement() {
+        let src = r#"
+fn f(a: bool, b: bool) {
+    let mut x = 0;
+    if a {
+        assert!(a);
+    } else if b {
+        x = 1;
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "elseif-without-else");
+    }
+
+    #[test]
+    fn flags_empty_branch_in_assertion_chain() {
+        // An empty branch is the genuine no-op risk — still flagged.
+        let src = r#"
+fn f(a: bool, b: bool) {
+    if a {
+    } else if b {
+        assert!(b);
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "elseif-without-else");
+    }
+
+    #[test]
+    fn allows_assertion_chain_with_final_else() {
+        let src = r#"
+fn f(a: bool, b: bool) {
+    if a {
+        assert!(a);
+    } else if b {
+        debug_assert!(b);
+    } else {
+        assert!(true);
     }
 }
 "#;
