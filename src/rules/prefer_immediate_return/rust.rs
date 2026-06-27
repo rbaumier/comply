@@ -67,6 +67,12 @@ impl AstCheck for Check {
             if let_node.kind() != "let_declaration" {
                 continue;
             }
+            // An outer attribute (`#[allow(...)]`) anchors to the `let`; stable
+            // Rust forbids it on a bare tail expression, so inlining would leave
+            // the attribute nowhere to attach. The binding is not redundant.
+            if let_has_outer_attribute(let_node) {
+                continue;
+            }
             let Some(var_name) = extract_let_var_name(let_node, source_bytes) else {
                 continue;
             };
@@ -113,6 +119,25 @@ fn extract_let_var_name<'a>(let_node: tree_sitter::Node, source: &'a [u8]) -> Op
         }
         _ => None,
     }
+}
+
+/// True if the `let_declaration` carries an outer attribute (`#[…]`).
+///
+/// In tree-sitter-rust an outer attribute parses as an `attribute_item`
+/// preceding-sibling of the item it decorates, so walk back over stacked
+/// attributes (and interleaved comments) from the `let`. Such a binding is the
+/// syntactic anchor for the attribute and cannot be inlined into a bare tail
+/// expression without losing it.
+fn let_has_outer_attribute(let_node: tree_sitter::Node) -> bool {
+    let mut sibling = let_node.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => return true,
+            "line_comment" | "block_comment" => sibling = s.prev_named_sibling(),
+            _ => break,
+        }
+    }
+    false
 }
 
 /// True if `node` is exactly `return X;` or the block's tail
@@ -249,6 +274,34 @@ mod tests {
         // not a whole-value binding and must not be flagged.
         let src = "fn f() -> &i32 { let ref x = make(); x }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_let_with_outer_attribute() {
+        // The `let` is the syntactic anchor for `#[allow(...)]`; inlining the
+        // expression into a bare tail would leave the attribute nowhere to
+        // attach (stable Rust rejects attributes on bare expressions). #6286.
+        let src = r#"
+            fn f(v: &[u32]) -> u64 {
+                #[allow(clippy::useless_conversion)]
+                let v0 = u64::from(v[0]);
+                v0
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_let_without_attribute_still() {
+        // Negative control: the same binding with no attribute is the rule's
+        // core surface and must still flag.
+        let src = r#"
+            fn f(v: &[u32]) -> u64 {
+                let v0 = u64::from(v[0]);
+                v0
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
