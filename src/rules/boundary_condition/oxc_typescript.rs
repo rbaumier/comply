@@ -105,6 +105,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip when this access IS the discriminant of a `switch` — `switch (arr[0])`.
+        // The discriminant is only read to be matched against each `case` label; an
+        // out-of-bounds index yields `undefined`, which simply matches no `case` and
+        // falls through (to `default:` if present, otherwise past the statement). The
+        // dispatch cannot crash on `undefined`, so the boundary read in this position
+        // is harmless. Distinct from the length-guard check above, which exempts an
+        // `arr[0]` inside a `case` body of `switch (arr.length)`.
+        if is_switch_discriminant(node, semantic) {
+            return;
+        }
+
         // Skip if a preceding sibling guards with early exit or expect().toHaveLength()
         if has_preceding_guard(node, semantic, obj_text, source) {
             return;
@@ -635,6 +646,39 @@ fn condition_guards_index0(expr: &Expression, obj_text: &str, source: &str) -> b
 /// without it; both denote the same array.
 fn normalize_optional_chaining(text: &str) -> String {
     text.replace("?.", ".")
+}
+
+/// Returns true when this access IS the discriminant expression of an enclosing
+/// `switch` — `switch (arr[0]) { ... }`. The discriminant is read solely to be
+/// compared against the `case` labels, so an out-of-bounds `undefined` matches no
+/// case and falls through harmlessly; the switch dispatch never throws on it.
+/// Parentheses and non-null assertions between the access and the switch are
+/// transparent (`switch ((arr[0])!)`). Scoped to the discriminant position: an
+/// `arr[0]` inside a `case` consequent is a different role and stays flagged.
+fn is_switch_discriminant(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let node_span = node.kind().span();
+    let mut current_id = node.id();
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        match parent.kind() {
+            AstKind::ParenthesizedExpression(_) | AstKind::TSNonNullExpression(_) => {
+                current_id = parent_id;
+            }
+            AstKind::SwitchStatement(switch) => {
+                let disc = switch.discriminant.span();
+                return disc.start <= node_span.start && node_span.end <= disc.end;
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// Returns true when an ancestor `switch (<obj_text>.length)` proves this access
@@ -2542,6 +2586,38 @@ mod tests {
     fn still_flags_switch_on_other_array_length_issue_1602() {
         // `switch (other.length)` guards `other`, not `arr`.
         let src = "function f(arr, other) { switch (other.length) { case 1: return arr[0]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_switch_discriminant_first_element_issue_6180() {
+        // The issue's exact pattern: `arr[0]` as the switch discriminant. An empty
+        // array yields `undefined`, which matches no `case` and hits `default:`.
+        let src = "const tokenToField = (token) => { switch (token[0]) { case 'S': return 'milliseconds'; case 's': return 'seconds'; default: return null; } };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_switch_discriminant_no_default_issue_6180() {
+        // Even without a `default:` arm, a non-matching `undefined` discriminant
+        // falls through past the switch without crashing.
+        let src = "function f(arr) { switch (arr[0]) { case 'a': return 1; case 'b': return 2; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_switch_discriminant_last_element_issue_6180() {
+        // The last-element read is equally safe in the discriminant position.
+        let src = "function f(arr) { switch (arr[arr.length - 1]) { case 'a': return 1; default: return 0; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_first_element_in_switch_case_body_issue_6180() {
+        // The discriminant `arr[0]` is exempt, but the same array's `arr[0]` in a
+        // `case` consequent is a different role and stays flagged — the exemption
+        // must not bleed from the discriminant position into the case body.
+        let src = "function f(arr) { switch (arr[0]) { case 'a': return arr[0]; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
