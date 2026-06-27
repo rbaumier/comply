@@ -646,7 +646,7 @@ fn has_length_guard_ancestor(
             AstKind::IfStatement(if_stmt) => {
                 let cond_text = &source
                     [if_stmt.test.span().start as usize..if_stmt.test.span().end as usize];
-                if cond_text.contains(".length") {
+                if normalize_optional_chaining(cond_text).contains(".length") {
                     return true;
                 }
                 if is_first && condition_guards_index0(&if_stmt.test, obj_text, source) {
@@ -661,8 +661,14 @@ fn has_length_guard_ancestor(
                 if in_consequent || in_test {
                     let cond_text = &source
                         [cond.test.span().start as usize..cond.test.span().end as usize];
-                    // `.length` guard applies to the truthy consequent.
-                    if in_consequent && cond_text.contains(&format!("{obj_text}.length")) {
+                    // `.length` guard applies to the truthy consequent. Optional
+                    // chaining is normalized on both sides so `arr?.length` matches.
+                    if in_consequent
+                        && normalize_optional_chaining(cond_text).contains(&format!(
+                            "{}.length",
+                            normalize_optional_chaining(obj_text)
+                        ))
+                    {
                         return true;
                     }
                     // A truthy `arr[0]` / `arr?.[0]` test narrows the consequent AND
@@ -689,7 +695,10 @@ fn has_length_guard_ancestor(
                     if in_right {
                         let left_text = &source[logical.left.span().start as usize
                             ..logical.left.span().end as usize];
-                        if left_text.contains(&format!("{obj_text}.length")) {
+                        if normalize_optional_chaining(left_text).contains(&format!(
+                            "{}.length",
+                            normalize_optional_chaining(obj_text)
+                        )) {
                             return true;
                         }
                     }
@@ -3365,6 +3374,40 @@ mod tests {
     fn still_flags_unguarded_index0_issue_6227() {
         // Negative space: a plain `arr[0]` with no `.length &&` guard at all.
         let src = "function f(arr) { return arr[0].id; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_optional_chained_length_ternary_consequent_issue_6228() {
+        // The issue's repro: `node.typeArguments?.length === 1` guards the truthy
+        // consequent, where the `?.` is normalized so `node.typeArguments?.length`
+        // matches `node.typeArguments.length`. All three index-0 accesses in the
+        // (nested) consequent are in-bounds.
+        let src = "function f(node, ast, ts) { const type = node.typeArguments?.length === 1 ? ts.isFunctionTypeNode(node.typeArguments[0]) ? `Parameters<${getText(node.typeArguments[0], ast, ts)}>` : getText(node.typeArguments[0], ast, ts) : '[]'; return type; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_optional_chained_length_and_issue_6228() {
+        // The `&&` short-circuit form with an optional-chained `.length` guard:
+        // `arr?.length && arr[0]` — `?.length` is normalized to `.length`.
+        let src = "function f(arr) { return arr?.length && arr[0].id; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_optional_chained_length_other_array_ternary_issue_6228() {
+        // Negative space: the optional-chained `.length` guard is on `foo`, but
+        // the index-0 access is on a DIFFERENT array `bar`, so `bar` may be empty.
+        let src = "function f(foo, bar) { return foo?.length === 1 ? bar[0].id : null; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_optional_chained_length_other_array_and_issue_6228() {
+        // Negative space (`&&` form): the optional-chained `.length` guard is on
+        // `foo`, but the index-0 access is on a DIFFERENT array `bar`.
+        let src = "function f(foo, bar) { return foo?.length && bar[0].id; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
