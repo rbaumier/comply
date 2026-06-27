@@ -620,6 +620,12 @@ fn has_nullish_or_logical_fallback(
 ///      empty array still yields `undefined` at index 0. The `alternate` (falsy)
 ///      branch stays flagged — it runs when the test is falsy, so the element
 ///      may be absent.
+///   4. in an `&&` chain (`<obj_text>.length && …<obj_text>[0]…`), an access in
+///      the RIGHT operand guarded by a `<obj_text>.length` check on the same
+///      array in the LEFT operand — the short-circuit evaluates the right side
+///      only when the left is truthy, the expression form of `if (arr.length)`.
+///      A different array in the left (`foo.length && bar[0]`) or an access in
+///      the left operand stays flagged.
 fn has_length_guard_ancestor(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -664,6 +670,28 @@ fn has_length_guard_ancestor(
                     // `if (arr[0])`. The alternate branch stays flagged.
                     if is_first && condition_guards_index0(&cond.test, obj_text, source) {
                         return true;
+                    }
+                }
+            }
+            AstKind::LogicalExpression(logical) => {
+                // `arr.length && …arr[0]…` — the `&&` short-circuit evaluates the
+                // right operand only when the left operand is truthy, so a
+                // `{obj_text}.length` check on the SAME array in the left operand
+                // proves the array is non-empty wherever this access sits in the
+                // right operand. The expression equivalent of `if (arr.length) { arr[0] }`.
+                // Scoped, like the `if`/ternary arms, to a `.length` on the same
+                // object: `foo.length && bar[0]` (a different array) stays flagged,
+                // and an access in the LEFT operand runs before the guard so it stays
+                // flagged too.
+                if matches!(logical.operator, LogicalOperator::And) {
+                    let in_right = logical.right.span().start <= node_span.start
+                        && node_span.end <= logical.right.span().end;
+                    if in_right {
+                        let left_text = &source[logical.left.span().start as usize
+                            ..logical.left.span().end as usize];
+                        if left_text.contains(&format!("{obj_text}.length")) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -3297,6 +3325,46 @@ mod tests {
         // the test's own `a[0]` is exempt but the `alternate` access runs when
         // `a[0]` is falsy (`undefined`) — exactly one diagnostic, the alternate.
         let src = "function f(a: string[]) { return a[0] ? 'x' : a[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_in_right_operand_of_length_and_issue_6227() {
+        // The issue's exact pattern: `node.arguments[0]` inside the right operand
+        // of `node.arguments.length && ts.isStringLiteral(node.arguments[0])`. The
+        // `&&` short-circuit evaluates the right side only when the left
+        // `.length` check is truthy, so the index-0 access is guarded.
+        let src = "function f(node) { const name = node.arguments.length && ts.isStringLiteral(node.arguments[0]) ? node.arguments[0].text : defaultName; return name; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_simple_length_and_issue_6227() {
+        // The bare idiom `arr.length && use(arr[0])` with no surrounding ternary.
+        let src = "function f(arr) { return arr.length && arr[0].id; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_with_length_and_on_other_array_issue_6227() {
+        // Negative space: the left operand checks `foo.length`, but the index-0
+        // access is on a DIFFERENT array `bar`, so `bar` may still be empty.
+        let src = "function f(foo, bar) { return foo.length && bar[0].id; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_in_left_operand_of_and_issue_6227() {
+        // Negative space: the index-0 access sits in the LEFT operand, which runs
+        // before any guard, so it stays flagged.
+        let src = "function f(arr) { return arr[0] && arr.length; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unguarded_index0_issue_6227() {
+        // Negative space: a plain `arr[0]` with no `.length &&` guard at all.
+        let src = "function f(arr) { return arr[0].id; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
