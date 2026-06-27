@@ -12,8 +12,8 @@ use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding, is_node_module_system_target,
     is_react_display_name_assignment, is_reassigned_fresh_copy_at, is_reduce_accumulator_param,
-    is_rtk_reducer_draft_param, is_typed_array_binding, is_valtio_proxy_binding,
-    is_vue_reactive_object_target, is_vue_ref_value_target,
+    is_rtk_reducer_draft_param, is_typed_array_binding, is_unist_visitor_node_param,
+    is_valtio_proxy_binding, is_vue_reactive_object_target, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -507,7 +507,8 @@ impl OxcCheck for Check {
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
-                                || is_get_context_call_binding(id, semantic)) { return; }
+                                || is_get_context_call_binding(id, semantic)
+                                || is_unist_visitor_node_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -549,7 +550,8 @@ impl OxcCheck for Check {
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
-                                || is_get_context_call_binding(id, semantic)) { return; }
+                                || is_get_context_call_binding(id, semantic)
+                                || is_unist_visitor_node_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -591,7 +593,8 @@ impl OxcCheck for Check {
                             && (is_created_dom_element(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
-                                || is_get_context_call_binding(id, semantic)) { return; }
+                                || is_get_context_call_binding(id, semantic)
+                                || is_unist_visitor_node_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -614,7 +617,8 @@ impl OxcCheck for Check {
                             && (is_created_dom_element(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
-                                || is_get_context_call_binding(id, semantic)) { return; }
+                                || is_get_context_call_binding(id, semantic)
+                                || is_unist_visitor_node_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -646,7 +650,8 @@ impl OxcCheck for Check {
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
-                                || is_get_context_call_binding(id, semantic)) { return; }
+                                || is_get_context_call_binding(id, semantic)
+                                || is_unist_visitor_node_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
@@ -660,7 +665,8 @@ impl OxcCheck for Check {
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
-                                || is_get_context_call_binding(id, semantic)) { return; }
+                                || is_get_context_call_binding(id, semantic)
+                                || is_unist_visitor_node_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     _ => return,
@@ -2265,6 +2271,105 @@ mod tests {
             function f(options) {
                 options.a = 1;
                 options = Object.assign({}, options);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_unist_visitor_node_mutation_by_reference_issue_6065() {
+        // remark/unified transformer (logaretm/villus highlight.ts): the visitor
+        // is a named function passed by reference to `visit(...)`; mutating the
+        // handed-in node in place (`node.value`, `node.type`) is the only
+        // AST-transform API the unified ecosystem exposes.
+        let src = r#"
+            import { visit } from 'unist-util-visit';
+            export default function highlight() {
+                return function (tree) {
+                    visit(tree, 'code', visitor);
+                    function visitor(node) {
+                        node.value = '<pre>x</pre>';
+                        node.type = 'html';
+                    }
+                };
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_unist_visitor_const_arrow_by_reference_node_mutation() {
+        // The unified ecosystem also writes the visitor as a const arrow passed
+        // by reference; resolve the visitor name from its binding, not just from
+        // a function declaration's own id.
+        let src = r#"
+            import { visit } from 'unist-util-visit';
+            function transform(tree) {
+                const visitor = (node) => {
+                    node.type = 'html';
+                };
+                visit(tree, 'code', visitor);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_unist_visitor_inline_node_mutation() {
+        // Inline visitor: the node parameter of the arrow handed to `visit(...)`
+        // is mutated in place — same AST-transform contract.
+        let src = r#"
+            import { visit } from 'unist-util-visit';
+            function transform(tree) {
+                visit(tree, 'code', (node) => {
+                    node.type = 'html';
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_unist_visitparents_node_mutation() {
+        // `visitParents(...)` is the other unist traversal entry point; mutating
+        // the first-param node (`node.tagName`) is the rehype/hast transform API.
+        let src = r#"
+            import { visitParents } from 'unist-util-visit-parents';
+            function transform(tree) {
+                visitParents(tree, 'element', (node, ancestors) => {
+                    node.tagName = 'div';
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_node_param_mutation_outside_visit_call() {
+        // Strong positive: the identical `node.type = …` shape, but the callback
+        // is passed to an unrelated function (not visit/visitParents) — the
+        // receiver is not a unist visitor node, so it stays flagged.
+        let src = r#"
+            function transform(tree) {
+                forEach(tree, (node) => {
+                    node.type = 'html';
+                });
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_node_param_mutation_inside_visitor() {
+        // Strong positive: inside the visit callback, mutating a closed-over
+        // object (`acc`, not the first-param node) is ordinary shared-state
+        // mutation, not the AST-transform contract — stays flagged.
+        let src = r#"
+            import { visit } from 'unist-util-visit';
+            function transform(tree, acc) {
+                visit(tree, 'code', (node) => {
+                    acc.count = 1;
+                });
             }
         "#;
         assert_eq!(run(src).len(), 1);

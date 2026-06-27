@@ -2612,6 +2612,140 @@ pub fn is_reduce_accumulator_param(
     false
 }
 
+/// True when `ident` resolves to the **node parameter** (first formal parameter)
+/// of a unist/unified tree-visitor callback — the function handed to `visit(...)`
+/// or `visitParents(...)` from `unist-util-visit`. In the unified ecosystem
+/// (remark/rehype, mdast/hast) transforming the tree is performed by mutating the
+/// visited node in place (`node.type = 'html'`, `node.value = …`, `node.children
+/// = …`); the visitor contract exposes no immutable return-a-new-node channel, so
+/// there is nothing to suggest.
+///
+/// Structural anchors, resolved through the binding's declaration — never a `node`
+/// name match:
+/// - the binding is the **first formal parameter** of a function/arrow `F`, and
+/// - `F` is the visitor of a `visit(...)`/`visitParents(...)` call, either inline
+///   (a direct argument of that call) or by reference (a named function whose
+///   identifier is passed as an argument to such a call elsewhere in the file).
+///
+/// An ordinary parameter mutated outside any visitor, and a non-first-parameter
+/// local mutated inside one, both stay flagged.
+#[must_use]
+pub fn is_unist_visitor_node_param(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    let decl_span = nodes.kind(decl_node_id).span();
+
+    // Walk from the binding's declaration up to the function it parameterises;
+    // require the binding to be that function's first formal parameter, then
+    // confirm the function is registered as a unist visitor.
+    let mut is_first_param = false;
+    for ancestor in nodes.ancestors(decl_node_id) {
+        match ancestor.kind() {
+            AstKind::FormalParameters(params) => {
+                is_first_param = params.items.first().is_some_and(|first| {
+                    first.span.start <= decl_span.start && decl_span.end <= first.span.end
+                });
+                if !is_first_param {
+                    return false;
+                }
+            }
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                if !is_first_param {
+                    return false;
+                }
+                return fn_is_unist_visitor(ancestor, semantic);
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when the callee identifies a `unist-util-visit` traversal entry point —
+/// the free functions `visit` / `visitParents`, whose visitor-callback argument
+/// mutates the handed-in node in place.
+fn is_unist_visit_callee(callee: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+
+    matches!(
+        callee,
+        Expression::Identifier(id) if matches!(id.name.as_str(), "visit" | "visitParents")
+    )
+}
+
+/// True when the function/arrow node `func` is the visitor callback of a
+/// `visit(...)`/`visitParents(...)` call — inline (a direct argument of the call)
+/// or by reference (a named function declaration whose name is passed as an
+/// argument to such a call anywhere in the file).
+fn fn_is_unist_visitor(
+    func: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let fn_span = func.kind().span();
+
+    // Inline: the callback is a direct argument of a visit/visitParents call
+    // (arrow/function arguments carry no `Argument` wrapper, so the call is the
+    // function node's parent).
+    if let AstKind::CallExpression(call) = nodes.parent_node(func.id()).kind()
+        && is_unist_visit_callee(&call.callee)
+        && call
+            .arguments
+            .iter()
+            .any(|arg| arg.as_expression().is_some_and(|e| e.span() == fn_span))
+    {
+        return true;
+    }
+
+    // By reference: the visitor is passed to a visit/visitParents call somewhere
+    // in the file under a name (`visit(tree, 'code', visitor)`). Resolve that name
+    // from either a function declaration's own id (`function visitor(node) {}`) or
+    // the binding a function/arrow expression is assigned to (`const visitor =
+    // (node) => {}`).
+    let name = match func.kind() {
+        AstKind::Function(decl) => decl.id.as_ref().map(|id| id.name.as_str()),
+        _ => None,
+    }
+    .or_else(|| match nodes.parent_node(func.id()).kind() {
+        AstKind::VariableDeclarator(decl) => {
+            decl.id.get_binding_identifier().map(|bid| bid.name.as_str())
+        }
+        _ => None,
+    });
+    let Some(name) = name else {
+        return false;
+    };
+    nodes.iter().any(|n| {
+        let AstKind::CallExpression(call) = n.kind() else {
+            return false;
+        };
+        is_unist_visit_callee(&call.callee)
+            && call.arguments.iter().any(|arg| {
+                matches!(
+                    arg.as_expression(),
+                    Some(Expression::Identifier(id)) if id.name.as_str() == name
+                )
+            })
+    })
+}
+
 /// True when `ident` resolves to a binding initialised from a `.getContext(...)`
 /// call — e.g. `const ctx = canvas.getContext('2d')`. A rendering context
 /// (`CanvasRenderingContext2D`, `WebGLRenderingContext`, …) is an imperative,
