@@ -649,7 +649,7 @@ fn has_length_guard_ancestor(
                 if normalize_optional_chaining(cond_text).contains(".length") {
                     return true;
                 }
-                if is_first && condition_guards_index0(&if_stmt.test, obj_text, source) {
+                if is_first && condition_guards_index0(&if_stmt.test, obj_text, source, false) {
                     return true;
                 }
             }
@@ -674,7 +674,7 @@ fn has_length_guard_ancestor(
                     // A truthy `arr[0]` / `arr?.[0]` test narrows the consequent AND
                     // exempts the test's own `[0]` access — the ternary equivalent of
                     // `if (arr[0])`. The alternate branch stays flagged.
-                    if is_first && condition_guards_index0(&cond.test, obj_text, source) {
+                    if is_first && condition_guards_index0(&cond.test, obj_text, source, false) {
                         return true;
                     }
                 }
@@ -710,11 +710,27 @@ fn has_length_guard_ancestor(
     }
 }
 
-/// Returns true when `expr` (an `if` condition) contains a zero-index access
-/// `obj_text[0]` / `obj_text?.[0]`, where `obj_text` is matched after stripping
-/// optional-chaining `?.` to `.` on both sides. Recurses through the operators
-/// that preserve a truthiness guard: `&&`, `||`, `!`, and parentheses.
-fn condition_guards_index0(expr: &Expression, obj_text: &str, source: &str) -> bool {
+/// Returns true when `expr` (an `if`/ternary condition, in its positive form when
+/// `negated` is false) proves a zero-index access `obj_text[0]` / `obj_text?.[0]`
+/// is in-bounds. `obj_text` is matched after stripping optional-chaining `?.` to
+/// `.` on both sides. Recognized signals:
+///   - a truthy `obj_text[0]` test — the truthiness equivalent of `if (arr.length)`;
+///   - a predicate call that receives `obj_text[0]` as an argument
+///     (`isPlainObject(arr[0])`, `Array.isArray(arr[0])`): the positive branch runs
+///     only when the first element existed and satisfied the predicate. The callee
+///     is not matched by name — the structural signal is `arr[0]` appearing as a
+///     call argument.
+/// Recurses through the operators that preserve a truthiness guard: `&&`, `||`, `!`,
+/// and parentheses. `negated` tracks logical-NOT polarity so a predicate call under
+/// `!` is NOT a guard: `if (!isPlainObject(arr[0])) { …arr[0]… }` narrows the branch
+/// to the element being absent or failing the predicate, so the body access stays
+/// flagged.
+fn condition_guards_index0(
+    expr: &Expression,
+    obj_text: &str,
+    source: &str,
+    negated: bool,
+) -> bool {
     match expr {
         Expression::ComputedMemberExpression(member) => {
             if is_zero_index(&member.expression, source)
@@ -723,10 +739,10 @@ fn condition_guards_index0(expr: &Expression, obj_text: &str, source: &str) -> b
             {
                 return true;
             }
-            condition_guards_index0(&member.object, obj_text, source)
+            condition_guards_index0(&member.object, obj_text, source, negated)
         }
         Expression::StaticMemberExpression(member) => {
-            condition_guards_index0(&member.object, obj_text, source)
+            condition_guards_index0(&member.object, obj_text, source, negated)
         }
         Expression::ChainExpression(chain) => match &chain.expression {
             ChainElement::ComputedMemberExpression(member) => {
@@ -736,22 +752,41 @@ fn condition_guards_index0(expr: &Expression, obj_text: &str, source: &str) -> b
                 {
                     return true;
                 }
-                condition_guards_index0(&member.object, obj_text, source)
+                condition_guards_index0(&member.object, obj_text, source, negated)
             }
             ChainElement::StaticMemberExpression(member) => {
-                condition_guards_index0(&member.object, obj_text, source)
+                condition_guards_index0(&member.object, obj_text, source, negated)
             }
             _ => false,
         },
+        Expression::CallExpression(call) => {
+            // A predicate call that receives `arr[0]` as an argument tests the first
+            // element before the positive branch runs. Only a non-negated call is a
+            // guard; under `!` the branch runs when the element is absent or fails the
+            // predicate, so its body access stays flagged.
+            if negated {
+                return false;
+            }
+            call.arguments.iter().any(|arg| {
+                arg.as_expression().is_some_and(|arg_expr| {
+                    condition_guards_index0(arg_expr, obj_text, source, negated)
+                })
+            })
+        }
         Expression::LogicalExpression(logical) => {
-            condition_guards_index0(&logical.left, obj_text, source)
-                || condition_guards_index0(&logical.right, obj_text, source)
+            condition_guards_index0(&logical.left, obj_text, source, negated)
+                || condition_guards_index0(&logical.right, obj_text, source, negated)
         }
         Expression::UnaryExpression(unary) => {
-            condition_guards_index0(&unary.argument, obj_text, source)
+            let negated = if unary.operator == UnaryOperator::LogicalNot {
+                !negated
+            } else {
+                negated
+            };
+            condition_guards_index0(&unary.argument, obj_text, source, negated)
         }
         Expression::ParenthesizedExpression(paren) => {
-            condition_guards_index0(&paren.expression, obj_text, source)
+            condition_guards_index0(&paren.expression, obj_text, source, negated)
         }
         _ => false,
     }
@@ -2783,6 +2818,58 @@ mod tests {
     fn still_flags_index0_inside_block_for_other_array_issue_1178() {
         // The guard is for `a`; `b[0]` inside the block is unrelated and stays flagged.
         let src = "function f(a, b) { if (a[0]) { return b[0].name; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_predicate_call_on_index0_execa_issue_6237() {
+        // `if (isPlainObject(arr[0]))` passes the first element to a boolean
+        // predicate; the positive branch runs only when that element exists, so
+        // neither the condition's own `[0]` read nor the body read is out-of-bounds.
+        let src = "export const pipeToSubprocess = (sourceInfo, ...pipeArguments) => { if (isPlainObject(pipeArguments[0])) { return foo({ ...sourceInfo, boundOptions: { ...sourceInfo.boundOptions, ...pipeArguments[0] } }); } return bar; };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_predicate_call_on_index0_then_branch_issue_6237() {
+        let src = "function f(arr) { if (isPlainObject(arr[0])) { use(arr[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_array_isarray_on_index0_issue_6237() {
+        // `Array.isArray(arr[0])` is true only when the first element exists.
+        let src = "function f(arr) { if (Array.isArray(arr[0])) { return arr[0].length; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_negated_predicate_call_on_index0_issue_6237() {
+        // A negated predicate (`!isPlainObject(arr[0])`) narrows the branch to the
+        // element being absent or failing the predicate, so neither the condition's
+        // own read nor the body read is proven in-bounds — both stay flagged.
+        let src = "function f(arr) { if (!isPlainObject(arr[0])) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_array_isarray_on_array_itself_issue_6237() {
+        // The structural signal is `arr[0]` as a call argument; `Array.isArray(arr)`
+        // tests array-ness of the whole array, not non-emptiness, so `arr[0]` stays
+        // flagged.
+        let src = "function f(arr) { if (Array.isArray(arr)) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_with_unrelated_condition_issue_6237() {
+        let src = "function f(arr, someFlag) { if (someFlag) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_no_guard_issue_6237() {
+        let src = "function f(arr) { const x = arr[0]; return x; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
