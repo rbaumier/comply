@@ -247,6 +247,23 @@ mod tests {
     }
 
     #[test]
+    fn allows_wif_test_vector_decoded_in_psbt_sign() {
+        // scure-btc-signer bip174-psbt.test.ts: the WIF string is the argument of
+        // a nested `btc.WIF(testnet).decode(...)` call, not a bare positional
+        // credential passed straight to `.sign(...)`. It is decoded to key bytes,
+        // a BIP-174 spec test vector, so it is a converted value, not a hardcoded
+        // secret.
+        assert!(
+            run("tx4.sign(btc.WIF(testnet).decode('cP53pDbR5WtAD8dYAW9hhTjuvvTVaEiQBdrz9XPrgLBeRFiyCbQr'));")
+                .is_empty()
+        );
+        assert!(
+            run("tx5.sign(btc.WIF(testnet).decode('cT7J9YpCwY3AVRFSjN6ukeEeWY6mhpbJPxRaDaP5QTdygQRxP9Au'));")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn still_flags_hardcoded_secret_in_object_property() {
         // A secret passed as a `secret`/`key` object property is still a
         // hardcoded credential — only message-carrying property names are exempt.
