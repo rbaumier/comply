@@ -52,7 +52,11 @@
 //! (`const App = () => <View style={styles.x} />`, the React Native
 //! styles-at-bottom convention) is also treated as a deferred body, as long as
 //! that variable is never *eagerly called* before the referenced binding's
-//! declaration line. The expression runs only when its variable is invoked, so a
+//! declaration line. The assignment may pass through transparent selector
+//! wrappers — a ternary (`const f = cond ? () => later : () => other`), a
+//! `&&`/`||`/`??` logical expression, or parentheses — none of which invokes
+//! the arrow; they only choose which expression becomes the variable's value.
+//! The expression runs only when its variable is invoked, so a
 //! `const`/`let` declared later in an enclosing scope is already initialized by
 //! then. The expression stays flagged when it could run during the synchronous
 //! initialization pass that precedes the declaration: an IIFE, or a variable
@@ -526,24 +530,40 @@ fn is_deferred_function_expression<'a>(
     !binding_called_before(nodes, scoping, symbol_id, decl_start)
 }
 
-/// The symbol of the variable a function/arrow expression is directly assigned
-/// to (`const App = () => ...`), or `None` when the expression is not bound to a
-/// simple variable (anonymous argument, object-property value, return value,
-/// ...). Only a `VariableDeclarator` parent with a plain binding identifier
-/// counts; a destructuring pattern has no single owning symbol and returns
-/// `None`.
+/// The symbol of the variable a function/arrow expression is ultimately
+/// assigned to (`const App = () => ...`), or `None` when the expression is not
+/// bound to a simple variable (anonymous argument, object-property value,
+/// return value, ...). The expression may reach its `VariableDeclarator`
+/// through transparent *selector* wrappers — a ternary
+/// (`const f = cond ? () => ... : () => ...`), a `&&`/`||`/`??`
+/// (`const f = enabled && (() => ...)`), or parentheses. None of those invokes
+/// the arrow; they only choose which expression becomes the variable's value,
+/// so an arrow reached through them is bound to the variable and runs only when
+/// that variable is later called — exactly like the direct form. A
+/// non-transparent parent (a `CallExpression` making the arrow an IIFE or a
+/// call argument, ...) stops the walk and yields `None`. Only a plain binding
+/// identifier counts; a destructuring pattern has no single owning symbol and
+/// returns `None`.
 fn function_expression_binding<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     func_id: NodeId,
 ) -> Option<oxc_semantic::SymbolId> {
-    let parent_id = nodes.parent_id(func_id);
-    let AstKind::VariableDeclarator(declarator) = nodes.kind(parent_id) else {
-        return None;
-    };
-    let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id else {
-        return None;
-    };
-    id.symbol_id.get()
+    let mut current = func_id;
+    loop {
+        let parent_id = nodes.parent_id(current);
+        match nodes.kind(parent_id) {
+            AstKind::VariableDeclarator(declarator) => {
+                let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    return None;
+                };
+                return id.symbol_id.get();
+            }
+            AstKind::ConditionalExpression(_)
+            | AstKind::LogicalExpression(_)
+            | AstKind::ParenthesizedExpression(_) => current = parent_id,
+            _ => return None,
+        }
+    }
 }
 
 /// True when the binding is the callee of an *eager* call expression whose call
@@ -1731,5 +1751,78 @@ mod tests {
             "an eagerly-called arrow reading a not-yet-declared const must still be flagged: {d:?}"
         );
         assert!(d[0].message.contains("`USES_LATER`"));
+    }
+
+    // Regression for #6141: both branches of a ternary initializer of a
+    // module-level `const` are arrow functions that reference a module const
+    // declared later in the file. Neither arrow body runs at module-evaluation
+    // time — the ternary only selects which arrow becomes the variable's value;
+    // by the time the variable is invoked, the later const is initialized.
+    #[test]
+    fn no_fp_arrow_in_ternary_initializer_of_module_const_issue_6141() {
+        let source = "export const getActivePinia = __DEV__\n\
+                      ? () => {\n\
+                      const pinia = inject(piniaSymbol);\n\
+                      return pinia || activePinia;\n\
+                      }\n\
+                      : () => inject(piniaSymbol) || activePinia;\n\
+                      const activePinia = 1;\n\
+                      const piniaSymbol = Symbol('pinia');";
+        assert!(
+            run_on(source).is_empty(),
+            "arrows in a ternary initializer of a module const should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_arrow_in_logical_initializer_of_module_const_issue_6141() {
+        // The same deferred shape via a `&&` initializer (also exercises the
+        // parenthesized-arrow wrapper): the arrow is only selected, never
+        // invoked, when `handler` is assigned.
+        let source = "export const handler = enabled && (() => doLater(config));\n\
+                      const config = { ready: true };";
+        assert!(
+            run_on(source).is_empty(),
+            "arrow in a logical-expression initializer of a module const should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_iife_ternary_initializer_use_before_define_issue_6141() {
+        // Negative space: an immediately-invoked ternary runs the selected arrow
+        // during the synchronous init pass, reading `later` before its
+        // declaration — a real TDZ hazard. The arrow's parent chain reaches a
+        // `CallExpression`, not a `VariableDeclarator`, so it is not deferred.
+        let d = run_on(
+            "const f = (cond ? () => later : () => 0)();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an IIFE'd ternary initializer must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_ternary_bound_arrow_called_at_module_level_issue_6141() {
+        // Negative space: the ternary-selected arrow is bound to `f` and `f()`
+        // is invoked eagerly at module level before `later` — its body runs
+        // during the synchronous init pass, so the forward reference stays
+        // flagged.
+        let d = run_on(
+            "const f = cond ? () => later : () => 0;\n\
+             f();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "a ternary-bound arrow called eagerly must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
     }
 }
