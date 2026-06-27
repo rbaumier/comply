@@ -121,10 +121,16 @@ impl OxcCheck for Check {
         // `name.X` is a member access on that local, not on the global object —
         // e.g. the `const self = this` / `const self = { ... }` closure-alias
         // idiom, or `self` used as a receiver parameter in functional-style
-        // libraries (Effect-TS, fp-ts, arktype). `is_reference_to_global_variable`
-        // is true only when the name resolves to an unbound (global) reference,
-        // so a shadowed local returns false and is left alone.
-        if !semantic.is_reference_to_global_variable(obj) {
+        // libraries (Effect-TS, fp-ts, arktype). Resolve THIS reference's binding
+        // rather than asking the file-level question "is there a global named
+        // `self`?": a resolved symbol means a local declaration (parameter,
+        // variable, import) is in scope, so the access is on the local and is
+        // left alone. Only a reference with no resolved symbol in any enclosing
+        // scope is the true unbound global.
+        let Some(ref_id) = obj.reference_id.get() else {
+            return;
+        };
+        if semantic.scoping().get_reference(ref_id).symbol_id().is_some() {
             return;
         }
 
@@ -333,6 +339,51 @@ mod tests {
         // member (no local `self` in scope) is still flagged.
         let d = run_ts("self['location'].reload();");
         assert_eq!(d.len(), 1, "global `self[...]` must still fire: {d:?}");
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn ignores_local_self_param_when_unbound_self_exists_elsewhere() {
+        // Regression for #6143 (pinojs/pino browser.js): a `self` member access
+        // bound to a function parameter must not be flagged just because an
+        // unrelated, unbound `self` reference (a globalThis polyfill fallback)
+        // appears elsewhere in the same file. The unbound `self` here is a call
+        // argument, not a member access, so it is never examined either.
+        let src = "function set(self, opts, rootLogger, level) {\n  \
+                   const x = self.level;\n  \
+                   return x;\n\
+                   }\n\
+                   function globalEnv() {\n  \
+                   try {\n    \
+                   return globalThis;\n  \
+                   } catch (e) {\n    \
+                   return defd(self) || {};\n  \
+                   }\n\
+                   }";
+        assert!(
+            run_ts(src).is_empty(),
+            "local `self` param must not be flagged despite an unbound `self` elsewhere: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn flags_unbound_self_member_only_not_local_self_param() {
+        // Per-reference discrimination: in the same file a `self.X` bound to a
+        // parameter must stay silent while an unbound `self.X` in another scope
+        // still fires. Exactly one diagnostic, on the global access.
+        let src = "function set(self) {\n  \
+                   return self.level;\n\
+                   }\n\
+                   function other() {\n  \
+                   return self.location;\n\
+                   }";
+        let d = run_ts(src);
+        assert_eq!(
+            d.len(),
+            1,
+            "only the unbound `self.location` must fire, not the bound `self.level`: {d:?}"
+        );
         assert!(d[0].message.contains("globalThis"));
     }
 
