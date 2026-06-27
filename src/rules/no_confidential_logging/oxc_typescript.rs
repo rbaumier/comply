@@ -305,6 +305,14 @@ fn segment_is_sensitive(segment: &str) -> bool {
         if *w == "dsn" {
             return lower.ends_with("dsn");
         }
+        // `ssn` (social-security-number) is three characters and substring-
+        // collides with benign camelCase compounds (`processName`,
+        // `className`, `assessName`) that spell `…ss…n…` across word
+        // boundaries. Match it only as a whole word-segment so `userSSN`,
+        // `ssnNumber`, `mySsn` flag but those neighbours do not.
+        if *w == "ssn" {
+            return split_identifier_words(segment).any(|word| word.eq_ignore_ascii_case("ssn"));
+        }
         if !lower.contains(w) {
             return false;
         }
@@ -703,5 +711,26 @@ mod tests {
             crate::rules::test_helpers::run_rule_gated(&Check, src, "src/auth.ts").len(),
             1
         );
+    }
+
+    // `ssn` is matched on a word boundary: a social-security-number reference
+    // in any camelCase/acronym/underscore casing still flags.
+    #[test]
+    fn flags_ssn_as_whole_word_segment() {
+        assert_eq!(run_on("logger.info(`ssn: ${userSSN}`);").len(), 1);
+        assert_eq!(run_on("logger.info(`ssn: ${ssnNumber}`);").len(), 1);
+        assert_eq!(run_on("logger.info(`ssn: ${mySsn}`);").len(), 1);
+        assert_eq!(run_on("logger.info(`ssn: ${user_ssn}`);").len(), 1);
+    }
+
+    // #6238 — `ssn` substring-collides with benign camelCase compounds
+    // (`processName`, `className`, `assessName`) that spell `…ss…n…` across
+    // word boundaries; those are not social-security numbers.
+    #[test]
+    fn allows_process_name_identifier() {
+        assert!(run_on("throw new Error(`${getOtherProcessName(x)} exited.`);").is_empty());
+        assert!(run_on("logger.info(`name: ${processName}`);").is_empty());
+        assert!(run_on("logger.info(`name: ${className}`);").is_empty());
+        assert!(run_on("logger.info(`name: ${assessName}`);").is_empty());
     }
 }
