@@ -4,20 +4,36 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
 
-/// True when the value of `node` is fed directly into an arithmetic or bitwise
-/// computation — operand of a binary/unary arithmetic-or-bitwise operator or a
-/// compound arithmetic/bitwise assignment, looking through parentheses.
+/// True when `call` invokes `String.fromCharCode(...)` — the text round-trip
+/// whose `charCodeAt()` argument should still be flagged so both APIs are
+/// upgraded together to their code-point equivalents.
+fn is_string_from_char_code(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "fromCharCode" {
+        return false;
+    }
+    matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == "String")
+}
+
+/// True when the value of `node` is consumed where `codePointAt()`'s
+/// `number | undefined` would break, so the `charCodeAt()` suggestion must be
+/// suppressed: an operand of a binary/unary arithmetic-or-bitwise operator or a
+/// compound arithmetic/bitwise assignment (looking through parentheses), or a
+/// direct argument of a function call (except `String.fromCharCode`).
 ///
 /// `charCodeAt()` returns a guaranteed `number`; `codePointAt()` returns
-/// `number | undefined`. In an arithmetic/bitwise context the suggested
-/// `codePointAt()` would inject `| undefined` (a strict-TS error or runtime
-/// NaN), and the astral-character handling that motivates the rule is
-/// irrelevant — such code decodes single-byte/protocol values, not text. Only
-/// genuine text processing (string round-trips, comparisons) keeps the
+/// `number | undefined`. In these positions the suggested `codePointAt()` would
+/// inject `| undefined` (a strict-TS error or runtime NaN), and the
+/// astral-character handling that motivates the rule is irrelevant — such code
+/// decodes single-byte/protocol values, not text. Only genuine text processing
+/// (string round-trips via `String.fromCharCode`, comparisons) keeps the
 /// suggestion.
 fn is_arithmetic_or_bitwise_consumer<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -39,6 +55,20 @@ fn is_arithmetic_or_bitwise_consumer<'a>(
             }
             AstKind::AssignmentExpression(assign) => {
                 return assign.operator.is_arithmetic() || assign.operator.is_bitwise();
+            }
+            // `fn(s.charCodeAt(i))` — passed directly as a call argument. The
+            // return type is a guaranteed `number`; `codePointAt()` returns
+            // `number | undefined`, which would break a callee whose parameter
+            // is typed `number` (a strict-TS error). The exception is
+            // `String.fromCharCode(...)`, the text round-trip that must still
+            // flag so both APIs are upgraded together.
+            AstKind::CallExpression(parent_call) => {
+                let current_span = semantic.nodes().get_node(current).kind().span();
+                let is_argument = parent_call
+                    .arguments
+                    .iter()
+                    .any(|arg| arg.span() == current_span);
+                return is_argument && !is_string_from_char_code(parent_call);
             }
             _ => return false,
         }
@@ -178,6 +208,20 @@ mod tests {
     #[test]
     fn ignores_arithmetic_through_parens() {
         let code = "const n = (s.charCodeAt(i)) - 0x30;";
+        assert!(run(code).is_empty(), "{:?}", run(code));
+    }
+
+    #[test]
+    fn ignores_direct_function_argument() {
+        // noble-hashes src/utils.ts:554 — asciiToBase16(ch: number) requires
+        // `number`; codePointAt() would inject `number | undefined`.
+        let code = "const n1 = asciiToBase16(hex.charCodeAt(hi));";
+        assert!(run(code).is_empty(), "{:?}", run(code));
+    }
+
+    #[test]
+    fn ignores_function_argument_with_offset_index() {
+        let code = "const n2 = asciiToBase16(hex.charCodeAt(hi + 1));";
         assert!(run(code).is_empty(), "{:?}", run(code));
     }
 
