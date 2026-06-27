@@ -13,6 +13,13 @@ const RESPONSE_SUFFIXES: &[&str] = &[
 ];
 
 fn is_response_type(name: &str) -> bool {
+    // `Request` and `Response` are opposite HTTP roles. A name asserting
+    // `Request` (e.g. `RequestAccessTokenBody`, an OAuth token *request* body)
+    // is structurally a request payload, never a response DTO — even when it
+    // ends with a response suffix like `Body`.
+    if name.contains("Request") {
+        return false;
+    }
     RESPONSE_SUFFIXES.iter().any(|s| name.ends_with(s))
 }
 
@@ -199,5 +206,25 @@ mod tests {
         // Firebase Cloud Messaging push payload — spec-mandated field name.
         let d = run("interface NotificationPayload { android_channel_id?: string }");
         assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_oauth_request_body_issue_6313() {
+        // RFC 6749 §4.1.3 — OAuth 2.0 access-token *request* body. Named with a
+        // `Request` role marker, so it is a request payload, not a response DTO,
+        // even though it ends with the `Body` suffix.
+        let d = run(
+            "interface RequestAccessTokenBody { grant_type: string; client_id: string; client_secret?: string }",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn still_flags_response_body_dto_issue_6313() {
+        // Negative control: a genuine `*ResponseBody` response DTO with an
+        // internal id must still flag.
+        let d = run("interface UserResponseBody { client_id: string }");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("client_id"));
     }
 }
