@@ -129,6 +129,15 @@ fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
         return ReturnKind::Promise;
     }
 
+    // `new Promise(...)` constructs a Promise regardless of its executor. Matched
+    // by constructor name, like the `Promise.<combinator>` check below.
+    if let Expression::NewExpression(new_expr) = expr
+        && let Expression::Identifier(id) = &new_expr.callee
+        && id.name.as_str() == "Promise"
+    {
+        return ReturnKind::Promise;
+    }
+
     let Expression::CallExpression(call) = expr else {
         return ReturnKind::Sync;
     };
@@ -332,6 +341,30 @@ mod tests {
             return Promise.resolve(cachedData);
         }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_new_promise_branch_alongside_promise_resolve() {
+        // Regression for #6390: nanostores' `allTasks` returns `Promise.resolve()`
+        // in the fast path and `new Promise(...)` in the slow path — both branches
+        // are Promises, so there is nothing to unify.
+        let src = "function allTasks() {
+            if (tasks === 0) {
+                return Promise.resolve();
+            } else {
+                return new Promise(resolve => { resolves.push(resolve); });
+            }
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_new_non_promise_construction_with_promise_branch() {
+        // A `NewExpression` whose callee is not `Promise` (`new Date()`) is sync,
+        // so mixing it with a Promise branch still fires — the new arm is scoped
+        // to the global `Promise` constructor, not any constructor call.
+        let src = "function f(x: boolean) { if (x) return new Date(); return Promise.resolve(); }";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
