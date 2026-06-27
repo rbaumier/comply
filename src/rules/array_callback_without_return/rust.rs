@@ -5,9 +5,10 @@
 //!
 //! Exempt the idiomatic `Option`/`Result` side-effect form, which produces a
 //! deliberate unit return: a bare `_` wildcard parameter (explicit value
-//! discard), a `?`-suffixed map, or a map whose result feeds an
-//! `Option`/`Result`-only query (`.is_some()`, `.is_ok()`, …) — each suffix
-//! proves the receiver is `Option`/`Result`, never a lazy `Iterator`.
+//! discard), a `?`-suffixed map, a map whose result feeds an
+//! `Option`/`Result`-only query (`.is_some()`, `.is_ok()`, …), or a map whose
+//! immediate receiver is a macro invocation (`syscall!(...).map(...)`) — each
+//! signal proves the receiver is `Option`/`Result`, never a lazy `Iterator`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -151,6 +152,28 @@ fn map_is_option_result_query_operand(call: tree_sitter::Node, source: &[u8]) ->
     })
 }
 
+/// True when the IMMEDIATE receiver of the `.map(...)` call is a macro
+/// invocation (`macro!(...).map(...)`).
+///
+/// A macro in receiver position overwhelmingly expands to `Result`/`Option`/a
+/// newtype wrapper (`syscall!(...)`, `tri!(...)`, …), never a lazy `Iterator`,
+/// so `.map(|n| { side_effect(); })` there is a deliberate unit-returning
+/// `Result::map`/`Option::map`, not a forgotten Iterator-callback return. Only
+/// the immediate receiver is inspected: `vec![1, 2, 3].iter().map(...)` has the
+/// macro at its chain root but its immediate receiver is the `.iter()` call, so
+/// it stays a genuine Iterator map and is still flagged. In tree-sitter-rust the
+/// receiver is the `value` of the `field_expression` that names `map`.
+fn receiver_is_macro_invocation(call: tree_sitter::Node) -> bool {
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    func.child_by_field_name("value")
+        .is_some_and(|recv| recv.kind() == "macro_invocation")
+}
+
 fn has_return(node: tree_sitter::Node) -> bool {
     if node.kind() == "return_expression" {
         return true;
@@ -181,13 +204,14 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 
     // Exempt the idiomatic Option/Result side-effect form, detected via
     // type-free structural signals: a bare `_` wildcard parameter (explicit
-    // value discard), a `?`-suffixed map, or a map whose result feeds an
-    // Option/Result-only query (`.is_some()`, `.is_ok()`, …). The `?` operand
-    // and the query suffix both prove the receiver is Option/Result, never a
-    // lazy Iterator.
+    // value discard), a `?`-suffixed map, a map whose result feeds an
+    // Option/Result-only query (`.is_some()`, `.is_ok()`, …), or a map whose
+    // immediate receiver is a macro invocation (`syscall!(...).map(...)`). Each
+    // signal proves the receiver is Option/Result, never a lazy Iterator.
     if closure_param_is_wildcard(callback)
         || map_is_try_operand(node)
         || map_is_option_result_query_operand(node, source)
+        || receiver_is_macro_invocation(node)
     {
         return;
     }
@@ -364,6 +388,33 @@ mod tests {
         // Guard: `.count()` exists on Iterator too, so it is NOT a proof of an
         // Option/Result receiver — a side-effecting iterator map still flags.
         let src = "fn f() { let n = xs.iter().map(|x| { transform(x); }).count(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_map_on_macro_invocation_receiver() {
+        // Issue #6302: mio epoll.rs:63 — `syscall!(...)` returns `Result`, and
+        // `.map(|n| { side_effect; })` transforms `Ok(n)` into `Ok(())`. The
+        // immediate receiver is a macro invocation, proving it is Result::map,
+        // not a lazy Iterator callback.
+        let src = "fn f() { syscall!(epoll_wait(self.ep.as_raw_fd(), events.as_mut_ptr(), events.capacity() as i32, timeout)).map(|n_events| { unsafe { events.set_len(n_events as usize) }; }); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_iterator_map_with_macro_at_chain_root() {
+        // Guard: `vec![..]` is a macro at the chain ROOT, but the immediate
+        // receiver of `.map(...)` is the `.iter()` call — a genuine lazy
+        // Iterator map that must still flag.
+        let src = "fn f() { vec![1, 2, 3].iter().map(|x| { do_thing(x); }); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_iterator_map_on_plain_vec_iter() {
+        // Guard: a plain `some_vec.iter().map(...)` has no macro receiver — a
+        // classic forgotten-return Iterator bug that must still flag.
+        let src = "fn f() { some_vec.iter().map(|x| { do_thing(x); }); }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
