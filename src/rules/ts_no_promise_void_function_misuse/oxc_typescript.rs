@@ -76,6 +76,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `await arr.reduce(async ...)` threads a promise through the accumulator
+        // and the outer `await` consumes the final chain — not a void misuse.
+        if is_awaited_reduce(node, semantic) {
+            return;
+        }
+
         // Check the first argument for async
         let Some(first_arg) = call.arguments.first() else {
             return;
@@ -106,6 +112,35 @@ fn is_async_arg(arg: &Argument) -> bool {
         Argument::FunctionExpression(func) => func.r#async,
         _ => false,
     }
+}
+
+/// True when the call is `arr.reduce(async ...)` whose result is the operand of
+/// an `await` (`await arr.reduce(...)` or `const x = await arr.reduce(...)`).
+///
+/// `reduce` returns its accumulator, which in the sequential-async idiom is the
+/// threaded `Promise` chain (`(prev, item) => { await prev; ... }`,
+/// `Promise.resolve()` seed); the outer `await` consumes that promise, so it is
+/// not ignored. This is narrowly `reduce`-only: `forEach` returns `undefined`
+/// and the other array methods coerce the callback's promise to a truthy
+/// non-promise value, so awaiting the whole call does not consume the inner
+/// promises — those remain genuine misuses.
+fn is_awaited_reduce(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let AstKind::CallExpression(call) = node.kind() else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "reduce" {
+        return false;
+    }
+    matches!(
+        semantic.nodes().parent_node(node.id()).kind(),
+        AstKind::AwaitExpression(_)
+    )
 }
 
 /// True when the promises produced by a `.map()`/`.flatMap()` CallExpression are
@@ -336,6 +371,64 @@ mod tests {
         let src = "function run() {\n\
                        const ps = items.map(async (x) => fetchOne(x));\n\
                        console.log(ps.length);\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // --- #6257: `await arr.reduce(async ...)` consumes the threaded promise ---
+
+    #[test]
+    fn allows_awaited_reduce_async() {
+        // Sequential-async idiom: the outer `await` consumes the promise chain
+        // returned by `reduce`.
+        let src = "async function run() {\n\
+                       await dump.reduce(async (prev, sql) => {\n\
+                           await prev;\n\
+                           await db.exec(sql);\n\
+                       }, Promise.resolve());\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_awaited_reduce_async_assigned() {
+        // `const result = await arr.reduce(async ...)` — the await is still the
+        // immediate parent of the call.
+        let src = "async function run() {\n\
+                       const result = await arr.reduce(async (prev, cur) => {\n\
+                           await prev;\n\
+                           return cur;\n\
+                       }, Promise.resolve());\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_reduce_async_not_awaited() {
+        // No outer `await` — the promise produced by `reduce` floats.
+        let src = "dump.reduce(async (prev, sql) => {\n\
+                       await prev;\n\
+                       await db.exec(sql);\n\
+                   }, Promise.resolve());";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_awaited_foreach_async() {
+        // `forEach` returns `undefined`; awaiting it does not consume the inner
+        // async callbacks' promises — still a misuse.
+        let src = "async function run() {\n\
+                       await arr.forEach(async (x) => { await save(x); });\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_awaited_some_async() {
+        // `some` returns a boolean; the callback's promise is coerced to truthy.
+        // Awaiting the whole call does not consume it — still a misuse.
+        let src = "async function run() {\n\
+                       await arr.some(async (x) => { await check(x); });\n\
                    }";
         assert_eq!(run(src).len(), 1);
     }
