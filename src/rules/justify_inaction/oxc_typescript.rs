@@ -11,7 +11,7 @@ impl OxcCheck for Check {
         &[
             AstType::TryStatement,
             AstType::IfStatement,
-            AstType::SwitchCase,
+            AstType::SwitchStatement,
             AstType::WhileStatement,
             AstType::DoWhileStatement,
             AstType::ForStatement,
@@ -52,12 +52,24 @@ impl OxcCheck for Check {
                             flag(ctx, block.span.start, "else", diagnostics);
                         }
                 }
-                AstKind::SwitchCase(case) => {
-                    // Only flag default case (test is None)
-                    if case.test.is_none() && case.consequent.is_empty() {
-                        // Check if there's a comment within the case span
-                        let span_text = &ctx.source[case.span.start as usize..case.span.end as usize];
-                        if !span_text.contains("//") && !span_text.contains("/*") {
+                AstKind::SwitchStatement(switch) => {
+                    let cases = &switch.cases;
+                    for (i, case) in cases.iter().enumerate() {
+                        // Only an empty `default:` (no test, no consequent) needs justifying.
+                        if case.test.is_some() || !case.consequent.is_empty() {
+                            continue;
+                        }
+                        // OXC ends an empty case's span right after its `:`, so a
+                        // justifying comment lands *outside* the case span. Scan the
+                        // default's body region instead: from after the `:` to the start
+                        // of the next case, or the switch's closing `}`. That covers an
+                        // inline `default: // fall through` and a comment on a following
+                        // line, while excluding any comment after the closing brace.
+                        let region_end = cases
+                            .get(i + 1)
+                            .map_or(switch.span.end as usize, |next| next.span.start as usize);
+                        let region = &ctx.source[case.span.end as usize..region_end];
+                        if !region.contains("//") && !region.contains("/*") {
                             flag(ctx, case.span.start, "default", diagnostics);
                         }
                     }
@@ -195,6 +207,40 @@ mod tests {
     #[test]
     fn flags_empty_default() {
         let src = "switch (x) { case 1: a(); break; default: }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_default_with_inline_comment() {
+        // #6184: comment on the same line as `default:` justifies the empty case.
+        let src = "switch (x) { case 1: a(); break; default: // fall through\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_default_with_comment_on_following_line() {
+        let src = "switch (x) {\n  case 1: a(); break;\n  default:\n    // intentional no-op\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_default_with_comment_only_after_closing_brace() {
+        // Negative space: a comment after the switch's `}` is outside the
+        // default's region, so the empty default is still flagged.
+        let src = "switch (x) { case 1: a(); break; default: } // handle later";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_non_terminal_default_with_inline_comment() {
+        // `default` followed by another label: region runs to the next case.
+        let src = "switch (x) { default: // fall through\n case 1: a(); break; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_non_terminal_default_without_comment() {
+        let src = "switch (x) { default: case 1: a(); break; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
