@@ -17,10 +17,12 @@
 //! to appear somewhere inside an inner type's generics (e.g.
 //! `dyn Future<Output = Result<_, Self::Error>>`).
 //!
-//! Test contexts, `fn main`, and Cargo build scripts (`build.rs`) are
-//! exempt: in all three the error stays single-threaded (the binary entry
-//! point prints to stderr; a build script runs synchronously at compile
-//! time), so the `Send + Sync` remediation is structurally inapplicable.
+//! Test contexts, `fn main`, Cargo build scripts (`build.rs`), and files
+//! in a binary crate (one whose nearest `Cargo.toml` declares a `[[bin]]`
+//! target or carries `src/main.rs`) are exempt: the error stays
+//! single-threaded (the binary entry point and the helpers it calls print
+//! to stderr; a build script runs synchronously at compile time), so the
+//! `Send + Sync` remediation is structurally inapplicable.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -78,6 +80,10 @@ impl AstCheck for Check {
             || is_under_tests_dir(ctx.path)
             || is_in_fn_main(node, source_bytes)
             || crate::rules::path_utils::is_rust_build_script(ctx.path)
+            || ctx
+                .project
+                .nearest_cargo_manifest(ctx.path)
+                .is_some_and(|m| m.declares_binary() || m.declares_executable_at(ctx.path))
         {
             return;
         }
@@ -178,8 +184,33 @@ impl crate::rules::test_helpers::RunRule for Check {
 mod tests {
     use super::*;
 
+    const BIN_CARGO_TOML: &str = r#"
+[package]
+name = "cargo-insta"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cargo-insta"
+path = "src/main.rs"
+"#;
+
+    const LIB_CARGO_TOML: &str = r#"
+[package]
+name = "mylib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mylib"
+path = "src/lib.rs"
+"#;
+
+    // Positive assertions run under a library-crate manifest: the binary-crate
+    // exemption (`declares_binary`) is manifest-aware, and the bare default
+    // test context would otherwise resolve to comply's own (binary) manifest.
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+        crate::rules::test_helpers::run_rule_with_cargo(&Check, LIB_CARGO_TOML, source, "src/lib.rs")
     }
 
     #[test]
@@ -312,11 +343,44 @@ mod tests {
 
     #[test]
     fn flags_box_dyn_error_in_non_main_fn() {
-        // A non-main function in a normal source path is still flagged.
+        // A non-main function in a library crate is still flagged.
         let source =
             "fn helper() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_box_dyn_error_in_binary_crate_helper() {
+        // cargo-insta/src/inline.rs: a helper in a synchronous CLI binary
+        // crate. If `fn main() -> Result<_, Box<dyn Error>>` is exempt, so is
+        // every helper it calls in the same single-threaded binary — the error
+        // never crosses a thread boundary.
+        let source = "pub fn rewrite() -> Result<usize, Box<dyn Error>> { todo!() }";
+        assert!(
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                BIN_CARGO_TOML,
+                source,
+                "src/inline.rs",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_box_dyn_error_in_library_crate_helper() {
+        // Negative control: the same signature in a library crate (no bin
+        // target, no `src/main.rs`) still flags — a library's errors can
+        // propagate to a multi-threaded consumer.
+        let source = "pub fn rewrite() -> Result<usize, Box<dyn Error>> { todo!() }";
         assert_eq!(
-            crate::rules::test_helpers::run_rule(&Check, source, "src/lib.rs").len(),
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                LIB_CARGO_TOML,
+                source,
+                "src/parser.rs",
+            )
+            .len(),
             1
         );
     }
