@@ -1,6 +1,6 @@
 [detection]
 dependencies = ["nuxt"]
-files = ["nuxt.config.ts", "nuxt.config.js"]
+files = ["nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs"]
 
 [entry_points]
 dirs = []
