@@ -1402,6 +1402,103 @@ mod tests {
         );
     }
 
+    // Regression for #6279 (unjs/unhead, packages/devtools-app): Nuxt's
+    // file-system router and auto-import mechanism wire `pages/`, `components/`,
+    // `composables/`, `utils/`, `layouts/`, `plugins/`, `middleware/`, and
+    // `server/api/` files into the app by directory convention — nothing imports
+    // them — so the import-graph BFS cannot reach them. In a project with a
+    // `nuxt.config.ts` they are live entry points, not dead code, and must not be
+    // flagged. This exercises the Nuxt 4 `app/` srcDir layout (convention dirs
+    // nested under `app/`, with `server/` at the root above it).
+    #[test]
+    fn nuxt_auto_loaded_dirs_not_flagged_issue_6279() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"devtools-app","private":true,"dependencies":{"nuxt":"^4.0.0"}}"#,
+            ),
+            ("nuxt.config.ts", "export default defineNuxtConfig({});\n"),
+            ("app/pages/index.vue", "<template><div /></template>\n"),
+            ("app/pages/audit.vue", "<template><div /></template>\n"),
+            ("app/components/DevtoolsSection.vue", "<template><div /></template>\n"),
+            ("app/composables/state.ts", "export const useShared = () => 1;\n"),
+            ("app/utils/schema-validation.ts", "export const validate = () => true;\n"),
+            ("app/layouts/default.vue", "<template><slot /></template>\n"),
+            ("app/plugins/setup.ts", "export default defineNuxtPlugin(() => {});\n"),
+            ("app/middleware/auth.ts", "export default defineNuxtRouteMiddleware(() => {});\n"),
+            ("server/api/health.ts", "export default defineEventHandler(() => 'ok');\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "Nuxt file-system-routed and auto-imported files are framework entry \
+             points and must not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #6279: detection is gated on a `nuxt.config.{ts,js,mjs}` in
+    // the file's nearest package.json directory (or a `nuxt` dependency). Here the
+    // package.json declares no `nuxt` dependency — Nuxt is recognized solely from
+    // the `nuxt.config.mjs` — and the Nuxt 3 root layout places the convention
+    // dirs directly at the project root (no `app/`).
+    #[test]
+    fn nuxt3_root_layout_detected_via_config_mjs_issue_6279() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app","private":true}"#),
+            ("nuxt.config.mjs", "export default {};\n"),
+            ("pages/index.vue", "<template><div /></template>\n"),
+            ("composables/state.ts", "export const useShared = () => 1;\n"),
+            ("utils/helpers.ts", "export const helper = () => 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "Nuxt 3 root-layout convention files (detected via nuxt.config.mjs) must \
+             not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #6279: the Nuxt exemption is precise — an orphaned source
+    // file NOT under a Nuxt convention directory is still a true positive even in
+    // a detected Nuxt project.
+    #[test]
+    fn orphan_in_nuxt_app_still_flagged_issue_6279() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"app","private":true,"dependencies":{"nuxt":"^3.0.0"}}"#,
+            ),
+            ("nuxt.config.ts", "export default defineNuxtConfig({});\n"),
+            ("app/pages/index.vue", "<template><div /></template>\n"),
+            ("app/lib/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the orphan outside the Nuxt convention dirs must be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #6279: the exemption is a framework convention tied to a
+    // detected Nuxt project, NOT an unconditional `pages/` allowlist. With no
+    // `nuxt.config` in any ancestor and no `nuxt` dependency, a `pages/` file is
+    // still eligible for unused-file flagging.
+    #[test]
+    fn pages_dir_flagged_without_nuxt_config_issue_6279() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app","private":true}"#),
+            ("index.ts", "export const app = 1;\n"),
+            ("pages/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "without a Nuxt signal, a `pages/` file is not blanket-exempt: {diags:?}"
+        );
+    }
+
     // Regression for #1850: in a Yarn/npm/pnpm workspace monorepo, one package
     // imports another by its package NAME (`import { x } from "motion-utils"`).
     // The root package.json has no main/exports (is_library=false, rule runs),

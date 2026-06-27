@@ -1557,11 +1557,48 @@ fn is_sveltekit_route_entry(path: &Path, project: &ProjectCtx) -> bool {
         || project.frameworks_for_path(path).iter().any(|f| f.name == "svelte")
 }
 
+/// Nuxt's conventional auto-loaded directories — those whose files Nuxt's
+/// file-system router and auto-import mechanism wire into the app by directory
+/// convention at build time, never through a static import: `pages/`
+/// (file-system routes), `components/` (auto-imported components),
+/// `composables/` and `utils/` (auto-imported app-wide), `layouts/`, `plugins/`,
+/// and `middleware/` (route middleware). Matched as path segments, so both the
+/// Nuxt 3 (`<root>/pages/`) and Nuxt 4 (`<root>/app/pages/`) layouts are covered.
+const NUXT_AUTO_LOADED_DIRS: &[&str] = &[
+    "pages",
+    "components",
+    "composables",
+    "utils",
+    "layouts",
+    "plugins",
+    "middleware",
+];
+
+/// True when `path` is a Nuxt framework-loaded entry point in a detected Nuxt
+/// project: a file under one of Nuxt's conventional auto-loaded directories
+/// ([`NUXT_AUTO_LOADED_DIRS`]) or under a `server/api/`/`server/routes/`/
+/// `server/middleware/` subtree. Nuxt's file-system router and auto-import
+/// mechanism consume these files by directory convention — nothing `import`s
+/// them — so the import-graph BFS cannot reach them, yet they are live entry
+/// points, not dead code. The Nuxt-detection gate (a `nuxt.config.{ts,js,mjs}`
+/// in the file's nearest `package.json` directory, or a `nuxt` dependency) keeps
+/// these directory names flaggable in a project that is not Nuxt.
+fn is_nuxt_framework_entry(path: &Path, project: &ProjectCtx) -> bool {
+    if !has_path_segment(path, NUXT_AUTO_LOADED_DIRS) && !is_nuxt_server_route_file(path) {
+        return false;
+    }
+    project.is_nuxt_for_path(path)
+}
+
 /// True when `path` matches an entry point declared by any detected
 /// framework. This covers file-based routers, generated route trees, and
 /// framework-owned files whose exports/import reachability is implicit.
 pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     if is_sveltekit_route_entry(path, project) {
+        return true;
+    }
+
+    if is_nuxt_framework_entry(path, project) {
         return true;
     }
 
