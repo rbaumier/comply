@@ -12,7 +12,10 @@
 //! return type (`fn new() -> RwLock<T>`, `fn get(&self) -> &Mutex<T>`), a
 //! function parameter (`fn f(m: &Mutex<T>)` borrows a lock the caller owns),
 //! a struct field — named (`struct S { m: Mutex<T> }`) or tuple
-//! (`struct S(Mutex<T>)`) — and a turbofish type argument in expression
+//! (`struct S(Mutex<T>)`) — a raw-pointer target (`*const Mutex<T>` /
+//! `*mut Mutex<T>`, a transient unsafe alias such as the
+//! `Arc::into_raw`/`Arc::from_raw` view of an `Arc<Mutex<T>>` allocation) and a
+//! turbofish type argument in expression
 //! position (`v.downcast_ref::<Mutex<T>>()`, `size_of::<Mutex<T>>()`), which
 //! only names the type a generic fn operates on. None can be `Arc`-wrapped at
 //! that site: the lock is owned or wrapped elsewhere.
@@ -67,6 +70,13 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
             // `Mutex<T>` in the function body is reached through `body`, not
             // `parameter`, and stays flagged.
             "parameter" => return,
+            // A raw-pointer target (`*const Mutex<T>` / `*mut Mutex<T>`) is a
+            // transient unsafe alias that cannot syntactically carry the `Arc`
+            // wrapper, so a `Mutex` reached through a `pointer_type` is not a
+            // bare single-threaded lock — ownership lives wherever the pointer
+            // was derived from. The canonical case is the `Arc::into_raw` /
+            // `Arc::from_raw` view of an `Arc<Mutex<T>>` allocation.
+            "pointer_type" => return,
             // A turbofish / generic argument in EXPRESSION position
             // (`downcast_ref::<Mutex<T>>()`, `size_of::<Mutex<T>>()`) only NAMES
             // the type — it is not an owning binding and cannot be `Arc`-wrapped
@@ -472,6 +482,29 @@ fn kmeans(nodes: &[Vec<f32>], k: usize) {
     #[test]
     fn flags_mutex_with_plain_iter_not_par() {
         let src = "fn f(v: &[u32]) { let m: Mutex<u32> = Mutex::new(0); v.iter().for_each(|x| { *m.lock().unwrap() += *x; }); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_const_ptr_to_mutex_from_into_raw() {
+        let src = "fn into_overlapped(sock_state: Pin<Arc<Mutex<SockState>>>) -> *mut c_void { let overlapped_ptr: *const Mutex<SockState> = unsafe { Arc::into_raw(Pin::into_inner_unchecked(sock_state)) }; overlapped_ptr as *mut _ }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_ptr_to_mutex_from_cast() {
+        let src = "fn from_overlapped(ptr: *mut OVERLAPPED) -> Pin<Arc<Mutex<SockState>>> { let sock_ptr: *const Mutex<SockState> = ptr as *const _; unsafe { Pin::new_unchecked(Arc::from_raw(sock_ptr)) } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mut_ptr_to_mutex_local() {
+        assert!(run("fn f() { let p: *mut Mutex<u32> = std::ptr::null_mut(); let _ = p; }").is_empty());
+    }
+
+    #[test]
+    fn flags_direct_mutex_not_behind_pointer() {
+        let src = "fn f() { let m: Mutex<SockState> = Mutex::new(state); let _g = m.lock().unwrap(); }";
         assert_eq!(run(src).len(), 1);
     }
 
