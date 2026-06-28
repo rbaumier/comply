@@ -183,6 +183,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A Zod `.transform()` callback is always a function (arrow or
+        // reference), never a plain object literal. A single object-literal
+        // argument is structural proof the receiver is not a Zod schema — it's
+        // an unrelated `.transform` API (e.g. a transpiler taking an options
+        // bag), so there is no `.pipe()` to add.
+        if matches!(call.arguments.first(), Some(Argument::ObjectExpression(_))) {
+            return;
+        }
+
         // Check if the parent is a member expression with property `pipe`
         // (i.e. `.transform(fn).pipe(...)`)
         let parent = semantic.nodes().parent_node(node.id());
@@ -326,6 +335,23 @@ mod tests {
         // (one arg), so it must stay flagged — the fix keys on argument COUNT,
         // not on the argument being an inline arrow.
         let src = "const s = schema.transform(namedFn);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_transform_with_object_argument() {
+        // Regression for rbaumier/comply#6635: jiti's `transform({ ... })` is a
+        // transpiler taking an options bag, not a Zod schema modifier. A plain
+        // object-literal argument is never a Zod transform callback (always a
+        // function), so it must not be flagged.
+        let src = "const out = jiti.transform({ source: rawSource, filename: filename, ts: true });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_transform_with_arrow_callback() {
+        // An arrow callback is a real schema transform and must still flag.
+        let src = "const s = schema.transform((v) => v.trim());";
         assert_eq!(run(src).len(), 1);
     }
 }
