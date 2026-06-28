@@ -7,8 +7,9 @@
 //! membership — there is no collection to index, so it is not flagged;
 //! a two-argument `.indexOf(value, fromIndex)` is a forward-scan cursor (a
 //! positional string/array walk), never a membership lookup, so it is not flagged;
-//! a receiver that is an inline literal array (`["./", "/"].includes(x)`) has a
-//! fixed, hardcoded size independent of input, so the scan is O(1), not flagged;
+//! a method-call chain rooted in an inline literal array (`["./", "/"].includes(x)`,
+//! `[a, b].flat().filter(Boolean)`) has a fixed, hardcoded size independent of
+//! input, so the scan is O(1), not flagged;
 //! a lookup in the iterable expression of a `for..of`/`for..in`
 //! (`for (const x of arr.filter(...))`) runs once before the loop, not per
 //! iteration, so it is not an O(n*m) site for that loop (an enclosing outer loop
@@ -98,11 +99,13 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip when the receiver is an inline literal array (`["./", "/"].includes(x)`).
-        // A literal array has a fixed, hardcoded size independent of input, so the
-        // membership/scan is O(constant) = O(1) regardless of the loop length; building
-        // a Set/Map from it would only add allocation overhead with no asymptotic gain.
-        if matches!(&member.object, Expression::ArrayExpression(_)) {
+        // Skip when the method-call chain is rooted in an inline literal array
+        // (`["./", "/"].includes(x)`, `[a, b].flat().filter(Boolean)`). The array
+        // is spelled out at the call site rather than read from unbounded input,
+        // so it is not the growing collection scanned per iteration that the rule
+        // targets; building a Set/Map from it would only add allocation overhead
+        // with no asymptotic gain.
+        if root_receiver_is_literal_array(&member.object) {
             return;
         }
 
@@ -129,6 +132,24 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+/// True when the root receiver of a method-call chain is an inline array literal.
+/// Walks `CallExpression` chains down through each call's member-expression callee
+/// (`[a, b].flat().filter(...)` → `[a, b].flat()` → `[a, b]`) until it reaches the
+/// ultimate receiver, returning true iff that root is an `Expression::ArrayExpression`.
+/// The base case is the direct `[...].filter(...)` receiver; intermediate method
+/// calls (`.flat()`, `.slice()`, …) are walked through to reach the root.
+fn root_receiver_is_literal_array(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::ArrayExpression(_) => true,
+        Expression::CallExpression(call) => match &call.callee {
+            Expression::StaticMemberExpression(m) => root_receiver_is_literal_array(&m.object),
+            Expression::ComputedMemberExpression(m) => root_receiver_is_literal_array(&m.object),
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -807,6 +828,74 @@ for (const x of items) { const m = [1, 2, 3].find(v => v === x); }
 "#)
             .is_empty()
         );
+    }
+
+    #[test]
+    fn no_fp_on_chain_rooted_in_literal_array_flat_filter_in_loop() {
+        // Regression for #6612: `[lockFile, files].flat().filter(Boolean)` — the
+        // root of the chain is an inline 2-element array literal, so the scan is
+        // O(constant); intermediate `.flat()` stays bounded by that fixed size.
+        assert!(
+            run(r#"
+for (const packageManager of packageManagers) {
+    const detectionsFiles = [packageManager.lockFile, packageManager.files]
+        .flat()
+        .filter(Boolean);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_chain_rooted_in_literal_array_slice_find_in_loop() {
+        // `.slice(0, n)` between the literal and the lookup is also a bounded
+        // transform of a fixed-size array.
+        assert!(
+            run(r#"
+for (const x of items) {
+    const m = [1, 2, 3, 4].slice(0, 2).find(v => v === x);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_direct_literal_array_filter_in_loop() {
+        // The base case of the chain walk: `.filter()` directly on a literal array.
+        assert!(
+            run(r#"
+for (const x of items) {
+    const m = [1, 2, 3].filter(v => v === x);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_chain_rooted_in_param_flat_filter_in_loop() {
+        // The chain root is a parameter (unbounded), not a literal array — the
+        // intermediate `.flat()` does not bound it, so still flagged.
+        let diags = run(r#"
+function process(arr) {
+    for (const x of items) {
+        const m = arr.flat().filter(v => v === x);
+    }
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_unbounded_filter_in_loop() {
+        let diags = run(r#"
+for (const x of items) {
+    const m = collection.filter(v => v === x);
+}
+"#);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
