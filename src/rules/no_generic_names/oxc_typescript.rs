@@ -757,6 +757,27 @@ fn is_for_in_value_lookup<'a>(
     false
 }
 
+/// True when the identifier is the declared `id` of a `TSTypeAliasDeclaration`
+/// or `TSInterfaceDeclaration` (`type Value = …`, `interface Value {}`) — a
+/// type-level symbol, not a runtime value. Scoped to the declaration's own
+/// `id`: the node's direct parent must be the type-alias/interface declaration,
+/// so a generic value declaration (`const value = …`) and a type parameter
+/// (`type T<Value> = …`, whose parent is `TSTypeParameter`) do not qualify.
+fn is_type_alias_or_interface_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    matches!(
+        nodes.kind(parent_id),
+        AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_)
+    )
+}
+
 /// True when the identifier is the *name* of a TypeScript type-alias or
 /// interface declaration (`type Value = …`, `interface Value {}`) nested inside
 /// a `namespace`/`module` block (`TSModuleDeclaration`). Such a member is always
@@ -771,20 +792,28 @@ fn is_namespaced_type_declaration_name<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
-    let nodes = semantic.nodes();
-    let parent_id = nodes.parent_id(node.id());
-    if parent_id == node.id() {
+    if !is_type_alias_or_interface_name(node, semantic) {
         return false;
     }
-    if !matches!(
-        nodes.kind(parent_id),
-        AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_)
-    ) {
-        return false;
-    }
-    nodes
+    semantic
+        .nodes()
         .ancestor_kinds(node.id())
         .any(|kind| matches!(kind, AstKind::TSModuleDeclaration(_)))
+}
+
+/// True when the banned `word` is the final word segment of `name` and `name`
+/// has more than one segment — i.e. `word` is the trailing qualifier of a
+/// compound (`LocalizerData` → trailing `Data`), not the entire name (bare
+/// `Data`). Segmentation reuses `for_each_segment` so the camelCase/snake_case
+/// boundaries match the banned-segment matcher exactly.
+fn banned_word_is_trailing_compound_segment(name: &str, word: &str) -> bool {
+    let mut count = 0usize;
+    let mut last_is_word = false;
+    for_each_segment(name, |seg| {
+        count += 1;
+        last_is_word = seg.eq_ignore_ascii_case(word);
+    });
+    count > 1 && last_is_word
 }
 
 /// True when the identifier is the *name* of a `type X = …` whose body's key
@@ -1462,6 +1491,19 @@ impl OxcCheck for Check {
             if is_namespaced_type_declaration_name(node, semantic) {
                 return;
             }
+            // A type-alias/interface name whose trailing PascalCase segment is the
+            // banned word (`type LocalizerData = …`, `interface LocaleLoaderData {}`)
+            // follows the idiomatic `{Domain}Data` suffix convention for data-shape
+            // types — the leading domain word supplies the specificity, and the
+            // symbol is type-level, not a runtime value. A bare `type Data = …`
+            // (the banned word is the whole name) and a runtime `const localizerData`
+            // still flag, since the exemption needs both a type-declaration name and
+            // a multi-segment compound.
+            if is_type_alias_or_interface_name(node, semantic)
+                && banned_word_is_trailing_compound_segment(name, word)
+            {
+                return;
+            }
             // An identifier mirroring a standard DOM/Web API type name in
             // camelCase (`dataTransfer` for `DataTransfer`) refers to the web
             // platform object, not a generic `data*` compound.
@@ -2115,14 +2157,36 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_data_compound_outside_namespace_issue_5501() {
-        // Negative space: the #5501 exemption hinges on the `NounData` type being
-        // nested in a namespace. A top-level `interface ProductData`/`type
-        // TransferData` still flags (the qualifier that would make `Data` specific
-        // is absent), and a generic *value* binding inside a namespace still flags.
-        assert_eq!(run("export interface ProductData { id?: string }").len(), 1);
-        assert_eq!(run("export type TransferData = { x: number };").len(), 1);
+    fn still_flags_data_value_binding_in_namespace_issue_5501() {
+        // The #5501 namespace exemption — like the #6568 `{Domain}Data` exemption —
+        // is scoped to type-level declaration names. A generic *value* binding
+        // inside a namespace (`const userData = …`) is a runtime value, so it
+        // still flags.
         assert_eq!(run("namespace P { export const userData = fetch(); }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_domain_data_type_declaration_name_issue_6568() {
+        // Regression for #6568 — a `{Domain}Data` PascalCase name declared as a
+        // `type` alias or `interface` follows the idiomatic data-shape suffix
+        // convention (`FormData`, `UserData`); the leading domain word makes the
+        // trailing `Data` segment specific, and the symbol is type-level, not a
+        // runtime value.
+        assert!(run("type LocalizerData = { route: string; locale: string };").is_empty());
+        assert!(run("type LocaleLoaderData = { key: string; cache: boolean };").is_empty());
+        assert!(run("interface FooData { id: string }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_generic_names_despite_domain_data_type_exemption_issue_6568() {
+        // Negative space for #6568: the exemption needs BOTH a type-declaration
+        // name AND a multi-segment compound. A bare `type Data = …` (the banned
+        // word is the whole name) still flags, and a runtime value (`const`,
+        // parameter) named `…Data`/`data` is not a type name, so it still flags.
+        assert_eq!(run("type Data = { x: number };").len(), 1);
+        assert_eq!(run("const localizerData = makeLocalizer();").len(), 1);
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        assert_eq!(run("function f(data) { return data; }").len(), 1);
     }
 
     #[test]
@@ -2704,12 +2768,12 @@ mod tests {
 
     #[test]
     fn still_flags_non_graph_data_compounds_issue_5732() {
-        // Negative space for #5732 — the exemption is scoped to graph-entity
-        // prefixes in the leading + trailing positions. A `data` segment led by a
-        // non-graph word (`UserData`, `updatedData`, `getUserData`), a graph noun
-        // whose `data` is not the trailing segment (`nodeDataResponse`), and a
-        // bare `data` all stay generic.
-        assert_eq!(run("export type UserData = { id: string };").len(), 1);
+        // Negative space for #5732 — the graph-entity exemption is scoped to a
+        // graph noun in the leading + trailing positions, and the #6568 type-name
+        // exemption does not reach runtime bindings. A `…Data` *value* led by a
+        // non-graph word (`updatedData`, `getUserData`), a graph noun whose `data`
+        // is not the trailing segment (`nodeDataResponse`), and a bare `data` all
+        // stay generic.
         assert_eq!(run("const updatedData = 1;").len(), 1);
         assert_eq!(run("function getUserData() { return 1; }").len(), 1);
         assert_eq!(run("const data = fetchData();").len(), 1);
@@ -2736,15 +2800,15 @@ mod tests {
 
     #[test]
     fn still_flags_non_event_and_generic_data_compounds_issue_6074() {
-        // Negative space for #6074 — the exemption is scoped to a specific
-        // event-type qualifier directly before `Event`+`Data`. A bare `data`, a
-        // bare `EventData` (no specific event type), a generic-led event compound
-        // (`ItemEventData`), and a non-event `…Data` suffix (`UserData`,
-        // `updatedData`) all stay generic.
+        // Negative space for #6074 — the `…EventData` payload exemption needs a
+        // specific event-type qualifier before `Event`+`Data`, and the #6568
+        // type-name exemption does not reach runtime bindings. A bare `data`, a
+        // bare-`EventData` *value* (no specific event type), a generic-led event
+        // compound *value* (`itemEventData`), and a non-event `…Data` *value*
+        // (`updatedData`) all stay generic.
         assert_eq!(run("const data = fetchData();").len(), 1);
-        assert_eq!(run("export interface EventData { x: number }").len(), 1);
-        assert_eq!(run("export interface ItemEventData { x: number }").len(), 1);
-        assert_eq!(run("export type UserData = { id: string };").len(), 1);
+        assert_eq!(run("const eventData = makePayload();").len(), 1);
+        assert_eq!(run("const itemEventData = makePayload();").len(), 1);
         assert_eq!(run("const updatedData = 1;").len(), 1);
     }
 
