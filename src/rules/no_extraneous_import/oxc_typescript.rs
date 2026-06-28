@@ -48,6 +48,18 @@ impl OxcCheck for Check {
         if pkg.engines.contains_key("vscode") {
             return;
         }
+        // A file the nearest `package.json`'s `files` publish whitelist does not
+        // cover is never included in the npm tarball, so a downstream consumer
+        // never `npm install`s it and there is no install-time break: importing a
+        // devDependency from such a non-published file (a test helper, build or
+        // example script, or any tooling left out of `files`) is correct, even
+        // when its name matches none of the rule's test/tooling patterns (issue
+        // #6511). Scoped to manifests that declare an exact `files` whitelist; a
+        // package with no `files` field, or one whose `files` uses a glob, is left
+        // to the path-based checks below.
+        if ctx.project.is_excluded_from_files_whitelist(ctx.path) {
+            return;
+        }
         // Dual-read: the unit-test harness injects an empty default FileCtx, so
         // the path-segment fields are false in tests — fall back to the pure
         // path predicate, which reads `ctx.path` directly.
@@ -1915,5 +1927,109 @@ import { ipcRenderer } from 'electron/renderer';
         let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
         assert_eq!(d.len(), 1, "electron in a non-electron project should flag: {d:?}");
         assert!(d[0].message.contains("electron"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_file_outside_files_whitelist() {
+        // Issue #6511: sindresorhus/p-map declares `files: ["index.js",
+        // "index.d.ts"]`. `assert-in-range.js` is a test helper absent from that
+        // publish whitelist, so npm never ships it — importing the `chalk` and
+        // `in-range` devDependencies from it cannot break a downstream install and
+        // must not flag.
+        let pkg = r#"{
+            "files": ["index.js", "index.d.ts"],
+            "devDependencies": {"chalk": "^5", "in-range": "^3", "ava": "^5"}
+        }"#;
+        let src = r#"
+import chalk from 'chalk';
+import inRange from 'in-range';
+"#;
+        let d = run_with_pkg_at_path(pkg, "assert-in-range.js", src);
+        assert!(d.is_empty(), "file outside files whitelist should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_unrecognized_test_file_outside_files_whitelist() {
+        // Issue #6511: `test-multiple-pmapskips-performance.js` matches none of the
+        // rule's test-name patterns, yet it is absent from p-map's `files`
+        // whitelist, so it is provably non-published and importing `ava` is correct.
+        let pkg = r#"{
+            "files": ["index.js", "index.d.ts"],
+            "devDependencies": {"ava": "^5"}
+        }"#;
+        let src = r#"import test from 'ava';"#;
+        let d = run_with_pkg_at_path(pkg, "test-multiple-pmapskips-performance.js", src);
+        assert!(d.is_empty(), "non-published file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_file_inside_files_whitelist() {
+        // Negative control: a file LISTED in `files` is published, so a
+        // devDependency import there is a genuine install-time break and must flag.
+        let pkg = r#"{
+            "files": ["index.js", "index.d.ts"],
+            "devDependencies": {"chalk": "^5"}
+        }"#;
+        let src = r#"import chalk from 'chalk';"#;
+        let d = run_with_pkg_at_path(pkg, "index.js", src);
+        assert_eq!(d.len(), 1, "published index.js should still flag: {d:?}");
+        assert!(d[0].message.contains("chalk"));
+    }
+
+    #[test]
+    fn still_flags_dev_dep_when_no_files_whitelist_declared() {
+        // Negative control: with no `files` field npm ships nearly everything, so a
+        // production file's devDependency import is unprovable as non-published and
+        // must still flag — the exemption must not broaden to the no-`files` case.
+        let pkg = r#"{"devDependencies":{"chalk":"^5"}}"#;
+        let src = r#"import chalk from 'chalk';"#;
+        let d = run_with_pkg_at_path(pkg, "src/util.js", src);
+        assert_eq!(d.len(), 1, "no files whitelist should still flag: {d:?}");
+        assert!(d[0].message.contains("chalk"));
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_file_under_published_directory_entry() {
+        // Negative control: a bare `files` directory entry (`lib`) ships its subtree
+        // recursively, so a file under it is published and must still flag.
+        let pkg = r#"{
+            "files": ["lib"],
+            "devDependencies": {"chalk": "^5"}
+        }"#;
+        let src = r#"import chalk from 'chalk';"#;
+        let d = run_with_pkg_at_path(pkg, "lib/util.js", src);
+        assert_eq!(d.len(), 1, "file under published lib/ should still flag: {d:?}");
+        assert!(d[0].message.contains("chalk"));
+    }
+
+    #[test]
+    fn still_flags_dev_dep_when_files_whitelist_uses_glob() {
+        // Negative control: a `*` glob in `files` is dropped from the parsed
+        // whitelist, so exclusion can no longer be proven exactly — the rule keeps
+        // its default behavior and a production file's devDependency import flags.
+        let pkg = r#"{
+            "files": ["dist/**/*.js", "index.js"],
+            "devDependencies": {"chalk": "^5"}
+        }"#;
+        let src = r#"import chalk from 'chalk';"#;
+        let d = run_with_pkg_at_path(pkg, "src/util.js", src);
+        assert_eq!(d.len(), 1, "glob files whitelist should not suppress: {d:?}");
+        assert!(d[0].message.contains("chalk"));
+    }
+
+    #[test]
+    fn still_flags_dev_dep_when_files_whitelist_uses_brace_glob() {
+        // Negative control: npm matches `files` with glob semantics, so a brace
+        // entry (`{index,cli}.js`) is a glob, not an exact path. It cannot be
+        // matched literally and would make a glob-covered file look absent, so the
+        // whitelist is treated as inexact and the rule keeps its default behavior.
+        let pkg = r#"{
+            "files": ["{index,cli}.js"],
+            "devDependencies": {"chalk": "^5"}
+        }"#;
+        let src = r#"import chalk from 'chalk';"#;
+        let d = run_with_pkg_at_path(pkg, "cli.js", src);
+        assert_eq!(d.len(), 1, "brace-glob files whitelist should not suppress: {d:?}");
+        assert!(d[0].message.contains("chalk"));
     }
 }
