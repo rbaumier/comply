@@ -1651,6 +1651,66 @@ fn is_export_object_assign(
     }
 }
 
+/// Base identifier name of an `Object.defineProperty` target, peeling a trailing
+/// `.prototype` or `.prototype.constructor`: `Collator` → `"Collator"`,
+/// `Collator.prototype` → `"Collator"`, `Collator.prototype.constructor` →
+/// `"Collator"`. Any other member-access shape (`Collator.foo`, a computed
+/// access, a deeper chain) yields `None`.
+fn define_property_target_base<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+    match expr {
+        Expression::Identifier(id) => Some(id.name.as_str()),
+        Expression::StaticMemberExpression(m) if m.property.name == "prototype" => {
+            match &m.object {
+                Expression::Identifier(id) => Some(id.name.as_str()),
+                _ => None,
+            }
+        }
+        Expression::StaticMemberExpression(m) if m.property.name == "constructor" => {
+            match &m.object {
+                Expression::StaticMemberExpression(inner)
+                    if inner.property.name == "prototype" =>
+                {
+                    match &inner.object {
+                        Expression::Identifier(id) => Some(id.name.as_str()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// True when `call` is a direct `Object.defineProperty(target, …)` whose target
+/// roots at a binding this module exports — the ECMA-402 polyfill pattern
+/// `Object.defineProperty(Collator, 'supportedLocalesOf', { … })` and
+/// `Object.defineProperty(Collator.prototype, 'compare', { … })` where the module
+/// declares `export const Collator = …`. Defining a property on the module's own
+/// exported object (or its prototype / prototype constructor) assembles the
+/// export's public contract before any consumer observes it — the same rationale
+/// as `is_export_object_assign`. The target is resolved against the module's
+/// actual exports (`exported`): `Object.defineProperty` on an imported binding, a
+/// global (`globalThis` / `window`), or any non-exported target is not matched
+/// and stays flagged.
+fn is_direct_define_property_on_exported_binding(
+    call: &oxc_ast::ast::CallExpression,
+    exported: &FxHashSet<String>,
+) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if !matches!(&m.object, Expression::Identifier(obj) if obj.name == "Object")
+        || m.property.name != "defineProperty"
+    {
+        return false;
+    }
+    let Some(first) = call.arguments.first().and_then(Argument::as_expression) else {
+        return false;
+    };
+    define_property_target_base(first).is_some_and(|base| exported.contains(base))
+}
+
 /// Name of the identifier reached by peeling TypeScript casts (`as`,
 /// `satisfies`, non-null `!`) off an expression. `None` once a non-cast,
 /// non-identifier node is reached. Lets `export default Vue as unknown as T`
@@ -2422,6 +2482,7 @@ impl OxcCheck for Check {
                     || is_define_property_wrapper_call(call, program)
                     || is_local_const_config_call(call, &new_locals)
                     || is_export_object_assign(call, &exported_locals)
+                    || is_direct_define_property_on_exported_binding(call, &exported_bindings)
                     || is_exported_builder_call(call, &exported_bindings)
                     || is_export_patching_foreach(call, &module_locals, &exported_bindings))
             {
@@ -2481,6 +2542,67 @@ mod tests {
     fn flags_top_level_new_expression() {
         let diags = crate::rules::test_helpers::run_rule(&Check, "new EventEmitter();", "t.ts");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn skips_define_property_on_exported_binding() {
+        // Issue #6319: ECMA-402 polyfills (formatjs intl-collator/core.ts) define
+        // spec-mandated methods on the module's own exported constructor via
+        // `Object.defineProperty(Collator, …)` and on its prototype via
+        // `Object.defineProperty(Collator.prototype, …)`. Because the module
+        // exports `Collator`, this assembles the export's public contract before
+        // any consumer observes it — not a tree-shaking hazard — exactly like the
+        // already-exempt `Object.assign(Collator, { … })`.
+        let on_ctor = "export const Collator = function () {} as any;\n\
+             Object.defineProperty(Collator, 'supportedLocalesOf', { value() {} });\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, on_ctor, "src/core.ts").is_empty(),
+            "Object.defineProperty on an exported constructor must be exempt"
+        );
+
+        let on_proto = "export const Collator = function () {} as any;\n\
+             Object.defineProperty(Collator.prototype, 'compare', { get() {} });\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, on_proto, "src/core.ts").is_empty(),
+            "Object.defineProperty on an exported binding's prototype must be exempt"
+        );
+
+        let on_proto_ctor = "export const Collator = function () {} as any;\n\
+             Object.defineProperty(Collator.prototype.constructor, 'name', { value: 'Collator' });\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, on_proto_ctor, "src/core.ts").is_empty(),
+            "Object.defineProperty on an exported binding's prototype.constructor must be exempt"
+        );
+    }
+
+    #[test]
+    fn flags_define_property_on_non_exported_target() {
+        // The exemption is bounded to the module's own exports. Defining a
+        // property on an *imported* binding mutates another module's object — a
+        // real side effect — and a global target (`globalThis`) is external
+        // state; both stay flagged.
+        let imported = "import { Foo } from 'pkg';\n\
+             Object.defineProperty(Foo, 'x', { value: 1 });\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, imported, "src/core.ts").len(),
+            1,
+            "Object.defineProperty on an imported binding must still flag"
+        );
+
+        let global = "Object.defineProperty(globalThis, 'x', { value: 1 });\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, global, "src/core.ts").len(),
+            1,
+            "Object.defineProperty on globalThis must still flag"
+        );
+
+        // An unrelated genuine top-level side effect is unaffected.
+        let unrelated = "export const Collator = function () {} as any;\nexternal.mutate();\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, unrelated, "src/core.ts").len(),
+            1,
+            "an unrelated top-level side effect must still flag"
+        );
     }
 
     #[test]
@@ -5393,7 +5515,7 @@ precacheAndRoute(entries)
             import { defineConfig, mergeConfig } from '../config';\n\
             defineConfig({ base: '' });\n\
             mergeConfig({}, {});\n";
-        let path = std::path::Path::new("packages/vite/src/node/config.ts");
+        let path = std::path::Path::new("packages/vite/src/node/plugin.ts");
         let project = crate::project::default_static_project_ctx();
         let file = FileCtx::build(path, src, Language::TypeScript, project);
         let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, path, project, &file);
