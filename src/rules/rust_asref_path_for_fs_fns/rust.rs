@@ -19,7 +19,7 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return; };
     let Ok(body_text) = body.utf8_text(source) else { return; };
     if !body_uses_fs(body_text) { return; }
-    if !is_effectively_pub(node, source) { return; }
+    if !is_effectively_pub(node, source, ctx.path) { return; }
 
     let Some(params) = node.child_by_field_name("parameters") else { return; };
     let mut cursor = params.walk();
@@ -325,5 +325,70 @@ mod tests {
         let src = "pub mod foo { \
                    pub fn find(p: &Path) -> String { fs::read_to_string(p).unwrap() } }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_pub_fs_function_in_privately_declared_platform_module() {
+        // Regression for #6534 (tempfile): `pub fn create(dir: &Path)` lives in
+        // `src/file/imp/unix.rs`, which is pulled in by a bare (non-`pub`)
+        // `mod platform;` carrying a `#[cfg_attr(…, path = "unix.rs")]` rename in
+        // the parent `mod.rs`. The function is therefore unreachable outside the
+        // crate, so the `impl AsRef<Path>` suggestion buys nothing.
+        let dir = tempfile::TempDir::new().unwrap();
+        let imp = dir.path().join("src/file/imp");
+        std::fs::create_dir_all(&imp).unwrap();
+        std::fs::write(
+            imp.join("mod.rs"),
+            "#[cfg_attr(any(unix, target_os = \"wasi\"), path = \"unix.rs\")]\n\
+             #[cfg_attr(windows, path = \"windows.rs\")]\n\
+             mod platform;\n\
+             pub use self::platform::*;\n",
+        )
+        .unwrap();
+        let unix = imp.join("unix.rs");
+        let source = "pub fn create(dir: &Path) -> std::io::Result<File> { \
+                      let _ = std::fs::metadata(dir)?; File::create(dir) }";
+        std::fs::write(&unix, source).unwrap();
+
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, &unix).is_empty());
+    }
+
+    #[test]
+    fn allows_pub_fs_function_in_bare_mod_declared_file() {
+        // The stem-matched multi-file case: `mod helper;` (bare, no `#[path]`) in
+        // the parent `mod.rs` declares `helper.rs` as a private module, so its
+        // top-level `pub fn` is crate-internal.
+        let dir = tempfile::TempDir::new().unwrap();
+        let util = dir.path().join("src/util");
+        std::fs::create_dir_all(&util).unwrap();
+        std::fs::write(util.join("mod.rs"), "mod helper;\npub use helper::*;\n").unwrap();
+        let helper = util.join("helper.rs");
+        let source = "pub fn load(p: &Path) -> Vec<u8> { fs::read(p).unwrap() }";
+        std::fs::write(&helper, source).unwrap();
+
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, &helper).is_empty());
+    }
+
+    #[test]
+    fn flags_pub_fs_function_in_publicly_declared_module() {
+        // Negative control: the same file declared by a bare-`pub mod platform;`
+        // (still using a `#[path]` rename) is reachable from outside the crate, so
+        // its `pub fn` stays flagged. A `pub` declaration does not suppress.
+        let dir = tempfile::TempDir::new().unwrap();
+        let imp = dir.path().join("src/file/imp");
+        std::fs::create_dir_all(&imp).unwrap();
+        std::fs::write(
+            imp.join("mod.rs"),
+            "#[cfg_attr(any(unix, target_os = \"wasi\"), path = \"unix.rs\")]\n\
+             pub mod platform;\n\
+             pub use self::platform::*;\n",
+        )
+        .unwrap();
+        let unix = imp.join("unix.rs");
+        let source = "pub fn create(dir: &Path) -> std::io::Result<File> { \
+                      let _ = std::fs::metadata(dir)?; File::create(dir) }";
+        std::fs::write(&unix, source).unwrap();
+
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, source, &unix).len(), 1);
     }
 }

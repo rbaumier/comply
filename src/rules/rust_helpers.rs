@@ -4,6 +4,8 @@
 //! "are we inside an async function" check (`thread-sleep-in-async`,
 //! `block-on-in-async`, `sync-io-in-async`). Rule of three: extract.
 
+use std::path::{Component, Path, PathBuf};
+
 use tree_sitter::Node;
 
 /// True if `node` is inside an `async fn`. Walks up parents looking
@@ -1515,18 +1517,232 @@ pub fn is_inside_non_public_module(node: Node, source: &[u8]) -> bool {
 }
 
 /// True if `item` is effectively reachable from outside the crate: it carries a
-/// bare `pub` modifier itself AND no enclosing module restricts it.
+/// bare `pub` modifier itself, no enclosing module restricts it, AND the file it
+/// lives in is not itself pulled in by a non-`pub` `mod` declaration.
 ///
 /// Effective visibility is the product of the item's own modifier and every
-/// enclosing module's, so a bare-`pub` item buried in a non-public module (e.g.
-/// `mod imp { pub fn … }`) is not part of the crate's public API. Combines
-/// [`is_pub`] (the item's own modifier) with [`is_inside_non_public_module`]
-/// (the enclosing chain).
+/// enclosing module's, so a bare-`pub` item buried in a non-public module is not
+/// part of the crate's public API. That non-public module can be lexical (an
+/// enclosing `mod imp { pub fn … }` in the same file — covered by
+/// [`is_inside_non_public_module`]) or cross-file: the whole file is brought in
+/// by a bare `mod imp;` in the parent module, so its top-level `pub` items are
+/// equally unreachable. [`file_is_privately_declared_module`] resolves that
+/// cross-file case from `path`.
 ///
 /// Rules whose rationale is "this is part of the crate's public surface" gate on
 /// this rather than bare [`is_pub`].
-pub fn is_effectively_pub(item: Node, source: &[u8]) -> bool {
-    is_pub(item, source) && !is_inside_non_public_module(item, source)
+pub fn is_effectively_pub(item: Node, source: &[u8], path: &Path) -> bool {
+    is_pub(item, source)
+        && !is_inside_non_public_module(item, source)
+        && !file_is_privately_declared_module(path)
+}
+
+/// True when the file at `path` is brought into its parent module by a
+/// non-`pub` `mod` declaration — making a bare-`pub`, top-level item in it
+/// unreachable from outside the crate even though it carries `pub`.
+///
+/// Resolution is purely structural: it locates the parent module file from the
+/// path layout (`dir/foo.rs` is declared in `dir`'s module file; `dir/mod.rs`
+/// is declared in the grandparent's; `lib.rs`/`main.rs` are crate roots with no
+/// declarer), parses each candidate parent file with tree-sitter, and looks for
+/// the external `mod` statement that pulls in THIS file — matched either by the
+/// module-name stem (`mod foo;` for `foo.rs`) or by a `#[path = "…"]` /
+/// `#[cfg_attr(…, path = "…")]` attribute whose resolved target is this file
+/// (the platform-rename shape: `#[cfg_attr(unix, path = "unix.rs")] mod
+/// platform;`).
+///
+/// Soundness: returns true ONLY when a declaring statement is positively
+/// matched AND it is not bare-`pub`. A matched bare-`pub mod` returns false, and
+/// any failure to resolve or match the parent file falls back to false — the
+/// rule keeps flagging rather than suppress on a guess.
+fn file_is_privately_declared_module(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+
+    // The module stem to look for, and the directory whose module file carries
+    // the declaring `mod` statement.
+    let (decl_dir, stem): (PathBuf, String) = if file_name == "mod.rs" {
+        // `dir/mod.rs` IS module `dir`; it is declared in dir's PARENT module.
+        let Some(module_dir) = path.parent() else {
+            return false;
+        };
+        let Some(stem) = module_dir.file_name().and_then(|n| n.to_str()) else {
+            return false;
+        };
+        let Some(decl_dir) = module_dir.parent() else {
+            return false;
+        };
+        (decl_dir.to_path_buf(), stem.to_string())
+    } else if file_name == "lib.rs" || file_name == "main.rs" {
+        // A crate root has no declaring `mod` statement.
+        return false;
+    } else {
+        // `dir/foo.rs` IS module `foo`; it is declared in dir's module file.
+        let Some(decl_dir) = path.parent() else {
+            return false;
+        };
+        let Some(stem) = path.file_stem().and_then(|n| n.to_str()) else {
+            return false;
+        };
+        (decl_dir.to_path_buf(), stem.to_string())
+    };
+
+    // Candidate files that may carry the declaration: the directory's
+    // `mod.rs`/`lib.rs`/`main.rs`, plus the Rust-2018 sibling `<decl_dir>.rs`.
+    let mut candidates = vec![
+        decl_dir.join("mod.rs"),
+        decl_dir.join("lib.rs"),
+        decl_dir.join("main.rs"),
+    ];
+    if let (Some(parent), Some(name)) =
+        (decl_dir.parent(), decl_dir.file_name().and_then(|n| n.to_str()))
+    {
+        candidates.push(parent.join(format!("{name}.rs")));
+    }
+
+    for candidate in candidates {
+        if candidate == path {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&candidate) else {
+            continue;
+        };
+        if let Some(declaration_is_pub) = declaring_mod_is_pub(&content, &candidate, &stem, path) {
+            return !declaration_is_pub;
+        }
+    }
+    false
+}
+
+/// Parse `content` (the parent module file at `candidate`) and return the
+/// visibility of the external `mod` statement that declares `target`, or `None`
+/// if no such statement is found.
+///
+/// `Some(true)` => declared by a bare-`pub mod`; `Some(false)` => declared by a
+/// non-`pub` `mod`. Only top-level external declarations (`mod name;`, no body)
+/// are considered. A `#[path]`/`#[cfg_attr(…, path)]` attribute overrides the
+/// module-name stem, so a path-attributed `mod` matches only when one of its
+/// resolved targets is `target`.
+fn declaring_mod_is_pub(content: &str, candidate: &Path, stem: &str, target: &Path) -> Option<bool> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
+    let tree = parser.parse(content, None)?;
+    let decl_dir = candidate.parent()?;
+    let source = content.as_bytes();
+
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        if child.kind() != "mod_item" {
+            continue;
+        }
+        // Only external declarations (`mod name;`) pull in a separate file.
+        if child.child_by_field_name("body").is_some() {
+            continue;
+        }
+
+        let path_targets = mod_path_attr_targets(child, source, decl_dir);
+        if !path_targets.is_empty() {
+            // A `#[path]` rename overrides the stem: this `mod` declares the
+            // attribute's target(s), not a `<stem>.rs` sibling.
+            if path_targets.iter().any(|t| paths_lexically_equal(t, target)) {
+                return Some(is_pub(child, source));
+            }
+            continue;
+        }
+
+        if child
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            == Some(stem)
+        {
+            return Some(is_pub(child, source));
+        }
+    }
+    None
+}
+
+/// Resolve every `#[path = "…"]` / `#[cfg_attr(…, path = "…")]` target carried
+/// by `mod_item`'s preceding attribute siblings, relative to `decl_dir` (the
+/// directory of the file declaring the module). Returns an empty vec when the
+/// module carries no path-bearing attribute.
+fn mod_path_attr_targets(mod_item: Node, source: &[u8], decl_dir: &Path) -> Vec<PathBuf> {
+    let mut targets = Vec::new();
+    let mut sibling = mod_item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                // A path attribute carries the `path` identifier and a string
+                // literal naming the file; the resolved-path equality check the
+                // caller performs is what actually decides the match.
+                if s.utf8_text(source).is_ok_and(|text| text.contains("path")) {
+                    let mut values = Vec::new();
+                    collect_string_literals(s, source, &mut values);
+                    for value in values {
+                        // A module `#[path]` target always names a `.rs` file, so
+                        // ignore the other string literals a `cfg_attr` carries
+                        // (e.g. `"wasi"` from a `target_os = "wasi"` predicate).
+                        if value.ends_with(".rs") {
+                            targets.push(decl_dir.join(value));
+                        }
+                    }
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    targets
+}
+
+/// Collect the unquoted value of every `string_literal` descendant of `node`
+/// into `out`. Recurses through token trees so literals inside a
+/// `#[cfg_attr(…, path = "…")]` argument list are reached.
+fn collect_string_literals(node: Node, source: &[u8], out: &mut Vec<String>) {
+    if node.kind() == "string_literal" {
+        if let Some(value) = string_literal_value(node, source) {
+            out.push(value.to_string());
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_string_literals(child, source, out);
+    }
+}
+
+/// The unquoted text of a `string_literal` node — its `string_content` child,
+/// or the literal with its surrounding quotes trimmed when empty.
+fn string_literal_value<'a>(node: Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "string_content" {
+            return child.utf8_text(source).ok();
+        }
+    }
+    node.utf8_text(source).ok().map(|t| t.trim_matches('"'))
+}
+
+/// Lexical path equality that folds away `.`/`..` components, so
+/// `dir/./unix.rs` and `dir/unix.rs` compare equal without touching the disk.
+fn paths_lexically_equal(a: &Path, b: &Path) -> bool {
+    normalize_lexically(a) == normalize_lexically(b)
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// True if the `match_arm`'s body is a single diverging or early-exit
@@ -6668,12 +6884,16 @@ mod tests {
             // Nested: a private module anywhere in the chain confines it.
             ("pub(crate) mod outer { pub mod inner { pub fn f() {} } }", false),
         ];
+        // A path with no resolvable parent module file on disk, so the
+        // cross-file check is a no-op and only the in-file visibility logic
+        // under test applies.
+        let path = Path::new("/nonexistent_comply_test/src/t.rs");
         for (src, expected) in cases {
             let tree = parse(src);
             let func = first_of_kind(tree.root_node(), "function_item")
                 .expect("snippet should contain a function_item");
             assert_eq!(
-                is_effectively_pub(func, src.as_bytes()),
+                is_effectively_pub(func, src.as_bytes(), path),
                 expected,
                 "is_effectively_pub mismatch for `{src}`"
             );
