@@ -1090,11 +1090,12 @@ pub fn has_outer_attribute_path(item: Node, source: &[u8], attr_paths: &[&str]) 
 /// `attribute_item` siblings (skipping interleaved comment siblings, traversing
 /// past unrelated attributes such as `#[cfg(...)]`) for an `allow`/`expect`
 /// attribute whose argument `token_tree` contains an `identifier` token equal to
-/// `lint`. At a `mod` block or the crate root it also reads the *inner*
-/// attributes (`#![allow(...)]`) that scope the whole module/file, the way the
-/// rustc/clippy lint itself resolves a file- or module-level allow. The walk
-/// stops at the enclosing `function_item` / `closure_expression` / `source_file`
-/// boundary so an `#[allow]` on a *sibling* item far above does not leak in.
+/// `lint`. At a `mod` block, the crate root, or any enclosing `block` (such as
+/// a function body) it also reads the *inner* attributes (`#![allow(...)]`) that
+/// scope that module/file/block, the way the rustc/clippy lint itself resolves a
+/// file-, module-, or function-level allow. The walk stops at the enclosing
+/// `function_item` / `closure_expression` / `source_file` boundary so an
+/// `#[allow]` on a *sibling* item far above does not leak in.
 ///
 /// Matching on the AST path child (`allow`/`expect`) and the token-tree
 /// `identifier` — not raw text — means a scope prefix like `clippy::` (which
@@ -1109,10 +1110,11 @@ pub fn has_clippy_allow(node: Node, source: &[u8], lint: &str) -> bool {
         if attribute_allows_lint_in_siblings(cur, source, lint) {
             return true;
         }
-        // Inner `#![allow(...)]` scope a `mod` block or the whole file; the rule
-        // mirrors rustc, which honors such a module/crate-level allow for every
-        // item inside.
-        if matches!(cur.kind(), "mod_item" | "source_file")
+        // Inner `#![allow(...)]` scope a `mod` block, the whole file, or an
+        // enclosing `block` such as a function body; the rule mirrors rustc,
+        // which honors such a module/crate/function-level allow for every node
+        // inside.
+        if matches!(cur.kind(), "mod_item" | "source_file" | "block")
             && inner_attribute_allows_lint(cur, source, lint)
         {
             return true;
@@ -1131,9 +1133,10 @@ pub fn has_clippy_allow(node: Node, source: &[u8], lint: &str) -> bool {
 }
 
 /// Scan the direct-child `inner_attribute_item` (`#![allow(...)]`) nodes of a
-/// `source_file` root or a `mod_item` for an `allow`/`expect` attribute naming
-/// `lint`. A `mod`'s inner attributes nest inside its `declaration_list` body;
-/// the `source_file` root holds them directly.
+/// `source_file` root, a `mod_item`, or a `block` for an `allow`/`expect`
+/// attribute naming `lint`. A `mod`'s inner attributes nest inside its
+/// `declaration_list` body; a `source_file` root or a `block` holds them
+/// directly.
 fn inner_attribute_allows_lint(scope: Node, source: &[u8], lint: &str) -> bool {
     let body = if scope.kind() == "mod_item" {
         let mut scope_cursor = scope.walk();
