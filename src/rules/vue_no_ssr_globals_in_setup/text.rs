@@ -222,6 +222,91 @@ fn is_ssr_aware_composable_arg(line: &str, abs: usize) -> bool {
     })
 }
 
+/// Vue Composition API lifecycle hooks that never run during server render:
+/// their callbacks execute only in the browser, so an SSR global referenced
+/// inside one is safe. These are the hooks Vue skips on the server — only the
+/// `<script setup>` body itself runs during SSR.
+const CLIENT_ONLY_LIFECYCLE_HOOKS: &[&str] = &[
+    "onBeforeMount",
+    "onMounted",
+    "onBeforeUpdate",
+    "onUpdated",
+    "onBeforeUnmount",
+    "onUnmounted",
+    "onActivated",
+    "onDeactivated",
+];
+
+/// True when the SSR global at byte offset `abs` sits inside an inline
+/// client-only lifecycle-hook callback that both opens and references the
+/// global on the same line — `onMounted(() => document.addEventListener(…))`
+/// (expression body) or `onMounted(() => { document.title = … })` (single-line
+/// braced body). The hook callback runs only in the browser, so the access is
+/// SSR-safe. Detection is anchored on a recognized lifecycle hook wrapping the
+/// reference: the global must lie within the hook call's parenthesis span and
+/// be preceded by the callback arrow on that line, so a bare top-level access,
+/// a global passed to a non-lifecycle call (`watch(() => window…)`), or one
+/// sitting after the hook's closing paren is not suppressed. Multi-line hook
+/// callbacks are handled separately by the cross-line brace-depth tracker.
+fn in_inline_lifecycle_callback(line: &str, abs: usize, in_string: &[bool]) -> bool {
+    let bytes = line.as_bytes();
+    let in_str = |i: usize| in_string.get(i).copied().unwrap_or(false);
+    for hook in CLIENT_ONLY_LIFECYCLE_HOOKS {
+        let mut from = 0;
+        while let Some(rel) = line[from..].find(hook) {
+            let name_start = from + rel;
+            let name_end = name_start + hook.len();
+            from = name_end;
+            // A standalone hook call only: not part of a larger identifier or a
+            // property access, and not inside a string literal.
+            let preceded_by_word = name_start > 0 && {
+                let p = bytes[name_start - 1];
+                p.is_ascii_alphanumeric() || p == b'_' || p == b'$' || p == b'.'
+            };
+            if preceded_by_word || in_str(name_start) {
+                continue;
+            }
+            // The opening paren of the call, skipping whitespace after the name.
+            let mut paren = name_end;
+            while paren < bytes.len() && bytes[paren].is_ascii_whitespace() {
+                paren += 1;
+            }
+            if paren >= bytes.len() || bytes[paren] != b'(' || in_str(paren) {
+                continue;
+            }
+            // Matching close paren of this hook call, ignoring parens in strings.
+            let mut depth = 0i32;
+            let mut close = bytes.len();
+            let mut i = paren;
+            while i < bytes.len() {
+                if !in_str(i) {
+                    match bytes[i] {
+                        b'(' => depth += 1,
+                        b')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                close = i;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                i += 1;
+            }
+            // The global must lie within this hook call's argument span, after a
+            // callback arrow (so it is inside the body, not a value handed to the
+            // hook directly).
+            let arrow_before = (paren..abs.saturating_sub(1))
+                .any(|j| bytes[j] == b'=' && bytes[j + 1] == b'>' && !in_str(j));
+            if paren < abs && abs < close && arrow_before {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// JS binding keywords that introduce a local variable.
 const DECL_KEYWORDS: &[&str] = &["const", "let", "var"];
 
@@ -345,6 +430,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                         && !runtime_guarded_before(line, abs)
                         && !is_typeof_operand(line, abs)
                         && !is_ssr_aware_composable_arg(line, abs)
+                        && !in_inline_lifecycle_callback(line, abs, &in_string)
                     {
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -678,6 +764,59 @@ mod tests {
         // bare `window` access.
         let sfc = "<script setup>\nconst a = isClient ? 1 : 0; const w = window.innerWidth\n</script>";
         assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_document_in_single_line_expression_body_onmounted() {
+        // Issue #6497: BayBreezy/ui-thing BlockDashboards7.vue. The whole
+        // lifecycle-hook call is on one line with a brace-less expression body;
+        // `document` is inside the browser-only `onMounted` callback.
+        let sfc = "<script setup>\nonMounted(() => document.addEventListener(\"keydown\", handleKeydown))\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_document_in_single_line_expression_body_onunmounted() {
+        // Issue #6497: companion `onUnmounted(() => document.removeEventListener(...))`.
+        let sfc = "<script setup>\nonUnmounted(() => document.removeEventListener(\"keydown\", handleKeydown))\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_document_in_single_line_braced_onmounted() {
+        // A single-line braced body (open and close brace on one line) is also an
+        // inline lifecycle callback and runs only in the browser.
+        let sfc = "<script setup>\nonMounted(() => { document.title = 'x' })\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_global_in_inline_non_lifecycle_call() {
+        // The arrow is not enough: a `watch` source getter is evaluated during
+        // setup (server-side), so a bare `window` inside it still crashes on SSR.
+        let sfc = "<script setup>\nconst stop = watch(() => window.innerWidth, () => {})\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_global_after_inline_lifecycle_call_on_same_line() {
+        // The inline lifecycle callback is suppressed, but a bare `window` access
+        // after its closing paren on the same line is still flagged.
+        let sfc = "<script setup>\nonMounted(() => doStuff()); const w = window.innerWidth\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
+    }
+
+    #[test]
+    fn flags_global_after_lifecycle_call_with_paren_in_string() {
+        // A `(` inside a string literal must not inflate the hook call's paren
+        // depth: the matching-paren scan still closes `onMounted(...)` correctly,
+        // so the bare `window` after it is flagged.
+        let sfc = "<script setup>\nonMounted(() => log('(')); const w = window.innerWidth\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
     }
 
     #[test]
