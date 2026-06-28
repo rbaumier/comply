@@ -216,14 +216,23 @@ fn imports_backtracking_engine(source: &str) -> bool {
 /// `true` when the file imports a Regex type from `krate`, in either the
 /// single-item form (`use regex::Regex;`, `use tantivy_fst::Regex;`) or the
 /// brace-grouped form (`use regex::{Regex, RegexBuilder};`).
+///
+/// The byte-oriented `bytes` submodule of the `regex` crate
+/// (`use regex::bytes::Regex;`, `use regex::bytes::{Regex, RegexBuilder};`) is
+/// the same finite-automaton engine with the same linear-time guarantees, so an
+/// optional `bytes::` module segment after the crate name is accepted too.
 fn source_imports_regex_from(source: &str, krate: &str) -> bool {
-    crate::oxc_helpers::source_contains(source, &format!("use {krate}::Regex"))
-        || crate::oxc_helpers::source_contains(source, &format!("use {krate}::RegexBuilder"))
-        || imports_grouped_regex_from(source, krate)
+    ["", "bytes::"].iter().any(|module| {
+        crate::oxc_helpers::source_contains(source, &format!("use {krate}::{module}Regex"))
+            || crate::oxc_helpers::source_contains(source, &format!("use {krate}::{module}RegexBuilder"))
+    }) || imports_grouped_regex_from(source, krate)
 }
 
 /// `true` when a brace-grouped `use {krate}::{ ... }` import group names a
-/// Regex type (`Regex`, `RegexBuilder`, `RegexSet`, …).
+/// Regex type (`Regex`, `RegexBuilder`, `RegexSet`, …). The byte-oriented
+/// `bytes` submodule (`use regex::bytes::{Regex, RegexBuilder};`) is the same
+/// linear-time engine, so an optional `bytes::` segment before the group is
+/// accepted too.
 ///
 /// Anchored on the `use {krate}::` crate-segment boundary — the `::` must
 /// immediately follow the crate name (modulo surrounding whitespace), so a
@@ -236,12 +245,15 @@ fn imports_grouped_regex_from(source: &str, krate: &str) -> bool {
     while let Some(idx) = rest.find(&prefix) {
         let after = &rest[idx + prefix.len()..];
         rest = after;
-        let Some(group_start) = after
-            .trim_start()
-            .strip_prefix("::")
-            .map(str::trim_start)
-            .and_then(|s| s.strip_prefix('{'))
-        else {
+        let Some(after_crate) = after.trim_start().strip_prefix("::").map(str::trim_start) else {
+            continue;
+        };
+        // Accept an optional `bytes::` submodule segment between the crate name
+        // and the brace group: `regex::bytes` is the same linear-time engine.
+        let after_module = after_crate
+            .strip_prefix("bytes::")
+            .map_or(after_crate, str::trim_start);
+        let Some(group_start) = after_module.strip_prefix('{') else {
             continue;
         };
         let group_end = group_start.find('}').unwrap_or(group_start.len());
@@ -478,6 +490,43 @@ mod tests {
         // A brace group from `regex` that names no Regex type does not resolve a
         // bare `Regex::new`, which stays flagged.
         let source = "use regex::{escape, Captures};\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_builder_from_grouped_regex_bytes_import() {
+        // Issue #6553: sharkdp/fd `main.rs` —
+        // `use regex::bytes::{Regex, RegexBuilder, RegexSetBuilder};` is the
+        // byte-oriented submodule of the linear-time `regex` engine.
+        let source = "use regex::bytes::{Regex, RegexBuilder, RegexSetBuilder};\nfn f(p: &str) { let r = RegexBuilder::new(&p); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_regex_from_single_item_regex_bytes_import() {
+        // Issue #6553: single-item `use regex::bytes::Regex;`.
+        let source = "use regex::bytes::Regex;\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_regex_from_multiline_grouped_regex_bytes_import() {
+        let source = "use regex::bytes::{\n    Regex,\n    RegexBuilder,\n};\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_grouped_bytes_import_from_lookalike_crate() {
+        // Issue #6553: `regexp` is a different crate whose path merely contains
+        // `regex`; its `bytes` submodule is not the linear-time `regex` engine,
+        // so the bare `Regex::new` still flags.
+        let source = "use regexp::bytes::{Regex};\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_single_item_bytes_import_from_lookalike_crate() {
+        let source = "use regexp::bytes::Regex;\nfn f(p: &str) { let r = Regex::new(p); }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
