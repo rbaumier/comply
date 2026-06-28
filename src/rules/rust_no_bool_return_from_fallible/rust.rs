@@ -2,9 +2,9 @@
 //!
 //! Walks `function_item` nodes whose return type is `bool` and whose
 //! name suggests an action (verb prefix from a small allowlist). The
-//! smell is an action whose boolean outcome is a hardcoded `true` /
-//! `false` literal: the operation ran but its failure reason is
-//! collapsed into a bare bool the caller can't act on.
+//! smell is an action that returns a bare `true` on one path and a bare
+//! `false` on another: the operation's success/failure is collapsed into
+//! a bool the caller can't get a reason from, instead of `Result<T, E>`.
 //!
 //! Several shapes are exempted because the bool is legitimate:
 //! - Pure predicates (`is_empty`, `has_x`, `contains`): a bool is the
@@ -24,7 +24,13 @@
 //!   than hardcoding a literal. A `match`/`if` tail counts as computed
 //!   when at least one branch body forwards a computed value (e.g.
 //!   `match { Some(f) => (f)(x), None => true }`); a `match`/`if` whose
-//!   every branch is a bare `true` / `false` is still the smell.
+//!   every branch is a bare `true` / `false` is not treated as computed.
+//! - Functions whose every boolean-literal return is the *same* constant
+//!   (all `true`, or all `false`): with a single possible outcome the bool
+//!   is a dispatch tag ("handler recognized the sequence"), not a
+//!   success/failure collapse — there is no failure path to surface as a
+//!   `Result`. A return forwarding a non-literal value keeps the function
+//!   in scope.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -140,6 +146,15 @@ impl AstCheck for Check {
         // iteration state (`true` = keep going, `false` = done), not
         // success/failure. The call site proves there is no error path.
         if drives_while_loop(node, name, source_bytes) {
+            return;
+        }
+        // A function whose every boolean-literal return is the *same*
+        // constant (all `true`, or all `false`) has a single possible
+        // outcome — its `bool` is a dispatch tag, not a success/failure
+        // collapse, so there is no failure path to hoist into a `Result`.
+        // Both literals must be reachable for the smell to exist; a return
+        // forwarding a non-literal value leaves the function in scope.
+        if returns_single_constant_bool(node, source_bytes) {
             return;
         }
         // mdBook tutorial example code (an ancestor `book.toml`) is
@@ -277,6 +292,137 @@ fn branch_body_is_computed(body: tree_sitter::Node) -> bool {
         body
     };
     expression_is_computed(expr)
+}
+
+/// Records the boolean-literal outcomes a function can return.
+#[derive(Default)]
+struct BoolReturns {
+    saw_true: bool,
+    saw_false: bool,
+    saw_non_literal: bool,
+}
+
+/// True if every boolean value the function can return is the *same*
+/// constant literal — all `true`, or all `false`. Such a function has a
+/// single possible outcome, so its `bool` is a dispatch tag, not a
+/// collapsed success/failure: there is no failure path to surface as a
+/// `Result`.
+///
+/// Both return positions are scanned: the body's tail expression (resolved
+/// through `if`/`match` branch tails) and every explicit `return <expr>;`
+/// in the function's *own* body. Closures and nested `fn`s are not
+/// descended into — a `return` there leaves through its own boundary. A
+/// return whose value is not a bool literal (a forwarded call or variable)
+/// makes the outcome non-constant, so the function keeps its current
+/// behaviour and is not exempted here.
+fn returns_single_constant_bool(func: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    let mut returns = BoolReturns::default();
+    if let Some(tail) = block_tail_expression(body) {
+        classify_return_value(tail, source, &mut returns);
+    }
+    collect_explicit_returns(body, source, &mut returns);
+
+    if returns.saw_non_literal {
+        return false;
+    }
+    // Exactly one of the two literals is reachable (and at least one is).
+    returns.saw_true ^ returns.saw_false
+}
+
+/// Classifies a value in return position. `if`/`match` are descended into
+/// their branch tails; a `block` resolves to its tail; a bool literal sets
+/// the matching flag; anything else is a non-literal outcome.
+fn classify_return_value(expr: tree_sitter::Node, source: &[u8], returns: &mut BoolReturns) {
+    match expr.kind() {
+        "boolean_literal" => match expr.utf8_text(source) {
+            Ok("true") => returns.saw_true = true,
+            Ok("false") => returns.saw_false = true,
+            _ => returns.saw_non_literal = true,
+        },
+        "if_expression" => classify_if_branches(expr, source, returns),
+        "match_expression" => classify_match_arms(expr, source, returns),
+        "block" => match block_tail_expression(expr) {
+            Some(tail) => classify_return_value(tail, source, returns),
+            None => returns.saw_non_literal = true,
+        },
+        _ => returns.saw_non_literal = true,
+    }
+}
+
+/// Classifies both branches of an `if`/`else` chain. An `if` without an
+/// `else` cannot yield a bool literal on the missing arm, so it counts as a
+/// non-literal outcome.
+fn classify_if_branches(if_expr: tree_sitter::Node, source: &[u8], returns: &mut BoolReturns) {
+    match if_expr.child_by_field_name("consequence") {
+        Some(cons) => classify_return_value(cons, source, returns),
+        None => returns.saw_non_literal = true,
+    }
+    match if_expr.child_by_field_name("alternative") {
+        Some(alt) => match alt.kind() {
+            // `else if`: the alternative is directly another `if_expression`.
+            "if_expression" => classify_if_branches(alt, source, returns),
+            // `else { .. }`: the `else_clause` wraps a `block` or a chained
+            // `else if` (`if_expression`).
+            "else_clause" => {
+                let mut cursor = alt.walk();
+                for child in alt.named_children(&mut cursor) {
+                    match child.kind() {
+                        "if_expression" => classify_if_branches(child, source, returns),
+                        "block" => classify_return_value(child, source, returns),
+                        _ => {}
+                    }
+                }
+            }
+            _ => returns.saw_non_literal = true,
+        },
+        None => returns.saw_non_literal = true,
+    }
+}
+
+/// Classifies every arm body of a `match` expression.
+fn classify_match_arms(match_expr: tree_sitter::Node, source: &[u8], returns: &mut BoolReturns) {
+    let Some(body) = match_expr.child_by_field_name("body") else {
+        returns.saw_non_literal = true;
+        return;
+    };
+    let mut cursor = body.walk();
+    let mut saw_arm = false;
+    for arm in body
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "match_arm")
+    {
+        saw_arm = true;
+        match arm.child_by_field_name("value") {
+            Some(value) => classify_return_value(value, source, returns),
+            None => returns.saw_non_literal = true,
+        }
+    }
+    if !saw_arm {
+        returns.saw_non_literal = true;
+    }
+}
+
+/// Records bool-literal outcomes from every `return <expr>;` in the
+/// function's own body. Closures, `async` blocks, and nested `fn`s are
+/// skipped so their returns — which leave through their own boundary, not
+/// this function's — are not attributed here.
+fn collect_explicit_returns(node: tree_sitter::Node, source: &[u8], returns: &mut BoolReturns) {
+    match node.kind() {
+        "closure_expression" | "async_block" | "function_item" => return,
+        "return_expression" => {
+            if let Some(value) = node.named_child(0) {
+                classify_return_value(value, source, returns);
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_explicit_returns(child, source, returns);
+    }
 }
 
 fn looks_like_action(name: &str) -> bool {
@@ -470,12 +616,18 @@ mod tests {
 
     #[test]
     fn flags_save_returning_bool() {
-        assert_eq!(run_on("fn save_user(u: &User) -> bool { true }").len(), 1);
+        assert_eq!(
+            run_on("fn save_user(u: &User) -> bool { if persist(u) { true } else { false } }").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_parse_returning_bool() {
-        assert_eq!(run_on("fn parse_config(s: &str) -> bool { true }").len(), 1);
+        assert_eq!(
+            run_on("fn parse_config(s: &str) -> bool { if scan(s) { true } else { false } }").len(),
+            1
+        );
     }
 
     #[test]
@@ -490,7 +642,8 @@ mod tests {
     /// is exempt.
     #[test]
     fn allows_bool_action_in_mdbook_example() {
-        let source = "fn process_events(&mut self) -> bool { side_effect(); true }";
+        let source =
+            "fn process_events(&mut self) -> bool { side_effect(); if step() { true } else { false } }";
         assert!(run_in_mdbook("going-further/custom_views_original.rs", source).is_empty());
     }
 
@@ -498,7 +651,8 @@ mod tests {
     /// stays flagged — the exemption is mdBook-scoped, not universal.
     #[test]
     fn flags_bool_action_outside_mdbook() {
-        let source = "fn process_events(&mut self) -> bool { side_effect(); true }";
+        let source =
+            "fn process_events(&mut self) -> bool { side_effect(); if step() { true } else { false } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -539,7 +693,7 @@ mod tests {
     fn flags_validate_in_inherent_impl() {
         // An inherent (non-trait) impl can freely return `Result`, so the
         // bool smell still applies.
-        let src = "impl Foo { fn validate_thing(&self) -> bool { true } }";
+        let src = "impl Foo { fn validate_thing(&self) -> bool { if ok() { true } else { false } } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -571,9 +725,9 @@ mod tests {
 
     #[test]
     fn flags_genuine_action_swallowing_failure() {
-        // The side effect runs as a statement and the outcome is a
-        // hardcoded literal — this is exactly the smell.
-        let src = "fn save_user(u: &User) -> bool { db.write(u); true }";
+        // Success and failure are collapsed into `true` / `false` literals
+        // instead of a `Result` — exactly the smell.
+        let src = "fn save_user(u: &User) -> bool { if db.write(u) { true } else { false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -696,7 +850,7 @@ mod tests {
 
     #[test]
     fn flags_validate_action_without_predicate_doc() {
-        let src = "fn validate_config(&self) -> bool { do_thing(); true }";
+        let src = "fn validate_config(&self) -> bool { do_thing(); if ok() { true } else { false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -725,7 +879,7 @@ mod tests {
     fn flags_validate_action_with_unrelated_doc() {
         let src = "\
             /// Validates the config and persists the result.\n\
-            fn validate_config(&self) -> bool { do_thing(); true }";
+            fn validate_config(&self) -> bool { do_thing(); if ok() { true } else { false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -773,7 +927,7 @@ mod tests {
 
     #[test]
     fn flags_genuine_action_no_predicate_name_or_doc() {
-        let src = "fn save_file(p: &str) -> bool { write(p); true }";
+        let src = "fn save_file(p: &str) -> bool { if write(p) { true } else { false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -782,7 +936,7 @@ mod tests {
         // `_island` must not match the `_is_` internal-segment check.
         assert!(!looks_like_predicate("parse_island_data"));
         // An action prefix + `island` still flags (it is not a predicate).
-        let src = "fn create_island_index() -> bool { do_thing(); true }";
+        let src = "fn create_island_index() -> bool { if build() { true } else { false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -800,7 +954,7 @@ mod tests {
                     while self.process_next_pt() {}\n\
                     self.outputs\n\
                 }\n\
-                fn process_next_pt(&mut self) -> bool { do_step(); true }\n\
+                fn process_next_pt(&mut self) -> bool { if more() { return true; } false }\n\
             }";
         assert!(run_on(src).is_empty());
     }
@@ -810,7 +964,7 @@ mod tests {
         // `while advance_state() {}` — bare-identifier call site.
         let src = "\
             fn drive() { while advance_state() {} }\n\
-            fn advance_state() -> bool { do_step(); true }";
+            fn advance_state() -> bool { if more() { return true; } false }";
         assert!(run_on(src).is_empty());
     }
 
@@ -822,13 +976,73 @@ mod tests {
         // `if save_config() {}` is not a continuation predicate.
         let src = "\
             fn setup() { if save_config() { log(); } }\n\
-            fn save_config(&self) -> bool { write(); true }";
+            fn save_config(&self) -> bool { if write() { true } else { false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn flags_action_with_no_caller() {
-        let src = "fn save_config(&self) -> bool { write(); true }";
+        let src = "fn save_config(&self) -> bool { if write() { true } else { false } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #6606: a function whose every bool-literal return is the same
+    // constant has one possible outcome (a dispatch tag), not a
+    // success/failure collapse, and is not flagged ---
+
+    #[test]
+    fn allows_action_always_returning_true() {
+        // sharkdp/bat `VisibleScreen::update_with_sgr` — recognizes and
+        // consumes the sequence, always succeeding: the tail is a constant
+        // `true`, never `false`, so there is no failure path.
+        let src = "fn update_with_sgr(&mut self, parameters: &str) -> bool { handle(parameters); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_action_always_returning_false() {
+        // sharkdp/bat `VisibleScreen::update_with_unsupported` — always
+        // returns `false` ("not recognized"); a single constant cannot
+        // encode success vs. failure.
+        let src =
+            "fn update_with_unsupported(&mut self, sequence: &str) -> bool { self.buf.push_str(sequence); false }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_action_with_branches_but_constant_true_tail() {
+        // sharkdp/bat `VisibleScreen::update_with_hyperlink` — the `if`/`else`
+        // is in statement position (both arms only run side effects); the
+        // function's single return value is the trailing constant `true`.
+        let src = "\
+            fn update_with_hyperlink(&mut self, sequence: &str) -> bool {\n\
+                if sequence == \"8;;\" { self.link.clear(); }\n\
+                else { self.link.clear(); self.link.push_str(sequence); }\n\
+                true\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_action_all_branches_same_constant() {
+        // Every reachable bool literal is `true`, so the outcome is constant.
+        let src = "fn update_state(&mut self, x: u8) -> bool { if x > 0 { true } else { true } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_action_with_reachable_true_and_false_returns() {
+        // A genuine fallible action: `false` on bad input, `true` on success.
+        // Both literals are reachable, so the bool collapses success/failure.
+        let src = "fn save_state(&mut self, x: &str) -> bool { if x.is_empty() { return false; } persist(x); true }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_action_mixing_literal_tail_and_computed_return() {
+        // A non-literal (forwarded) return makes the outcome non-constant, so
+        // the function keeps its current behaviour and stays flagged.
+        let src = "fn save_state(&mut self, x: &str) -> bool { if x.is_empty() { return self.try_save(x); } true }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
