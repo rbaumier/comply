@@ -90,7 +90,8 @@ use crate::rules::rust_helpers::{
     cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
+    cast_operand_is_enum_discriminant, cast_operand_is_for_range_bounded,
+    cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
     cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
@@ -272,6 +273,12 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_operand_is_range_guarded(node, source_bytes) {
+        return false;
+    }
+    // The cast operand is a `for n in <range>` induction variable whose range
+    // literal bounds the whole interval within the target type — `for n in
+    // 0usize..256 { n as u32 }` (#6512).
+    if cast_operand_is_for_range_bounded(node, source_bytes) {
         return false;
     }
     if cast_operand_is_non_negative_guarded(node, source_bytes) {
@@ -1277,6 +1284,132 @@ name = "normal_lib"
         assert!(
             run_on("fn w(val: u64) -> u8 { if val <= 255 { val as u8 } else { 0 } }").is_empty()
         );
+    }
+
+    #[test]
+    fn repro_6512_for_range_var_cast_not_flagged() {
+        // The flate2 `build_crc_table` pattern: `n` is the induction variable of
+        // `for n in 0usize..256`, so at the cast it is provably in `[0, 255]`,
+        // which fits `u32` — the `as` cannot truncate.
+        let src = "fn t() -> [u32; 256] { \
+                   let mut table = [0u32; 256]; \
+                   for n in 0usize..256 { let mut c = n as u32; table[n] = c; } \
+                   table }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6512_inclusive_range_into_signed_not_flagged() {
+        // `n ∈ [0, 1000]` (inclusive end) fits `i32`.
+        assert!(run_on("fn t() { for n in 0u32..=1000 { let b = n as i32; } }").is_empty());
+    }
+
+    #[test]
+    fn repro_6512_exclusive_range_at_target_max_not_flagged() {
+        // `0..256` (exclusive) yields `[0, 255]`; `255 == u8::MAX`, so it fits.
+        assert!(run_on("fn t() { for n in 0..256 { let x = n as u8; } }").is_empty());
+    }
+
+    #[test]
+    fn repro_6512_signed_range_fits_signed_target_not_flagged() {
+        // `[-128, 127] == [i8::MIN, i8::MAX]` fits `i8`.
+        assert!(run_on("fn t() { for n in -128i32..=127 { let x = n as i8; } }").is_empty());
+    }
+
+    #[test]
+    fn repro_6512_const_range_bound_not_flagged() {
+        // The exclusive upper bound is a `const` resolving to an integer literal.
+        let src = "const LEN: usize = 256; \
+                   fn t() { for n in 0..LEN { let x = n as u8; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6512_non_binding_inner_if_still_exempt() {
+        // An enclosing `if` whose condition does NOT bind `n` leaves the loop
+        // variable in scope, so the range still proves the cast lossless.
+        let src = "fn t() { for n in 0..256 { if q() { let x = n as u8; } } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6512_inclusive_range_exceeds_target_still_flagged() {
+        // `0..=256` yields `[0, 256]`; `256 > u8::MAX`, so the cast can overflow.
+        assert_eq!(run_on("fn t() { for n in 0..=256 { let x = n as u8; } }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_exclusive_range_exceeds_target_still_flagged() {
+        // `0..1000` yields `[0, 999]`; far beyond `u8::MAX`.
+        assert_eq!(run_on("fn t() { for n in 0..1000 { let x = n as u8; } }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_negative_lo_into_unsigned_still_flagged() {
+        // `lo == -5 < 0` cannot fit an unsigned target — a negative wraps on cast.
+        assert_eq!(run_on("fn t() { for n in -5i32..10 { let x = n as u8; } }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_non_literal_range_bound_still_flagged() {
+        // A runtime upper bound proves no static interval, so the cast stays flagged.
+        let src = "fn t(len: usize) { for n in 0..len { let x = n as u8; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_shadowed_loop_var_still_flagged() {
+        // An inner `let n` between the loop header and the cast shadows the
+        // induction variable, so the range no longer bounds the value cast.
+        let src = "fn t() { for n in 0..256 { let n = q(); let x = n as u8; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_reassigned_shadow_still_flagged() {
+        // A shadowing `let mut n` reassigned past the range invalidates the bound.
+        let src = "fn t() { for n in 0..256 { let mut n = n; n += 9999; let x = n as u8; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_match_arm_shadow_still_flagged() {
+        // `n` in the arm body is bound by the `Some(n)` pattern (an unrelated
+        // value), not the induction variable, so the range does not bound it.
+        let src = "fn t() { for n in 0usize..256 { \
+                   let _ = match q() { Some(n) => n as u8, None => 0 }; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_if_let_shadow_still_flagged() {
+        // The `if let Some(n) = …` binding shadows the loop variable in the body.
+        let src = "fn t() { for n in 0usize..256 { \
+                   if let Some(n) = q() { let x = n as u8; } } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_let_chain_shadow_still_flagged() {
+        // A `let_chain` member (`flag && let Some(n) = …`) binds `n` in the body.
+        let src = "fn t(flag: bool) { for n in 0usize..256 { \
+                   if flag && let Some(n) = q() { let x = n as u8; } } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6512_nested_let_in_condition_still_exempt() {
+        // A bool-valued inner `if let Some(n)` buried in the condition does NOT
+        // bind `n` in the outer body, so the cast still reads the loop variable.
+        let src = "fn t() { for n in 0usize..200 { \
+                   if (if let Some(n) = q() { n > 0 } else { false }) { let x = n as u8; } } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6512_half_open_range_still_flagged() {
+        // `0..` has no upper bound — no provable interval.
+        assert_eq!(run_on("fn t() { for n in 0usize.. { let x = n as u8; } }").len(), 1);
     }
 
     #[test]

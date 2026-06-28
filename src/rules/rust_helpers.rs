@@ -2904,6 +2904,246 @@ pub fn cast_operand_is_range_guarded(cast: Node, source: &[u8]) -> bool {
         || preceding_exit_guard_upper_bounds(cast, name, target_bits, source)
 }
 
+/// True if `cast` (a `type_cast_expression`) narrows the induction variable of an
+/// enclosing `for <name> in <range>` loop whose range's integer-literal bounds
+/// prove every value the variable takes fits the cast's target type, so the
+/// `as`-cast cannot truncate or change sign — e.g. `for n in 0usize..256 { n as
+/// u32 }` (`n ∈ [0, 255] ⊂ u32`) or `for n in 0u32..=1000 { n as i32 }`
+/// (`n ∈ [0, 1000] ⊂ i32`).
+///
+/// A `for` loop over a `range_expression` binds its variable to every value of a
+/// statically known integer interval, exactly the way an enclosing `if val < N`
+/// guard bounds a value — but the range proves BOTH ends, so a signed target is in
+/// scope too (unlike [`cast_operand_is_range_guarded`], which needs a separate
+/// non-negativity proof for the lower bound).
+///
+/// The exemption is deliberately narrow to stay sound — every condition must hold:
+///
+/// - the operand is a bare `identifier` (`n`), not an expression;
+/// - the target is an integer type (`u8`..`u128`/`usize` or `i8`..`i128`/`isize`);
+/// - the nearest enclosing binding of `name` is a `for_expression` whose `pattern`
+///   is exactly that identifier and whose iterator is a `range_expression` with two
+///   integer-literal (or `const`-resolved) bounds: `a..b` gives `[a, b - 1]`,
+///   `a..=b` gives `[a, b]`. A non-literal bound, a half-open range, or a `...`
+///   operator yields no interval, leaving the cast flagged;
+/// - the whole interval `[lo, hi]` is representable in the target type
+///   ([`interval_fits_int_target`]): `for n in 0..=256 { n as u8 }` stays flagged
+///   (`256 > u8::MAX`), as does `for n in -5..10 { n as u8 }` (`lo < 0` into an
+///   unsigned target);
+/// - `name` is not re-bound (a shadowing `let n`) or reassigned between the loop
+///   body's start and the cast, which would break the link between the range and
+///   the value the cast reads.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag the narrowing because the induction variable's bounded range is
+/// not visible from the cast in isolation.
+pub fn cast_operand_is_for_range_bounded(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = value.utf8_text(source) else {
+        return false;
+    };
+    // Target must be an integer type (signed or unsigned); the range proves both
+    // ends, so either signedness is in scope.
+    let Some(target) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .map(str::trim)
+    else {
+        return false;
+    };
+    if unsigned_int_bits(target).is_none() && signed_int_bits(target).is_none() {
+        return false;
+    }
+    // Ascend to the nearest enclosing binding of `name`. A `for_expression` whose
+    // pattern binds it is THE induction binding; any other binder (an inner
+    // shadowing `for`/closure pattern, a `match_arm` / `if let` / `while let`
+    // pattern crossed on the way up) makes the range inapplicable. The walk stops
+    // at the enclosing function / closure boundary.
+    let cast_start = cast.start_byte();
+    let mut child = cast;
+    while let Some(parent) = child.parent() {
+        match parent.kind() {
+            "function_item" | "closure_expression" => return false,
+            "for_expression"
+                if parent
+                    .child_by_field_name("pattern")
+                    .is_some_and(|p| pattern_contains_identifier(p, name, source)) =>
+            {
+                return for_loop_range_fits_target(parent, name, target, cast_start, source);
+            }
+            // A pattern binding of `name` introduced by an intervening scope — a
+            // `match_arm` pattern, or an `if let` / `while let` `let_condition` —
+            // shadows the induction variable: the cast reads that binding, not the
+            // loop var, so the range no longer applies.
+            _ if intervening_pattern_binds_name(parent, child, name, source) => return false,
+            _ => {}
+        }
+        child = parent;
+    }
+    false
+}
+
+/// True if ascending from `child` into `parent` crosses a *pattern* binding of
+/// `name` that shadows an outer loop variable: a `match_arm` whose pattern binds
+/// `name` and whose `value` body contains the cast, or an `if`/`while` expression
+/// reached through its guarded body whose condition is (or contains) a
+/// `let_condition` binding `name` (`if let Some(n) = …`). Such a binding rebinds
+/// `name` to an unrelated value, so a `for`-range exemption above it is unsound.
+fn intervening_pattern_binds_name(parent: Node, child: Node, name: &str, source: &[u8]) -> bool {
+    match parent.kind() {
+        "match_arm" => {
+            parent.child_by_field_name("value") == Some(child)
+                && parent
+                    .child_by_field_name("pattern")
+                    .is_some_and(|p| pattern_contains_identifier(p, name, source))
+        }
+        "if_expression" | "while_expression" => {
+            let entered_body = parent.child_by_field_name("consequence") == Some(child)
+                || parent.child_by_field_name("body") == Some(child);
+            entered_body
+                && parent
+                    .child_by_field_name("condition")
+                    .is_some_and(|c| condition_let_binds_name(c, name, source))
+        }
+        _ => false,
+    }
+}
+
+/// True if an `if`/`while` condition `c` is — or, in a `let_chain` of `&&`-joined
+/// conditions, directly contains — a `let_condition` (`let <pattern> = <expr>`)
+/// whose pattern binds `name`. Only the top-level condition and direct `let_chain`
+/// members are inspected: a `let` binding is in scope in the guarded body only at
+/// those positions, so a `let_condition` nested inside a sub-expression (e.g. a
+/// bool-valued inner `if let`) is correctly ignored — its binding does not reach
+/// the body.
+fn condition_let_binds_name(c: Node, name: &str, source: &[u8]) -> bool {
+    let binds = |lc: Node| {
+        lc.child_by_field_name("pattern")
+            .is_some_and(|p| pattern_contains_identifier(p, name, source))
+    };
+    match c.kind() {
+        "let_condition" => binds(c),
+        "let_chain" => {
+            let mut cursor = c.walk();
+            c.named_children(&mut cursor)
+                .filter(|n| n.kind() == "let_condition")
+                .any(binds)
+        }
+        _ => false,
+    }
+}
+
+/// True if `for_node`'s pattern is exactly the identifier `name`, its iterator is a
+/// `range_expression` whose literal bounds give an interval that fits `target`
+/// ([`interval_fits_int_target`]), and `name` is not re-bound between the loop
+/// body's start and `cast_start`. Any other pattern shape (a tuple/ref pattern that
+/// merely *contains* `name`) is not a range induction variable, so it is rejected —
+/// and since such a binding shadows `name`, the caller must not look further out.
+fn for_loop_range_fits_target(
+    for_node: Node,
+    name: &str,
+    target: &str,
+    cast_start: usize,
+    source: &[u8],
+) -> bool {
+    let pattern_is_name = for_node
+        .child_by_field_name("pattern")
+        .is_some_and(|p| p.kind() == "identifier" && p.utf8_text(source) == Ok(name));
+    if !pattern_is_name {
+        return false;
+    }
+    let Some(iter) = for_node.child_by_field_name("value") else {
+        return false;
+    };
+    if iter.kind() != "range_expression" {
+        return false;
+    }
+    let Some((lo, hi)) = range_literal_interval(iter, source) else {
+        return false;
+    };
+    if !interval_fits_int_target(lo, hi, target) {
+        return false;
+    }
+    // A shadowing `let name` or a reassignment of `name` between the loop body's
+    // opening brace and the cast breaks the link between the range and the value
+    // the cast reads.
+    let Some(body) = for_node.child_by_field_name("body") else {
+        return false;
+    };
+    !name_rebound_in_range(body, body.start_byte(), cast_start, name, source)
+}
+
+/// The inclusive integer interval `[lo, hi]` (as `i128`) a `range_expression`'s
+/// induction variable ranges over, or `None` when it is not a both-bounded literal
+/// range. `a..b` (exclusive end) yields `[a, b - 1]`; `a..=b` (inclusive end)
+/// yields `[a, b]`. Each bound must be a (possibly negated) integer literal
+/// ([`signed_int_value`]) or a `const` resolving to one ([`resolve_const_int`]). A
+/// half-open range (`a..` / `..b`), a deprecated `...` operator, an unresolved
+/// bound, or an empty interval (`lo > hi`) yields `None`, leaving the cast flagged.
+fn range_literal_interval(range: Node, source: &[u8]) -> Option<(i128, i128)> {
+    // The operator is an anonymous token between the two operands; `..=` marks an
+    // inclusive end, `..` an exclusive one. `...` is not supported.
+    let mut cursor = range.walk();
+    let inclusive = range.children(&mut cursor).find_map(|c| match c.kind() {
+        "..=" => Some(true),
+        ".." => Some(false),
+        _ => None,
+    })?;
+    // Both bounds must be present (named-child expressions); a half-open range has
+    // only one.
+    if range.named_child_count() != 2 {
+        return None;
+    }
+    let lo = resolve_range_bound(range.named_child(0)?, source)?;
+    let hi_raw = resolve_range_bound(range.named_child(1)?, source)?;
+    let hi = if inclusive { hi_raw } else { hi_raw.checked_sub(1)? };
+    (lo <= hi).then_some((lo, hi))
+}
+
+/// Resolve a range bound to its `i128` value: a (possibly negated) integer literal
+/// ([`signed_int_value`]), or a `const` identifier resolving to an integer literal
+/// ([`resolve_const_int`]). Any other shape — a runtime variable, a call, an
+/// expression — yields `None`, so the range stays unbounded and the cast flagged.
+fn resolve_range_bound(node: Node, source: &[u8]) -> Option<i128> {
+    if let Some(value) = signed_int_value(node, source) {
+        return Some(value);
+    }
+    if node.kind() == "identifier" {
+        return resolve_const_int(node, source).and_then(|v| i128::try_from(v).ok());
+    }
+    None
+}
+
+/// True if every value of the inclusive integer interval `[lo, hi]` is
+/// representable in the integer type named by `target`. For an unsigned target the
+/// interval must be non-negative (`lo >= 0`) and `hi` must not exceed the type's
+/// maximum; for a signed target both ends must lie within `[T::MIN, T::MAX]`. A
+/// non-integer target yields `false`.
+fn interval_fits_int_target(lo: i128, hi: i128, target: &str) -> bool {
+    if let Some(bits) = unsigned_int_bits(target) {
+        if lo < 0 {
+            return false;
+        }
+        let target_max: u128 = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+        // `hi >= lo >= 0`, so the cast to `u128` is exact.
+        (hi as u128) <= target_max
+    } else if let Some(bits) = signed_int_bits(target) {
+        let (target_min, target_max): (i128, i128) = if bits >= 128 {
+            (i128::MIN, i128::MAX)
+        } else {
+            (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+        };
+        lo >= target_min && hi <= target_max
+    } else {
+        false
+    }
+}
+
 /// True if `cast` (a `type_cast_expression`) casts a signed integer to an
 /// unsigned integer whose value an enclosing guard proves is non-negative, so
 /// the cast cannot wrap — e.g. `Some(diff) if !diff.is_negative() => diff as u64`

@@ -87,7 +87,8 @@ use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
+    cast_operand_is_enum_discriminant, cast_operand_is_for_range_bounded,
+    cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
     cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
@@ -192,6 +193,12 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_range_guarded(node, source_bytes) {
+            return;
+        }
+        // The cast operand is a `for n in <range>` induction variable whose range
+        // literal bounds the whole interval within the target type — `for n in
+        // 0usize..256 { n as u32 }` (#6512).
+        if cast_operand_is_for_range_bounded(node, source_bytes) {
             return;
         }
         if cast_operand_is_non_negative_guarded(node, source_bytes) {
@@ -1077,6 +1084,25 @@ mod tests {
         assert!(
             run_on("fn w(val: u64) -> u8 { if val <= 255 { val as u8 } else { 0 } }").is_empty()
         );
+    }
+
+    #[test]
+    fn repro_6512_for_range_var_cast_not_flagged() {
+        // The flate2 `build_crc_table` pattern: `n` is the induction variable of
+        // `for n in 0usize..256`, provably in `[0, 255]` ⊂ `u32` at the cast. Once
+        // `rust-no-as-numeric-cast` exempts the span, this rule must also exempt it
+        // rather than become the sole emitter (#6512).
+        let src = "fn t() -> [u32; 256] { \
+                   let mut table = [0u32; 256]; \
+                   for n in 0usize..256 { let mut c = n as u32; table[n] = c; } \
+                   table }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6512_inclusive_range_into_signed_not_flagged() {
+        // `n ∈ [0, 1000]` (inclusive end) fits `i32`.
+        assert!(run_on("fn t() { for n in 0u32..=1000 { let b = n as i32; } }").is_empty());
     }
 
     #[test]
