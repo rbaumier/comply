@@ -3,7 +3,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, ObjectExpression, ObjectPropertyKind, PropertyKey, TSType};
+use oxc_ast::ast::{
+    ArrayExpression, ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind,
+    PropertyKey, TSType,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -76,6 +79,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `[...expr] as T` where `expr` is not an array literal is a *narrowing*
+        // assertion, not a widening one. TypeScript infers the spread's element
+        // type from `expr`, which can be broader than `T` — e.g.
+        // `[...new Set(xs.filter(Boolean))] as string[]`, whose inferred element
+        // type is `(string | false | undefined)[]` because `.filter(Boolean)`
+        // is not narrowed. `satisfies string[]` would then fail to compile, so
+        // the `as` cannot be mechanically replaced. A spread of an array literal
+        // (`[...[1, 2], 3]`) has a known element type and stays in scope.
+        if let Expression::ArrayExpression(arr) = &as_expr.expression
+            && has_non_literal_spread(arr)
+        {
+            return;
+        }
+
         // `satisfies unknown` / `satisfies any` are vacuously true — every
         // value satisfies `unknown`/`any`, so the suggestion validates
         // nothing. `literal as unknown` / `literal as any` is a deliberate
@@ -136,6 +153,22 @@ fn has_non_literal_computed_key(obj: &ObjectExpression<'_>) -> bool {
     obj.properties.iter().any(|prop| {
         let ObjectPropertyKind::ObjectProperty(p) = prop else { return false };
         p.computed && !matches!(p.key, PropertyKey::StringLiteral(_) | PropertyKey::NumericLiteral(_))
+    })
+}
+
+/// True when the array literal spreads a non-array-literal expression
+/// (`[...call()]`, `[...ident]`, `[...obj.prop]`, …). TypeScript infers the
+/// spread's element type from that expression, which may be broader than the
+/// `as` target, making the cast a narrowing assertion that `satisfies` cannot
+/// reproduce. Spreading an array literal (`[...[1, 2]]`) has a known element
+/// type and does not trigger this.
+fn has_non_literal_spread(arr: &ArrayExpression<'_>) -> bool {
+    arr.elements.iter().any(|el| {
+        matches!(
+            el,
+            ArrayExpressionElement::SpreadElement(s)
+                if !matches!(s.argument, Expression::ArrayExpression(_))
+        )
     })
 }
 
@@ -371,5 +404,40 @@ const s = {
     #[test]
     fn still_flags_all_static_keys() {
         assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const x = { a: 1, b: 2 } as T;", "t.ts").len(), 1);
+    }
+
+    // Regression test for #6544: `[...new Set(xs.filter(Boolean))] as string[]`
+    // spreads a non-literal whose inferred element type is broader than
+    // `string` (`(string | false | undefined)[]`), so `as string[]` is a
+    // narrowing assertion — `satisfies string[]` would not compile. The spread
+    // of a non-array-literal must suppress the diagnostic.
+    #[test]
+    fn allows_array_with_non_literal_spread() {
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "const watchingFiles = [...new Set(xs.filter(Boolean))] as string[];",
+                "t.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    // #6544: spreading a plain identifier is equally a narrowing risk.
+    #[test]
+    fn allows_array_with_identifier_spread() {
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const a = [...items, extra] as Foo[];", "t.ts").is_empty()
+        );
+    }
+
+    // #6544 boundary: spreading an array literal has a known element type, so
+    // the cast can still be replaced with `satisfies` — must still flag.
+    #[test]
+    fn still_flags_array_literal_spread() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "const a = [...[1, 2], 3] as number[];", "t.ts").len(),
+            1
+        );
     }
 }
