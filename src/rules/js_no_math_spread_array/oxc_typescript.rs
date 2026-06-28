@@ -1,9 +1,12 @@
 //! js-no-math-spread-array OXC backend — flag `Math.min(...arr)` / `Math.max(...arr)`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_statically_bounded_array};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, expression_is_statically_bounded_array, span_contains,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{Argument, BinaryOperator, Expression, LogicalOperator};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -54,11 +57,15 @@ impl OxcCheck for Check {
         // Spreading a statically-bounded array (literal, length-non-increasing
         // `.map`/`.filter`/`.slice` chain rooted at one, or a fixed-length tuple
         // binding) cannot exhaust the argument-count limit, so there is no
-        // stack-overflow risk. Only flag when some spread operand is dynamic.
-        if spreads
-            .iter()
-            .all(|operand| expression_is_statically_bounded_array(operand, semantic))
-        {
+        // stack-overflow risk. The same guarantee holds for an identifier spread
+        // whose enclosing branch is gated by an upper-bound `.length` check on
+        // that identifier (`if (x.length === 2) … Math.max(...x)`): the guard caps
+        // the element count statically. Only flag when some spread operand is
+        // dynamic and unguarded.
+        if spreads.iter().all(|operand| {
+            expression_is_statically_bounded_array(operand, semantic)
+                || spread_operand_is_length_guarded(operand, node, semantic)
+        }) {
             return;
         }
         let (line, column) =
@@ -76,6 +83,148 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// Returns true when `operand` is an identifier binding whose enclosing guard
+/// branch statically caps its element count via an upper-bound `.length` check
+/// (so the spread expands to a known-small arity, not an unbounded array).
+fn spread_operand_is_length_guarded(
+    operand: &Expression,
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(target) = identifier_symbol(operand, semantic) else {
+        return false;
+    };
+    nearest_guard_caps_length(node, semantic, target)
+}
+
+/// Walks the call's ancestor chain for a dominating guard whose condition caps
+/// the `target` binding's length. A guard dominates the spread when the call sits
+/// in:
+///   - an `IfStatement` consequent (gated by the `if` test),
+///   - a `ConditionalExpression` consequent (gated by the ternary test), or
+///   - the right operand of a logical `&&` (gated by the left operand).
+/// A length check in an unrelated sibling branch or a `||` alternative does not
+/// dominate the call and is ignored.
+fn nearest_guard_caps_length(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    target: oxc_semantic::SymbolId,
+) -> bool {
+    let call_span = node.kind().span();
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::IfStatement(if_stmt) => {
+                if span_contains(if_stmt.consequent.span(), call_span)
+                    && condition_caps_length(&if_stmt.test, semantic, target)
+                {
+                    return true;
+                }
+            }
+            AstKind::ConditionalExpression(cond) => {
+                if span_contains(cond.consequent.span(), call_span)
+                    && condition_caps_length(&cond.test, semantic, target)
+                {
+                    return true;
+                }
+            }
+            AstKind::LogicalExpression(logical) => {
+                if logical.operator == LogicalOperator::And
+                    && span_contains(logical.right.span(), call_span)
+                    && condition_caps_length(&logical.left, semantic, target)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns true when `expr`, used as a guarding condition, statically caps the
+/// element count of the `target` binding through an upper-bound `.length`
+/// comparison. Recurses through `&&` conjuncts and parentheses — every `&&`
+/// operand must hold for the guarded branch to run, so any conjunct that caps the
+/// length suffices. `||` is not a guarantee and is not traversed.
+fn condition_caps_length(
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic,
+    target: oxc_semantic::SymbolId,
+) -> bool {
+    match expr {
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+            condition_caps_length(&logical.left, semantic, target)
+                || condition_caps_length(&logical.right, semantic, target)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            condition_caps_length(&paren.expression, semantic, target)
+        }
+        Expression::BinaryExpression(bin) => {
+            // `target.length <op> N`: `===`/`==` pin an exact arity, `<`/`<=` cap
+            // the maximum. A lower-bound-only guard (`length > 0`, `length >= 1`)
+            // does not cap the maximum and must NOT exempt the spread.
+            if is_length_of_symbol(&bin.left, semantic, target)
+                && is_nonneg_int_literal(&bin.right)
+            {
+                return matches!(
+                    bin.operator,
+                    BinaryOperator::StrictEquality
+                        | BinaryOperator::Equality
+                        | BinaryOperator::LessThan
+                        | BinaryOperator::LessEqualThan
+                );
+            }
+            // Mirror `N <op> target.length`: `N >= len` / `N > len` cap the maximum.
+            if is_length_of_symbol(&bin.right, semantic, target)
+                && is_nonneg_int_literal(&bin.left)
+            {
+                return matches!(
+                    bin.operator,
+                    BinaryOperator::StrictEquality
+                        | BinaryOperator::Equality
+                        | BinaryOperator::GreaterThan
+                        | BinaryOperator::GreaterEqualThan
+                );
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when `expr` is `<binding>.length` where `<binding>` resolves to
+/// the `target` symbol — the same array being spread, not a same-named binding in
+/// another scope.
+fn is_length_of_symbol(
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic,
+    target: oxc_semantic::SymbolId,
+) -> bool {
+    matches!(expr, Expression::StaticMemberExpression(member)
+        if member.property.name.as_str() == "length"
+            && identifier_symbol(&member.object, semantic) == Some(target))
+}
+
+/// Resolves an identifier expression to the symbol it references, or `None` for a
+/// non-identifier or an unresolved reference.
+fn identifier_symbol(
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<oxc_semantic::SymbolId> {
+    let Expression::Identifier(ident) = expr else {
+        return None;
+    };
+    let ref_id = ident.reference_id.get()?;
+    semantic.scoping().get_reference(ref_id).symbol_id()
+}
+
+/// Returns true when `expr` is a non-negative integer numeric literal — a static
+/// element-count bound.
+fn is_nonneg_int_literal(expr: &Expression) -> bool {
+    matches!(expr, Expression::NumericLiteral(num)
+        if num.value.is_finite() && num.value >= 0.0 && num.value.fract() == 0.0)
 }
 
 #[cfg(test)]
@@ -203,6 +352,82 @@ mod tests {
     #[test]
     fn flags_push_accumulator() {
         let src = "const arr = []; for (const x of xs) arr.push(x); Math.max(...arr);";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Issue #6496: sindresorhus/is — both spreads are gated by `range.length === 2`
+    // in the enclosing `if`, a static upper bound on the element count.
+    #[test]
+    fn allows_spread_guarded_by_length_equality() {
+        let src = r#"
+            function isInRange(value, range) {
+                if (isArray(range) && range.length === 2) {
+                    return value >= Math.min(...range) && value <= Math.max(...range);
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // An upper-bound `<=` guard caps the arity just as `===` does.
+    #[test]
+    fn allows_spread_guarded_by_length_le() {
+        let src = "function f(xs) { if (xs.length <= 8) return Math.max(...xs); }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // The mirrored upper bound `N > x.length` also caps the arity.
+    #[test]
+    fn allows_spread_guarded_by_mirrored_upper_bound() {
+        let src = "function f(xs) { if (3 > xs.length) return Math.min(...xs); }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // An inline `&&` short-circuit guard caps the right-operand call.
+    #[test]
+    fn allows_spread_guarded_by_logical_and() {
+        let src = "function f(xs) { return xs.length === 2 && Math.max(...xs); }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Negative space: a lower-bound-only guard (`length > 0`) does not cap the
+    // maximum element count, so the spread must still flag.
+    #[test]
+    fn flags_spread_guarded_by_lower_bound_only() {
+        let src = "function f(xs) { if (xs.length > 0) return Math.max(...xs); }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Negative space: a `>= 1` guard is also a lower bound only and stays flagged.
+    #[test]
+    fn flags_spread_guarded_by_length_ge_one() {
+        let src = "function f(xs) { if (xs.length >= 1) return Math.max(...xs); }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Negative space: the length guard is on a DIFFERENT variable than the one
+    // spread, so it does not bound the spread operand.
+    #[test]
+    fn flags_when_length_guard_targets_other_variable() {
+        let src = "function f(xs, ys) { if (ys.length === 2) return Math.max(...xs); }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Negative space: a length check in a SIBLING branch does not dominate the
+    // call in the else-path, so the unguarded spread still flags.
+    #[test]
+    fn flags_when_length_guard_in_sibling_branch() {
+        let src = "function f(xs) { if (xs.length === 2) { g(); } else { return Math.max(...xs); } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Negative space: the guarded `.length` and the spread reference DIFFERENT
+    // bindings that merely share a name — an inner `const xs` shadows the guarded
+    // outer param — so the guard does not bound the spread operand. Name-equality
+    // would wrongly suppress this; symbol identity keeps it flagged.
+    #[test]
+    fn flags_when_inner_shadow_breaks_symbol_identity() {
+        let src = "function f(xs) { if (xs.length === 2) { const xs = getHuge(); return Math.max(...xs); } }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 }
