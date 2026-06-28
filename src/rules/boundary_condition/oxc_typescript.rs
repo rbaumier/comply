@@ -91,9 +91,9 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip if inside an `if` whose condition guards this array — either a
-        // `.length` check or, for a first-element read, a truthy `arr[0]` /
-        // `arr?.[0]` check on the same array.
+        // Skip if dominated by an `if` / ternary / `&&` / enclosing `while`/`for`
+        // whose condition guards this array — either a `.length` check or, for a
+        // first-element read, a truthy `arr[0]` / `arr?.[0]` check on the same array.
         if has_length_guard_ancestor(node, semantic, obj_text, is_first, source) {
             return;
         }
@@ -626,6 +626,16 @@ fn has_nullish_or_logical_fallback(
 ///      only when the left is truthy, the expression form of `if (arr.length)`.
 ///      A different array in the left (`foo.length && bar[0]`) or an access in
 ///      the left operand stays flagged.
+///   5. in the body of an enclosing `while (<test>)` / `for (…; <test>; …)`,
+///      an access whose `<test>` proves `<obj_text>` is non-empty
+///      (`<obj_text>.length`, `.length > 0`, `>= 1`, `!== 0`, `=== N` for `N >= 1`,
+///      or the mirrored `0 < <obj_text>.length` — see [`test_proves_nonempty`]),
+///      or (for a first-element read) a truthy `<obj_text>[0]` test. The loop
+///      condition is re-evaluated before each iteration, so it dominates every
+///      synchronous point in the body. Scoped to the SAME receiver array on the `.length`
+///      side; a non-empty check on a different binding does not exempt. A
+///      `do { … } while (<test>)` is NOT recognized — its body runs once before
+///      the test, so the test does not dominate the first iteration.
 fn has_length_guard_ancestor(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -720,9 +730,59 @@ fn has_length_guard_ancestor(
                     }
                 }
             }
+            AstKind::WhileStatement(while_stmt) => {
+                if span_contains(while_stmt.body.span(), node_span) {
+                    if test_proves_nonempty(&while_stmt.test, obj_text, source) {
+                        return true;
+                    }
+                    if is_first
+                        && condition_guards_index0(&while_stmt.test, obj_text, source, false)
+                    {
+                        return true;
+                    }
+                }
+            }
+            AstKind::ForStatement(for_stmt) => {
+                if span_contains(for_stmt.body.span(), node_span)
+                    && let Some(test) = &for_stmt.test
+                {
+                    if test_proves_nonempty(test, obj_text, source) {
+                        return true;
+                    }
+                    if is_first && condition_guards_index0(test, obj_text, source, false) {
+                        return true;
+                    }
+                }
+            }
             _ => {}
         }
         current_id = parent_id;
+    }
+}
+
+/// Returns true when `test` — the condition of an enclosing `while`/`for` whose
+/// body dominates the access — proves `<obj_text>.length >= 1` (the array is
+/// non-empty on every iteration). Recognized on the SAME receiver array:
+///   - a bare truthy `<obj_text>.length` (zero is falsy, so a truthy length is `>= 1`);
+///   - `<obj_text>.length > 0` / `>= 1` / `!== 0` / `=== N` (`N >= 1`) and the
+///     mirrored `0 < <obj_text>.length` — delegated to
+///     [`length_comparison_proves_nonempty`];
+///   - any conjunct of an `&&` chain that proves one of the above — every conjunct
+///     holds inside the loop body, so it suffices for one to bound the length.
+/// `||` is NOT traversed: a disjunct need not hold when the whole test is true.
+fn test_proves_nonempty(test: &Expression, obj_text: &str, source: &str) -> bool {
+    match test {
+        Expression::ParenthesizedExpression(paren) => {
+            test_proves_nonempty(&paren.expression, obj_text, source)
+        }
+        Expression::LogicalExpression(logical)
+            if logical.operator == LogicalOperator::And =>
+        {
+            test_proves_nonempty(&logical.left, obj_text, source)
+                || test_proves_nonempty(&logical.right, obj_text, source)
+        }
+        Expression::StaticMemberExpression(_) => is_length_of(test, obj_text, source),
+        _ => length_comparison_proves_nonempty(test, obj_text, source),
     }
 }
 
@@ -1141,6 +1201,7 @@ fn stmt_is_assert_nonempty_length(stmt: &Statement, obj_text: &str, source: &str
 /// The `.length` member must be on the SAME receiver array. Recognized (with the
 /// `.length` side on either operand):
 ///   - `length === N` / `length == N` with `N >= 1`
+///   - `length !== 0` / `length != 0`
 ///   - `length >= N` with `N >= 1`
 ///   - `length > N` with `N >= 0`
 ///
@@ -1170,6 +1231,9 @@ fn length_comparison_proves_nonempty(expr: &Expression, obj_text: &str, source: 
     };
     match op {
         BinaryOperator::StrictEquality | BinaryOperator::Equality => n >= 1,
+        // `length !== 0` / `length != 0` proves non-empty; a `!= N` for any other
+        // `N` does not (length could still be 0).
+        BinaryOperator::StrictInequality | BinaryOperator::Inequality => n == 0,
         BinaryOperator::GreaterEqualThan => n >= 1,
         BinaryOperator::GreaterThan => true, // length > 0 (or any N) proves >= 1
         _ => false,
@@ -4265,6 +4329,78 @@ mod tests {
         // `Object.values` elements are scalar `T`, not tuples — the callback-path
         // exemption must reject a non-`entries` receiver. Stays flagged.
         let src = "Object.values(o).map(e => e[0]);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_while_length_gt_zero_drain_issue_6510() {
+        // The issue's exact repro: a work-list drain loop whose `while` condition
+        // proves the array is non-empty before each `promises[0]` read.
+        let src = "while (promises.length > 0) { const x = await promises[0]; promises.shift(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_while_bare_length_drain_issue_6510() {
+        // `while (arr.length)` — a bare truthy length is non-zero, hence non-empty.
+        let src = "while (queue.length) { handle(queue[0]); queue.shift(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_while_length_ge_one_issue_6510() {
+        let src = "while (items.length >= 1) { use(items[0]); items.pop(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_while_length_ne_zero_issue_6510() {
+        let src = "while (items.length !== 0) { use(items[0]); items.shift(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_while_zero_lt_length_mirrored_issue_6510() {
+        let src = "while (0 < stack.length) { peek(stack[0]); stack.shift(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_while_length_gt_zero_last_element_issue_6510() {
+        // The issue covers `arr[arr.length - 1]`: a `length > 0` guard proves the
+        // last element exists too.
+        let src = "while (stack.length > 0) { const top = stack[stack.length - 1]; stack.pop(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_length_gt_zero_drain_issue_6510() {
+        // A `for` loop whose test proves non-emptiness is analogous to `while`.
+        let src = "for (; queue.length > 0; ) { const x = queue[0]; queue.shift(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_unguarded_first_access_issue_6510() {
+        // Negative control: an unguarded `arr[0]` with no dominating length guard
+        // stays flagged.
+        let src = "function f(arr) { const x = arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_while_length_guard_on_different_array_issue_6510() {
+        // Negative control: the non-empty check is on `other`, not the indexed
+        // `arr` — it does not prove `arr` non-empty, so `arr[0]` stays flagged.
+        let src = "while (other.length > 0) { const x = arr[0]; other.shift(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_do_while_length_guard_issue_6510() {
+        // Negative control: a `do…while` body runs once before the test, so the
+        // `length > 0` condition does not dominate the first iteration's read.
+        let src = "do { const x = arr[0]; arr.shift(); } while (arr.length > 0);";
         assert_eq!(run_on(src).len(), 1);
     }
 }
