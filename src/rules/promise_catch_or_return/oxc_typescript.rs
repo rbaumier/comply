@@ -72,12 +72,46 @@ fn chain_is_safe<'a>(
             AstKind::VariableDeclarator(_) | AstKind::AssignmentExpression(_) => {
                 return true
             }
-            AstKind::ExpressionStatement(_) => return false,
+            AstKind::ExpressionStatement(_) => {
+                // An expression-bodied arrow `(...) => expr` is normalized by oxc
+                // into a `FunctionBody` holding a single `ExpressionStatement`. That
+                // expression is the arrow's implicit return, so the chain is
+                // returned — keep traversing to let the `ArrowFunctionExpression`
+                // arm decide. A genuine statement (block body / top level) stops here.
+                if is_expr_body_arrow_implicit_return(parent_id, nodes) {
+                    current_id = parent_id;
+                    continue;
+                }
+                return false;
+            }
             _ => {
                 current_id = parent_id;
             }
         }
     }
+}
+
+/// True when `expr_stmt_id` is an `ExpressionStatement` that forms the implicit
+/// return of an expression-bodied arrow `(...) => <expr>`. oxc normalizes such an
+/// arrow body to a `FunctionBody` wrapping a single `ExpressionStatement`, so the
+/// wrapped expression is returned from the arrow rather than left floating. A
+/// genuine statement (block body / top level) returns false.
+fn is_expr_body_arrow_implicit_return(
+    expr_stmt_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    let mut id = nodes.parent_id(expr_stmt_id);
+    if matches!(nodes.get_node(id).kind(), AstKind::FunctionBody(_)) {
+        let grandparent = nodes.parent_id(id);
+        if grandparent == id {
+            return false;
+        }
+        id = grandparent;
+    }
+    matches!(
+        nodes.get_node(id).kind(),
+        AstKind::ArrowFunctionExpression(a) if a.expression
+    )
 }
 
 impl OxcCheck for Check {
@@ -221,5 +255,43 @@ resolvedPromise.then(
         // `.then(fn, ...rest)` — the spread may expand to a rejection handler,
         // treated as handled to avoid a false positive.
         assert!(run_on("p.then((x) => use(x), ...rest);").is_empty());
+    }
+
+    #[test]
+    fn allows_then_as_expression_body_of_arrow() {
+        // #6472: an expression-bodied arrow implicitly returns its expression,
+        // so `.then(...)` is returned from the arrow — not floating.
+        assert!(run_on("const f = (p) => p.then((x) => use(x));").is_empty());
+    }
+
+    #[test]
+    fn allows_then_as_reduce_expression_body_arrow() {
+        // #6472: unjs/hookable `serial()` — the `.then()` is the expression body
+        // of the reduce callback arrow, returned all the way out of the function.
+        let src = r#"
+export function serial(tasks, function_) {
+  return tasks.reduce(
+    (promise, task) => promise.then(() => function_(task)),
+    Promise.resolve()
+  );
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_floating_then_statement_in_block_body_function() {
+        // Negative control: a genuine floating `.then()` statement in a block
+        // body must still be flagged.
+        let d = run_on("function f(p) { p.then(g); }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_floating_then_statement_in_block_body_arrow() {
+        // Negative control: block-bodied arrow — the `.then()` is a real
+        // statement (arrow.expression is false), so it stays flagged.
+        let d = run_on("arr.forEach((p) => { p.then(g); });");
+        assert_eq!(d.len(), 1);
     }
 }
