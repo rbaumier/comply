@@ -798,6 +798,9 @@ fn extract_entries(
             continue;
         }
         let words = normalize_words(&group.stripped);
+        if is_all_numeric_label(&words) {
+            continue;
+        }
         if words.len() < need {
             continue;
         }
@@ -1102,6 +1105,19 @@ fn normalize_words(stripped: &str) -> Vec<String> {
         .filter(|w| !w.is_empty())
         .map(str::to_lowercase)
         .collect()
+}
+
+/// A comment whose normalized words are *every one* a purely numeric integer
+/// token — a byte lookup table's column-index header (`//  0  1  2 … 15`) or a
+/// row of magic constants (`// 100 200 300 …`). Such a comment labels a data
+/// structure by index, carrying no prose rationale that can drift out of sync,
+/// so it can never be the copy-paste smell this rule targets however many tables
+/// across however many files share the layout. The `is_empty` guard keeps a
+/// blank comment (empty word list) from vacuously satisfying `all` and being
+/// dropped as numeric.
+fn is_all_numeric_label(words: &[String]) -> bool {
+    !words.is_empty()
+        && words.iter().all(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn prefix_passes_entropy(prefix: &[String]) -> bool {
@@ -2172,6 +2188,55 @@ fn split_off(&mut self, at: usize) {
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "duplicated plain prose without a SAFETY marker is still a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn skips_numeric_column_index_labels_issue_6273() {
+        // Regression (#6273): hyperium/http labels each 256-byte lookup table
+        // with a column-index header (`//  0  1  2 …`). The same header recurs
+        // across the four tables, but it is an all-integer data-structure
+        // annotation, not prose — there is nothing to lift into a canonical doc.
+        // A 16-wide header is used so the comment clears `min_words` and would
+        // pass the entropy gate (8 distinct numeric prefix words) without the
+        // all-numeric guard, proving the guard — not the length gate — exempts it.
+        let dir = tempfile::tempdir().unwrap();
+        let header = "// 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15\nconst TABLE: [u8; 16] = [];\n";
+        let a = write(&dir, "method.rs", header);
+        let b = write(&dir, "name.rs", header);
+        assert!(run(&[&a, &b]).is_empty(), "numeric column-index labels must not flag");
+
+        // Multi-digit constant rows (`// 100 200 300 …`) are equally all-numeric.
+        let magic = "// 100 200 300 400 500 600 700 800 900 1000 1100 1200 1300 1400 1500\nconst ROW: u32 = 0;\n";
+        let c = write(&dir, "c.rs", magic);
+        let d = write(&dir, "d.rs", magic);
+        assert!(run(&[&c, &d]).is_empty(), "all-numeric constant rows must not flag");
+    }
+
+    #[test]
+    fn still_flags_label_mixing_a_word_with_numbers_issue_6273() {
+        // Over-exclusion guard for #6273: a label that carries any non-numeric
+        // word (`row`) is not an all-numeric annotation, so it stays subject to
+        // duplicate detection and a copy-pasted one still flags.
+        let dir = tempfile::tempdir().unwrap();
+        let mixed = "// row 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14\nconst TABLE: [u8; 15] = [];\n";
+        let a = write(&dir, "a.rs", mixed);
+        let b = write(&dir, "b.rs", mixed);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a label mixing a word with numbers is still checked");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn all_numeric_label_predicate_edges_issue_6273() {
+        // The structural predicate: all integer tokens skip; an empty word list
+        // (blank comment) is NOT all-numeric, so it cannot vacuously skip; any
+        // alphabetic token disqualifies the whole label.
+        let nums = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
+        assert!(is_all_numeric_label(&nums(&["0", "1", "15"])));
+        assert!(is_all_numeric_label(&nums(&["100", "200", "300"])));
+        assert!(!is_all_numeric_label(&[]), "an empty word list is not all-numeric");
+        assert!(!is_all_numeric_label(&nums(&["row", "0", "1"])));
+        assert!(!is_all_numeric_label(&nums(&["0x1f"])), "hex is not a decimal token");
     }
 
     #[test]
