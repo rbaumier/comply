@@ -53,7 +53,10 @@
 //! extra bit accommodates the sign, so every value is represented
 //! exactly.  A dereference operand (`*x as i32` where `x: &u16`) resolves
 //! through its referent — the leading borrow is stripped and `u16 as i32`
-//! is analysed as the widening cast it is.  When the source type is not
+//! is analysed as the widening cast it is.  A unary-negation operand
+//! (`-e10 as u32` where `e10: i32`) resolves through the negation to the inner
+//! identifier's signed type, so `i32 as u32` is recognised as the same-width
+//! reinterpretation it is.  When the source type is not
 //! locally annotated
 //! (e.g. a method return or a custom type alias), the cast is flagged
 //! conservatively.  Use
@@ -393,7 +396,7 @@ fn target_int_bounds(target: NumericType) -> Option<(i128, i128)> {
 
 fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
     let value = node.child_by_field_name("value")?;
-    let ident = deref_identifier(value, source).unwrap_or(value);
+    let ident = unary_operand_identifier(value, source).unwrap_or(value);
     if ident.kind() != "identifier" {
         // `base[idx] as T` where `base` is a locally-declared slice/array/Vec of
         // a fixed-width integer (`buf: &[u8; N]`): the element type is the cast's
@@ -420,21 +423,31 @@ fn referent_type(type_text: &str) -> &str {
     }
 }
 
-/// If `value` is a unary dereference of an identifier (`*x`), return the inner
-/// identifier node; otherwise `None`. Peels a single parenthesized wrapper so
-/// `(*x) as i32` is covered too.
-fn deref_identifier<'a>(value: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_sitter::Node<'a>> {
+/// If `value` is a unary dereference (`*x`) or negation (`-x`) of an
+/// identifier, return the inner identifier node; otherwise `None`. Peels a
+/// single parenthesized wrapper so `(*x) as i32` / `(-x) as i32` is covered too.
+///
+/// Both operators preserve the inner identifier's numeric type for the cast's
+/// purposes: a deref reads the referent (the borrow is stripped by
+/// `referent_type`), and unary `-` on a signed integer keeps its type
+/// (`-e10` where `e10: i32` is `i32`). Resolving to the inner identifier lets
+/// `is_dangerous_cast` make the final lossy/non-lossy decision from the real
+/// source type — a genuinely lossy `-x as u8` (`i32 -> u8`) still flags.
+fn unary_operand_identifier<'a>(
+    value: tree_sitter::Node<'a>,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
     if value.kind() == "parenthesized_expression" {
-        return value.named_child(0).and_then(|inner| deref_identifier(inner, source));
+        return value.named_child(0).and_then(|inner| unary_operand_identifier(inner, source));
     }
     if value.kind() != "unary_expression" {
         return None;
     }
-    let is_deref = value
+    let is_deref_or_neg = value
         .child(0)
         .and_then(|op| op.utf8_text(source).ok())
-        .is_some_and(|op| op == "*");
-    if !is_deref {
+        .is_some_and(|op| op == "*" || op == "-");
+    if !is_deref_or_neg {
         return None;
     }
     value
@@ -1750,5 +1763,53 @@ mod tests {
         let src = "enum Rec { M(u8, u32) } \
                    fn narrow(r: &Rec) -> i16 { match r { Rec::M(.., x) => *x as i16 } }";
         assert!(!run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6443_neg_ident_i32_as_u32_not_flagged() {
+        // Issue #6443 (dtolnay/ryu s2d.rs): `-e10 as u32` where `e10: i32`. Unary
+        // negation preserves the signed type, so `-e10` is `i32` and `i32 as u32`
+        // is a same-width signed↔unsigned reinterpretation — no bits are lost.
+        let src = "fn f(m10: u64) -> u32 { let e10: i32 = -3; multiple_of_power_of_5(m10, -e10 as u32) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6443_neg_ident_i16_as_u16_not_flagged() {
+        // A same-width reinterpretation within the narrowing-target set genuinely
+        // exercises the negation resolution: `-x as u16` where `x: i16` resolves
+        // through `-` to `i16`, and `is_dangerous_cast(i16, u16)` is false.
+        assert!(run_on("fn f(x: i16) -> u16 { -x as u16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6443_neg_ident_i64_as_u64_not_flagged() {
+        // The issue's stated `i64 -> u64` expectation. `u64` is outside
+        // `NARROWING_TARGETS`, so the rule never inspects this cast — it documents
+        // the expected silence end to end, not the negation resolution itself.
+        assert!(run_on("fn f(x: i64) -> u64 { -x as u64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6443_paren_neg_ident_as_u32_not_flagged() {
+        // A parenthesized negation operand resolves the same way: `(-x) as u32`.
+        assert!(run_on("fn f(x: i32) -> u32 { (-x) as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_6443_neg_ident_i32_as_u8_still_flagged() {
+        // Negative control: resolving through `-` exposes the source type but does
+        // not change the lossy verdict. `-x as u8` where `x: i32` is a genuine
+        // narrowing (`i32 -> u8`), so `is_dangerous_cast` keeps it a finding.
+        assert_eq!(run_on("fn f(x: i32) -> u8 { -x as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6443_neg_non_identifier_operand_keeps_conservative_flag() {
+        // A non-identifier negation operand (`-(a + b)`) is not a single binding,
+        // so the source type stays unresolved and behavior is unchanged: the cast
+        // is a `unary_expression` (ceded by `rust-no-as-numeric-cast`), so this
+        // rule remains its sole owner and conservatively flags it.
+        assert_eq!(run_on("fn f(a: i32, b: i32) -> u8 { -(a + b) as u8 }").len(), 1);
     }
 }
