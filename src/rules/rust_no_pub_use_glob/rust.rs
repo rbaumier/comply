@@ -23,7 +23,12 @@
 //! - an umbrella/facade crate re-exporting one of its own Cargo-family sub-crates
 //!   (`pub use salvo_core::*;` in package `salvo`, `pub use poem_core::*;` in `poem`),
 //!   identified by the glob source starting with `<package_name>_` — wholesale
-//!   re-export of the core sub-crate IS the umbrella crate's public API.
+//!   re-export of the core sub-crate IS the umbrella crate's public API;
+//! - a file whose sole top-level item (ignoring comments and attributes) is the
+//!   flagged `pub use ...::*;` itself — a single-statement re-export facade whose
+//!   entire public API is the wholesale re-export (e.g. a thin `errors` crate
+//!   that is just `pub use anyhow::*;`). A second top-level item makes the file
+//!   mix the glob with its own surface, so it stays flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -118,6 +123,16 @@ impl AstCheck for Check {
                 return;
             }
         }
+        // A file whose only top-level item (ignoring comments and attributes) is
+        // this `pub use ...::*;` is a deliberate single-statement re-export
+        // facade: its entire public API IS the wholesale re-export (e.g. a shared
+        // `errors` crate that is just `pub use anyhow::*;`). There is no other
+        // surface for the glob to silently mirror alongside. A second top-level
+        // item (a `struct`, a `fn`, a second `use`, a `mod`, …) makes the count
+        // exceed one and the file is no longer a pure facade, so it stays flagged.
+        if is_sole_top_level_item(node) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -163,6 +178,35 @@ fn first_use_segment(trimmed: &str) -> Option<&str> {
     let after = after.strip_prefix("self::").unwrap_or(after);
     let seg = after.split("::").next()?.trim();
     (!seg.is_empty()).then_some(seg)
+}
+
+/// True when the flagged `use_declaration` is the entire content of its file:
+/// it is a direct child of the `source_file` root and that root holds exactly
+/// one item that is not a comment or attribute. Such a file — whose sole
+/// statement is `pub use <dep>::*;`, optionally under a license comment
+/// (`line_comment` / `block_comment`) or a crate-level attribute
+/// (`attribute_item` / `inner_attribute_item`) — is a deliberate
+/// single-statement re-export facade. Any real second item (`function_item`,
+/// `struct_item`, `mod_item`, a second `use_declaration`, …) pushes the count
+/// past one, so the file is no longer a pure facade.
+fn is_sole_top_level_item(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "source_file" {
+        return false;
+    }
+    let mut cursor = parent.walk();
+    parent
+        .named_children(&mut cursor)
+        .filter(|child| {
+            !matches!(
+                child.kind(),
+                "line_comment" | "block_comment" | "attribute_item" | "inner_attribute_item"
+            )
+        })
+        .count()
+        == 1
 }
 
 /// True when `crate_name` follows the conventional naming of a proc-macro /
@@ -273,7 +317,48 @@ mod tests {
 
     #[test]
     fn flags_pub_use_glob() {
-        assert_eq!(run_on("pub use crate::types::*;").len(), 1);
+        // A second top-level item keeps the file out of the single-statement
+        // facade exemption, so the glob re-export is still flagged.
+        assert_eq!(run_on("pub use crate::types::*;\npub struct Marker;").len(), 1);
+    }
+
+    #[test]
+    fn exempts_sole_item_facade_issue_6563() {
+        // Issue #6563: getzola/zola components/errors/src/lib.rs is a thin facade
+        // crate whose entire content is `pub use anyhow::*;`. With the glob as the
+        // file's only item, the wholesale re-export IS the public API.
+        assert!(run_on("pub use anyhow::*;").is_empty());
+    }
+
+    #[test]
+    fn exempts_sole_item_facade_with_license_comment_issue_6563() {
+        // A leading license comment is not a real item — the `pub use` is still
+        // the sole top-level item, so the facade exemption holds.
+        let src = "// SPDX-License-Identifier: MIT\npub use anyhow::*;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn exempts_sole_item_facade_with_crate_attribute_issue_6563() {
+        // A crate-level inner attribute (`#![...]`) is not a real item either, so
+        // the `pub use` remains the sole top-level item -> facade exemption holds.
+        let src = "#![allow(unused_imports)]\npub use anyhow::*;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_facade_plus_other_item_issue_6563() {
+        // `pub use anyhow::*;` alongside another item is no longer a pure facade:
+        // the glob mirrors the dependency's surface next to the crate's own API.
+        let src = "pub use anyhow::*;\npub struct Foo;";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_two_pub_use_globs_issue_6563() {
+        // Two top-level `pub use ...::*;` items push the count to two, so neither
+        // is the sole item -> both stay flagged.
+        assert_eq!(run_on("pub use x::*;\npub use y::*;").len(), 2);
     }
 
     #[test]
@@ -294,14 +379,20 @@ mod tests {
         // The exemption is package-relative, not a blanket `*_core` suffix: a crate
         // named `othercrate` re-exporting `salvo_core::*` is still mirroring an
         // external dependency's surface -> flagged.
-        assert_eq!(run_in_crate("othercrate", "pub use salvo_core::*;").len(), 1);
+        assert_eq!(
+            run_in_crate("othercrate", "pub use salvo_core::*;\npub struct Marker;").len(),
+            1
+        );
     }
 
     #[test]
     fn still_flags_external_crate_glob_in_umbrella_crate_issue_4461() {
         // `serde` is not a `salvo_*` family sub-crate, so package `salvo` re-exporting
         // `serde::*` does mirror an external dependency -> flagged.
-        assert_eq!(run_in_crate("salvo", "pub use serde::*;").len(), 1);
+        assert_eq!(
+            run_in_crate("salvo", "pub use serde::*;\npub struct Marker;").len(),
+            1
+        );
     }
 
     #[test]
@@ -332,13 +423,13 @@ mod tests {
     fn still_flags_external_crate_without_companion_suffix_issue_4510() {
         // No `_derive` / `_impl` / `_macros` suffix -> a normal glob re-export that
         // does mirror the dependency's surface. The exemption must stay suffix-gated.
-        assert_eq!(run_on("pub use some_external_lib::*;").len(), 1);
+        assert_eq!(run_on("pub use some_external_lib::*;\npub struct Marker;").len(), 1);
     }
 
     #[test]
     fn still_flags_std_collections_glob_issue_4510() {
         // First segment `std` has no companion suffix -> still flagged.
-        assert_eq!(run_on("pub use std::collections::*;").len(), 1);
+        assert_eq!(run_on("pub use std::collections::*;\npub struct Marker;").len(), 1);
     }
 
     #[test]
@@ -387,13 +478,13 @@ mod tests {
     #[test]
     fn still_flags_external_crate_glob_issue_1013() {
         // `serde` is an external crate, not a submodule declared here.
-        assert_eq!(run_on("pub use serde::*;").len(), 1);
+        assert_eq!(run_on("pub use serde::*;\npub struct Marker;").len(), 1);
     }
 
     #[test]
     fn still_flags_bare_glob_without_local_mod() {
         // No `mod external_thing;` in the file -> not local flattening.
-        assert_eq!(run_on("pub use external_thing::*;").len(), 1);
+        assert_eq!(run_on("pub use external_thing::*;\npub struct Marker;").len(), 1);
     }
 
     #[test]
@@ -414,8 +505,10 @@ mod tests {
     #[test]
     fn still_flags_cfg_only_glob_without_doc_hidden() {
         // A `#[cfg(...)]` attribute alone does not remove the re-export from
-        // the public API -> still flagged.
-        let src = "#[cfg(feature = \"derive\")]\npub use serde::*;";
+        // the public API -> still flagged. The struct keeps the real-item count
+        // above one (the attribute itself does not count) so the facade
+        // exemption does not apply.
+        let src = "#[cfg(feature = \"derive\")]\npub use serde::*;\npub struct Marker;";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -478,7 +571,7 @@ mod tests {
             "src/lib.rs",
             "pub mod platform_impl;\n",
             "src/platform_impl/mod.rs",
-            "pub use self::platform::*;\n",
+            "pub use self::platform::*;\npub struct Marker;\n",
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
@@ -491,7 +584,7 @@ mod tests {
             "src/unrelated.rs",
             "// no mod declaration here\n",
             "src/platform_impl/mod.rs",
-            "pub use self::platform::*;\n",
+            "pub use self::platform::*;\npub struct Marker;\n",
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
@@ -504,7 +597,7 @@ mod tests {
             "src/other.rs",
             "// sibling file, irrelevant\n",
             "src/lib.rs",
-            "pub use self::platform::*;\n",
+            "pub use self::platform::*;\npub struct Marker;\n",
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
