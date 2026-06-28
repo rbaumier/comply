@@ -10,6 +10,30 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_FILE_MARKERS.iter().any(|m| s.contains(m))
 }
 
+/// When `node` is the direct initializer of a `const`/`let`/`var` declarator,
+/// return the 1-based line of the enclosing `VariableDeclaration`. The regex
+/// literal may live on a continuation line below `const X =`, so a doc comment
+/// above the declaration documents it. Returns `None` when the regex is nested
+/// (array element, call argument, object property…), keeping the literal's own
+/// line so an unrelated comment above the enclosing statement never counts.
+fn enclosing_declaration_line<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    source: &str,
+) -> Option<usize> {
+    let nodes = semantic.nodes();
+    if !matches!(nodes.parent_node(node.id()).kind(), AstKind::VariableDeclarator(_)) {
+        return None;
+    }
+    for ancestor in nodes.ancestors(node.id()) {
+        if let AstKind::VariableDeclaration(decl) = ancestor.kind() {
+            let (decl_line, _) = byte_offset_to_line_col(source, decl.span.start as usize);
+            return Some(decl_line);
+        }
+    }
+    None
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -64,7 +88,16 @@ impl OxcCheck for Check {
         }
 
         let (line, _) = byte_offset_to_line_col(ctx.source, span.start as usize);
-        let row = line.saturating_sub(1);
+
+        // When the regex is the direct initializer of a `const X =\n  /re/`
+        // declaration, the literal can sit on a continuation line below the
+        // declaration. Anchor the doc-comment probe at the enclosing
+        // declaration so a comment above `const X =` documents the regex, just
+        // as it would when the literal shares the line with `=`. A nested regex
+        // (array element, call argument, object property…) keeps its own line,
+        // so an unrelated comment above the enclosing statement never counts.
+        let probe_line = enclosing_declaration_line(node, semantic, ctx.source).unwrap_or(line);
+        let row = probe_line.saturating_sub(1);
         let lines: Vec<&str> = ctx.source.lines().collect();
 
         // Blank lines between comment and declaration still count as documentation.
@@ -166,6 +199,33 @@ mod tests {
         // Sanity check: skipping blank lines must not reach past real code
         // and treat a far-away comment as documentation for this regex.
         let src = "// A comment about something unrelated.\nconst other = 1;\n\nconst r = /^[a-z]+@[a-z]+\\.[a-z]{2,4}$/;\n";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_jsdoc_above_continuation_line_regex_issue_6518() {
+        // Regression for rbaumier/comply#6518 — a JSDoc block immediately above
+        // `export const X =` documents the regex even when the literal sits on
+        // the continuation line below the `=`, where the probe used to stop at
+        // the declaration line and miss the comment.
+        let src = r#"
+/**
+ * Regular expression to match static import statements.
+ * @example `import { foo } from 'module'`
+ */
+export const ESM_STATIC_IMPORT_RE =
+  /import\s+["']([^"']+)["']/gmu;
+"#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_continuation_line_regex_without_comment() {
+        // Anchoring the probe at the enclosing declaration must not silence a
+        // genuinely undocumented complex regex on a continuation line.
+        let src = r#"export const X =
+  /import\s+["']([^"']+)["']/gmu;
+"#;
         assert_eq!(run(src).len(), 1);
     }
 
