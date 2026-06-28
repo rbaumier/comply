@@ -78,18 +78,31 @@ impl OxcCheck for Check {
     }
 }
 
-/// Walk ancestors to find the enclosing `VariableDeclarator` and return
-/// the binding identifier name.
+/// Walk ancestors to find the enclosing `VariableDeclarator` and return the
+/// binding identifier name — but only when the regex literal is the *direct*
+/// initializer of that binding, reached through transparent wrappers
+/// (parens / `as` / `satisfies` / `!`) alone. If the path crosses a consuming
+/// construct (a call, `new RegExp(...)`, a template literal, …) the literal is
+/// a sub-expression used to build a different value, not the bound regex, so no
+/// binding is attributed and the diagnostic is suppressed.
 fn find_enclosing_binding<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> Option<&'a str> {
     for ancestor in semantic.nodes().ancestors(node.id()) {
-        if let AstKind::VariableDeclarator(decl) = ancestor.kind() {
-            if let BindingPattern::BindingIdentifier(id) = &decl.id {
-                return Some(id.name.as_str());
+        match ancestor.kind() {
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSTypeAssertion(_)
+            | AstKind::TSNonNullExpression(_) => continue,
+            AstKind::VariableDeclarator(decl) => {
+                if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                    return Some(id.name.as_str());
+                }
+                return None;
             }
-            return None;
+            _ => return None,
         }
     }
     None
@@ -262,6 +275,25 @@ mod tests {
     #[test]
     fn flags_exec_in_loop_body_not_test() {
         let src = "const re = /x/g;\nwhile (cond) { re.exec(s); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_global_literal_nested_in_new_regexp_initializer() {
+        let src = "const regex = new RegExp(`^${pattern.replace(/\\*/g, '.*')}$`);\n\
+                   return regex.test(path);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_global_literal_as_replace_argument_in_initializer() {
+        let src = "const re = new RegExp(input.replace(/a/g, 'b'));\nif (re.test(x)) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_global_regex_bound_through_transparent_wrapper() {
+        let src = "const re = /foo/g as RegExp;\nif (re.test(str)) {}";
         assert_eq!(run_on(src).len(), 1);
     }
 }
