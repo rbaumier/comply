@@ -66,6 +66,32 @@ fn any_divergent_import_source(
     })
 }
 
+/// Whether a module specifier is *relative* (`./…` or `../…`), i.e. names a file
+/// under the importing package rather than an installed dependency.
+fn is_relative_specifier(spec: Option<&String>) -> bool {
+    spec.is_some_and(|s| s.starts_with('.'))
+}
+
+/// Whether either function delegates to a *package-local* implementation: a body
+/// free-var resolves (via that file's import map) to a relative module specifier.
+/// The two functions share a `(name, signature)` bucket, so their body-token
+/// streams — and identifier sets — are identical; iterating one side's
+/// `body_idents` is enough. A relative specifier resolves to a different file in
+/// each package, so when the two functions live in different packages the alias
+/// calls a different implementation per package even when the specifier text is
+/// identical.
+fn any_relative_import_dependency(
+    a: &FnEntry,
+    b: &FnEntry,
+    import_maps: &[FxHashMap<String, String>],
+) -> bool {
+    let map_a = &import_maps[a.file_idx];
+    let map_b = &import_maps[b.file_idx];
+    a.body_idents
+        .iter()
+        .any(|name| is_relative_specifier(map_a.get(name)) || is_relative_specifier(map_b.get(name)))
+}
+
 /// Whether the declaration at `decl` is `export`ed: a TS/JS `export` keyword
 /// wraps the declaration in an `export_statement` ancestor. Walks up because a
 /// `const` binding sits two levels under the `export_statement` (via its
@@ -236,6 +262,25 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             // when a body identifier resolves to imports with diverging module
             // specifiers across the two files.
             if any_divergent_import_source(entry, canonical, &import_maps) {
+                continue;
+            }
+            // Framework-adapter packages (`@xstate/svelte`, `@xstate/solid`,
+            // `@xstate/vue`) each export the same thin public hook (`useMachine`,
+            // `useStore`, `useAtomState`) whose byte-identical body delegates to a
+            // package-LOCAL `useActor` imported via a relative specifier
+            // (`./useActor`). A relative specifier resolves to a different file in
+            // each package — its specifier text being identical does not make the
+            // targets identical — so the bodies cannot be hoisted into one shared
+            // module: each depends on its own framework-specific implementation.
+            // Skip when the two functions live in different packages and a body
+            // identifier resolves to a relative import in either file. A pure
+            // cross-package duplicate with no relative-import delegation (e.g.
+            // `shallowEqual`) stays flagged — it is genuinely hoistable.
+            if are_different_packages(
+                package_dirs[entry.file_idx].as_deref(),
+                package_dirs[canonical.file_idx].as_deref(),
+            ) && any_relative_import_dependency(entry, canonical, &import_maps)
+            {
                 continue;
             }
             diags.push(Diagnostic {
@@ -991,5 +1036,109 @@ export function shallowEqual(a: Record<string, unknown>, b: Record<string, unkno
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "an import-free pure duplicate is still flagged");
         assert!(diags[0].message.contains("`shallowEqual`"));
+    }
+
+    // A framework-adapter package's thin public hook: an exported `useMachine`
+    // delegating to a package-local `useActor` imported from `specifier`.
+    fn use_machine_entry(specifier: &str) -> String {
+        format!(
+            "import {{ useActor }} from \"{specifier}\";\n\
+             export function useMachine(machine: AnyStateMachine, ...opts: unknown[]): Actor {{\n\
+            \x20 const actor = useActor(machine, opts);\n\
+            \x20 return actor;\n\
+             }}\n"
+        )
+    }
+
+    #[test]
+    fn relative_import_delegation_across_packages_not_flagged() {
+        // Issue #6277 (statelyai/xstate): framework-adapter packages
+        // (`@xstate/svelte`, `@xstate/solid`) each export an identical thin
+        // `useMachine` whose body delegates to a package-LOCAL `useActor`
+        // imported via a relative specifier. The same `./useActor` text resolves
+        // to a different framework-specific file per package, so the bodies
+        // cannot be hoisted into one shared module — not a true duplicate.
+        let dir = tempfile::tempdir().unwrap();
+        write_pkg(&dir, "packages/xstate-svelte", "@xstate/svelte");
+        write_pkg(&dir, "packages/xstate-solid", "@xstate/solid");
+        let a = write(
+            &dir,
+            "packages/xstate-svelte/src/useMachine.ts",
+            &use_machine_entry("./useActor"),
+        );
+        let b = write(
+            &dir,
+            "packages/xstate-solid/src/useMachine.ts",
+            &use_machine_entry("./useActor"),
+        );
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "exported hooks delegating to a package-local relative import are exempt"
+        );
+    }
+
+    #[test]
+    fn pure_export_across_packages_still_flagged() {
+        // Negative control for #6277: a pure exported helper (`shallowEqual`) with
+        // no imports is genuinely hoistable to a shared package, so duplicating it
+        // across packages stays a smell — the exemption is keyed on delegation to
+        // a package-local relative import, not on the package boundary alone.
+        let pure = "\
+export function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+";
+        let dir = tempfile::tempdir().unwrap();
+        write_pkg(&dir, "packages/xstate-react", "@xstate/react");
+        write_pkg(&dir, "packages/xstate-store", "@xstate/store");
+        let a = write(&dir, "packages/xstate-react/src/shallowEqual.ts", pure);
+        let b = write(&dir, "packages/xstate-store/src/shallowEqual.ts", pure);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a pure cross-package duplicate is still flagged");
+        assert!(diags[0].message.contains("`shallowEqual`"));
+    }
+
+    #[test]
+    fn relative_import_delegation_same_package_still_flagged() {
+        // Within one package the two relative `./useActor` imports resolve to the
+        // same file, so the delegating hook is trivially hoistable to a local
+        // module and the duplicate is still a smell.
+        let dir = tempfile::tempdir().unwrap();
+        write_pkg(&dir, "packages/xstate-svelte", "@xstate/svelte");
+        let a = write(
+            &dir,
+            "packages/xstate-svelte/src/useMachine.ts",
+            &use_machine_entry("./useActor"),
+        );
+        let b = write(
+            &dir,
+            "packages/xstate-svelte/src/useMachineAlias.ts",
+            &use_machine_entry("./useActor"),
+        );
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "intra-package relative-delegating duplicates are still flagged");
+        assert!(diags[0].message.contains("`useMachine`"));
+    }
+
+    #[test]
+    fn bare_import_delegation_across_packages_still_flagged() {
+        // Negative control for #6277: a shared body free-var imported from a
+        // bare/external package resolves to the same module in both packages — no
+        // package-local divergence — so the cross-package duplicate is genuinely
+        // hoistable and still flags.
+        let dir = tempfile::tempdir().unwrap();
+        write_pkg(&dir, "packages/a", "@scope/a");
+        write_pkg(&dir, "packages/b", "@scope/b");
+        let a = write(&dir, "packages/a/src/useMachine.ts", &use_machine_entry("xstate"));
+        let b = write(&dir, "packages/b/src/useMachine.ts", &use_machine_entry("xstate"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a bare-import cross-package duplicate is still flagged");
+        assert!(diags[0].message.contains("`useMachine`"));
     }
 }
