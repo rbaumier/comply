@@ -138,11 +138,14 @@ impl OxcCheck for Check {
 }
 
 /// True when the parameter's enclosing parameter list belongs to an actual
-/// runtime function (a `Function` — which includes class/object methods, whose
-/// value is a `Function` node — or an `ArrowFunctionExpression`). Every other
-/// parent is a type-level callable signature with no body, which cannot be
-/// split and must not be flagged. The allowlist is positive so that new
-/// type-level node kinds are skipped by default.
+/// runtime function (a `Function` with a body — which includes class/object
+/// methods, whose value is a `Function` node — or an `ArrowFunctionExpression`).
+/// A bodyless `Function` (an overload signature, an abstract method, or an
+/// ambient `declare` function) is a pure type-level declaration with no runtime
+/// branching, so it cannot be split and must not be flagged. Every other parent
+/// is a type-level callable signature with no body.
+/// The allowlist is positive so that new type-level node kinds are skipped by
+/// default.
 fn is_runtime_function_param<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -152,10 +155,11 @@ fn is_runtime_function_param<'a>(
     if !matches!(params_node.kind(), AstKind::FormalParameters(_)) {
         return false;
     }
-    matches!(
-        nodes.parent_node(params_node.id()).kind(),
-        AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
-    )
+    match nodes.parent_node(params_node.id()).kind() {
+        AstKind::Function(func) => func.body.is_some(),
+        AstKind::ArrowFunctionExpression(_) => true,
+        _ => false,
+    }
 }
 
 /// True when the parameter belongs to a class setter accessor
@@ -540,5 +544,35 @@ mod tests {
             1,
         );
         assert_eq!(run("function f(flag: boolean) { if (flag) a(); else b(); }").len(), 1);
+    }
+
+    // Regression for #6476: a boolean parameter that appears only in a TypeScript
+    // overload signature (a `function` declaration with `body: None`) is a pure
+    // type-level construct with no runtime branching — "split into two named
+    // functions" is meaningless for a bodyless signature, so it must not be
+    // flagged. The implementation here uses `HasProtocolOptions | boolean` (a
+    // union, not `boolean`), so nothing is flagged. Exact reproducer from the issue.
+    #[test]
+    fn no_fp_boolean_param_in_overload_signature_issue_6476() {
+        let src = "export function hasProtocol(\
+                     inputString: string,\
+                     opts?: HasProtocolOptions,\
+                   ): boolean;\
+                   export function hasProtocol(\
+                     inputString: string,\
+                     acceptRelative: boolean,\
+                   ): boolean;\
+                   export function hasProtocol(\
+                     inputString: string,\
+                     acceptRelative?: HasProtocolOptions | boolean,\
+                   ): boolean { return true; }";
+        assert!(run(src).is_empty(), "got {:#?}", run(src));
+    }
+
+    // Guard: an arrow function with a plain boolean mode flag has a body and is a
+    // runtime function — it stays flagged.
+    #[test]
+    fn still_flags_boolean_flag_param_in_arrow() {
+        assert_eq!(run("const send = (urgent: boolean) => {};").len(), 1);
     }
 }
