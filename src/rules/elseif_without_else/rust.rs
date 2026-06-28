@@ -1,5 +1,12 @@
 //! elseif-without-else Rust backend — flag `if/else if` chains without
 //! a final `else`.
+//!
+//! Exempt: best-candidate accumulator chains. When every branch body is
+//! non-empty and consists exclusively of pure-mutation statements
+//! (assignment, compound assignment, or local `let`) with no control-flow
+//! exit, function call, or macro, the omitted `else` is intentional —
+//! "leave the accumulators unchanged" is the complete remaining behavior,
+//! and an empty `else {}` would be noise.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -66,6 +73,14 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
     // in release, so the absent `else` hides no silent no-op data bug; the
     // chain is intentional.
     if all_branches_assert {
+        return;
+    }
+
+    // Every branch body is a non-empty run of pure-mutation statements
+    // (assignments / local `let`) — a "best-candidate accumulator". Updating
+    // running bests and leaving them unchanged for the remaining cases is the
+    // complete behavior; an explicit empty `else {}` would be noise.
+    if is_pure_mutation_accumulator(node) {
         return;
     }
 
@@ -185,6 +200,87 @@ fn is_pure_assertion_block(block: tree_sitter::Node, source: &[u8]) -> bool {
         assertions += 1;
     }
     assertions > 0
+}
+
+/// True when the whole `if/else if` chain rooted at `head` is a best-candidate
+/// accumulator: every branch body (the `if` consequence plus each `else if`
+/// consequence) is a non-empty run of pure-mutation statements. Such a chain
+/// intentionally omits the terminal `else` because "leave the running bests
+/// unchanged" is the complete behavior for the remaining cases.
+fn is_pure_mutation_accumulator(head: tree_sitter::Node) -> bool {
+    let mut current = head;
+    loop {
+        let Some(consequence) = current.child_by_field_name("consequence") else {
+            return false;
+        };
+        if !is_pure_mutation_block(consequence) {
+            return false;
+        }
+
+        // Advance to the next `else if` in the chain. The caller has already
+        // ruled out a terminal bare `else`, so the chain ends at the last
+        // `else if`.
+        let Some(alt) = current.child_by_field_name("alternative") else {
+            return true;
+        };
+        if alt.kind() != "else_clause" {
+            return true;
+        }
+        let mut next: Option<tree_sitter::Node> = None;
+        let count = alt.named_child_count();
+        for i in 0..count {
+            if let Some(child) = alt.named_child(i)
+                && child.kind() == "if_expression"
+            {
+                next = Some(child);
+                break;
+            }
+        }
+        match next {
+            Some(if_node) => current = if_node,
+            None => return true,
+        }
+    }
+}
+
+/// A `block` is a pure-mutation body when it holds at least one statement and
+/// every statement is a pure mutation (comments are ignored). An empty block,
+/// or one holding any control-flow exit, function call, or macro, is not —
+/// those carry the genuine no-op / missing-case risk the rule exists to catch.
+fn is_pure_mutation_block(block: tree_sitter::Node) -> bool {
+    let mut mutations = 0usize;
+    let count = block.named_child_count();
+    for i in 0..count {
+        let Some(stmt) = block.named_child(i) else {
+            return false;
+        };
+        if matches!(stmt.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        if !is_pure_mutation_stmt(stmt) {
+            return false;
+        }
+        mutations += 1;
+    }
+    mutations > 0
+}
+
+/// A statement is a pure mutation when it is a local `let` binding, or an
+/// assignment / compound assignment — directly as a block tail expression or
+/// wrapped in an `expression_statement` (the `x = y;` shape). Every other
+/// statement kind (function/method calls, macros, `return`/`break`/`continue`,
+/// nested control flow) is rejected: only running-state updates qualify.
+fn is_pure_mutation_stmt(stmt: tree_sitter::Node) -> bool {
+    match stmt.kind() {
+        "let_declaration" | "assignment_expression" | "compound_assignment_expr" => true,
+        "expression_statement" => stmt.named_child(0).is_some_and(|inner| {
+            matches!(
+                inner.kind(),
+                "assignment_expression" | "compound_assignment_expr"
+            )
+        }),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -429,6 +525,112 @@ fn f(a: bool, b: bool) {
         return;
     } else if b {
         y = 2;
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "elseif-without-else");
+    }
+
+    #[test]
+    fn allows_best_candidate_accumulator() {
+        // Repro from BurntSushi/memchr: "best rare byte" selection — each
+        // branch only updates the running-best accumulators, "do nothing" is
+        // the correct remaining behavior.
+        let src = r#"
+fn f(needle: &[u8], ranker: &Ranker) {
+    let mut rare1 = needle[0];
+    let mut rare2 = needle[1];
+    let mut index1 = 0u8;
+    let mut index2 = 1u8;
+    for (i, &b) in needle.iter().enumerate().take(8).skip(2) {
+        if ranker.rank(b) < ranker.rank(rare1) {
+            rare2 = rare1;
+            index2 = index1;
+            rare1 = b;
+            index1 = u8::try_from(i).unwrap();
+        } else if b != rare1 && ranker.rank(b) < ranker.rank(rare2) {
+            rare2 = b;
+            index2 = u8::try_from(i).unwrap();
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_accumulator_with_compound_and_let() {
+        // Pure-mutation branches mixing compound assignment and a local `let`.
+        let src = r#"
+fn f(xs: &[i32]) {
+    let mut sum = 0;
+    let mut max = i32::MIN;
+    for &x in xs {
+        if x > 0 {
+            sum += x;
+            let doubled = x * 2;
+            max = doubled;
+        } else if x < 0 {
+            sum -= 1;
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_accumulator_with_a_call_branch() {
+        // Negative control: one branch is a function call, not a pure
+        // mutation — the missing `else` may be a real omission, still flagged.
+        let src = r#"
+fn f(a: bool, b: bool) {
+    let mut x = 0;
+    if a {
+        x = 1;
+    } else if b {
+        record(x);
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "elseif-without-else");
+    }
+
+    #[test]
+    fn flags_accumulator_with_a_return_branch() {
+        // Negative control: a branch returns — not pure mutation, still flagged
+        // (and it does not diverge in *every* branch, so the diverge exemption
+        // does not apply either).
+        let src = r#"
+fn f(a: bool, b: bool) -> i32 {
+    let mut x = 0;
+    if a {
+        x = 1;
+    } else if b {
+        return 2;
+    }
+    x
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "elseif-without-else");
+    }
+
+    #[test]
+    fn flags_empty_branch_in_accumulator_chain() {
+        // Negative control: an empty branch is the genuine no-op risk — still
+        // flagged even when the other branch is a pure mutation.
+        let src = r#"
+fn f(a: bool, b: bool) {
+    let mut x = 0;
+    if a {
+        x = 1;
+    } else if b {
     }
 }
 "#;
