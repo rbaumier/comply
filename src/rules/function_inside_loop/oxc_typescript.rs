@@ -111,15 +111,39 @@ fn per_iteration_for_init_span(loop_kind: AstKind) -> Option<oxc_span::Span> {
     .then_some(decl.span)
 }
 
+/// True when `sym_id` is declared by a `const` `VariableDeclaration`. A `const`
+/// binding is immutable and block-scoped: every execution of its enclosing block —
+/// including every loop iteration — produces a fresh binding that can never be
+/// reassigned, so it can never become a stale-shared capture. Resolves the symbol's
+/// declaration node and walks up to its nearest enclosing `VariableDeclaration` to
+/// read the declaration kind, which also covers destructuring (`const { a } = …`),
+/// where the binding sits inside an `ObjectPattern`/`ArrayPattern` under the
+/// declarator. Returns `false` for `let`/`var` and for non-variable declarations.
+fn is_const_declared_symbol(
+    sym_id: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let decl_node_id = semantic.scoping().symbol_declaration(sym_id);
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclaration(decl) => Some(decl.kind == VariableDeclarationKind::Const),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 /// True when the function spanning `func_span` closes over at least one binding
-/// the enclosing loop introduces or re-assigns per iteration — a symbol declared
-/// inside the loop (`var` header binding or `let`/`const`/`var` in the body), or
+/// the enclosing loop introduces or re-assigns per iteration — a `let`/`var`
+/// declared inside the loop (`var` header binding or `let`/`var` in the body), or
 /// the pre-declared target of a `for (x of …)`/`for (x in …)` — that the function
 /// references. Such a capture is the stale-shared-binding hazard this rule exists
-/// to catch. The `let`/`const` initializer of a C-style `for (let i …)` is exempt:
-/// it is re-bound fresh each iteration, so a closure capturing it reads its own
-/// value. A function that only touches its own params and outer-stable values
-/// (globals like `setTimeout`, bindings declared above the loop) captures nothing
+/// to catch. Two kinds of capture are exempt because they are re-bound fresh each
+/// iteration: the `let`/`const` initializer of a C-style `for (let i …)`, and any
+/// `const` declared in the loop body (immutable and block-scoped → per-iteration).
+/// A function that only touches its own params and outer-stable values (globals
+/// like `setTimeout`, bindings declared above the loop) captures nothing
 /// loop-scoped and is safe.
 fn captures_loop_binding<'a>(
     func_span: oxc_span::Span,
@@ -146,6 +170,13 @@ fn captures_loop_binding<'a>(
         // shared-binding hazard. `var` inits and bindings declared in the loop
         // body remain hazards.
         if per_iteration_init.is_some_and(|init_span| span_contains(init_span, decl_span)) {
+            continue;
+        }
+        // A `const` declared in the loop body is immutable and block-scoped, so
+        // each iteration binds a fresh value the closure captures for itself —
+        // never a stale-shared binding, exactly like a `for…of const` head.
+        // (`let`/`var` body declarations stay hazards.)
+        if is_const_declared_symbol(sym_id, semantic) {
             continue;
         }
         for reference in scoping.get_resolved_references(sym_id) {
@@ -310,14 +341,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_function_in_while_in_prod_code() {
-        // The closure captures `n`, a binding declared in the loop body, so it
-        // sees a stale value across iterations — the hazard this rule targets.
+    fn allows_function_capturing_const_in_while_body() {
+        // The closure captures `n`, a `const` declared in the loop body. Each
+        // iteration creates a fresh, immutable block-scoped binding, so the closure
+        // reads its own iteration's value — no stale-shared-binding hazard.
         let d = run(
             "while (true) { const n = next(); const fn = function() { return n; }; }",
             "src/app.ts",
         );
-        assert_eq!(d.len(), 1);
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
     }
 
     #[test]
@@ -653,6 +685,65 @@ mod tests {
             while (running) {
                 let n = next();
                 arr.push(() => n);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_getter_capturing_const_in_while_body() {
+        // Issue #6617 (nuxt-modules/sitemap prerender.ts): a getter captures
+        // `filePath`, a `const` declared in the `while` body. The const is a fresh,
+        // immutable per-iteration block binding, so the getter reads its own value —
+        // semantically the `while` analogue of an exempted `for…of const` loop.
+        let src = r#"
+            while (queue.length) {
+                const route = queue.shift()!
+                const filePath = resolve(route)
+                sitemaps.push({
+                    name: route,
+                    get content() {
+                        return readFileSync(filePath, { encoding: 'utf8' })
+                    },
+                })
+            }
+        "#;
+        let d = run(src, "src/prerender.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_getter_capturing_destructured_const_in_while_body() {
+        // Issue #6617 exact form: `const { filePath } = await …` — a destructured
+        // `const` binding in the loop body is still per-iteration immutable.
+        let src = r#"
+            while (queue.length) {
+                const route = queue.shift()!
+                const { filePath, prerenderUrls } = await prerenderRoute(nitro, route)
+                sitemaps.push({
+                    name: route,
+                    get content() {
+                        return readFileSync(filePath, { encoding: 'utf8' })
+                    },
+                })
+                queue.push(...prerenderUrls)
+            }
+        "#;
+        let d = run(src, "src/prerender.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_closure_capturing_reassigned_let_in_while_body() {
+        // Negative control for #6617: a `let` declared in the loop body and
+        // reassigned is mutable, so a captured closure reads a stale value — must
+        // STILL flag. Only `const` body bindings are exempt.
+        let src = r#"
+            while (running) {
+                let value = seed();
+                value = transform(value);
+                cbs.push(() => value);
             }
         "#;
         let d = run(src, "src/app.ts");
