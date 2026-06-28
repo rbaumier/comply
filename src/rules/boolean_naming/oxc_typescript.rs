@@ -418,6 +418,21 @@ impl OxcCheck for Check {
                     return;
                 }
 
+                // An explicit annotation whose top-level type is neither the
+                // `boolean` keyword nor a union (`Listener["https"]` indexed
+                // access, a `HTTPSCert` type reference, a conditional type, …)
+                // is an opaque non-boolean type and is the source of truth for
+                // the variable's type. A `= false` / `= true` initializer is a
+                // sentinel value, not evidence of a boolean predicate, so the
+                // init-value heuristic must not fire. `boolean` and boolean-ish
+                // unions (`boolean | undefined`) fall through and still flag.
+                if let Some(ann) = &decl.type_annotation {
+                    let top = &ann.type_annotation;
+                    if !matches!(top, TSType::TSBooleanKeyword(_) | TSType::TSUnionType(_)) {
+                        return;
+                    }
+                }
+
                 // Check for `: boolean` annotation
                 let has_annotation = decl
                     .type_annotation
@@ -1002,5 +1017,31 @@ mod tests {
         );
         // The plain-variable form is unaffected by the parameter exemption.
         assert_eq!(run("const enumerable: boolean = true;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_opaque_non_boolean_annotation_with_bool_init() {
+        // An explicit annotation whose top-level type is neither `boolean` nor a
+        // union — an indexed-access type (`Listener["https"]` resolves to
+        // `false | Certificate`), a type reference (`HTTPSCert`) — is an opaque
+        // non-boolean type and is the source of truth. A `= false` / `= true`
+        // initializer is a sentinel value, not a boolean predicate, so it must
+        // not be flagged based solely on its init value. (Closes #6641)
+        assert!(run("let https: Listener[\"https\"] = false;").is_empty());
+        assert!(run("let cert: HTTPSCert = false;").is_empty());
+        assert!(run("let x: SomeType = false;").is_empty());
+        assert!(run("let y: Listener[\"https\"] = true;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_annotated_and_unannotated_real_booleans() {
+        // Strictness preserved: the opaque-annotation exemption only suppresses
+        // the init-value heuristic for non-boolean annotations. A genuine
+        // `boolean` annotation, a boolean-ish union (`boolean | undefined`), and
+        // an unannotated `= false` (inferred boolean) are all real booleans and
+        // still require a predicate prefix.
+        assert_eq!(run("let done: boolean = false;").len(), 1);
+        assert_eq!(run("let ready: boolean | undefined = false;").len(), 1);
+        assert_eq!(run("let active = false;").len(), 1);
     }
 }
