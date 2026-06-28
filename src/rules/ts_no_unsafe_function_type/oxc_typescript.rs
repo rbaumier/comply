@@ -17,7 +17,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         // tsd type-test files pass `Function` as an input to the utility under
@@ -34,6 +34,22 @@ impl OxcCheck for Check {
             _ => return,
         };
         if name != "Function" {
+            return;
+        }
+        // `value is Function` / `asserts value is Function`: when `Function` is
+        // the narrowed type of a type predicate it asserts only that the value is
+        // callable with an unknown signature — no concrete call signature like
+        // `() => void` can replace it without over-narrowing the claim. The
+        // predicate wraps its type in a `TSTypeAnnotation`, so the direct slot is
+        // parent = `TSTypeAnnotation`, grandparent = `TSTypePredicate`; `Function`
+        // nested deeper (e.g. `value is Function[]`) stays flagged.
+        let nodes = semantic.nodes();
+        if matches!(nodes.parent_kind(node.id()), AstKind::TSTypeAnnotation(_))
+            && matches!(
+                nodes.parent_kind(nodes.parent_id(node.id())),
+                AstKind::TSTypePredicate(_)
+            )
+        {
             return;
         }
         let (line, column) =
@@ -109,5 +125,36 @@ mod tests {
     #[test]
     fn still_flags_function_type_in_production_issue3324() {
         assert_eq!(run_at("function call(cb: Function) { cb(); }", "src/widget.ts").len(), 1);
+    }
+
+    #[test]
+    fn exempts_function_in_type_predicate_issue6494() {
+        // sindresorhus/is source/index.ts:534 — `value is Function` asserts the
+        // value is callable with an unknown signature; no narrower type fits.
+        let src = "function isFunction(value: unknown): value is Function { return typeof value === 'function'; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_function_in_asserts_type_predicate_issue6494() {
+        let src = "function assertFunction(value: unknown): asserts value is Function {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_function_in_parameter_return_and_variable_issue6494() {
+        // Only the type-predicate narrowed-type slot is exempt; ordinary
+        // value-type positions still flag.
+        assert_eq!(run("function f(cb: Function) {}").len(), 1);
+        assert_eq!(run("function g(): Function { return () => {}; }").len(), 1);
+        assert_eq!(run("const h: Function = () => {};").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_function_nested_in_type_predicate_issue6494() {
+        // Only the direct narrowed-type slot is exempt; `Function` nested inside
+        // the narrowed type (here an array element) keeps a narrower replacement.
+        let src = "function isFns(v: unknown): v is Function[] { return Array.isArray(v); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
