@@ -13,6 +13,17 @@ use oxc_span::GetSpan;
 
 pub struct Check;
 
+/// Generic utility types whose `<…>` application NARROWS a value out of a
+/// broader type by filtering its members (`NonNullable<T>` drops null/undefined,
+/// `Exclude`/`Extract` filter a union, `Pick` filters keys, `Required` filters
+/// `undefined` off optional props) — a runtime type-predicate / `in` / `typeof`
+/// check is the checkable alternative this rule recommends. The intrinsic
+/// string-transformation types (`Uppercase`/`Lowercase`/`Capitalize`/
+/// `Uncapitalize`) are deliberately absent: they MAP each string to a
+/// transformed string rather than filtering a set, so no runtime check yields
+/// their result (and for a generic argument the transformation is uninferable,
+/// making the `as` the only viable annotation) — casting to them is structural,
+/// not a narrowing smell.
 const NARROWING_UTILITY_TYPES: &[&str] = &[
     "NonNullable",
     "Exclude",
@@ -20,10 +31,6 @@ const NARROWING_UTILITY_TYPES: &[&str] = &[
     "Required",
     "Readonly",
     "Pick",
-    "Capitalize",
-    "Uncapitalize",
-    "Uppercase",
-    "Lowercase",
 ];
 
 /// Built-in DOM element interfaces (`HTMLSpanElement`, `SVGPathElement`, the
@@ -492,6 +499,37 @@ mod tests {
         let src = "function f(x: unknown) { return x as Concrete; }";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_intrinsic_string_transform_types() {
+        // Regression for #6538: scule's `upperFirst`/`lowerFirst` cast to
+        // `Capitalize<S>`/`Uncapitalize<S>` where `S extends string` is the
+        // function's generic parameter. The intrinsic string-transformation
+        // types map each string to a transformed string; for a generic argument
+        // TypeScript cannot evaluate the result, so the `as` is the only
+        // annotation and no runtime type-predicate / `in` / `typeof` check can
+        // yield it. These four are not narrowings.
+        let cap = "export function upperFirst<S extends string>(str: S): Capitalize<S> {\n\
+                   return (str ? str[0].toUpperCase() + str.slice(1) : \"\") as Capitalize<S>;\n}";
+        assert!(run_on(cap).is_empty(), "unexpected diags: {:?}", run_on(cap));
+        let uncap = "export function lowerFirst<S extends string>(str: S): Uncapitalize<S> {\n\
+                     return (str ? str[0].toLowerCase() + str.slice(1) : \"\") as Uncapitalize<S>;\n}";
+        assert!(run_on(uncap).is_empty(), "unexpected diags: {:?}", run_on(uncap));
+        let up = "function up<S extends string>(s: S) { return s.toUpperCase() as Uppercase<S>; }";
+        assert!(run_on(up).is_empty(), "unexpected diags: {:?}", run_on(up));
+        let low = "function low<S extends string>(s: S) { return s.toLowerCase() as Lowercase<S>; }";
+        assert!(run_on(low).is_empty(), "unexpected diags: {:?}", run_on(low));
+    }
+
+    #[test]
+    fn still_flags_genuine_narrowing_utility_types() {
+        // Control for #6538: filter-based narrowing utilities still flag — they
+        // narrow a value out of a broader type and a runtime check is the
+        // checkable alternative, unlike the intrinsic string-transformation
+        // types that #6538 exempted.
+        assert_eq!(run_on("const a = x as NonNullable<T>;").len(), 1);
+        assert_eq!(run_on("const b = x as Exclude<A, B>;").len(), 1);
     }
 
     #[test]
