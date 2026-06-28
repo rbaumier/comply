@@ -4099,22 +4099,39 @@ pub fn type_annotation_is_type_predicate(
 }
 
 /// True when `annotation` is a return-type that admits both `return;` (yields
-/// `undefined`) and `return expr;`: a bare `void`/`undefined` keyword, or a union
-/// that includes either. Mixing bare and value returns under such a contract is
-/// the canonical TypeScript idiom (e.g. `: T | undefined`, void tail-calls), not
-/// an inconsistency.
+/// `undefined`) and `return expr;`: a bare `void`/`undefined` keyword, a union
+/// that includes either, or a `Promise<T>` whose single awaited type argument
+/// does. In an `async` function a bare `return` resolves the promise to
+/// `Promise.resolve(undefined)`, i.e. the `undefined`/`void` arm of a declared
+/// `Promise<T | undefined>` / `Promise<T | void>`. Mixing bare and value returns
+/// under such a contract is the canonical TypeScript idiom
+/// (e.g. `: T | undefined`, `: Promise<T | undefined>`, void tail-calls), not an
+/// inconsistency.
 #[must_use]
 pub fn return_type_admits_void_or_undefined(
     annotation: Option<&oxc_ast::ast::TSTypeAnnotation>,
 ) -> bool {
-    use oxc_ast::ast::TSType;
-    fn is_void_or_undefined(ty: &TSType) -> bool {
-        matches!(ty, TSType::TSVoidKeyword(_) | TSType::TSUndefinedKeyword(_))
+    use oxc_ast::ast::{TSType, TSTypeName};
+    fn ty_admits(ty: &TSType) -> bool {
+        match ty {
+            TSType::TSVoidKeyword(_) | TSType::TSUndefinedKeyword(_) => true,
+            TSType::TSUnionType(union) => union.types.iter().any(ty_admits),
+            // `Promise<T>`: an async bare `return` resolves to
+            // `Promise.resolve(undefined)`, so admit when the single awaited
+            // type argument `T` does. Only the one-argument `Promise<T>` shape.
+            TSType::TSTypeReference(tref) => {
+                matches!(
+                    &tref.type_name,
+                    TSTypeName::IdentifierReference(id) if id.name == "Promise"
+                ) && tref.type_arguments.as_ref().is_some_and(|args| {
+                    args.params.len() == 1
+                        && args.params.first().is_some_and(ty_admits)
+                })
+            }
+            _ => false,
+        }
     }
-    annotation.is_some_and(|ann| match &ann.type_annotation {
-        TSType::TSUnionType(union) => union.types.iter().any(is_void_or_undefined),
-        ty => is_void_or_undefined(ty),
-    })
+    annotation.is_some_and(|ann| ty_admits(&ann.type_annotation))
 }
 
 /// True when `ident` (a type-position identifier) resolves to a symbol whose

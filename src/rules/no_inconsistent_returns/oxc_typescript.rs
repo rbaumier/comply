@@ -327,6 +327,54 @@ const f = (c, s): string | undefined => {
     }
 
     #[test]
+    fn allows_async_arrow_promise_union_undefined_return_type() {
+        // Regression for issue #6558 (egoist/tsup src/utils.ts:398): an async
+        // arrow declared `: Promise<T | undefined>` mixing a bare `return;` with
+        // value returns — the bare `return` is the `undefined` arm of the
+        // promise's type argument.
+        let code = r#"
+const resolve = async (x): Promise<NormalizedConfig | undefined> => {
+    if (x == null) {
+        return;
+    }
+    return { entry: {} };
+};
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_async_function_promise_void_return_type() {
+        // `: Promise<T | void>` — the bare `return;` is the `void` arm of the
+        // promise's type argument.
+        let code = r#"
+async function run(x): Promise<Result | void> {
+    if (!x) {
+        return;
+    }
+    return compute(x);
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_promise_without_undefined_arm() {
+        // `: Promise<T>` with no `| undefined` / `| void` in the type argument:
+        // a bare `return;` yields `undefined`, not the declared awaited type.
+        // Genuine inconsistency, must still flag.
+        let code = r#"
+async function load(x): Promise<NormalizedConfig> {
+    if (!x) {
+        return;
+    }
+    return { entry: {} };
+}
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
     fn still_flags_unannotated_mixed_returns() {
         // No return-type annotation: genuine inconsistency, must still flag.
         let code = r#"
