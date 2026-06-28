@@ -1737,7 +1737,7 @@ fn resolves_to_regex_match(
 /// Returns true when `expr` is `<recv>.exec(...)` or `<recv>.match(...)` — the
 /// two calls that yield a `RegExpExecArray`/`RegExpMatchArray | null`.
 fn is_regex_exec_or_match_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else {
+    let Expression::CallExpression(call) = peel_transparent_wrappers(expr) else {
         return false;
     };
     let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -1789,12 +1789,29 @@ fn resolves_to_split_call(
     false
 }
 
+/// Strips runtime-transparent wrapper expressions — type assertions (`expr as T`,
+/// `<T>expr`), `satisfies` narrowing (`expr satisfies T`), the non-null assertion
+/// (`expr!`), and parentheses — returning the underlying expression. These wrappers are
+/// compile-time-only, so `foo.split("/") as [string, ...string[]]` is the `split`
+/// call at runtime. The call-shape predicates below peel through this first so a
+/// wrapped `.split()`/`.exec()`/`.matchAll()` is still recognized.
+fn peel_transparent_wrappers<'a, 'b>(expr: &'b Expression<'a>) -> &'b Expression<'a> {
+    match expr {
+        Expression::ParenthesizedExpression(p) => peel_transparent_wrappers(&p.expression),
+        Expression::TSAsExpression(t) => peel_transparent_wrappers(&t.expression),
+        Expression::TSSatisfiesExpression(t) => peel_transparent_wrappers(&t.expression),
+        Expression::TSNonNullExpression(t) => peel_transparent_wrappers(&t.expression),
+        Expression::TSTypeAssertion(t) => peel_transparent_wrappers(&t.expression),
+        _ => expr,
+    }
+}
+
 /// Returns true when `expr` is a `<recv>.split(...)` call. `<recv>` may itself be
 /// a member chain (e.g. `this.name.split(...)`), so only the called property name
 /// is checked. Any argument shape qualifies — `split()` with no argument returns
 /// `[wholeString]`, still non-empty.
 fn is_split_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else {
+    let Expression::CallExpression(call) = peel_transparent_wrappers(expr) else {
         return false;
     };
     let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -1842,7 +1859,7 @@ fn for_of_binds_name(left: &ForStatementLeft, name: &str) -> bool {
 /// that yields `RegExpMatchArray` elements. `<recv>` may itself be a member chain
 /// (e.g. `this.text.matchAll(re)`), so only the called property name is checked.
 fn is_matchall_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else {
+    let Expression::CallExpression(call) = peel_transparent_wrappers(expr) else {
         return false;
     };
     let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -3833,6 +3850,32 @@ mod tests {
         // Negative space: a `let` may be reassigned to a non-split value, so the
         // split contract no longer proves non-emptiness at the read site.
         let src = "let parts = s.split(','); parts = []; const x = parts[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_split_result_as_tuple_assertion_issue_6493() {
+        // unjs/pathe repro: the `.split()` initializer is wrapped in a transparent
+        // `as [string, ...string[]]` assertion. The assertion is compile-time-only,
+        // so the binding still holds the (non-empty) split result and `_from[0]` is
+        // in-bounds.
+        let src = "const _from = resolve(from).replace(re, '$1').split('/') as [string, ...string[]]; const c = _from[0][1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_split_result_legacy_type_assertion_issue_6493() {
+        // The legacy `<T>expr` assertion form is equally transparent.
+        let src = "const parts = <[string, ...string[]]>s.split('/'); const c = parts[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_split_call_wrapped_in_as_issue_6493() {
+        // Negative space: peeling the `as` wrapper must not turn a non-`split` call
+        // into a split exemption — `getParts()` provides no non-emptiness guarantee,
+        // so `parts[0]` stays flagged.
+        let src = "const parts = getParts() as string[]; const x = parts[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 
