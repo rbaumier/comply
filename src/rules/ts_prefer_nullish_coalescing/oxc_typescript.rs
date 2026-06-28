@@ -3,7 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator, UnaryOperator};
+use oxc_ast::ast::{
+    BinaryOperator, Expression, LogicalOperator, TSLiteral, TSType, UnaryOperator,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -160,6 +162,82 @@ fn lhs_may_produce_non_nullish_falsy(expr: &Expression) -> bool {
     }
 }
 
+/// True when `ty` (or, for a union, any member) is a literal type whose literal
+/// is a non-nullish falsy value: the `false` literal, the `0` numeric literal,
+/// or the empty-string literal. `null` / `undefined` are nullish, not falsy
+/// literals, so a nullish-only union (`number | undefined`, `string | null`)
+/// returns `false` — that is exactly what `??` is for.
+fn type_has_non_nullish_falsy_literal(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSUnionType(union) => {
+            union.types.iter().any(type_has_non_nullish_falsy_literal)
+        }
+        TSType::TSParenthesizedType(inner) => {
+            type_has_non_nullish_falsy_literal(&inner.type_annotation)
+        }
+        TSType::TSLiteralType(lit) => match &lit.literal {
+            TSLiteral::BooleanLiteral(b) => !b.value,
+            TSLiteral::NumericLiteral(n) => n.value == 0.0,
+            TSLiteral::StringLiteral(s) => s.value.is_empty(),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// True when `expr` is a bare identifier whose declared type annotation includes
+/// a non-nullish falsy literal member (`number | false`, `string | "" | null`,
+/// …). For such an LHS, `a || b` intentionally treats that falsy literal as
+/// "absent" (e.g. `false` meaning "disabled"), so `??` — which would preserve it
+/// and pass it downstream — is a breaking change. The binding is resolved via
+/// `semantic.scoping()`; only a bare-identifier declaration (variable declarator
+/// or function parameter) is trusted, since a destructured binding's real type
+/// is an element/property of the annotation, not the annotation itself.
+fn lhs_type_includes_non_nullish_falsy_literal<'a>(
+    expr: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::BindingPattern;
+
+    let Expression::Identifier(ident) = expr.without_parentheses() else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+
+    fn pattern_is_bare_identifier(pattern: &BindingPattern) -> bool {
+        matches!(pattern, BindingPattern::BindingIdentifier(_))
+    }
+
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::VariableDeclarator(decl) if pattern_is_bare_identifier(&decl.id) => {
+                return decl
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| type_has_non_nullish_falsy_literal(&ann.type_annotation));
+            }
+            AstKind::FormalParameter(param) if pattern_is_bare_identifier(&param.pattern) => {
+                return param
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| type_has_non_nullish_falsy_literal(&ann.type_annotation));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True if `expr` is a clearly typed default value — the canonical `||`
 /// shapes we want to flag: `foo || "string"`, `foo || []`, `foo || fn()`.
 /// Plain identifiers are excluded: without type information we cannot tell
@@ -244,6 +322,13 @@ impl OxcCheck for Check {
         // String methods (`.replace()`, `.replaceAll()`, `.trim()`, …) can return
         // `""` (falsy but not nullish): `str.trim() ?? "root"` would pass `""` through.
         if lhs_may_produce_non_nullish_falsy(&logical.left) {
+            return;
+        }
+        // The LHS identifier's declared type includes a non-nullish falsy literal
+        // (`number | false`, `string | "" | undefined`, …): `||` intentionally
+        // treats that literal (e.g. `false` = "disabled") as absent, so `??`
+        // would preserve it and pass it downstream — a breaking change.
+        if lhs_type_includes_non_nullish_falsy_literal(&logical.left, semantic) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, logical.span.start as usize);
@@ -563,6 +648,71 @@ mod tests {
     #[test]
     fn still_flags_call_or_in_assignment() {
         let src = r#"const x = maybe() || "default";"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #6620: a parameter typed `number | false` (false = "disabled")
+    // intentionally uses `||` so `false` falls through to the numeric default;
+    // `??` would preserve `false` and pass it downstream — a breaking change.
+    #[test]
+    fn allows_param_number_or_false_literal() {
+        let src = r#"
+            function parseChunkInfo(defaultChunkSize?: number | false): number {
+                defaultChunkSize = defaultChunkSize || 1000;
+                return Number(defaultChunkSize);
+            }
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A `let` declarator whose annotation includes the `false` literal is also
+    // exempt; the trailing `| undefined` does not change that.
+    #[test]
+    fn allows_let_string_or_false_literal() {
+        let src = r#"
+            let x: string | false | undefined = compute();
+            const y = x || "d";
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The `0` numeric literal is also a non-nullish falsy literal.
+    #[test]
+    fn allows_zero_literal_union() {
+        let src = r#"
+            let x: 0 | number = compute();
+            const y = x || 1000;
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The empty-string literal is also a non-nullish falsy literal.
+    #[test]
+    fn allows_empty_string_literal_union() {
+        let src = r#"
+            let x: "" | string = compute();
+            const y = x || "fallback";
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative control: a nullish-only union has no non-nullish falsy literal —
+    // `??` is exactly correct here, so it must STILL flag.
+    #[test]
+    fn still_flags_number_or_undefined_union() {
+        let src = r#"
+            let x: number | undefined = compute();
+            const y = x || 1000;
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_string_or_null_union() {
+        let src = r#"
+            let x: string | null = compute();
+            const y = x || "d";
+        "#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
