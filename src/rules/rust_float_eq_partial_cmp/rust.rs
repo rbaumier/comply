@@ -15,9 +15,15 @@
 //! Skips exact zero, lossless integer round-trip casts, and state-change
 //! detection (`old = current; if new == old`) — see the guards in
 //! `visit_node`.
+//!
+//! Also defers to an author's explicit suppression of clippy's equivalent lint:
+//! an `#[allow(clippy::float_cmp)]` / `#[allow(clippy::float_cmp_const)]` (or the
+//! `#![allow(...)]` inner form on a function body) in scope silences the
+//! diagnostic.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::has_clippy_allow;
 
 const KINDS: &[&str] = &["binary_expression"];
 
@@ -80,6 +86,16 @@ impl AstCheck for Check {
         // naive `computed == 0.1` has a literal operand (no store), so it still
         // fires.
         if is_change_detection(left, right, source) {
+            return;
+        }
+        // Honor the author's explicit suppression of clippy's equivalent lint:
+        // `rust-float-eq-partial-cmp` is the comply analog of `clippy::float_cmp`,
+        // so an `#[allow(clippy::float_cmp)]` / `#[allow(clippy::float_cmp_const)]`
+        // (outer on the function, or inner `#![allow(...)]` in its body) in scope
+        // declares the comparison intentional.
+        if has_clippy_allow(node, source, "float_cmp")
+            || has_clippy_allow(node, source, "float_cmp_const")
+        {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -502,5 +518,45 @@ mod tests {
     #[test]
     fn flags_nonzero_sum_eq() {
         assert_eq!(run_on("fn f(a: f64, b: f64) -> bool { (a + b) == 0.3 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_inner_clippy_float_cmp_allow() {
+        // sharkdp/pastel src/types.rs: the author placed an inner
+        // `#![allow(clippy::float_cmp)]` declaring the comparison intentional.
+        let src = "fn value(unclipped: f64) -> f64 { \
+                   #![allow(clippy::float_cmp)] \
+                   if unclipped == 360.0 { unclipped } else { wrap(unclipped) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_outer_clippy_float_cmp_allow() {
+        let src = "#[allow(clippy::float_cmp)] fn f(x: f64) -> bool { x == 1.5 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_clippy_float_cmp_const_allow() {
+        let src = "#[allow(clippy::float_cmp_const)] fn f(x: f64) -> bool { x == 1.5 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_without_any_allow() {
+        // Negative control: no suppression attribute → still fires.
+        assert_eq!(run_on("fn f(x: f64) -> bool { x == 1.5 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_with_unrelated_allow() {
+        // Negative control: an unrelated allow does not suppress.
+        for src in [
+            "#[allow(dead_code)] fn f(x: f64) -> bool { x == 1.5 }",
+            "#[allow(clippy::approx_constant)] fn f(x: f64) -> bool { x == 1.5 }",
+            "fn f(x: f64) -> bool { #![allow(dead_code)] x == 1.5 }",
+        ] {
+            assert_eq!(run_on(src).len(), 1, "should still flag: {src}");
+        }
     }
 }
