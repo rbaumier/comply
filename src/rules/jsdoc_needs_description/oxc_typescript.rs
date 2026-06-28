@@ -4,9 +4,11 @@
 //! directly via `run_on_semantic`.
 //!
 //! A block is flagged when it has tags but no prose description, unless every
-//! tag is type-only (the type is the documentation) or a JSX compiler pragma
-//! (`@jsx`, `@jsxImportSource`, `@jsxRuntime`, `@jsxFrag`), where the whole
-//! comment is a compiler directive with no prose to add.
+//! tag is self-sufficient — a type annotation (the type is the documentation)
+//! or a value annotation (`@default`/`@defaultValue`, where the value is the
+//! documentation) — or a JSX compiler pragma (`@jsx`, `@jsxImportSource`,
+//! `@jsxRuntime`, `@jsxFrag`), where the whole comment is a compiler directive
+//! with no prose to add.
 //!
 //! A `@description`/`@desc` tag is itself the prose description, and a
 //! `@deprecated` tag carrying an inline reason supplies the prose, so blocks
@@ -19,7 +21,7 @@ use std::sync::Arc;
 
 pub struct Check;
 
-fn is_type_only_tag(tag: &str) -> bool {
+fn is_self_sufficient_tag(tag: &str) -> bool {
     matches!(
         tag,
         "type"
@@ -38,6 +40,8 @@ fn is_type_only_tag(tag: &str) -> bool {
             | "implements"
             | "extends"
             | "satisfies"
+            | "default"
+            | "defaultValue"
     )
 }
 
@@ -110,7 +114,7 @@ impl OxcCheck for Check {
                 && !has_description
                 && !tags
                     .iter()
-                    .all(|tag| is_type_only_tag(tag) || is_pragma_tag(tag))
+                    .all(|tag| is_self_sufficient_tag(tag) || is_pragma_tag(tag))
             {
                 let (line, column) = byte_offset_to_line_col(src, abs_start);
                 diagnostics.push(Diagnostic {
@@ -213,6 +217,53 @@ function legacy() {}
  * @author someone
  */
 function thing() {}
+"#;
+        assert!(!run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_default_only_block() {
+        // Regression for rbaumier/comply#6536 — a `@default`-only block on an
+        // options-interface property is self-sufficient: the default value is
+        // the documentation and the property name is the description.
+        let source = r#"
+export interface ModuleOptions {
+  /**
+   * @default 'system'
+   */
+  preference: string
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_default_value_alias_block() {
+        // Regression for rbaumier/comply#6536 — `@defaultValue` is the TSDoc
+        // alias of `@default` and is equally self-sufficient.
+        let source = r#"
+export interface ModuleOptions {
+  /**
+   * @defaultValue `__NUXT_COLOR_MODE__`
+   */
+  globalName: string
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_default_mixed_with_prose_requiring_tag() {
+        // A `@default` alongside a non-self-sufficient tag (e.g. `@see`) and no
+        // prose still flags — only ALL-self-sufficient blocks are exempt.
+        let source = r#"
+export interface ModuleOptions {
+  /**
+   * @default 'system'
+   * @see other
+   */
+  preference: string
+}
 "#;
         assert!(!run_on(source).is_empty());
     }
