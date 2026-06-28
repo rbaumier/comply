@@ -76,7 +76,12 @@ impl AstCheck for Check {
             return;
         }
         let depth = control_flow_depth(node) + 1;
-        if depth > max_depth {
+        // Test-only combination generators and exhaustive fixtures legitimately
+        // need deep nesting; they ship only in the test binary. Checked only on
+        // over-threshold candidates so production nodes skip the ancestor walk.
+        if depth > max_depth
+            && !crate::rules::rust_helpers::is_in_test_context(node, ctx.source.as_bytes())
+        {
             let line = node.start_position().row + 1;
             if flagged_lines.insert(line) {
                 diagnostics.push(Diagnostic {
@@ -271,6 +276,54 @@ fn outer() {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    /// Issue #6486: an exhaustive combination generator inside a
+    /// `#[cfg(test)] mod tests {}` block is test-only — its deep nesting must
+    /// not be flagged.
+    #[test]
+    fn skips_deep_nesting_in_cfg_test_module() {
+        let src = r#"
+#[cfg(test)]
+mod tests {
+    fn all_attributes() {
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    for d in 0..2 {
+                        for e in 0..2 {
+                            push(a, b, c, d, e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// The same deep nesting in production code is still flagged — the rule
+    /// keeps its value outside test context.
+    #[test]
+    fn still_flags_same_nesting_in_production() {
+        let src = r#"
+fn all_attributes() {
+    for a in 0..2 {
+        for b in 0..2 {
+            for c in 0..2 {
+                for d in 0..2 {
+                    for e in 0..2 {
+                        push(a, b, c, d, e);
+                    }
+                }
+            }
+        }
+    }
+}
+"#;
+        assert!(!run_on(src).is_empty());
     }
 
     /// Nested closure bodies that do exceed depth 3 internally are still
