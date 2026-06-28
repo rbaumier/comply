@@ -3,11 +3,14 @@
 //! declared by the loop header or in the loop body). Such a closure can read a
 //! stale value when invoked on a later iteration. A closure that references only
 //! its own params/locals or bindings declared outside the loop captures nothing
-//! loop-scoped and is left alone.
+//! loop-scoped and is left alone. The `let`/`const` initializer of a C-style
+//! `for (let i …)` is also exempt: ES2015 §14.7.4.2 re-binds it fresh each
+//! iteration, so a closure capturing it reads its own value, not a shared one.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{ForStatementInit, VariableDeclarationKind};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -61,18 +64,41 @@ fn span_contains(outer: oxc_span::Span, inner: oxc_span::Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
 }
 
+/// Byte span of the `let`/`const` initializer of a C-style `for (let i …)` /
+/// `for (const x …)` loop — the per-iteration binding(s). `None` for a `var`
+/// init, for an init that is not a variable declaration, and for any non-`for`
+/// loop. Per ES2015 §14.7.4.2 a `let`/`const` `for` init is re-bound fresh each
+/// iteration, so a closure capturing it reads its own value; a `var` init keeps
+/// one function-scoped binding mutated across iterations and stays a hazard.
+fn per_iteration_for_init_span(loop_kind: AstKind) -> Option<oxc_span::Span> {
+    let AstKind::ForStatement(stmt) = loop_kind else {
+        return None;
+    };
+    let Some(ForStatementInit::VariableDeclaration(decl)) = &stmt.init else {
+        return None;
+    };
+    matches!(
+        decl.kind,
+        VariableDeclarationKind::Let | VariableDeclarationKind::Const
+    )
+    .then_some(decl.span)
+}
+
 /// True when the closure spanning `func_span` references at least one binding the
 /// enclosing loop introduces: a symbol whose declaration sits inside the loop
 /// span (its header or body) but outside the closure itself, and that the closure
 /// references. That capture is the stale-shared-binding hazard this rule targets.
 /// A symbol declared inside the closure is the closure's own param/local; a symbol
-/// declared above the loop is stable across iterations — neither contributes.
+/// declared above the loop is stable across iterations — neither contributes. The
+/// `let`/`const` initializer of a C-style `for` is also excluded: it is re-bound
+/// per iteration, so capturing it is sound.
 fn captures_loop_binding<'a>(
     func_span: oxc_span::Span,
     loop_kind: AstKind<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let loop_span = loop_kind.span();
+    let per_iteration_init = per_iteration_for_init_span(loop_kind);
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
     for sym_id in scoping.symbol_ids() {
@@ -80,6 +106,13 @@ fn captures_loop_binding<'a>(
         let is_loop_binding =
             span_contains(loop_span, decl_span) && !span_contains(func_span, decl_span);
         if !is_loop_binding {
+            continue;
+        }
+        // The `let`/`const` loop variable of a C-style `for` is re-bound each
+        // iteration, so capturing it reads that iteration's own value — not the
+        // shared-binding hazard. `var` inits and bindings declared in the loop
+        // body remain hazards.
+        if per_iteration_init.is_some_and(|init_span| span_contains(init_span, decl_span)) {
             continue;
         }
         for reference in scoping.get_resolved_references(sym_id) {
@@ -177,11 +210,57 @@ mod tests {
     }
 
     #[test]
-    fn flags_arrow_capturing_loop_var() {
-        // The closure captures `i`, the C-style loop binding mutated each
-        // iteration, so it reads a stale value when invoked later — the bug.
+    fn allows_arrow_capturing_per_iteration_let_loop_var() {
+        // Issue #6473: `let` in a C-style `for` creates a fresh per-iteration
+        // binding (ES2015 §14.7.4.2), so each closure captures its own `i` —
+        // `fns.map(f => f())` yields [0..9], not [10,…]. No stale-closure hazard.
         let src = r#"
             for (let i = 0; i < 10; i++) {
+                fns.push(() => i);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_closures_capturing_let_loop_var_unjs_hookable_repro() {
+        // Issue #6473 real-world repro (unjs/hookable src/utils.ts). Both arrows
+        // capture only `i` (the per-iteration `let` loop var) and bindings
+        // declared above the loop (`hooks`, `args`, `task`, `callHooks`).
+        let src = r#"
+            function callHooks(hooks, args, startIndex, task) {
+                for (let i = startIndex; i < hooks.length; i += 1) {
+                    const result = task ? task.run(() => hooks[i](...args)) : hooks[i](...args);
+                    if (result && typeof result.then === "function") {
+                        return Promise.resolve(result).then(() => callHooks(hooks, args, i + 1, task));
+                    }
+                }
+            }
+        "#;
+        let d = run(src, "src/utils.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_arrow_capturing_per_iteration_const_loop_var() {
+        // A C-style `for` with a `const` init also re-binds per iteration.
+        let src = r#"
+            for (const x = seed(); cond(x); ) {
+                fns.push(() => x);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_arrow_capturing_var_loop_var() {
+        // Negative-space guard: `var` is a single function-scoped binding mutated
+        // across iterations, so every closure shares it and reads the final value
+        // — the classic stale-closure bug, which must STILL be flagged.
+        let src = r#"
+            for (var i = 0; i < n; i++) {
                 fns.push(() => i);
             }
         "#;
