@@ -522,11 +522,51 @@ fn is_var_bound_function_referenced_for_this(
         .any(|reference| reference_binds_this(reference.node_id(), semantic))
 }
 
+/// True when the `ThisExpression` at `this_node_id` is the second positional
+/// argument of a `Reflect.apply(fn, this, args)` call. `Reflect.apply` invokes
+/// `fn` with its second argument bound as the receiver, so a `this` written
+/// there forwards the enclosing function's own `this` — the standard
+/// context-forwarding idiom, equivalent to `fn.apply(this, args)` /
+/// `fn.call(this, args)`. The callee must be the `Reflect.apply` member
+/// expression (object identifier `Reflect`, property `apply`), and the
+/// `ThisExpression` must be the call's `arguments[1]` directly (a `this` buried
+/// in a sub-expression of the second argument is not this idiom); the call must
+/// carry at least two arguments.
+fn is_reflect_apply_this_arg(
+    this_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::CallExpression(call) = nodes.kind(nodes.parent_id(this_node_id)) else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if member.property.name != "apply"
+        || !matches!(&member.object, Expression::Identifier(id) if id.name == "Reflect")
+    {
+        return false;
+    }
+    let Some(second_arg) = call.arguments.get(1) else {
+        return false;
+    };
+    second_arg.span() == nodes.kind(this_node_id).span()
+}
+
 fn is_valid_this_context(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
     source: &str,
 ) -> bool {
+    // `Reflect.apply(fn, this, args)`: the `this` is written directly as the
+    // `thisArg` (second) argument, forwarding the enclosing function's receiver
+    // to `fn` — the standard idiom equivalent to `fn.apply(this, args)`. This is
+    // a property of the `this` node itself, independent of the enclosing
+    // function, so it is checked before the boundary walk.
+    if is_reflect_apply_this_arg(node.id(), semantic) {
+        return true;
+    }
     // Walk up from the ThisExpression. The first `this`-binding boundary
     // determines validity:
     // - ArrowFunction: transparent, keep going.
@@ -1329,6 +1369,57 @@ mod tests {
         // explicit `this` parameter (and outside any class/object method) still
         // has an unbound `this` and must fire.
         let diags = run_on("function f(url: string) {\n  return this.x;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_as_reflect_apply_this_arg_in_wrapper_function() {
+        // Regression for #6584: a debounce wrapper forwards its caller's receiver
+        // to the wrapped function via `Reflect.apply(fn, this, arguments)` — the
+        // `this` is the second (`thisArg`) argument being forwarded, the standard
+        // idiom equivalent to `fn.apply(this, args)`. The standalone `function`
+        // returned by `debounce` is cast `as T` where `T extends (this: unknown,
+        // …) => void`, so `this` is intentional, not a stray reference.
+        let src = "export const debounce = <T extends (this: unknown, ...args: any[]) => void>(\n  originalFunction: T,\n  duration: number,\n): T => {\n  let timeout: NodeJS.Timeout | undefined;\n  return function () {\n    if (timeout) {\n      clearTimeout(timeout);\n    }\n    timeout = setTimeout(\n      () => Reflect.apply(originalFunction, this, arguments),\n      duration,\n    );\n  } as T;\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_standalone_function_with_unrelated_this_use() {
+        // Negative-space guard for #6584: the `Reflect.apply` exemption keys on
+        // the `this` node being the second argument of a `Reflect.apply` call. A
+        // module-scope standalone function whose `this` is used elsewhere is not
+        // that idiom — `this` stays unbound and must fire.
+        let diags = run_on("function f() {\n  return this.x;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_as_first_arg_of_reflect_apply() {
+        // Negative-space guard for #6584: `this` as the *first* argument of
+        // `Reflect.apply` (the function to invoke, wrong position) is not the
+        // forwarding idiom — keep current behavior and flag it.
+        let diags = run_on("function f() {\n  return Reflect.apply(this, ctx, args);\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_as_second_arg_of_non_reflect_apply_call() {
+        // Negative-space guard for #6584: passing `this` as the second argument of
+        // some other call (not `Reflect.apply`) does not forward a receiver — the
+        // exemption keys on the `Reflect.apply` callee shape, so `this` still fires.
+        let diags = run_on("function f() {\n  return helper(fn, this, args);\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_buried_in_second_arg_of_reflect_apply() {
+        // Negative-space guard for #6584: only `this` written *directly* as the
+        // second argument is the forwarding idiom. A `this` buried in a
+        // sub-expression of arg 1 (`Reflect.apply(fn, this.ctx, args)`) has the
+        // member access as its immediate parent, not the `Reflect.apply` call, so
+        // it stays unbound and must fire.
+        let diags = run_on("function f() {\n  return Reflect.apply(fn, this.ctx, args);\n}");
         assert_eq!(diags.len(), 1);
     }
 }
