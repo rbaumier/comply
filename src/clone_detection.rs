@@ -329,6 +329,18 @@ fn merge_and_emit(
     //    differ only in end-of-input handling (`complete` errors, `streaming`
     //    returns `Incomplete`); the near-identical bodies ARE the public-API
     //    design, not refactorable copy-paste.
+    //
+    // H) Architecture sibling: the two paths share an `arch/` ancestor (identical
+    //    prefix up to an `arch` directory component) but the path component
+    //    immediately following `arch` differs (e.g. `arch/x86_64/sse2/memchr.rs`
+    //    vs `arch/wasm32/simd128/memchr.rs`). Rust systems crates (std, core,
+    //    compiler-builtins, memchr, …) ship one subtree per CPU instruction set
+    //    under `arch/<isa>/`, each using ISA-specific SIMD intrinsic types
+    //    (`__m128i`, `uint8x16_t`, `v128`, …) but the same algorithm structure;
+    //    unifying them would force runtime-dispatch overhead, so the parallel
+    //    bodies are intentional. Keyed on the `arch` directory-convention token
+    //    and the differing immediate child — never on ISA names — so two files
+    //    under the SAME `arch/<isa>/` child stay flagged.
     let mut suppressed = FxHashSet::<usize>::default();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
@@ -355,6 +367,8 @@ fn merge_and_emit(
                 are_theme_palette_pair(&files[*rfi].path, &files[*cfi].path);
             let complete_streaming_variants =
                 are_complete_streaming_pair(&files[*rfi].path, &files[*cfi].path);
+            let arch_siblings =
+                are_arch_sibling_pair(&files[*rfi].path, &files[*cfi].path);
             if small_gap
                 || name_siblings
                 || locale_variants
@@ -362,6 +376,7 @@ fn merge_and_emit(
                 || test_spec_siblings
                 || theme_variants
                 || complete_streaming_variants
+                || arch_siblings
             {
                 suppressed.extend(idxs);
             }
@@ -754,6 +769,58 @@ fn are_complete_streaming_pair(a: &std::path::Path, b: &std::path::Path) -> bool
     let (x, y) = (segs_a[pos], segs_b[pos]);
     (x.eq_ignore_ascii_case("complete") && y.eq_ignore_ascii_case("streaming"))
         || (x.eq_ignore_ascii_case("streaming") && y.eq_ignore_ascii_case("complete"))
+}
+
+// --- Architecture-sibling detection ---
+
+/// True when two paths are ISA-sibling implementations under a shared `arch/`
+/// directory: both reach an `arch` directory component by an identical prefix,
+/// and the component immediately following it differs (e.g.
+/// `src/arch/x86_64/sse2/memchr.rs` vs `src/arch/wasm32/simd128/memchr.rs`).
+/// Rust systems crates (std, core, compiler-builtins, memchr, …) ship one
+/// subtree per CPU instruction set under `arch/<isa>/`, each using ISA-specific
+/// SIMD intrinsic types but sharing the same algorithm structure; unifying them
+/// would force runtime-dispatch overhead, so the parallel bodies are
+/// intentional rather than refactorable copy-paste.
+///
+/// Keyed purely on the `arch` directory-convention token and the differing
+/// immediate child — no ISA names are enumerated. The shared-prefix requirement
+/// keeps unrelated files living in two separate `arch/` trees from being paired,
+/// and two files under the SAME `arch/<isa>/` child (equal immediate child) stay
+/// flagged as genuine duplication.
+fn are_arch_sibling_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let segs_a: Vec<&std::ffi::OsStr> = a
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    let segs_b: Vec<&std::ffi::OsStr> = b
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    let arch = std::ffi::OsStr::new("arch");
+    let (Some(pos_a), Some(pos_b)) = (
+        segs_a.iter().position(|s| **s == *arch),
+        segs_b.iter().position(|s| **s == *arch),
+    ) else {
+        return false;
+    };
+    // Same `arch` ancestor: identical prefix up to and including the `arch`
+    // component. Equal-length equal prefixes also force `pos_a == pos_b`.
+    if segs_a[..=pos_a] != segs_b[..=pos_b] {
+        return false;
+    }
+    // The immediate child under `arch` must exist on both sides and differ —
+    // that difference is the ISA-sibling signal.
+    match (segs_a.get(pos_a + 1), segs_b.get(pos_b + 1)) {
+        (Some(child_a), Some(child_b)) => child_a != child_b,
+        _ => false,
+    }
 }
 
 // --- Tokenization ---
@@ -2120,6 +2187,111 @@ mod tests {
             lint_files(&[&fa, &fb]).len(),
             1,
             "a `complete.rs` cloned against an ordinarily-named sibling must still be flagged"
+        );
+    }
+
+    #[test]
+    fn are_arch_sibling_pair_recognizes_examples() {
+        use std::path::Path;
+        // ISA siblings under a shared `arch/` ancestor: differing immediate child.
+        assert!(are_arch_sibling_pair(
+            Path::new("src/arch/x86_64/sse2/memchr.rs"),
+            Path::new("src/arch/wasm32/simd128/memchr.rs"),
+        ));
+        assert!(are_arch_sibling_pair(
+            Path::new("src/arch/aarch64/neon/packedpair.rs"),
+            Path::new("src/arch/wasm32/simd128/packedpair.rs"),
+        ));
+        // Same `arch/<isa>/` subtree (equal immediate child) → not a sibling pair.
+        assert!(!are_arch_sibling_pair(
+            Path::new("src/arch/x86_64/sse2/memchr.rs"),
+            Path::new("src/arch/x86_64/sse2/packedpair.rs"),
+        ));
+        // No `arch` component → not a sibling pair (keys on the `arch` token, not
+        // on differing directory names).
+        assert!(!are_arch_sibling_pair(
+            Path::new("src/x86_64/sse2/memchr.rs"),
+            Path::new("src/wasm32/simd128/memchr.rs"),
+        ));
+        // `arch/` trees under different ancestors → not a sibling pair.
+        assert!(!are_arch_sibling_pair(
+            Path::new("foo/arch/x86_64/memchr.rs"),
+            Path::new("bar/arch/wasm32/memchr.rs"),
+        ));
+        // One side has no component after `arch` → not a sibling pair.
+        assert!(!are_arch_sibling_pair(
+            Path::new("src/arch"),
+            Path::new("src/arch/x86_64/memchr.rs"),
+        ));
+    }
+
+    #[test]
+    fn no_false_positive_on_arch_isa_siblings() {
+        // Regression test for issue #6514.
+        // memchr (and std, core, compiler-builtins, …) ship one SIMD
+        // implementation of the same algorithm per CPU instruction set under
+        // `src/arch/<isa>/`. The bodies are structurally identical modulo
+        // ISA-specific intrinsic types and cannot be unified without runtime
+        // dispatch, so sibling files whose immediate `arch/` child differs must
+        // not be flagged as clones.
+        let dir = tempfile::tempdir().unwrap();
+        let block = format!("fn f() {{\n{}\n}}", large_rust_block(20));
+        let pa = dir.path().join("src/arch/x86_64/sse2/memchr.rs");
+        let pb = dir.path().join("src/arch/wasm32/simd128/memchr.rs");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Rust };
+        let fb = SourceFile { path: pb, language: Language::Rust };
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "ISA-sibling files across arch/<isa>/ subtrees must not be flagged as clones"
+        );
+    }
+
+    #[test]
+    fn arch_clones_within_same_isa_subtree_still_flagged() {
+        // Negative guard for issue #6514: the exemption fires only when the
+        // immediate `arch/` child differs. Two duplicated files inside the SAME
+        // `arch/x86_64/sse2/` subtree share the same immediate child, so genuine
+        // copy-paste there must still be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = format!("fn f() {{\n{}\n}}", large_rust_block(20));
+        let pa = dir.path().join("src/arch/x86_64/sse2/memchr.rs");
+        let pb = dir.path().join("src/arch/x86_64/sse2/packedpair.rs");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Rust };
+        let fb = SourceFile { path: pb, language: Language::Rust };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "duplication within the same arch/<isa>/ subtree must still be flagged"
+        );
+    }
+
+    #[test]
+    fn arch_exemption_requires_the_arch_token() {
+        // Negative guard for issue #6514: the suppression hinges on the `arch`
+        // directory-convention token, not merely on differing directory names.
+        // The same two structurally-cloned files under sibling directories that
+        // are NOT below an `arch/` ancestor must still be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = format!("fn f() {{\n{}\n}}", large_rust_block(20));
+        let pa = dir.path().join("src/x86_64/sse2/memchr.rs");
+        let pb = dir.path().join("src/wasm32/simd128/memchr.rs");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Rust };
+        let fb = SourceFile { path: pb, language: Language::Rust };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "structurally-cloned files not under an arch/ ancestor must still be flagged"
         );
     }
 }
