@@ -30,6 +30,11 @@
 //! startup cost, which test files never ship into. Importing a component's
 //! barrel from its `__tests__/` directory is the idiomatic way to exercise the
 //! public API surface, not a barrel-file anti-pattern.
+//!
+//! Skipped in auxiliary, non-shipped directories (`examples/`, `scripts/`,
+//! `templates/`, `playground/`, …): demo and tooling scripts consume the
+//! library through its public barrel on purpose and never reach a production
+//! bundle, so the tree-shaking cost does not apply.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -151,6 +156,9 @@ impl OxcCheck for Check {
         if is_test_file(ctx.path) {
             return;
         }
+        if ctx.file.path_segments.in_aux_dir {
+            return;
+        }
 
         // With cross-file visibility, only flag targets that are actually
         // re-export hubs. Without it (no project context), fall back to the
@@ -226,6 +234,54 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    /// Path-aware variant: builds a real `FileCtx` so the rule's
+    /// `ctx.file.path_segments.in_aux_dir` bail is exercised from the path
+    /// (the default `run_on` helper uses an empty `FileCtx`).
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        use crate::files::Language;
+        let path_ref = std::path::Path::new(path);
+        let lang = Language::from_path(path_ref).unwrap_or(Language::TypeScript);
+        let project = crate::project::default_static_project_ctx();
+        let file = crate::rules::file_ctx::FileCtx::build(path_ref, source, lang, project);
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path_ref, project, &file)
+    }
+
+    #[test]
+    fn allows_barrel_import_from_playground() {
+        // Regression for #6490: `playground/` holds non-shipped demo scripts
+        // (the TS equivalent of Cargo's `examples/`) that intentionally consume
+        // the library through its public barrel; the production-bundle cost the
+        // rule guards against does not apply.
+        let d = run_at(
+            "import { defineCommand, runMain } from '../src/index.ts';",
+            "playground/cli.ts",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_barrel_import_from_playgrounds() {
+        // The plural `playgrounds/` monorepo variant is exempt too.
+        let d = run_at(
+            "import { foo } from '../src/index.ts';",
+            "playgrounds/demo/app.ts",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn still_flags_barrel_import_from_normal_source() {
+        // Negative space for #6490: the SAME barrel import from a normal source
+        // file (not under any aux dir) must still fire — the rule keeps its core
+        // value.
+        let d = run_at(
+            "import { defineCommand, runMain } from '../src/index.ts';",
+            "src/foo.ts",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got {d:?}");
+        assert!(d[0].message.contains("barrel file"));
     }
 
     #[test]

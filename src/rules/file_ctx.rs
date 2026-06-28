@@ -1117,6 +1117,8 @@ mod tests {
             "migrations",
             "samples",
             "examples",
+            "playground",
+            "playgrounds",
             "templates",
             "scaffold",
             "boilerplate",
