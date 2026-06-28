@@ -88,7 +88,7 @@ use crate::rules::rust_helpers::{
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
-    cast_operand_is_non_negative_guarded,
+    cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
     is_in_enum_discriminant, is_in_test_context,
@@ -213,6 +213,11 @@ impl AstCheck for Check {
         // `(x % N) as uT` with a non-negative `x` and `N - 1 <= uT::MAX` is in
         // range — the unsigned-remainder narrowing in `(width % 256) as u8` (#6151).
         if cast_operand_is_modulo_bounded(node, source_bytes) {
+            return;
+        }
+        // `let v = x % N; v as uT` — the modulo bound carried through a `let`
+        // binding to an identifier cast (#6485), the let-bound form of the above.
+        if cast_operand_is_modulo_bounded_via_binding(node, source_bytes) {
             return;
         }
         // `<recv>.min(BOUND) as uT` where the `.min()` clamp proves the value fits
@@ -476,6 +481,21 @@ mod tests {
         // not start flagging it — the modulo exemption keeps it silent here too.
         assert!(run_on("fn f(width: u32) -> u8 { (width % 256) as u8 }").is_empty());
         assert!(run_on("fn f(n: u128) -> u32 { (n % 1_000_000) as u32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_modulo_bounded_via_let_binding() {
+        // Issue #6485: the modulo bound carried through a `let` binding to an
+        // identifier cast (`let quad = remain % 1_00_00; quad as u32`). This rule
+        // must stay silent here too, not just `rust-no-as-numeric-cast`.
+        assert!(
+            run_on("fn f(remain: u64) -> u32 { let quad = remain % 1_00_00; quad as u32 }")
+                .is_empty()
+        );
+        // A narrower target (`% 200` into `u8`, remainder in `[0, 199] ⊆ u8`).
+        assert!(
+            run_on("fn f(remain: u64) -> u8 { let quad = remain % 200; quad as u8 }").is_empty()
+        );
     }
 
     #[test]
