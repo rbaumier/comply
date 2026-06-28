@@ -9,6 +9,13 @@
 //! the counted-iteration contract and almost always hides an off-by-one
 //! error or a misplaced reset.
 //!
+//! A body write that advances the counter in the *same* direction as the
+//! update clause — `i++`/`++i`/`i += <positive int literal>` in an
+//! incrementing loop, and the decrementing mirror — is the intentional
+//! "skip the next N elements" stride and is not flagged. Resets, arbitrary
+//! assignments, opposite-direction writes, and compound assignments whose
+//! magnitude is not a positive integer literal remain flagged.
+//!
 //! ## Why no Rust backend
 //!
 //! Rust has no construct that matches this pattern. `for x in iter` is
