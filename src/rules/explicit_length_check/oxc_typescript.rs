@@ -131,6 +131,9 @@ fn is_call_open_paren(trimmed: &str, open: usize) -> bool {
 ///     `total / sizes.length`, `(i + 1) % options.length` (the base is preceded
 ///     by `+`/`-`/`*`/`/`/`%`); arithmetic produces a number, so `.length` is a
 ///     numeric operand, never a boolean coercion.
+///   * a computed-member index or array-literal element — `input[base.length]`,
+///     `[base.length]` (the base is preceded by `[`); the length is a positional
+///     index / array value, never a boolean coercion.
 /// A plain `=` assignment RHS (`x = arr.length`) is also a value position.
 fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
     let bytes = trimmed.as_bytes();
@@ -183,6 +186,12 @@ fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
         // `substring(token.raw.length)`, a value position — but only when it is a
         // call paren, not an `if`/`while` grouping/test paren (`if ((arr.length))`).
         b'(' => is_call_open_paren(trimmed, j - 1),
+        // `[` left of the base opens a computed-member index (`input[base.length]`)
+        // or an array-literal element (`[base.length]`) — a positional index /
+        // array value, never a boolean coercion. A `[` *inside* the base (e.g.
+        // `arr[i].length`) is balanced away by the walk above, so this arm only
+        // matches when `[` is the operand's immediate left neighbour.
+        b'[' => true,
         _ => false,
     }
 }
@@ -642,5 +651,33 @@ mod tests {
     #[test]
     fn still_flags_parenthesised_length_as_ternary_condition_issue_6247() {
         assert_eq!(run_on("const x = (items.length) ? a : b;").len(), 1);
+    }
+
+    // Regression #6475 — `.length` used as a computed-member index
+    // (`expr[base.length]`) is a positional numeric index, not a boolean
+    // coercion. The unjs/ufo repro plus the generic `arr[other.length]` shape.
+    #[test]
+    fn allows_length_as_computed_member_index_issue_6475() {
+        assert!(run_on("const nextChar = input[_base.length];").is_empty());
+    }
+
+    #[test]
+    fn allows_length_as_computed_member_index_generic_issue_6475() {
+        assert!(run_on("arr[other.length]").is_empty());
+    }
+
+    // The array-literal-element form (`[base.length]`, base at the start of the
+    // brackets) is the same `[`-preceded value position as a computed index.
+    #[test]
+    fn allows_length_as_array_literal_element_issue_6475() {
+        assert!(run_on("const dims = [rows.length];").is_empty());
+    }
+
+    // Soundness guard for #6475: a `[` *inside* the base expression
+    // (`arr[i].length`) is balanced away by the leftward walk, so a genuine
+    // boolean coercion of `(arr[i]).length` in a test position still flags.
+    #[test]
+    fn still_flags_indexed_base_length_in_if_issue_6475() {
+        assert_eq!(run_on("if (arr[i].length) {}").len(), 1);
     }
 }
