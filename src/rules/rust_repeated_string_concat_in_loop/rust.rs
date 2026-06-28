@@ -75,11 +75,14 @@ fn find_concat<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_si
 }
 
 /// True if `node` is `s += …` (compound assignment with `+=`) whose
-/// right-hand side is plausibly a `String`/`&str`.
+/// right-hand side allocates a fresh owned `String` every iteration.
 ///
-/// Without type information the AST cannot prove the operand is a `String`,
-/// so the check only fires on right-hand sides that produce a string in
-/// practice (string literal, `format!`, `.to_string()`/`.to_owned()`). This
+/// `String += &str` desugars to `AddAssign<&str>`, which calls `push_str` —
+/// the recommended amortized-growth append, not a reallocation. So a bare
+/// `&str` right-hand side (a string literal or a `&str`-typed value) is not
+/// flagged. The check fires only when the right-hand side produces a new owned
+/// `String` (`format!`, `.to_string()`/`.to_owned()`, or a `+` concatenation),
+/// which is the per-iteration allocation the rule warns about. This also
 /// avoids flagging numeric accumulation such as `total += other` or
 /// `pos += chunk.len()`, where `+=` is integer/float arithmetic.
 fn is_compound_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -95,7 +98,7 @@ fn is_compound_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(rhs) = node.child_by_field_name("right") else {
         return false;
     };
-    is_string_valued(rhs, source)
+    is_owned_string_valued(rhs, source)
 }
 
 /// True if `node` is an expression that yields a string in practice: a string
@@ -114,6 +117,49 @@ fn is_string_valued(node: tree_sitter::Node, source: &[u8]) -> bool {
             .child_by_field_name("value")
             .is_some_and(|inner| is_string_valued(inner, source)),
         // `a + b` is string concatenation when either operand is string-valued.
+        "binary_expression" => {
+            let plus = node
+                .child_by_field_name("operator")
+                .and_then(|op| op.utf8_text(source).ok())
+                == Some("+");
+            plus && [
+                node.child_by_field_name("left"),
+                node.child_by_field_name("right"),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|operand| is_string_valued(operand, source))
+        }
+        _ => false,
+    }
+}
+
+/// True if `node` is an expression that allocates a fresh owned `String` when
+/// evaluated: a `format!` invocation, a `.to_string()`/`.to_owned()` call, a
+/// reference (`&…`) to one of those, or a string `+` concatenation.
+///
+/// A bare string literal or a `&str`-typed value is borrowed (no allocation);
+/// `String += &str` desugars to `push_str`, so those right-hand sides are not
+/// owned-producing and must not flag on the `+=` path.
+fn is_owned_string_valued(node: tree_sitter::Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "macro_invocation" => node
+            .child_by_field_name("macro")
+            .and_then(|m| m.utf8_text(source).ok())
+            .is_some_and(|name| name == "format"),
+        "call_expression" => is_string_producing_method_call(node, source),
+        // `&format!(…)`, `&x.to_string()`, `&(line + "\n")` — the inner
+        // expression still allocates a fresh `String` every iteration.
+        "reference_expression" => node
+            .child_by_field_name("value")
+            .is_some_and(|inner| is_owned_string_valued(inner, source)),
+        // `(line + "\n")` — parentheses wrapping an owned-`String` producer,
+        // as in the compiling `s += &(line + "\n")`.
+        "parenthesized_expression" => node
+            .named_child(0)
+            .is_some_and(|inner| is_owned_string_valued(inner, source)),
+        // `a + "x"` move-concatenation produces an owned `String`; it is a
+        // string `+` (not numeric) when one operand is string-valued.
         "binary_expression" => {
             let plus = node
                 .child_by_field_name("operator")
@@ -223,8 +269,56 @@ mod tests {
     }
 
     #[test]
-    fn flags_plus_eq_in_loop() {
+    fn allows_plus_eq_str_literal_in_loop() {
+        // `String += &str` desugars to `push_str` — no per-iteration realloc.
         let src = r#"fn f() { let mut s = String::new(); loop { s += "x"; break; } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_plus_eq_str_literal_in_for() {
+        // sharkdp/bat src/bin/bat/main.rs:191 — `result += "\n";`.
+        let src = r#"fn f() { let mut result = String::new(); for lang in languages { result += "\n"; } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_plus_eq_str_literal_separator_in_for() {
+        // sharkdp/bat src/bin/bat/main.rs:279 — `new_terminal_title += ", ";`.
+        let src = r#"fn f() { let mut new_terminal_title = "bat: ".to_string(); for (index, input) in inputs.iter().enumerate() { new_terminal_title += input.description().title(); if index < inputs.len() - 1 { new_terminal_title += ", "; } } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_plus_eq_str_variable_in_for() {
+        // A bare `&str`-typed value also calls `push_str` — no realloc.
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s += other_str; } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_plus_eq_format_owned_in_loop() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s += format!("{}", x); } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plus_eq_to_string_owned_in_loop() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s += x.to_string(); } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plus_eq_binary_concat_in_loop() {
+        let src = r#"fn f() { let mut s = String::new(); for line in v { s += line + "\n"; } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plus_eq_ref_paren_concat_in_loop() {
+        // `s += &(line.to_owned() + "\n")` — the compiling form of move-concat
+        // appended via `+=`; the `(…)` still allocates an owned `String`.
+        let src = r#"fn f() { let mut s = String::new(); for line in v { s += &(line.to_owned() + "\n"); } }"#;
         assert_eq!(run_on(src).len(), 1);
     }
 
