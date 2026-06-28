@@ -5,7 +5,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::MethodDefinitionKind;
+use oxc_ast::ast::{MethodDefinitionKind, TSType};
 use std::sync::Arc;
 
 pub struct Check;
@@ -77,6 +77,20 @@ impl OxcCheck for Check {
                     return;
                 }
                 if trimmed == "Promise<void>" || trimmed == "Promise<never>" {
+                    return;
+                }
+                // A union return type with a `void`/`never` member (e.g. `void | string`,
+                // `string | void`) makes a bare `return;` the idiomatic way to take the
+                // no-value branch; TypeScript accepts it there. Inspect the AST rather
+                // than splitting on `|`, so nested generics like `Map<A | B, C> | void`
+                // are handled correctly. A `undefined` member is NOT exempt — in
+                // `string | undefined`, `undefined` is a real value the rule still flags.
+                if let TSType::TSUnionType(union) = &ret_type.type_annotation
+                    && union
+                        .types
+                        .iter()
+                        .any(|t| matches!(t, TSType::TSVoidKeyword(_) | TSType::TSNeverKeyword(_)))
+                {
                     return;
                 }
 
@@ -201,5 +215,32 @@ mod tests {
     fn allows_bare_return_in_assertion_method() {
         let src = "class C { check(value: unknown, label: string): asserts value { for (const p of this.ps) { try { run(value, label, p); return; } catch (e) {} } } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_return_in_void_union() {
+        // Issue #6467 repro (sindresorhus/ow infer-label.ts).
+        let src =
+            "const inferLabel = (x: number): void | string => { if (!x) return; return 'y'; };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_return_in_reversed_void_union() {
+        let src = "const f = (x: number): string | void => { if (!x) return; return 'y'; };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_return_in_never_union() {
+        let src = "function f(x: number): string | never { if (!x) return; return 'y'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_return_in_undefined_union() {
+        // `undefined` is a real value — `string | undefined` must still flag.
+        let src = "function f(x: number): string | undefined { if (!x) return; return 'y'; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
