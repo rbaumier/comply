@@ -17,8 +17,8 @@ use rustc_hash::FxHashSet;
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    AssignmentOperator, AssignmentTarget, Expression, Statement,
-    VariableDeclarationKind,
+    AssignmentOperator, AssignmentTarget, BinaryOperator, Expression, Statement,
+    UnaryOperator, VariableDeclarationKind,
 };
 use oxc_semantic::{NodeId, ReferenceFlags};
 use oxc_span::GetSpan;
@@ -241,11 +241,15 @@ fn is_effectively_const_binding(
 }
 
 /// True if the binding is a write-once lazy-init cache: it starts unset (no
-/// initializer or `= undefined`) and every write to it is a `??=` nullish
-/// assignment. The value is set exactly once on first access and never changes
-/// thereafter, so a function reading or seeding it returns the same value on
-/// every call and is idempotent. Any plain `=`/compound write would mutate the
-/// value past the first set, so it disqualifies the binding and keeps it flagged.
+/// initializer or `= undefined`) and every write to it is a lazy-init write —
+/// either a `??=` nullish assignment, or a plain `=` assignment guarded by an
+/// enclosing `if (binding === undefined)` / `== null` / `typeof binding ===
+/// 'undefined'` check of the same binding. The value is set exactly once on
+/// first access and never changes thereafter, so a function reading or seeding
+/// it returns the same value on every call and is idempotent. Any other write
+/// (unconditional plain `=`, compound, or a guard testing a different binding or
+/// the inverse direction) would mutate the value past the first set, so it
+/// disqualifies the binding and keeps it flagged.
 fn is_write_once_lazy_init(
     nodes: &oxc_semantic::AstNodes,
     scoping: &oxc_semantic::Scoping,
@@ -260,7 +264,9 @@ fn is_write_once_lazy_init(
             continue;
         }
         saw_write = true;
-        if !write_is_nullish_assignment(nodes, reference.node_id()) {
+        if !write_is_nullish_assignment(nodes, reference.node_id())
+            && !write_is_if_undefined_guarded_assignment(nodes, reference.node_id())
+        {
             return false;
         }
     }
@@ -300,6 +306,112 @@ fn write_is_nullish_assignment(
         Some(AstKind::AssignmentExpression(assign))
             if assign.operator == AssignmentOperator::LogicalNullish
     )
+}
+
+/// True when the write at `ref_node_id` is a plain `=` assignment that sits in
+/// the consequent of an `if (binding === undefined)` guard testing the SAME
+/// binding for being unset. This is the `if (cache === undefined) { cache =
+/// compute(); }` lazy-init idiom, structurally equivalent to `cache ??=
+/// compute()`: the binding is filled exactly once on first access. Only the
+/// unset-direction tests (`===`/`==` against `undefined`/`null`, or `typeof
+/// binding === 'undefined'`) in the consequent qualify; the inverse (`!==`/`!=`)
+/// or a guard on a different binding does not, since those would write when the
+/// value is already set.
+fn write_is_if_undefined_guarded_assignment(
+    nodes: &oxc_semantic::AstNodes,
+    ref_node_id: NodeId,
+) -> bool {
+    let mut kinds = nodes.ancestor_kinds(ref_node_id);
+
+    // The write target must be a plain `=` assignment to a bare identifier.
+    let Some(AstKind::AssignmentExpression(assign)) = kinds.next() else {
+        return false;
+    };
+    if assign.operator != AssignmentOperator::Assign {
+        return false;
+    }
+    let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+        return false;
+    };
+
+    // Walk up through the statement wrappers to the nearest enclosing
+    // `IfStatement`, tracking the child we entered it through so we can require
+    // the assignment is in the consequent (then-branch), not the alternate.
+    let mut child_span = assign.span();
+    for kind in kinds {
+        match kind {
+            AstKind::IfStatement(if_stmt) => {
+                if if_stmt.consequent.span() != child_span {
+                    return false;
+                }
+                return test_is_unset_check(&if_stmt.test, target.name.as_str());
+            }
+            AstKind::ExpressionStatement(_) | AstKind::BlockStatement(_) => {
+                child_span = kind.span();
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// True when `test` is an "is-unset" check of the binding named `name`:
+/// `name === undefined`, `name == null`, `name === null`, or
+/// `typeof name === 'undefined'` (either operand order). Only the equality
+/// direction is accepted; the inverse (`!==`/`!=`) is not, as it would gate the
+/// write on the value already being set.
+fn test_is_unset_check(test: &Expression, name: &str) -> bool {
+    let Expression::BinaryExpression(bin) = test else {
+        return false;
+    };
+    if !matches!(
+        bin.operator,
+        BinaryOperator::StrictEquality | BinaryOperator::Equality
+    ) {
+        return false;
+    }
+    // `binding === undefined` / `binding == null` / `binding === null`.
+    if (operand_is_binding(&bin.left, name) && operand_is_unset_literal(&bin.right))
+        || (operand_is_binding(&bin.right, name)
+            && operand_is_unset_literal(&bin.left))
+    {
+        return true;
+    }
+    // `typeof binding === 'undefined'`.
+    (typeof_targets_binding(&bin.left, name)
+        && operand_is_undefined_string(&bin.right))
+        || (typeof_targets_binding(&bin.right, name)
+            && operand_is_undefined_string(&bin.left))
+}
+
+/// True when `expr` is a plain identifier reference named `name`.
+fn operand_is_binding(expr: &Expression, name: &str) -> bool {
+    matches!(expr, Expression::Identifier(ident) if ident.name.as_str() == name)
+}
+
+/// True when `expr` is the `undefined` identifier or a `null` literal — the
+/// values a lazy cache holds before its first write.
+fn operand_is_unset_literal(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(ident) => ident.name.as_str() == "undefined",
+        Expression::NullLiteral(_) => true,
+        _ => false,
+    }
+}
+
+/// True when `expr` is `typeof name`, i.e. a `typeof` unary applied to the
+/// identifier `name`.
+fn typeof_targets_binding(expr: &Expression, name: &str) -> bool {
+    let Expression::UnaryExpression(unary) = expr else {
+        return false;
+    };
+    unary.operator == UnaryOperator::Typeof
+        && operand_is_binding(&unary.argument, name)
+}
+
+/// True when `expr` is the string literal `'undefined'`.
+fn operand_is_undefined_string(expr: &Expression) -> bool {
+    matches!(expr, Expression::StringLiteral(lit) if lit.value == "undefined")
 }
 
 /// True if the symbol's declaration sits inside a `let` or `var`
@@ -810,6 +922,142 @@ function readEnvFileCached() {
 }
 "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #6646 — the `if (cache === undefined) { cache = ...; }`
+    // lazy-init idiom is structurally equivalent to `cache ??= ...`: the binding
+    // starts unset and is seeded exactly once on first call, behind a guard that
+    // tests it for being unset. The reader is idempotent and must not be flagged.
+    #[test]
+    fn no_fp_on_if_undefined_guarded_lazy_init() {
+        let src = r#"
+let isDockerCached: boolean;
+export function isDocker() {
+    if (isDockerCached === undefined) {
+        isDockerCached = _hasDockerEnvironment() || _hasDockerCGroup();
+    }
+    return isDockerCached;
+}
+"#;
+        assert!(
+            run(src).is_empty(),
+            "if-undefined guarded lazy-init must not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_if_eqeq_null_guarded_lazy_init() {
+        let src = r#"
+let cache: number;
+function read() {
+    if (cache == null) {
+        cache = compute();
+    }
+    return cache;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_typeof_undefined_guarded_lazy_init() {
+        let src = r#"
+let cache: number;
+function read() {
+    if (typeof cache === 'undefined') {
+        cache = compute();
+    }
+    return cache;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_if_undefined_guarded_lazy_init_bare_consequent() {
+        // The guard's consequent is a bare statement, not a block.
+        let src = r#"
+let cache: number;
+function read() {
+    if (cache === undefined) cache = compute();
+    return cache;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unconditional_plain_assign_to_top_level_state() {
+        // A plain `=` write with no if-undefined guard mutates on every call, so
+        // the binding is not a write-once cache and the reader stays flagged.
+        let src = r#"
+let cache: number;
+function read() {
+    cache = compute();
+    return cache;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("read"));
+    }
+
+    #[test]
+    fn flags_when_guard_tests_a_different_binding() {
+        // The guard checks `other`, but the write targets `cache`; the write is
+        // not gated on `cache` being unset, so `cache`'s reader stays flagged.
+        let src = r#"
+let cache: number;
+let other: number;
+function read() {
+    if (other === undefined) {
+        cache = compute();
+    }
+    return cache;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("read"));
+        assert!(d[0].message.contains("cache"));
+    }
+
+    #[test]
+    fn flags_when_guard_uses_inverse_test() {
+        // `if (cache !== undefined) { cache = ...; }` writes only when the value
+        // is already set — the opposite of lazy-init — so it stays flagged.
+        let src = r#"
+let cache: number;
+function read() {
+    if (cache !== undefined) {
+        cache = compute();
+    }
+    return cache;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("read"));
+    }
+
+    #[test]
+    fn flags_when_assignment_is_in_else_branch() {
+        // The write sits in the alternate, not the consequent, so the unset
+        // guard does not gate it; the reader stays flagged.
+        let src = r#"
+let cache: number;
+function read() {
+    if (cache === undefined) {
+        log();
+    } else {
+        cache = compute();
+    }
+    return cache;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("read"));
     }
 
     #[test]
