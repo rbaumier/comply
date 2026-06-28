@@ -8,6 +8,8 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Regex::new"] => |node, 
 
     if is_in_test_context(node, source) { return; }
 
+    if is_in_named_binding_init(node) { return; }
+
     let Ok(text) = node.utf8_text(source) else { return };
 
     let pattern_len = extract_string_arg_len(text);
@@ -40,6 +42,24 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Regex::new"] => |node, 
         "Complex regex without a comment — add a description of what it matches.".into(),
         Severity::Warning,
     ));
+}
+
+/// True when `node` is the initializer of a named `static_item` or `const_item`
+/// binding — directly, or nested inside a `Lazy::new(|| …)` closure. In that
+/// position the binding name (`START_SCRIPT`, `LF_TARGET_REGEX`, …) already
+/// documents what the regex matches, so no separate comment is required.
+///
+/// Walks up the tree-sitter ancestor chain and returns `true` at the first
+/// enclosing `static_item` / `const_item`; the walk stops at the source root.
+fn is_in_named_binding_init(node: tree_sitter::Node) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if matches!(parent.kind(), "static_item" | "const_item") {
+            return true;
+        }
+        cur = parent;
+    }
+    false
 }
 
 fn extract_string_arg_len(call_text: &str) -> usize {
@@ -124,6 +144,24 @@ mod tests {
     #[test]
     fn still_flags_undocumented_regex_in_production_code() {
         let src = "fn parse() {\nlet re = Regex::new(r\"^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$\").unwrap();\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_regex_in_named_static_lazy_init() {
+        let src = "pub static START_SCRIPT: Lazy<Regex> =\n    Lazy::new(|| Regex::new(r#\"<script(?:.*type=\"(.*)\")?.*?>\"#).unwrap());";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_regex_in_named_const_init() {
+        let src = "const LF_TARGET_REGEX: &str = Regex::new(r\"^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$\").unwrap();";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_undocumented_let_bound_regex_in_fn() {
+        let src = "fn f() {\nlet re = Regex::new(r\"^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$\").unwrap();\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
