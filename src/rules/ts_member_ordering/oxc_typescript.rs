@@ -75,8 +75,11 @@ fn is_method_like_field(prop: &oxc_ast::ast::PropertyDefinition) -> bool {
 
 fn ts_signature_rank(sig: &TSSignature) -> Option<u8> {
     match sig {
-        TSSignature::TSIndexSignature(_)
-        | TSSignature::TSCallSignatureDeclaration(_)
+        // A catch-all index signature (`[key: string]: T`) has no canonical
+        // position: leading and trailing placement are both idiomatic, so it is
+        // excluded from ordering and never updates or violates the running rank.
+        TSSignature::TSIndexSignature(_) => None,
+        TSSignature::TSCallSignatureDeclaration(_)
         | TSSignature::TSConstructSignatureDeclaration(_) => Some(0),
         TSSignature::TSPropertySignature(_) => Some(1),
         TSSignature::TSMethodSignature(_) => Some(3),
@@ -269,6 +272,54 @@ mod tests {
         let src = "class Foo {\n\
             \x20 bar(): void {}\n\
             \x20 hasAnimated = false;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_trailing_index_signature_in_interface() {
+        // nitrojs/nitro pattern: a catch-all index signature placed last, after
+        // the explicitly typed members, is the canonical "open interface" idiom.
+        let src = "interface CFPagesEnv {\n\
+            \x20 CF_PAGES: \"1\";\n\
+            \x20 CF_PAGES_URL: string;\n\
+            \x20 [key: string]: any;\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_leading_index_signature_in_interface() {
+        // A leading index signature is equally idiomatic and must not flag the
+        // properties that follow it.
+        let src = "interface Bag {\n\
+            \x20 [key: string]: unknown;\n\
+            \x20 id: string;\n\
+            \x20 name: string;\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_call_signature_after_property_in_interface() {
+        // A genuine ordering smell among non-index members still fires: a call
+        // signature (rank 0) belongs before properties (rank 1).
+        let src = "interface Foo {\n\
+            \x20 value: number;\n\
+            \x20 (): void;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_method_before_property_in_interface() {
+        // A method (rank 3) declared before a property (rank 1) is a genuine
+        // misorder and must still fire.
+        let src = "interface Foo {\n\
+            \x20 bar(): void;\n\
+            \x20 value: number;\n\
             }";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
