@@ -457,23 +457,33 @@ fn collect_derives(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
     let Some(idx) = children.iter().position(|c| c.id() == node.id()) else {
         return out;
     };
-    // Walk backward through preceding siblings while they're attribute_items.
+    // Walk backward through preceding siblings, collecting `#[derive(..)]`
+    // entries. A `///` doc comment placed between the derive and the type
+    // (`line_comment` / `block_comment`) is interleaved, not a separator:
+    // skip it and keep walking so the derive above it is still found. Any
+    // other node (a blank-separated unrelated item) genuinely ends the
+    // attribute block.
     for i in (0..idx).rev() {
         let c = children[i];
-        if c.kind() != "attribute_item" {
-            break;
-        }
-        let Ok(text) = c.utf8_text(source) else {
-            continue;
-        };
-        if let Some(start) = text.find("derive(") {
-            let after = &text[start + "derive(".len()..];
-            if let Some(end) = after.find(')') {
-                let list = &after[..end];
-                for item in list.split(',') {
-                    out.push(item.trim().to_string());
+        match c.kind() {
+            "attribute_item" => {
+                let Ok(text) = c.utf8_text(source) else {
+                    continue;
+                };
+                if let Some(start) = text.find("derive(") {
+                    let after = &text[start + "derive(".len()..];
+                    if let Some(end) = after.find(')') {
+                        let list = &after[..end];
+                        for item in list.split(',') {
+                            out.push(item.trim().to_string());
+                        }
+                    }
                 }
             }
+            "line_comment" | "block_comment" => {
+                // Interleaved comment — keep walking.
+            }
+            _ => break,
         }
     }
     out
@@ -790,6 +800,71 @@ struct Outer {
         let source = "#[derive(Debug, PartialEq)]\nstruct Unit;";
         let diags = crate::rules::test_helpers::run_rule_gated(&Check, source, "tests/into.rs");
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_field_type_with_doc_comment_between_derive_and_def() {
+        // Issue #6640: a `///` doc comment placed between `#[derive(PartialEq)]`
+        // and the type stops the backward sibling walk too early, so the inner
+        // type's derive is missed and it is wrongly treated as Eq-capable. Here
+        // `GlobPattern` is `PartialEq`-without-`Eq`, so `Vec<GlobPattern>` is not
+        // provably `Eq` and the outer struct must NOT be flagged.
+        let source = "\
+#[derive(PartialEq, Debug)]
+/// This doc comment sits between the derive and the type definition.
+/// Normally doc comments precede the derive, but this placement is valid Rust.
+enum GlobPattern {
+    Complex(glob::Pattern, Style),
+    Simple(HashMap<String, Style>),
+}
+#[derive(PartialEq, Debug, Default)]
+struct ExtensionMappings {
+    mappings: Vec<GlobPattern>,
+}";
+        let diags = run_on(source);
+        // Only `GlobPattern` itself is unflaggable (external field types are not
+        // provably `Eq`); `ExtensionMappings` must not be flagged.
+        assert!(
+            diags.iter().all(|d| !d.message.contains("`ExtensionMappings`")),
+            "FP: `ExtensionMappings` flagged despite holding Eq-incapable `Vec<GlobPattern>`"
+        );
+    }
+
+    #[test]
+    fn allows_field_type_with_block_comment_between_derive_and_def() {
+        // Same as above with a `/** */` block comment interleaved. `Inner`'s
+        // Eq-incapability is provable only via its derived `PartialEq`-without-
+        // `Eq` (its field `glob::Pattern` is an external type the rule cannot
+        // inspect), so it depends on `collect_derives` walking past the comment.
+        let source = "\
+#[derive(PartialEq)]
+/** block doc between derive and def */
+struct Inner {
+    pat: glob::Pattern,
+}
+#[derive(PartialEq)]
+struct Outer {
+    inner: Vec<Inner>,
+}";
+        let diags = run_on(source);
+        assert!(
+            diags.iter().all(|d| !d.message.contains("`Outer`")),
+            "FP: `Outer` flagged despite holding Eq-incapable `Vec<Inner>`"
+        );
+    }
+
+    #[test]
+    fn flags_eq_capable_struct_with_doc_comment_between_derive_and_def() {
+        // Negative control: an interleaved doc comment must not silence the rule
+        // for a genuinely Eq-capable type. `A`'s only field is `i32`, so `Eq` is
+        // safely addable and it must still be flagged.
+        let source = "\
+#[derive(PartialEq)]
+/// interleaved doc comment
+struct A {
+    x: i32,
+}";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
