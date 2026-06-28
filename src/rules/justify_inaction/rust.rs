@@ -55,6 +55,13 @@
 //! pure comparison (`while x < n {}`) — is not self-documenting and is
 //! still flagged.
 //!
+//! An empty-bodied `for` is exempt when its pattern is a bare wildcard
+//! (`for _ in iter.by_ref().take(3) {}`): draining an iterator for its
+//! side effects is the idiomatic use of such a loop and the `_` documents
+//! that the yielded value is intentionally ignored, exactly like a
+//! wildcard `match` arm. A named binding (`for x in iter {}`) or a
+//! destructuring pattern (`for (k, v) in map {}`) still flags.
+//!
 //! Function bodies, closure bodies, and empty `{}` used as unit
 //! expressions in other positions are out of scope — they are common
 //! in stubs, marker impls, and no-op callbacks, and flagging them
@@ -240,6 +247,24 @@ fn contains_call(node: tree_sitter::Node) -> bool {
     node.children(&mut cursor).any(contains_call)
 }
 
+/// True when a `for`-loop binds its item to a bare wildcard (`for _ in expr {}`).
+/// Draining an iterator for its side effects — triggering `Drop`, or advancing a
+/// `by_ref()` cursor without consuming the outer iterator (`for _ in it.by_ref()
+/// .take(n) {}`) — is the idiomatic use of such a loop: the `_` states the yielded
+/// value is intentionally ignored and the iteration itself is the goal, so the
+/// empty body is self-documenting, exactly like a wildcard `match` arm. A named
+/// binding (`for x in expr {}`) or a destructuring pattern (`for (k, v) in map {}`)
+/// is not a bare wildcard and still flags. Non-`for` loops have no `pattern` field
+/// and return false.
+fn for_pattern_is_wildcard(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return false;
+    };
+    matches!(pattern.kind(), "_" | "wildcard_pattern")
+        || (pattern.kind() == "identifier"
+            && pattern.utf8_text(source).is_ok_and(|name| name == "_"))
+}
+
 fn loop_name(kind: &str) -> &'static str {
     match kind {
         "for_expression" => "for",
@@ -298,6 +323,7 @@ match node.kind() {
         "for_expression" | "while_expression" | "loop_expression" => {
             if let Some(body) = node.child_by_field_name("body")
                 && !has_leading_comment(node, _source)
+                && !for_pattern_is_wildcard(node, _source)
                 && !(node.kind() == "while_expression"
                     && node
                         .child_by_field_name("condition")
@@ -605,7 +631,34 @@ fn f(x: Option<u8>) {
 
     #[test]
     fn flags_empty_for() {
-        assert_eq!(run_on("fn f(xs: &[u8]) { for _ in xs {} }").len(), 1);
+        assert_eq!(run_on("fn f(xs: &[u8]) { for x in xs {} }").len(), 1);
+    }
+
+    // -- bare-wildcard for-loop drain (issue #6322) --
+
+    #[test]
+    fn allows_empty_for_wildcard_drain_issue_6322() {
+        let src = "fn f(half: &mut std::vec::IntoIter<u8>) { for _ in half.by_ref() {} }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_for_wildcard_byref_take_issue_6322() {
+        let src = "fn f(iter: &mut std::vec::IntoIter<u8>) { for _ in iter.by_ref().take(3) {} }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_for_underscore_prefixed_binding_issue_6322() {
+        // `_x` is a named binding, not the bare wildcard `_`: it still flags,
+        // matching how the rule treats top-level match-arm patterns.
+        assert_eq!(run_on("fn f(xs: &[u8]) { for _x in xs {} }").len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_for_destructuring_binding_issue_6322() {
+        let src = "fn f(map: std::collections::HashMap<u8, u8>) { for (k, v) in map {} }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     #[test]
