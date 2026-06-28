@@ -38,6 +38,19 @@ fn is_relative_data_file(path: &str) -> bool {
     DATA_FILE_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
 }
 
+/// True when `path` is a bare package specifier: not a relative (`./`, `../`)
+/// or absolute (`/`) path, and not a data file. A conditional `require()` of
+/// such a specifier is a lazy-load of an optional module dependency — the
+/// package is loaded only when a caller opts into a feature, so hoisting it to
+/// module top level would eagerly load it on every import, changing semantics.
+fn is_bare_package_specifier(path: &str) -> bool {
+    if path.starts_with("./") || path.starts_with("../") || path.starts_with('/') {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    DATA_FILE_EXTENSIONS.iter().all(|ext| !lower.ends_with(ext))
+}
+
 /// The string-literal argument of a `require()` call, or `None` when the call
 /// has no argument or a non-literal (dynamic) argument.
 fn string_literal_arg<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a str> {
@@ -147,6 +160,7 @@ impl OxcCheck for Check {
         }
 
         let data_file_arg = string_literal_arg(call).map(is_relative_data_file).unwrap_or(false);
+        let bare_pkg_arg = string_literal_arg(call).map(is_bare_package_specifier).unwrap_or(false);
 
         // Walk ancestors: require is OK if all ancestors are top-level.
         let mut in_function = false;
@@ -168,11 +182,14 @@ impl OxcCheck for Check {
                     in_function = true;
                     break;
                 }
-                // A relative data-file `require()` inside a conditional branch is
-                // a lazy data-dispatch: load only the requested locale/dataset on
-                // demand (idiomatic in language servers / VS Code extensions).
-                // Hoisting it would eagerly bundle every branch's data file.
-                AstKind::IfStatement(_) | AstKind::SwitchStatement(_) if data_file_arg => {
+                // A conditional `require()` of either a relative data file or a
+                // bare package specifier is a lazy load on demand: a data file
+                // loads only the requested locale/dataset, a bare package loads
+                // an optional dependency only when a caller opts into a feature.
+                // Hoisting either would eagerly load it on every import.
+                AstKind::IfStatement(_) | AstKind::SwitchStatement(_)
+                    if data_file_arg || bare_pkg_arg =>
+                {
                     return;
                 }
                 AstKind::MethodDefinition(_)
@@ -337,12 +354,53 @@ mod tests {
         assert!(d.is_empty());
     }
 
-    // Negative space for #5055: a hoistable code module (`fs`) inside a
-    // conditional is still flagged — the data-dispatch exemption is scoped to
-    // relative data files, not arbitrary in-conditional requires.
+    // #6637: a bare specifier inside a conditional is a lazy-load of an optional
+    // module dependency. The structural rule does not inspect the name, so a
+    // builtin like `fs` is exempt too; the negative space — a relative module in
+    // a conditional — stays flagged (`flags_relative_js_module_in_conditional`).
     #[test]
-    fn flags_module_require_in_conditional() {
+    fn allows_bare_specifier_require_in_conditional() {
         let d = run(r#"function f(x: boolean) { if (x) { const fs = require("fs"); return fs; } }"#);
+        assert!(d.is_empty());
+    }
+
+    // Regression for #6637 (unjs/jiti src/jiti.ts:56): a synchronous factory
+    // lazy-loads an optional peer dependency via a bare package specifier only
+    // when the caller opts into the feature. Hoisting it would eagerly load the
+    // optional package on every `import`.
+    #[test]
+    fn allows_conditional_optional_peer_dependency_lazy_load() {
+        let d = run(
+            r#"function createJiti(opts: { tsconfigPaths?: boolean }) {
+                if (opts.tsconfigPaths) {
+                    const { getTsconfig, createPathsMatcher } =
+                        require("get-tsconfig") as typeof import("get-tsconfig");
+                }
+            }"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    // #6637: same lazy-load expressed as a switch over a bare package specifier.
+    #[test]
+    fn allows_switch_bare_package_lazy_load() {
+        let d = run(
+            r#"function load(kind: string) {
+                switch (kind) {
+                    case 'a': return require("pkg-a");
+                    default: return require("pkg-b");
+                }
+            }"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    // Negative space for #6637: a bare package `require()` inside a function but
+    // NOT inside an if/switch is still flagged — the exemption is scoped to the
+    // conditional (lazy-load) position.
+    #[test]
+    fn flags_unconditional_bare_package_require_in_function() {
+        let d = run(r#"function init() { const _ = require("lodash"); return _; }"#);
         assert_eq!(d.len(), 1);
     }
 
