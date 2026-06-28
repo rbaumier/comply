@@ -620,12 +620,22 @@ fn has_nullish_or_logical_fallback(
 ///      empty array still yields `undefined` at index 0. The `alternate` (falsy)
 ///      branch stays flagged — it runs when the test is falsy, so the element
 ///      may be absent.
-///   4. in an `&&` chain (`<obj_text>.length && …<obj_text>[0]…`), an access in
-///      the RIGHT operand guarded by a `<obj_text>.length` check on the same
-///      array in the LEFT operand — the short-circuit evaluates the right side
-///      only when the left is truthy, the expression form of `if (arr.length)`.
-///      A different array in the left (`foo.length && bar[0]`) or an access in
-///      the left operand stays flagged.
+///   4. in an `&&` chain, two short-circuit guards (the right operand runs only
+///      when the left is truthy):
+///        a. a `<obj_text>.length` check in the LEFT operand exempts an access in
+///           the RIGHT operand (`arr.length && arr[0]`), the expression form of
+///           `if (arr.length)`. It does not exempt an access in the LEFT operand
+///           itself (that runs before the guard).
+///        b. for a first-element read, a truthy `<obj_text>[0]` test in the LEFT
+///           operand exempts a `[0]` read in EITHER operand: the LEFT read is the
+///           truthiness test itself (`arr[0] && …`, evaluated for truthiness only,
+///           short-circuiting harmlessly on an empty array) and the RIGHT read
+///           runs only after it (`arr[0] && use(arr[0])`) — the `&&` form of
+///           `if (arr[0])`.
+///      Scoped to the SAME array: a different array in the left
+///      (`foo.length && bar[0]`, `other[0] && use(arr[0])`) stays flagged. Only
+///      `&&` qualifies; `||` / `??` short-circuit on a falsy left and do not
+///      prove the element present.
 ///   5. in the body of an enclosing `while (<test>)` / `for (…; <test>; …)`,
 ///      an access whose `<test>` proves `<obj_text>` is non-empty
 ///      (`<obj_text>.length`, `.length > 0`, `>= 1`, `!== 0`, `=== N` for `N >= 1`,
@@ -712,12 +722,14 @@ fn has_length_guard_ancestor(
                 // proves the array is non-empty wherever this access sits in the
                 // right operand. The expression equivalent of `if (arr.length) { arr[0] }`.
                 // Scoped, like the `if`/ternary arms, to a `.length` on the same
-                // object: `foo.length && bar[0]` (a different array) stays flagged,
-                // and an access in the LEFT operand runs before the guard so it stays
-                // flagged too.
+                // object: `foo.length && bar[0]` (a different array) stays flagged.
+                // This `.length` guard reaches only the RIGHT operand; a truthy
+                // `arr[0]` LEFT guard is handled separately below.
                 if matches!(logical.operator, LogicalOperator::And) {
                     let in_right = logical.right.span().start <= node_span.start
                         && node_span.end <= logical.right.span().end;
+                    let in_left = logical.left.span().start <= node_span.start
+                        && node_span.end <= logical.left.span().end;
                     if in_right {
                         let left_text = &source[logical.left.span().start as usize
                             ..logical.left.span().end as usize];
@@ -727,6 +739,22 @@ fn has_length_guard_ancestor(
                         )) {
                             return true;
                         }
+                    }
+                    // A truthy `arr[0]` test in the LEFT operand is the `&&` form of
+                    // `if (arr[0])`. The LEFT operand is evaluated for truthiness only,
+                    // so a first-element read there short-circuits harmlessly to
+                    // `undefined` on an empty array (`arr[0] && use`); and the RIGHT
+                    // operand runs only after that truthy test, so a first-element read
+                    // there is in-bounds (`arr[0] && use(arr[0])`). Both reuse the
+                    // ternary-consequent predicate on `logical.left`: a different array
+                    // in the left (`other[0] && use(arr[0])`) does not match, so it
+                    // stays flagged. Only `&&` qualifies — `||` / `??` short-circuit on
+                    // a FALSY left and do not prove the element present.
+                    if is_first
+                        && (in_left || in_right)
+                        && condition_guards_index0(&logical.left, obj_text, source, false)
+                    {
+                        return true;
                     }
                 }
             }
@@ -3634,11 +3662,13 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_index0_in_left_operand_of_and_issue_6227() {
-        // Negative space: the index-0 access sits in the LEFT operand, which runs
-        // before any guard, so it stays flagged.
+    fn no_fp_index0_in_left_operand_of_and_issue_6643() {
+        // The index-0 access in the LEFT operand of `&&` is evaluated for truthiness
+        // only — it is never dereferenced, short-circuits harmlessly to `undefined` on
+        // an empty array, and its value is discarded. It is a truthiness guard (the
+        // `&&` form of `if (arr[0])`), not an unchecked read, so it is exempt.
         let src = "function f(arr) { return arr[0] && arr.length; }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -4401,6 +4431,62 @@ mod tests {
         // Negative control: a `do…while` body runs once before the test, so the
         // `length > 0` condition does not dominate the first iteration's read.
         let src = "do { const x = arr[0]; arr.shift(); } while (arr.length > 0);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_guarded_by_and_short_circuit_issue_6643() {
+        // unjs/automd `jsimport.ts`: `(importNames[0] && ` ${importNames[0]} `) || ""`.
+        // The LEFT `importNames[0]` is evaluated for truthiness only — an empty array
+        // yields `undefined`, the `&&` short-circuits, and the outer `|| ""` returns
+        // `""`. The RIGHT `importNames[0]` runs only when the LEFT was truthy, so it is
+        // present. Neither use is flagged.
+        let src = "function f(importNames: string[]) { return (importNames[0] && ` ${importNames[0]} `) || \"\"; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_as_left_of_and_guard_issue_6643() {
+        // `arr[0]` as the LEFT operand of `&&` is a truthiness guard (the `&&` form of
+        // `if (arr[0])`); the RIGHT `arr[0].id` runs only after that truthy test. Both
+        // reads are exempt.
+        let src = "function f(arr: number[]) { return arr[0] && arr[0].id; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_in_right_of_and_with_different_array_left_issue_6643() {
+        // The LEFT `&&` operand tests a DIFFERENT array (`other[0]`), so it does not
+        // prove `arr` non-empty — the RIGHT `arr[0].id` stays flagged. (`other[0]` is
+        // itself a truthiness guard and is exempt, so exactly one diagnostic remains.)
+        let src = "function f(arr: number[], other: number[]) { return other[0] && arr[0].id; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_in_right_of_or_issue_6643() {
+        // `||` short-circuits on a FALSY left, so the RIGHT operand runs only when
+        // `arr[0]` was absent/falsy — it is NOT guarded. The LEFT `arr[0]` is exempt
+        // via its `|| fallback`, leaving exactly one diagnostic on the dereferenced
+        // RIGHT `arr[0].id`.
+        let src = "function f(arr: number[]) { return arr[0] || arr[0].id; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_in_right_of_nullish_coalesce_issue_6643() {
+        // `??` short-circuits on a nullish left, so the RIGHT operand is the fallback
+        // path and is not guarded. The LEFT `arr[0]` is exempt via its `?? fallback`,
+        // leaving exactly one diagnostic on the RIGHT `arr[0].id`.
+        let src = "function f(arr: number[]) { return arr[0] ?? arr[0].id; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_index0_member_access_issue_6643() {
+        // No `&&` guard at all: a bare `arr[0].foo` dereferences the first element and
+        // stays flagged.
+        let src = "function f(arr: number[]) { const x = arr[0].foo; return x; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
