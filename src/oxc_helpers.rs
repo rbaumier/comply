@@ -227,6 +227,88 @@ pub fn groups_destructure_keys(source: &str) -> FxHashSet<String> {
     keys
 }
 
+/// Collect the plain binding identifiers that hold an entire `<expr>.groups`
+/// object, e.g. `m` from `const m = input.match(re)?.groups || {}`. Here the
+/// `.groups` object is stored in a variable — neither destructured nor spread —
+/// and its named-group properties are read later as `m.name`; callers pair each
+/// returned binding with the regex's group names and check for those reads via
+/// [`reads_var_property`].
+///
+/// Mirrors [`groups_destructure_keys`]'s byte scan: every `.groups` member
+/// access is located, then — for accesses that are the terminal initializer of
+/// a `const`/`let`/`var` declaration bound to a bare identifier — the identifier
+/// is captured. A `.groups` that is sub-accessed (`.groups.name`,
+/// `.groups["name"]`), destructured (`{ name } = …groups`), or not bound to a
+/// fresh identifier is skipped. Optional chaining (`?.groups`) and a trailing
+/// `|| {}` / `?? {}` fallback are tolerated since they sit outside the binding
+/// identifier.
+#[must_use]
+pub fn groups_object_binding_names(source: &str) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
+    let bytes = source.as_bytes();
+    let needle = b".groups";
+    let mut search_from = 0;
+    while let Some(rel) = memchr::memmem::find(&bytes[search_from..], needle) {
+        let dot = search_from + rel;
+        let after = dot + needle.len();
+        search_from = after;
+        // `.groups` must be a member access (not a prefix like `.groupsCount`)
+        // and the terminal object, not a sub-access (`.groups.name`,
+        // `.groups["name"]`) whose binding would hold a single group value.
+        if bytes
+            .get(after)
+            .is_some_and(|&b| is_ident_byte(b) || b == b'.' || b == b'[')
+        {
+            continue;
+        }
+        if let Some((start, end)) = binding_ident_before_groups(bytes, dot) {
+            names.insert(source[start..end].to_string());
+        }
+    }
+    names
+}
+
+/// True when the file reads property `name` off the variable `var_name` as a
+/// real property access — `var_name.name` or `var_name?.name` — the read used
+/// after the entire `.groups` object was stored in `var_name`. The match
+/// respects identifier boundaries: `var_name` must not be the tail of a longer
+/// identifier or itself a property (`param.name`, `obj.m.name` never match an
+/// `m` binding), and `name` must not be the head of a longer identifier
+/// (`m.repository` does not satisfy group `repo`).
+#[must_use]
+pub fn reads_var_property(source: &str, var_name: &str, name: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = memchr::memmem::find(&bytes[from..], var_name.as_bytes()) {
+        let start = from + rel;
+        let end = start + var_name.len();
+        from = start + 1;
+        // Left boundary: `var_name` must start a fresh identifier, not continue
+        // one (`param`) and not be a property of another object (`obj.m`).
+        if start > 0 && (is_ident_byte(bytes[start - 1]) || bytes[start - 1] == b'.') {
+            continue;
+        }
+        // `var_name.name` or `var_name?.name`.
+        let mut j = end;
+        if bytes.get(j) == Some(&b'?') {
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b'.') {
+            continue;
+        }
+        j += 1;
+        if !bytes[j..].starts_with(name.as_bytes()) {
+            continue;
+        }
+        // Right boundary: `name` must end the property, not prefix a longer one.
+        if bytes.get(j + name.len()).is_some_and(|&b| is_ident_byte(b)) {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
 /// True when the file spreads an entire `<expr>.groups` object anywhere, e.g.
 /// `{ ...match.groups, code: match[0] }` (the unjs/mlly `matchAll` pattern). A
 /// spread copies every key of the `.groups` object, so each named capturing
@@ -311,6 +393,79 @@ fn object_pattern_before_groups(bytes: &[u8], groups_dot: usize) -> Option<usize
         }
     }
     None
+}
+
+/// Given the byte offset of the `.` in a terminal `<expr>.groups` access, return
+/// the byte range of the plain binding identifier it initializes in a
+/// `const`/`let`/`var` declaration — `m` in `const m = <expr>.groups`. Returns
+/// `None` when the access is not the initializer of such a binding: destructured
+/// (`{…} = …groups`, the `}` to the left of `=`), compared (`a === b.groups`),
+/// returned, passed as an argument, or assigned to a member target
+/// (`obj.m = …groups`).
+///
+/// Mirrors [`object_pattern_before_groups`]'s left walk over `<expr>` to the
+/// top-level `=`, but extracts the identifier to the left of `=` instead of an
+/// object pattern.
+fn binding_ident_before_groups(bytes: &[u8], groups_dot: usize) -> Option<(usize, usize)> {
+    let mut i = groups_dot;
+    let mut depth: i32 = 0;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' | b'[' | b'{' if depth > 0 => depth -= 1,
+            b'{' | b';' if depth == 0 => return None,
+            b'=' if depth == 0 => {
+                // Reject `==`, `===`, `<=`, `>=`, `!=`, `=>`.
+                let prev = bytes[..i].iter().rev().find(|&&b| !b.is_ascii_whitespace());
+                if matches!(prev, Some(b'=' | b'!' | b'<' | b'>')) {
+                    return None;
+                }
+                if bytes.get(i + 1) == Some(&b'>') {
+                    return None;
+                }
+                // The binding identifier sits to the left of `=`, skipping ws.
+                let mut end = i;
+                while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+                    end -= 1;
+                }
+                let mut start = end;
+                while start > 0 && is_ident_byte(bytes[start - 1]) {
+                    start -= 1;
+                }
+                if start == end {
+                    return None;
+                }
+                return binding_is_declared(bytes, start).then_some((start, end));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// True when the identifier starting at `ident_start` is a fresh binding,
+/// introduced by a `const`/`let`/`var` keyword or a `,` continuing a
+/// multi-declarator (`const a = …, m = …groups`). This excludes member targets
+/// (`obj.m = …`) and bare reassignments, restricting [`binding_ident_before_groups`]
+/// to declarations whose initializer is the stored `.groups` object.
+fn binding_is_declared(bytes: &[u8], ident_start: usize) -> bool {
+    let mut j = ident_start;
+    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
+        j -= 1;
+    }
+    if j == 0 {
+        return false;
+    }
+    if bytes[j - 1] == b',' {
+        return true;
+    }
+    let word_end = j;
+    let mut word_start = j;
+    while word_start > 0 && is_ident_byte(bytes[word_start - 1]) {
+        word_start -= 1;
+    }
+    matches!(&bytes[word_start..word_end], b"const" | b"let" | b"var")
 }
 
 /// Find the `{` matching the closing `}` at `brace_close`, scanning left and
