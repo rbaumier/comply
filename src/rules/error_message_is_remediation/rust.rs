@@ -105,6 +105,21 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
         return;
     };
 
+    // A literal that is nothing but a single bare format placeholder
+    // (`{}`, `{:?}`, `{0}`, `{e}`, `{value:>8}`, …) carries no static text:
+    // the runtime message is supplied entirely by the macro argument, so there
+    // is no human-facing string to judge for length or verb content. The
+    // interior must hold no further braces, so only a whole-string single
+    // placeholder qualifies — `failed {}` keeps its surrounding prose and is
+    // judged as before.
+    if msg.starts_with('{')
+        && msg.ends_with('}')
+        && msg.len() >= 2
+        && !msg[1..msg.len() - 1].contains(['{', '}'])
+    {
+        return;
+    }
+
     let too_short = msg.len() < 15;
     let no_verb = !has_verb(msg);
 
@@ -289,5 +304,41 @@ mod tests {
     }
 }"#;
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn ignores_bare_placeholder_passthrough() {
+        // getzola/zola #6561: the literal is a single bare placeholder; the whole
+        // error text comes from the argument at runtime, so there is no static
+        // string to judge.
+        assert!(run_on(r#"fn f() { bail!("{}", fancy_e); }"#).is_empty());
+        assert!(run_on(r#"fn f() { panic!("{}", err); }"#).is_empty());
+    }
+
+    #[test]
+    fn ignores_bare_placeholder_with_format_spec() {
+        assert!(run_on(r#"fn f() { bail!("{:?}", e); }"#).is_empty());
+        assert!(run_on(r#"fn f() { bail!("{0}", e); }"#).is_empty());
+        assert!(run_on(r#"fn f() { bail!("{value:>8}", value); }"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_placeholder_embedded_in_prose() {
+        // Text surrounds the placeholder, so the static prose is still judged and
+        // a short/vague message keeps flagging.
+        assert_eq!(run_on(r#"fn f() { bail!("failed: {}", e); }"#).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_multiple_placeholders() {
+        // Only a whole-string single placeholder is exempt; interior braces (two
+        // placeholders) keep the literal in scope of the length/verb checks.
+        assert_eq!(run_on(r#"fn f() { bail!("{} {}", a, b); }"#).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_vague_static_message() {
+        // No placeholder at all — a genuinely short static message still flags.
+        assert_eq!(run_on(r#"fn f() { bail!("oops"); }"#).len(), 1);
     }
 }
