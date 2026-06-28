@@ -96,9 +96,22 @@ impl OxcCheck for Check {
                 _ => continue,
             };
 
-            // Skip nested union/intersection — only count the outermost.
-            let parent = semantic.nodes().parent_node(node.id());
-            if matches!(parent.kind(), AstKind::TSUnionType(_) | AstKind::TSIntersectionType(_)) {
+            // Skip nested union/intersection — only count the outermost. A
+            // union/intersection that is structurally a component of an
+            // enclosing union/intersection is nested and must not be reported
+            // on its own. Walk up through transparent type containers — the
+            // `<…>` generic arguments (`TSTypeParameterInstantiation`) and the
+            // type references wrapping them (`TSTypeReference`) — so a union
+            // inside the generic argument of an enclosing intersection (e.g.
+            // `A & Partial<Record<"x" | "y", V>>`) is recognized as nested too.
+            let mut ancestor = semantic.nodes().parent_node(node.id());
+            while matches!(
+                ancestor.kind(),
+                AstKind::TSTypeParameterInstantiation(_) | AstKind::TSTypeReference(_)
+            ) {
+                ancestor = semantic.nodes().parent_node(ancestor.id());
+            }
+            if matches!(ancestor.kind(), AstKind::TSUnionType(_) | AstKind::TSIntersectionType(_)) {
                 continue;
             }
 
@@ -439,5 +452,36 @@ mod tests {
             function b(x: string | readonly string[]) {}
         "#;
         assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_inner_union_in_generic_arg() {
+        // Regression #6587 — the inner union `"unbuild" | "build"` is a
+        // structural component of the enclosing intersection, reached through
+        // the generic arguments of `Record<>`. It must not be reported on its
+        // own: only the outer intersection counts, exactly once per occurrence.
+        let src = r#"
+            const pkg: PackageJson & Partial<Record<"unbuild" | "build", BuildConfig>> = load();
+            function build(pkg: PackageJson & Partial<Record<"unbuild" | "build", BuildConfig>>) {}
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 2);
+        assert!(diags.iter().all(|d| d.message.contains("PackageJson & Partial")));
+    }
+
+    #[test]
+    fn still_flags_inner_union_not_inside_enclosing_union_or_intersection() {
+        // Control for #6587 — when the repeated inner union is NOT a component
+        // of an enclosing union/intersection (`Record<>` is the whole
+        // annotation, not wrapped in a `&`/`|`), the walk reaches the type
+        // annotation, not a union/intersection, so it is still evaluated and a
+        // repeated occurrence is flagged as before.
+        let src = r#"
+            const a: Record<"alpha" | "beta", number> = make();
+            const b: Record<"alpha" | "beta", number> = make();
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 2);
+        assert!(diags.iter().all(|d| d.message.contains(r#""alpha" | "beta""#)));
     }
 }
