@@ -213,11 +213,43 @@ fn imports_backtracking_engine(source: &str) -> bool {
         .any(|krate| crate::oxc_helpers::source_contains(source, &format!("use {krate}::")))
 }
 
-/// `true` when the file imports `Regex` (or `RegexBuilder`) from `krate`, e.g.
-/// `use regex::Regex;` or `use tantivy_fst::Regex;`.
+/// `true` when the file imports a Regex type from `krate`, in either the
+/// single-item form (`use regex::Regex;`, `use tantivy_fst::Regex;`) or the
+/// brace-grouped form (`use regex::{Regex, RegexBuilder};`).
 fn source_imports_regex_from(source: &str, krate: &str) -> bool {
     crate::oxc_helpers::source_contains(source, &format!("use {krate}::Regex"))
         || crate::oxc_helpers::source_contains(source, &format!("use {krate}::RegexBuilder"))
+        || imports_grouped_regex_from(source, krate)
+}
+
+/// `true` when a brace-grouped `use {krate}::{ ... }` import group names a
+/// Regex type (`Regex`, `RegexBuilder`, `RegexSet`, …).
+///
+/// Anchored on the `use {krate}::` crate-segment boundary — the `::` must
+/// immediately follow the crate name (modulo surrounding whitespace), so a
+/// different crate whose path merely contains `regex` (`use my_regex::{…}`,
+/// `use foo::regex::{…}`) is not matched. Tolerant of spaces/newlines around
+/// `::` and inside the group, covering single- and multi-line grouped imports.
+fn imports_grouped_regex_from(source: &str, krate: &str) -> bool {
+    let prefix = format!("use {krate}");
+    let mut rest = source;
+    while let Some(idx) = rest.find(&prefix) {
+        let after = &rest[idx + prefix.len()..];
+        rest = after;
+        let Some(group_start) = after
+            .trim_start()
+            .strip_prefix("::")
+            .map(str::trim_start)
+            .and_then(|s| s.strip_prefix('{'))
+        else {
+            continue;
+        };
+        let group_end = group_start.find('}').unwrap_or(group_start.len());
+        if group_start[..group_end].contains("Regex") {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -407,5 +439,45 @@ mod tests {
     fn still_flags_unresolved_bare_regex() {
         // No import disambiguates the engine: stay conservative and flag.
         assert_eq!(run_on("fn f() { let r = Regex::new(user_input); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_builder_from_brace_grouped_regex_import() {
+        // Issue #6579: dandavison/delta `regex_replacement.rs` —
+        // `use regex::{Regex, RegexBuilder};` is the linear-time engine.
+        let source =
+            "use regex::{Regex, RegexBuilder};\nfn f(p: &str) { let r = RegexBuilder::new(p); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_regex_from_multiline_brace_grouped_import() {
+        let source =
+            "use regex::{\n    Regex,\n    RegexBuilder,\n};\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_brace_grouped_import_from_backtracking_crate() {
+        // `fancy_regex` backtracks: a brace-grouped import of it must not be
+        // mistaken for the linear-time `regex` crate.
+        let source = "use fancy_regex::{Regex};\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_brace_grouped_import_from_lookalike_crate() {
+        // A different crate whose path merely contains `regex` is not the
+        // linear-time `regex` crate, so the bare `Regex::new` still flags.
+        let source = "use my_regex::{Regex};\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_brace_grouped_regex_import_without_regex_type() {
+        // A brace group from `regex` that names no Regex type does not resolve a
+        // bare `Regex::new`, which stays flagged.
+        let source = "use regex::{escape, Captures};\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
