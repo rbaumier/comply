@@ -1419,6 +1419,32 @@ fn is_worker_thread_port_handler_call(
     )
 }
 
+/// True when `call` is a Node.js ESM loader-hook registration: a bare
+/// `register(...)` call whose callee identifier `register` resolves (via the
+/// symbol table) to an import from `"node:module"` or `"module"`.
+///
+/// A file whose module-scope statement is `register("./hooks.mjs", import.meta.url)`
+/// — with `register` imported from `node:module` — is a `node --import` target
+/// (https://nodejs.org/api/module.html#moduleregisterspecifier-parenturl-options):
+/// the top-level call IS the file's payload, never tree-shaken, with no lifecycle
+/// callback to defer it into. The provenance check (binding resolves to a
+/// `node:module` import) anchors the exemption: a module-scope `register(...)`
+/// whose `register` is a local function does not resolve to that import and stays
+/// flagged, and a `register(...)` called from inside a function is unaffected
+/// because this predicate only runs on module-scope expression statements.
+fn is_node_module_register_call(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    if callee.name != "register" {
+        return false;
+    }
+    crate::oxc_helpers::resolves_to_import_from(callee, semantic, &["module", "node:module"])
+}
+
 /// True when `call` is a library plugin-registration call: a member call
 /// `recv.<name>(...)` whose method is one of a small curated set of unambiguous
 /// plugin-registration idioms — `extend` (dayjs's `dayjs.extend(plugin)`) or
@@ -2511,6 +2537,7 @@ impl OxcCheck for Check {
                     || is_vue_reactivity_setup_call(call, &vue_reactivity_names)
                     || is_process_signal_handler_call(call)
                     || is_worker_thread_port_handler_call(call, semantic)
+                    || is_node_module_register_call(call, semantic)
                     || is_library_plugin_registration_call(call)
                     || is_commander_subcommand_chain(call)
                     || is_data_init_foreach(call, &module_locals)
@@ -5811,6 +5838,62 @@ precacheAndRoute(entries)
             diags.len(),
             1,
             "a same-named local parentPort.on(…) must still flag, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn skips_node_module_register_hook_registration() {
+        // Issue #6636: a `node --import` target whose module-scope statement is
+        // `register('./hooks.mjs', import.meta.url, {})` — with `register` imported
+        // from `node:module` — registers an ESM loader hook. The top-level call IS
+        // the file's payload, never tree-shaken, with no callback to defer it into.
+        // Exempt for both the `node:` prefixed and bare specifiers.
+        for module in ["node:module", "module"] {
+            let src = format!(
+                "import {{ register }} from '{module}';\n\
+                 register('./hooks.mjs', import.meta.url, {{}});\n"
+            );
+            let diags = crate::rules::test_helpers::run_rule(
+                &Check,
+                &src,
+                "lib/jiti-register.mjs",
+            );
+            assert!(
+                diags.is_empty(),
+                "register from {module} must be exempt, got {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_local_same_named_register() {
+        // Provenance anchor: a top-level `register(...)` whose `register` is a local
+        // function (not imported from node:module) does not resolve to that import,
+        // so it stays flagged.
+        let src = "\
+            function register(x) { configure(x); }\n\
+            register('./hooks.mjs');\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a top-level call to a local register() must still flag, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn register_exemption_does_not_mask_other_side_effects() {
+        // The exemption covers only the `register(...)` call itself: a different
+        // top-level side effect in the same file still flags.
+        let src = "\
+            import { register } from 'node:module';\n\
+            register('./hooks.mjs', import.meta.url, {});\n\
+            sideEffect();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "lib/register.mjs");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a non-register top-level side effect must still flag, got {diags:?}"
         );
     }
 }
