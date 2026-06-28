@@ -411,6 +411,40 @@ pub fn is_in_kani_proof(node: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `node` sits inside a function whose declared return type is the
+/// never type `-> !`.
+///
+/// Walks ancestors to the nearest enclosing `function_item` and inspects its
+/// `return_type` field: it qualifies only when that node is a `never_type`
+/// (tree-sitter's dedicated node for a bare `-> !`). A function returning `!`
+/// is compiler-guaranteed to diverge — it never returns to a caller, instead
+/// terminating via `process::exit`, `panic!`, an infinite loop, or another
+/// diverging operation. Any error discarded inside such a function therefore
+/// has no caller to propagate to.
+///
+/// Matching on the `never_type` node kind keeps this exact: a `-> Result<!, E>`
+/// (where `!` is buried in a generic) has a `generic_type` return type, not a
+/// `never_type`, so it does not qualify; nor does any ordinary return type
+/// (`()`, `Result<…>`, a value type) or an absent return annotation. Only the
+/// nearest `function_item` governs, so a closure inside a `-> !` function is
+/// covered by the function it is syntactically nested in.
+///
+/// Rules that relax their discipline for provably-diverging code (allow
+/// `let _ = fallible()`, etc.) call this helper — analogous to
+/// [`is_in_test_context`] and [`is_in_kani_proof`].
+pub fn is_in_never_fn(node: Node) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            return parent
+                .child_by_field_name("return_type")
+                .is_some_and(|ret| ret.kind() == "never_type");
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if a single path SEGMENT names a test directory by a `-`/`_`-delimited
 /// `test`/`tests` token.
 ///

@@ -82,6 +82,18 @@
 //!   ordinary discard in a block with no exit still fires, a user method
 //!   `foo.exit()` does not qualify, and an exit buried in a nested closure does
 //!   not exempt a sibling discard in the outer block.
+//! - `let _ = fallible()` inside a function whose return type is `!` (the never
+//!   type): a `-> !` function is compiler-guaranteed to diverge — it never
+//!   returns to a caller (it ends in `process::exit`, `panic!`, an infinite
+//!   loop, …), so a dropped error has no caller to propagate to. Detected via
+//!   `rust_helpers::is_in_never_fn`, which walks to the nearest enclosing
+//!   `function_item` and checks its `return_type` is a `never_type` node. This
+//!   divergence guarantee is structurally stronger than the block-level
+//!   exit-imminent scan above: it also covers fd's `ExitCode::exit` shape where
+//!   `process::exit` sits at the fn level while the `let _ =` is nested inside
+//!   `unsafe {}`/`if`. A `-> Result<!, E>` (where `!` is buried in a generic) is
+//!   a `generic_type`, not a bare `never_type`, so it does not qualify, and a fn
+//!   returning `()`/`Result<…>`/any value type still fires.
 //! - `let _ = f::<Infallible, _>(..)`: a turbofish call whose type arguments fix
 //!   the error type to `Infallible`. `Result<_, Infallible>` is uninhabited on
 //!   its `Err` side, so the result can never be `Err` — discarding it ignores no
@@ -97,7 +109,9 @@
 //! fix for this class of FP — document intent in the calling code if needed.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_kani_proof, is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{
+    is_in_kani_proof, is_in_never_fn, is_in_test_context, is_under_tests_dir,
+};
 use tree_sitter::Node;
 
 crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
@@ -205,6 +219,16 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // also calls `process::exit(..)`, after which the process terminates and no
     // error can be handled — structurally identical to `Drop::drop`.
     if is_in_process_exit_scope(node, source) {
+        return;
+    }
+
+    // Skip discards inside a function whose return type is `!` (never): the
+    // compiler guarantees it diverges and never returns to a caller, so a
+    // dropped error can provably never propagate — the divergence guarantee is
+    // stronger than the block-level `process::exit` scan above and covers a
+    // `process::exit` at the fn level while the discard is nested in `unsafe`/
+    // `if`.
+    if is_in_never_fn(node) {
         return;
     }
 
@@ -1281,6 +1305,52 @@ mod tests {
         assert!(run_on(async_graphql).is_empty());
         assert!(run_on(bare).is_empty());
         assert!(run_on(core).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_in_never_returning_fn() {
+        // Regression for #6555: a `-> !` function is compiler-guaranteed to
+        // diverge, so a discarded fallible result can never propagate to a
+        // caller. The issue's exact fd `exit_codes.rs` shape — `process::exit`
+        // sits at the fn level while the `let _ =` is nested inside `unsafe`/`if`,
+        // which the block-level exit scan misses.
+        let fd = r#"
+            pub fn exit(self) -> ! {
+                if self == ExitCode::KilledBySigint {
+                    unsafe {
+                        if signal(Signal::SIGINT, SigHandler::SigDfl).is_ok() {
+                            let _ = raise(Signal::SIGINT);
+                        }
+                    }
+                }
+                process::exit(self.into())
+            }
+        "#;
+        // Minimal divergent body that does not itself contain `process::exit`.
+        let looping = r#"
+            fn run() -> ! {
+                let _ = fallible();
+                loop {}
+            }
+        "#;
+        assert!(run_on(fd).is_empty());
+        assert!(run_on(looping).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_in_non_never_returning_fn() {
+        // Negative space for #6555: the exemption requires a bare `-> !` return
+        // type. A fn returning `()`, a `Result<…>`, or a `Result<!, E>` (where
+        // `!` is buried in a generic, not the top-level return type) can still
+        // propagate errors, so a discarded fallible call must still fire.
+        let unit = "fn f() -> () { let _ = fallible(); }";
+        let result = "fn f() -> Result<(), E> { let _ = fallible(); Ok(()) }";
+        let result_never_err = "fn f() -> Result<!, E> { let _ = fallible(); loop {} }";
+        let no_return_type = "fn f() { let _ = fallible(); }";
+        assert_eq!(run_on(unit).len(), 1);
+        assert_eq!(run_on(result).len(), 1);
+        assert_eq!(run_on(result_never_err).len(), 1);
+        assert_eq!(run_on(no_return_type).len(), 1);
     }
 
     #[test]
