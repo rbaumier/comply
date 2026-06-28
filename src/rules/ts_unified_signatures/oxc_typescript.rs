@@ -72,6 +72,39 @@ fn params_text<'a>(shape: &SigShape<'a>, source: &'a str) -> &'a str {
     &source[shape.params.span.start as usize..shape.params.span.end as usize]
 }
 
+/// The source text of the type annotation of the parameter at `index`, or `None`
+/// when the signature has no parameter there or that parameter is untyped. Names
+/// are excluded so positions compare by type alone.
+fn param_type_text<'a>(shape: &SigShape<'a>, index: usize, source: &'a str) -> Option<&'a str> {
+    let span = shape
+        .params
+        .items
+        .get(index)?
+        .type_annotation
+        .as_ref()?
+        .type_annotation
+        .span();
+    Some(&source[span.start as usize..span.end as usize])
+}
+
+/// The count of parameter positions at which the equal-arity signatures do not all
+/// share the same parameter type text. Two same-arity overloads unify into one only
+/// by unioning a *single* position's type; differing at two or more positions means
+/// a per-position union would also admit cross combinations none of the overloads
+/// declared (e.g. an `'error'` event paired with the catch-all listener), so such a
+/// group cannot be merged.
+fn differing_param_positions<'a>(shapes: &[SigShape<'a>], source: &'a str) -> usize {
+    let arity = shapes.first().map_or(0, |s| s.params.items.len());
+    (0..arity)
+        .filter(|&pos| {
+            let baseline = param_type_text(&shapes[0], pos, source);
+            shapes[1..]
+                .iter()
+                .any(|s| param_type_text(s, pos, source) != baseline)
+        })
+        .count()
+}
+
 /// Whether the signatures form an "overloaded narrowing" group: every signature
 /// has a *distinct* parameter list *and* a *distinct* return type, so each
 /// parameter shape maps to its own narrowed return (the
@@ -107,9 +140,13 @@ fn signatures_narrow_return_type<'a>(shapes: &[SigShape<'a>], source: &'a str) -
 ///   (the curried zero-arg vs one-arg overload idiom, and the D3-style
 ///   getter/setter idiom where the 0-arg getter returns the value and the 1-arg
 ///   setter returns `this`).
-/// * When the counts are equal the merge unions a single parameter's type, which
-///   is safe only when the signatures are not an overloaded-narrowing group
-///   (distinct parameter lists each mapping to a distinct, narrower return).
+/// * When the counts are equal the merge unions a single parameter's type. This is
+///   unsafe — so the group is not unifiable — when either the signatures form an
+///   overloaded-narrowing group (distinct parameter lists each mapping to a
+///   distinct, narrower return) or they differ at two or more parameter positions
+///   (the EventEmitter idiom, where a string-literal event and its narrowed
+///   listener both differ from the catch-all overload; a per-position union would
+///   admit listener/event combinations the overloads reject).
 fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
     let mut counts = shapes.iter().map(|s| s.params.items.len());
     let Some(first) = counts.next() else {
@@ -124,7 +161,10 @@ fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> boo
         return false;
     }
     if min == max {
-        return !signatures_narrow_return_type(shapes, source);
+        if signatures_narrow_return_type(shapes, source) {
+            return false;
+        }
+        return differing_param_positions(shapes, source) < 2;
     }
 
     let first_return = return_type_text(&shapes[0], source);
@@ -392,6 +432,69 @@ mod tests {
             "interface Foo {\n  \
              bar(a: string): void;\n  \
              bar(a: number): void;\n}",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Regression #6254: Node.js EventEmitter-style overloads — a string-literal
+    // event paired with a narrowed listener, then a catch-all `string` event with a
+    // generic listener, both returning `this`. Both parameters differ across the
+    // pair, so a per-position union would let `(...args) => void` pair with the
+    // `'error'` event, which the overloads reject. Two differing positions => not
+    // unifiable.
+    #[test]
+    fn allows_event_emitter_overloads() {
+        assert!(
+            run_on(
+                "export interface TediousConnection {\n  \
+                 off(event: 'error', listener: (error: unknown) => void): this\n  \
+                 off(event: string, listener: (...args: any[]) => void): this\n  \
+                 on(event: 'error', listener: (error: unknown) => void): this\n  \
+                 on(event: string, listener: (...args: any[]) => void): this\n  \
+                 once(event: 'end', listener: () => void): this\n  \
+                 once(event: string, listener: (...args: any[]) => void): this\n}"
+            )
+            .is_empty()
+        );
+    }
+
+    // Guard: an equal-arity pair differing at two parameter positions cannot be
+    // merged without a per-position union that admits `f(number, number)` and
+    // `f(string, string)`, which neither overload declares. Not unifiable.
+    #[test]
+    fn allows_two_position_differing_overloads() {
+        assert!(
+            run_on(
+                "interface Foo {\n  \
+                 f(a: number, b: string): void;\n  \
+                 f(a: string, b: number): void;\n}"
+            )
+            .is_empty()
+        );
+    }
+
+    // Guard: a single differing parameter position with a shared return type is
+    // genuinely unifiable into `x: number | string`, so still fires.
+    #[test]
+    fn flags_single_position_differing_overloads() {
+        let diags = run_on(
+            "interface Foo {\n  \
+             f(x: number): void;\n  \
+             f(x: string): void;\n}",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Guard: a string-literal vs `string` first parameter where the listener type is
+    // *identical* differs at exactly one position, so the literal overload is
+    // subsumed and the pair is unifiable — must still fire (distinguishes the fix
+    // from a naive "literal-vs-string first param => exempt" carve-out).
+    #[test]
+    fn flags_literal_vs_string_with_identical_remaining_param() {
+        let diags = run_on(
+            "interface Foo {\n  \
+             off(event: 'error', listener: (e: unknown) => void): this\n  \
+             off(event: string, listener: (e: unknown) => void): this\n}",
         );
         assert_eq!(diags.len(), 1);
     }
