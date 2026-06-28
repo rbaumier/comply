@@ -501,11 +501,15 @@ fn read_uint(bytes: &[u8], i: &mut usize) -> Option<u32> {
 /// Extract source-file paths from a package.json script command value.
 ///
 /// Splits the command by whitespace and keeps tokens that end with a known
-/// source extension (`.ts`, `.tsx`, `.mts`, `.js`, `.mjs`, `.cjs`). Leading
-/// `./` is stripped so callers can compare against project-root-relative paths.
+/// source extension (`.ts`, `.tsx`, `.mts`, `.js`, `.mjs`, `.cjs`). Surrounding
+/// shell quotes are trimmed first so a quoted subcommand fragment (e.g.
+/// `concurrently "node ./scripts/watch.mjs"` splits to `./scripts/watch.mjs"`)
+/// still matches its extension. Leading `./` is stripped so callers can compare
+/// against project-root-relative paths.
 fn extract_script_entry_files(cmd: &str) -> Vec<String> {
     const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs"];
     cmd.split_whitespace()
+        .map(|token| token.trim_matches(|c| c == '"' || c == '\''))
         .filter(|token| SOURCE_EXTS.iter().any(|ext| token.ends_with(ext)))
         .map(|token| token.strip_prefix("./").unwrap_or(token).to_string())
         .collect()
@@ -6789,6 +6793,48 @@ mod tests {
         assert!(ctx.is_script_entry_file(&dir.path().join("build.ts")));
         // A sibling library module the scripts never invoke is not.
         assert!(!ctx.is_script_entry_file(&dir.path().join("src/load.ts")));
+    }
+
+    #[test]
+    fn extract_script_entry_files_strips_shell_quotes() {
+        // Regression for #6591: a `concurrently "..." "node ./scripts/x.mjs"`
+        // command splits the quoted subcommand into `"node` and
+        // `./scripts/watchAndCopy.mjs"`; without trimming the trailing quote the
+        // `.mjs` extension check misses the entry. The returned path must be
+        // quote-free so callers can compare it against project-relative paths.
+        assert_eq!(
+            extract_script_entry_files(
+                r#"concurrently "vite build --watch" "node ./scripts/watchAndCopy.mjs""#
+            ),
+            vec!["scripts/watchAndCopy.mjs".to_string()]
+        );
+        // An unquoted command still resolves (no regression).
+        assert_eq!(
+            extract_script_entry_files("node ./scripts/build.mjs"),
+            vec!["scripts/build.mjs".to_string()]
+        );
+        // A path quoted on both sides de-quotes once.
+        assert_eq!(
+            extract_script_entry_files(r#"node "./scripts/build.mjs""#),
+            vec!["scripts/build.mjs".to_string()]
+        );
+        // A command with no source-extension token extracts nothing.
+        assert!(extract_script_entry_files("eslint .").is_empty());
+    }
+
+    #[test]
+    fn is_script_entry_file_recognizes_quoted_concurrently_entry() {
+        // Regression for #6591: histoire's `watchAndCopy.mjs`, invoked as a
+        // quoted `node ./scripts/watchAndCopy.mjs` subcommand of `concurrently`.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"histoire-app","scripts":{"watch":"concurrently \"vite build --watch\" \"node ./scripts/watchAndCopy.mjs\""}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_script_entry_file(&dir.path().join("scripts/watchAndCopy.mjs")));
     }
 
     #[test]
