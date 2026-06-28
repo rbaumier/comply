@@ -58,57 +58,6 @@ fn is_trivial_nullable_union(types: &[TSType]) -> bool {
     types.iter().any(is_null_or_undefined)
 }
 
-/// True when `ident` (a type-position identifier) resolves to a symbol whose
-/// declaration node is a `TSTypeParameter` — i.e. a generic parameter bound to
-/// an enclosing class, function, interface, or type-alias scope.
-fn resolves_to_type_parameter(
-    ident: &oxc_ast::ast::IdentifierReference,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let decl = scoping.symbol_declaration(sym_id);
-    matches!(semantic.nodes().kind(decl), AstKind::TSTypeParameter(_))
-}
-
-/// True when `ty` references at least one enclosing-scope type parameter,
-/// looking through union/intersection members and into generic type arguments
-/// (so `CTEBuilderCallback<N>` is seen to reference `N`). Such an expression is
-/// instantiation-dependent: identical source text denotes a different concrete
-/// type per instantiation, so extracting it to a module-level alias only renames
-/// the duplication — and TypeScript forbids a class-body-local alias anyway.
-fn references_enclosing_type_parameter(t: &TSType, semantic: &oxc_semantic::Semantic) -> bool {
-    use oxc_ast::ast::TSTypeName;
-    match t {
-        TSType::TSTypeReference(tref) => {
-            if let TSTypeName::IdentifierReference(id) = &tref.type_name
-                && resolves_to_type_parameter(id, semantic)
-            {
-                return true;
-            }
-            tref.type_arguments.as_ref().is_some_and(|args| {
-                args.params
-                    .iter()
-                    .any(|p| references_enclosing_type_parameter(p, semantic))
-            })
-        }
-        TSType::TSUnionType(u) => u
-            .types
-            .iter()
-            .any(|m| references_enclosing_type_parameter(m, semantic)),
-        TSType::TSIntersectionType(i) => i
-            .types
-            .iter()
-            .any(|m| references_enclosing_type_parameter(m, semantic)),
-        _ => false,
-    }
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [crate::rules::backend::AstType] {
         &[]
@@ -185,10 +134,9 @@ impl OxcCheck for Check {
             // textual occurrence is a different concrete type per instantiation,
             // and TypeScript forbids hoisting them to a class-body-local alias —
             // a module-level generic alias only renames the duplication.
-            if members
-                .iter()
-                .any(|m| references_enclosing_type_parameter(m, semantic))
-            {
+            if members.iter().any(|m| {
+                crate::oxc_helpers::type_references_enclosing_type_parameter(m, semantic)
+            }) {
                 continue;
             }
 
