@@ -227,6 +227,47 @@ pub fn groups_destructure_keys(source: &str) -> FxHashSet<String> {
     keys
 }
 
+/// True when the file spreads an entire `<expr>.groups` object anywhere, e.g.
+/// `{ ...match.groups, code: match[0] }` (the unjs/mlly `matchAll` pattern). A
+/// spread copies every key of the `.groups` object, so each named capturing
+/// group flows out as a property with no individual `.groups.name` read or
+/// `{ name } = .groups` destructure. The specific group names are unknowable
+/// from a spread, so — consistent with [`groups_destructure_keys`]'s
+/// conservative, file-level stance — a single such spread marks every named
+/// group in the file as referenced.
+///
+/// Matches the AST shape of a `SpreadElement` (object `{ ...x.groups }`, array
+/// `[ ...x.groups ]`, or call `f(...x.groups)`) whose argument is a member
+/// access whose final property is `groups` (`...match.groups`, `...m?.groups`).
+/// A direct `match.groups.year` read or a `{ name } = m.groups` destructure is
+/// not a `SpreadElement` argument, so neither matches here.
+#[must_use]
+pub fn file_has_groups_spread(semantic: &Semantic) -> bool {
+    use oxc_ast::AstKind;
+    semantic.nodes().iter().any(|node| {
+        let AstKind::SpreadElement(spread) = node.kind() else {
+            return false;
+        };
+        expression_ends_in_groups_member(&spread.argument)
+    })
+}
+
+/// True when `expr` is a member access whose final property is `groups`
+/// (`x.groups`, `re.exec(s).groups`, `m?.groups`). Unwraps a leading optional
+/// `ChainExpression` so `...m?.groups` is recognised alongside `...m.groups`.
+fn expression_ends_in_groups_member(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::{ChainElement, Expression};
+    match expr {
+        Expression::StaticMemberExpression(member) => member.property.name.as_str() == "groups",
+        Expression::ChainExpression(chain) => matches!(
+            &chain.expression,
+            ChainElement::StaticMemberExpression(member)
+                if member.property.name.as_str() == "groups"
+        ),
+        _ => false,
+    }
+}
+
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
