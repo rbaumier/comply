@@ -5,14 +5,16 @@
 //! terminators, so case-less scripts (Chinese, Japanese, Korean) are not
 //! flagged.
 //!
-//! A single-line `/** … */` comment documenting a property/field signature —
-//! a `TSPropertySignature` in an interface or type literal, or a class
+//! A `/** … */` comment whose description (the prose before the first `@tag`)
+//! is a single line and that documents a property/field signature — a
+//! `TSPropertySignature` in an interface or type literal, or a class
 //! `PropertyDefinition` — is a field label, not prose, so the terminal-
 //! punctuation requirement is not applied to it: idiomatic TypeScript writes
 //! such labels as noun phrases without a closing period
-//! (`/** Timeout in milliseconds */`). The capital-letter check still applies,
-//! and a multi-line/prose property doc, or any function/method doc, still
-//! requires a complete sentence.
+//! (`/** Timeout in milliseconds */`). This holds even when `@default`/`@type`/
+//! `@example`/`@docs` tags push the raw comment onto multiple lines. The
+//! capital-letter check still applies, and a multi-line prose property
+//! description, or any function/method doc, still requires a complete sentence.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -115,9 +117,9 @@ fn drop_trailing_code_block_label(description_lines: &mut Vec<(String, usize)>) 
 
 /// Collect the byte-offset start of every property/field-signature node: a
 /// `TSPropertySignature` (interface or type-literal member) or a class
-/// `PropertyDefinition`. A single-line JSDoc comment immediately preceding one
-/// of these documents a field label, not prose, so its terminal-punctuation
-/// requirement is waived.
+/// `PropertyDefinition`. A JSDoc comment with a single-line description
+/// immediately preceding one of these documents a field label, not prose, so
+/// its terminal-punctuation requirement is waived.
 fn property_node_starts(semantic: &oxc_semantic::Semantic) -> Vec<usize> {
     semantic
         .nodes()
@@ -130,10 +132,10 @@ fn property_node_starts(semantic: &oxc_semantic::Semantic) -> Vec<usize> {
         .collect()
 }
 
-/// Whether a single-line JSDoc comment ending at `comment_end` immediately
-/// precedes a property/field-signature node — only whitespace separates the
-/// comment's end from the node's start. Such a comment is a field label, so the
-/// terminal-punctuation check is waived for it.
+/// Whether a JSDoc comment ending at `comment_end` immediately precedes a
+/// property/field-signature node — only whitespace separates the comment's end
+/// from the node's start. Combined with a single-line description, such a
+/// comment is a field label, so the terminal-punctuation check is waived for it.
 fn precedes_property(
     comment_end: usize,
     property_starts: &[usize],
@@ -202,13 +204,14 @@ impl OxcCheck for Check {
             // text does not use ASCII terminators, and short phrases routinely
             // carry no closing mark at all, so requiring one is meaningless.
             //
-            // A single-line `/** … */` comment documenting a property/field
+            // A `/** … */` comment whose description (the prose before the
+            // first `@tag`) is a single line and that documents a property/field
             // signature is a field label, not prose, so the noun-phrase style
-            // without a closing period is idiomatic and exempt. A multi-line
-            // property doc, or any non-property doc, still requires terminal
-            // punctuation.
-            let is_single_line = !raw.contains('\n');
-            let is_property_label = is_single_line
+            // without a closing period is idiomatic and exempt — even when
+            // `@default`/`@type`/`@example`/`@docs` tags make the raw comment
+            // span multiple lines. A multi-line prose description on a property,
+            // or any non-property doc, still requires terminal punctuation.
+            let is_property_label = description_lines.len() == 1
                 && precedes_property(comment.span.end as usize, &property_starts, ctx.source);
             let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
             if let Some(ch) = last_text.trim_end().chars().last()
@@ -529,6 +532,70 @@ export interface ExampleFile {
         // A single-line doc on a function is prose, not a field label, so it
         // still requires terminal punctuation.
         let source = "/** Adds two numbers */\nfunction add(a: number, b: number) {}";
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn allows_single_line_description_property_label_with_tags() {
+        // Regression for rbaumier/comply#6449 — a noun-phrase label on an
+        // interface property whose description (before the first `@tag`) is a
+        // single line must not be flagged, even though `@default`/`@type`/
+        // `@example`/`@docs` tags make the raw comment span multiple lines.
+        let source = r#"
+export interface ModuleOptions {
+  /**
+   * Supabase API URL
+   * @default process.env.NUXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
+   * @example 'https://*.supabase.co'
+   * @type string
+   * @docs https://supabase.com/docs/reference/javascript/initializing#parameters
+   */
+  url: string
+
+  /**
+   * Redirect automatically to login page if user is not authenticated
+   * @default `true`
+   * @type boolean
+   */
+  redirect?: boolean
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_multi_line_description_property_label_with_tags() {
+        // The exemption is only for a single-line description — a multi-line
+        // prose description on a property still requires terminal punctuation,
+        // even when `@tag` annotations follow it.
+        let source = r#"
+export interface ModuleOptions {
+  /**
+   * The absolute path to the example file on disk, resolved relative to the
+   * project root before the examples are collected
+   * @default ""
+   * @type string
+   */
+  path: string
+}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_function_doc_with_tags_missing_punctuation() {
+        // A single-line description on a function (not a property), even with
+        // trailing tags, is prose and still requires terminal punctuation.
+        let source = r#"
+/**
+ * Adds two numbers
+ * @param a the first number
+ * @returns the sum
+ */
+function add(a: number, b: number) {}
+"#;
         let d = run_on(source);
         assert!(d.iter().any(|d| d.message.contains("end with")));
     }
