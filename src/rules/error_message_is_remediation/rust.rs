@@ -8,7 +8,8 @@
 //! signals rather than user-facing errors.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, trait_base_name};
+use tree_sitter::Node;
 
 const VERBS: &[&str] = &[
     "is", "are", "was", "were", "be", "been", "has", "have", "had", "do", "does", "did", "will",
@@ -26,6 +27,50 @@ fn has_verb(msg: &str) -> bool {
         .any(|v| lower.split_whitespace().any(|w| w == *v))
 }
 
+/// True if `node` sits in the body of a `fn default()` whose enclosing `impl`
+/// is an `impl Default for T` block.
+///
+/// The `Default` supertrait is often a mandatory bound on a marker trait, so the
+/// impl must exist even when the type is a zero-variant (uninhabited) marker that
+/// can never be instantiated. The `default()` body is then an unreachable stub
+/// that panics — a trait-satisfaction placeholder, not a user-facing error — so
+/// its message need not read as remediation.
+///
+/// Only a trait impl qualifies: the nearest enclosing `impl_item` must carry a
+/// `trait` field resolving to `Default` (bare `Default` or a path ending in it,
+/// e.g. `core::default::Default`). An inherent `impl T { fn default() {} }` has no
+/// `trait` field and does not qualify.
+fn is_in_default_trait_stub(node: Node, source: &[u8]) -> bool {
+    // Nearest enclosing function must be named `default`.
+    let mut current = node.parent();
+    let func = loop {
+        let Some(ancestor) = current else { return false };
+        if ancestor.kind() == "function_item" {
+            break ancestor;
+        }
+        current = ancestor.parent();
+    };
+    let is_default_fn = func
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        == Some("default");
+    if !is_default_fn {
+        return false;
+    }
+    // That function's enclosing impl must be a trait impl for `Default`.
+    let mut current = func.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            return ancestor
+                .child_by_field_name("trait")
+                .and_then(|t| trait_base_name(t, source))
+                .is_some_and(|name| name == "Default");
+        }
+        current = ancestor.parent();
+    }
+    false
+}
+
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(mac) = node.child_by_field_name("macro") else { return };
     let Ok(mac_name) = mac.utf8_text(source) else { return };
@@ -40,6 +85,11 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     // a test failure, not a user-facing error — they need not read as
     // remediation.
     if is_in_test_context(node, source) { return; }
+
+    // A `panic!` that is the body of `fn default()` inside an `impl Default for T`
+    // block is an unreachable trait-satisfaction stub (the `Default` supertrait is
+    // mandatory but the type may be uninhabited), not a user-facing error.
+    if is_in_default_trait_stub(node, source) { return; }
 
     let Ok(full_text) = node.utf8_text(source) else { return };
 
@@ -188,5 +238,56 @@ mod tests {
             run_on(r#"fn f() { bail!("something wonky happened somewhere"); }"#).len(),
             1
         );
+    }
+
+    #[test]
+    fn ignores_panic_in_default_trait_stub() {
+        // BurntSushi/byteorder #6532: `BigEndian` is a zero-variant marker enum;
+        // the `ByteOrder` trait requires `Default`, so this impl is mandatory but
+        // structurally unreachable. The panic is a trait-satisfaction stub.
+        let source = r#"impl Default for BigEndian {
+    fn default() -> BigEndian {
+        panic!("BigEndian default")
+    }
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_panic_in_default_trait_stub_path_qualified() {
+        let source = r#"impl core::default::Default for LittleEndian {
+    fn default() -> LittleEndian {
+        panic!("LittleEndian default")
+    }
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_panic_in_default_inherent_impl() {
+        // Inherent `impl T { fn default() {} }` has no trait field — not a
+        // `Default` trait stub, so a vague panic still flags.
+        let source = r#"impl BigEndian {
+    fn default() -> BigEndian {
+        panic!("oops")
+    }
+}"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_panic_in_non_default_fn_of_impl_default() {
+        // A vague panic in a non-`default` method sitting inside the same
+        // `impl Default` block is not the trait stub and still flags; the
+        // exempt `default()` stub in the block does not.
+        let source = r#"impl Default for BigEndian {
+    fn default() -> BigEndian {
+        panic!("BigEndian default")
+    }
+    fn helper() -> BigEndian {
+        panic!("oops")
+    }
+}"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 }
