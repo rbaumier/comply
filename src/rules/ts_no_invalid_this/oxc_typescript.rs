@@ -216,6 +216,7 @@ fn is_cypress_callback(
 /// is the documented Chai plugin API.
 const CHAI_REGISTRATION_METHODS: &[&str] = &[
     "addMethod", "addProperty", "overwriteMethod", "overwriteProperty",
+    "addChainableMethod", "overwriteChainableMethod",
 ];
 
 /// True when `expr` is a `chai.Assertion` receiver — either the bare `Assertion`
@@ -257,6 +258,67 @@ fn is_chai_registration_callback(
         return false;
     }
     is_chai_assertion_receiver(&member.object)
+}
+
+/// True when the reference at `ref_node_id` sits in argument position of a Chai
+/// plugin-registration call (`Assertion.addChainableMethod('an', an)`). The
+/// reference's nearest enclosing `CallExpression` must have a member callee whose
+/// property is in `CHAI_REGISTRATION_METHODS` and whose receiver is a
+/// `chai.Assertion`, and the reference itself must be inside one of that call's
+/// arguments (not its callee). Chai invokes the registered function with `this`
+/// bound to the Assertion instance, so passing a function's name here makes its
+/// body a plugin-method body.
+fn reference_is_chai_registration_arg(
+    ref_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let ref_span = nodes.kind(ref_node_id).span();
+    let Some(call) = nodes.ancestors(ref_node_id).find_map(|ancestor| match ancestor.kind() {
+        AstKind::CallExpression(call) => Some(call),
+        _ => None,
+    }) else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !CHAI_REGISTRATION_METHODS.contains(&member.property.name.as_str()) {
+        return false;
+    }
+    if !is_chai_assertion_receiver(&member.object) {
+        return false;
+    }
+    call.arguments.iter().any(|arg| {
+        let arg_span = arg.span();
+        arg_span.start <= ref_span.start && ref_span.end <= arg_span.end
+    })
+}
+
+/// True when the standalone named `function` at `func` is registered as a Chai
+/// assertion callback by reference — its name is passed as an argument to a Chai
+/// plugin-registration call (`function an() {…}` then
+/// `Assertion.addChainableMethod('an', an)`). Chai invokes the registered
+/// function with `this` bound to the Assertion instance, so `this` in the body is
+/// the documented plugin API. This is the by-identifier registration form; the
+/// inline-callback form (`Assertion.addMethod('x', function () {…})`) is handled
+/// by `is_chai_registration_callback`. The function's name symbol is resolved and
+/// its references enumerated via the symbol table — the same mechanism
+/// `is_constructor_function` uses to trace how a named function is later used.
+fn is_chai_registration_callback_by_reference(
+    func: &oxc_ast::ast::Function,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(id) = &func.id else {
+        return false;
+    };
+    let Some(symbol_id) = id.symbol_id.get() else {
+        return false;
+    };
+    semantic
+        .scoping()
+        .get_resolved_references(symbol_id)
+        .any(|reference| reference_is_chai_registration_arg(reference.node_id(), semantic))
 }
 
 /// Node EventEmitter listener-registration methods. Each invokes its callback
@@ -616,12 +678,19 @@ fn is_valid_this_context(
                 if is_cypress_callback(ancestor.id(), semantic) {
                     return true;
                 }
-                // Chai plugin registration: a `function` passed to
-                // `chai.Assertion.addMethod`/`addProperty`/`overwriteMethod`/
-                // `overwriteProperty` is invoked with `this` bound to the
-                // Assertion instance — the documented plugin API — so `this`
-                // is valid.
+                // Chai plugin registration: a `function` passed to a Chai
+                // plugin-registration method (`addMethod`/`addProperty`/
+                // `addChainableMethod`/`overwriteMethod`/`overwriteProperty`/
+                // `overwriteChainableMethod`) on a `chai.Assertion` receiver is
+                // invoked with `this` bound to the Assertion instance — the
+                // documented plugin API — so `this` is valid. The inline form
+                // passes the function directly; the by-reference form passes a
+                // named function declaration by identifier
+                // (`function an() {…}; Assertion.addChainableMethod('an', an)`).
                 if is_chai_registration_callback(ancestor.id(), semantic) {
+                    return true;
+                }
+                if is_chai_registration_callback_by_reference(func, semantic) {
                     return true;
                 }
                 // EventEmitter listener callback: a `function` passed to a
@@ -1087,6 +1156,56 @@ mod tests {
         // Negative-space guard for #1549: `addMethod` on a non-Assertion
         // receiver is not the Chai API — `this` stays unbound and must fire.
         let diags = run_on("registry.addMethod('x', function () {\n  return this._obj;\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_chai_add_chainable_method_callback_by_reference() {
+        // Regression for #6445: chai's `lib/chai/core/assertions.js` declares
+        // named functions that use `this` and registers them by identifier
+        // (`function an(...) { this.assert(...) }` then
+        // `Assertion.addChainableMethod('an', an)`). Chai invokes the function
+        // with `this` bound to the Assertion instance, so the body's `this` is
+        // valid even though the function node is not itself a call argument.
+        let src = "function an(type, msg) {\n  if (msg) flag(this, 'message', msg);\n  this.assert(type === detectedType, 'expected #{this} to be a ' + type);\n}\nAssertion.addChainableMethod('an', an);\nAssertion.addChainableMethod('a', an);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_chai_add_chainable_method_inline_callback() {
+        // Regression for #6445: the chainable-method names also exempt the inline
+        // form (`Assertion.addChainableMethod('x', function () {…})`), since both
+        // the direct-argument and by-reference paths read the same method set.
+        let src = "Assertion.addChainableMethod('x', function () {\n  return this._obj;\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_chai_overwrite_chainable_method_callback_by_reference() {
+        // Regression for #6445: the `overwriteChainableMethod` registration and
+        // the `chai.Assertion` member receiver bind `this` the same way when the
+        // callback is passed by identifier reference.
+        let src = "function lengthOf() {\n  return this._obj.length;\n}\nchai.Assertion.overwriteChainableMethod('length', lengthOf, chainer);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_named_function_never_registered_with_chai() {
+        // Negative-space guard for #6445: a named function that uses `this` but is
+        // never passed to a Chai registration method has no bound `this` — must
+        // still fire. `an` is referenced only by an ordinary call here.
+        let src = "function an(type) {\n  return this.assert(type);\n}\nan('number');";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_named_function_registered_with_non_chai_method() {
+        // Negative-space guard for #6445: passing the function's name to a
+        // non-Chai registration call (a `registry.addChainableMethod` on a
+        // non-Assertion receiver) does not bind `this` — must still fire.
+        let src = "function an(type) {\n  return this.assert(type);\n}\nregistry.addChainableMethod('an', an);";
+        let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
 
