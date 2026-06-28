@@ -4,6 +4,9 @@
 //! treated as non-empty (the comment is the "intentionally empty" signal).
 //! Dependency-injection constructors — whose parameters carry an accessibility
 //! modifier, `readonly`, or a decorator — are exempt: the parameters are the work.
+//! Empty method stubs in a type-constrained object literal (`const x: T = { m:
+//! () => {} }`, `{ … } satisfies T`, `{ … } as T`) are exempt: the constraining
+//! interface makes them mandatory no-op implementations (Null Object pattern).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -52,6 +55,68 @@ fn is_placeholder_callback_position(
             )
         }
         _ => false,
+    }
+}
+
+/// Returns true when the type pins the object to an interface shape. `any`,
+/// `unknown`, and the `as const` const-assertion do not — they make no method
+/// mandatory — so they are not interface constraints.
+fn ts_type_constrains(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    match ty {
+        TSType::TSAnyKeyword(_) | TSType::TSUnknownKeyword(_) => false,
+        TSType::TSTypeReference(r) => !matches!(
+            &r.type_name,
+            TSTypeName::IdentifierReference(id) if id.name.as_str() == "const"
+        ),
+        _ => true,
+    }
+}
+
+/// Returns true when the function is the value of an object-literal property
+/// whose enclosing object literal is type-constrained — either the initializer
+/// of a typed `const x: T = { … }`, or wrapped in a `satisfies T` / `as T`
+/// assertion. The empty bodies are then mandatory no-op stubs of the
+/// constraining interface's methods (Null Object pattern), not dead code.
+fn is_typed_object_literal_method_stub(
+    nodes: &oxc_semantic::AstNodes,
+    node_id: oxc_semantic::NodeId,
+) -> bool {
+    let prop_id = nodes.parent_id(node_id);
+    if prop_id == node_id {
+        return false;
+    }
+    let AstKind::ObjectProperty(prop) = nodes.kind(prop_id) else {
+        return false;
+    };
+    // The function must be the property VALUE, not a computed key.
+    if prop.value.span() != nodes.kind(node_id).span() {
+        return false;
+    }
+    let obj_id = nodes.parent_id(prop_id);
+    if obj_id == prop_id || !matches!(nodes.kind(obj_id), AstKind::ObjectExpression(_)) {
+        return false;
+    }
+    // Walk up from the object literal, peeling assertion / paren wrappers, to
+    // find a type constraint on the literal itself.
+    let mut current = obj_id;
+    loop {
+        let parent = nodes.parent_id(current);
+        if parent == current {
+            return false;
+        }
+        match nodes.kind(parent) {
+            AstKind::TSSatisfiesExpression(e) => return ts_type_constrains(&e.type_annotation),
+            AstKind::TSAsExpression(e) => return ts_type_constrains(&e.type_annotation),
+            AstKind::ParenthesizedExpression(_) => current = parent,
+            AstKind::VariableDeclarator(decl) => {
+                return decl
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ts_type_constrains(&ann.type_annotation));
+            }
+            _ => return false,
+        }
     }
 }
 
@@ -104,6 +169,13 @@ impl OxcCheck for Check {
         }
 
         if !is_empty_body(body, semantic) {
+            return;
+        }
+
+        // Empty method stubs in a type-constrained object literal are mandatory
+        // no-op implementations of the constraining interface's methods (Null
+        // Object pattern), not dead code.
+        if is_typed_object_literal_method_stub(semantic.nodes(), node.id()) {
             return;
         }
 
@@ -312,6 +384,94 @@ mod tests {
             }
         "#;
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "foo.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_stubs_in_typed_object_literal() {
+        // Repro #6275: Null-Object stubs of an interface in a typed object literal.
+        let src = r#"
+            const inertActorScope: ActorScope<X> = {
+                defer: () => {},
+                logger: () => {},
+                emit: () => {},
+            };
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "actorScope.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_stubs_in_object_literal_with_satisfies() {
+        let src = r#"
+            const x = { m: () => {} } satisfies SomeIface;
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_stubs_in_object_literal_with_as() {
+        let src = r#"
+            const y = { m: () => {} } as SomeIface;
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_function_expression_stub_in_typed_object_literal() {
+        let src = r#"
+            const x: SomeIface = { m: function () {} };
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_empty_arrow_in_untyped_object_literal() {
+        // Negative space (the key distinction): an UNTYPED object literal's empty
+        // arrow may be a forgotten ad-hoc handler — still flagged.
+        let src = r#"
+            const handlers = { onClick: () => {} };
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_arrow_in_object_literal_with_as_const() {
+        // Negative space: `as const` is a const-assertion, not an interface
+        // constraint — the empty arrow may be a forgotten handler, still flagged.
+        let src = r#"
+            const handlers = { onClick: () => {} } as const;
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_arrow_in_object_literal_with_as_any() {
+        // Negative space: `as any` is an escape hatch, not an interface constraint.
+        let src = r#"
+            const handlers = { onClick: () => {} } as any;
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_function_declaration_outside_object_literal() {
+        let src = r#"
+            function foo() {}
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_arrow_in_variable_init() {
+        // Negative space: a variable init (not an object property) still flags.
+        let src = r#"
+            const f = () => {};
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(diags.len(), 1);
     }
 }
