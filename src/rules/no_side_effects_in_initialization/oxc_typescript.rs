@@ -1384,6 +1384,41 @@ fn is_process_signal_handler_call(call: &oxc_ast::ast::CallExpression) -> bool {
     )
 }
 
+/// True when `call` is a module-scope listener registration on the Node.js
+/// Worker thread parent port: a `parentPort.on(...)` member call whose receiver
+/// `parentPort` resolves (via the symbol table) to an import from
+/// `"worker_threads"` or `"node:worker_threads"`.
+///
+/// In a Worker thread module, `parentPort.on('message', …)` at module scope is
+/// the thread's entry point — the only way to receive messages from the parent —
+/// with no lifecycle callback to defer it into, exactly like `app.listen(…)` is a
+/// server's entry point. The provenance check (binding resolves to a
+/// `worker_threads` import) anchors the exemption: a same-named local binding
+/// (`const parentPort = makeThing(); parentPort.on(…)`) does not resolve to that
+/// import and stays flagged, and any other `emitter.on(…)` is unaffected.
+fn is_worker_thread_port_handler_call(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if m.property.name != "on" {
+        return false;
+    }
+    let Expression::Identifier(obj) = &m.object else {
+        return false;
+    };
+    if obj.name != "parentPort" {
+        return false;
+    }
+    crate::oxc_helpers::resolves_to_import_from(
+        obj,
+        semantic,
+        &["worker_threads", "node:worker_threads"],
+    )
+}
+
 /// True when `call` is a library plugin-registration call: a member call
 /// `recv.<name>(...)` whose method is one of a small curated set of unambiguous
 /// plugin-registration idioms — `extend` (dayjs's `dayjs.extend(plugin)`) or
@@ -2475,6 +2510,7 @@ impl OxcCheck for Check {
                 && (is_start_transition_call(call, &start_transition_names)
                     || is_vue_reactivity_setup_call(call, &vue_reactivity_names)
                     || is_process_signal_handler_call(call)
+                    || is_worker_thread_port_handler_call(call, semantic)
                     || is_library_plugin_registration_call(call)
                     || is_commander_subcommand_chain(call)
                     || is_data_init_foreach(call, &module_locals)
@@ -5703,6 +5739,78 @@ precacheAndRoute(entries)
             diags.len(),
             1,
             "a call to an imported (non-local) helper must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn skips_worker_thread_parent_port_handler() {
+        // Issue #6592: in a Node.js Worker thread module, a module-scope
+        // `parentPort.on('message', …)` is the thread's entry point — the only way
+        // to receive messages from the parent — with no lifecycle callback to
+        // defer it into. Exempt when `parentPort` resolves to a `worker_threads`
+        // import, covering both the `node:` prefixed and bare specifiers.
+        for module in ["node:worker_threads", "worker_threads"] {
+            let src = format!(
+                "import {{ parentPort }} from '{module}';\n\
+                 parentPort.on('message', (message) => {{ handle(message); }});\n"
+            );
+            let diags = crate::rules::test_helpers::run_rule(
+                &Check,
+                &src,
+                "src/node/collect/worker.ts",
+            );
+            assert!(
+                diags.is_empty(),
+                "parentPort.on from {module} must be exempt, got {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_on_handler_not_from_worker_threads() {
+        // Negative-space guard: an `emitter.on(…)` whose receiver is not the
+        // worker_threads parent port (here an imported event emitter) is a genuine
+        // top-level side effect and must still fire.
+        let src = "\
+            import { emitter } from './bus';\n\
+            emitter.on('x', () => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an .on(…) on a non-worker_threads receiver must still flag, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_parent_port_imported_from_wrong_module() {
+        // Provenance anchor: a `parentPort` with the right name but imported from
+        // an unrelated module does not resolve to `worker_threads`, so its `.on(…)`
+        // stays flagged.
+        let src = "\
+            import { parentPort } from './local';\n\
+            parentPort.on('message', () => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "parentPort.on imported from a non-worker_threads module must still flag, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_local_same_named_parent_port() {
+        // Provenance anchor: a local `const parentPort = makeThing()` shares the
+        // name but does not resolve to a worker_threads import, so its `.on(…)`
+        // stays flagged.
+        let src = "\
+            const parentPort = makeThing();\n\
+            parentPort.on('message', () => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a same-named local parentPort.on(…) must still flag, got {diags:?}"
         );
     }
 }
