@@ -1502,6 +1502,123 @@ fn reference_is_member_object(
     }
 }
 
+/// True when `member` is `<el>.innerHTML` and `<el>` is a detached element minted
+/// by `document.createElement(...)` that is used solely as an HTML→text parser:
+/// the only references to `<el>` are this single `.innerHTML` write and reads of
+/// `.textContent` / `.innerText`. Such an element never reaches the live DOM, so
+/// the assignment parses HTML into plain text rather than feeding an XSS sink.
+///
+/// Conservative by construction (bias to flag): the binding must be a `const`
+/// initialised from `document.createElement(...)`, and EVERY one of its resolved
+/// references must be either this exact `.innerHTML` write (matched by span) or a
+/// `.textContent` / `.innerText` member access. ANY other reference — an
+/// insertion-method receiver (`el.appendChild(...)`), a call argument
+/// (`document.body.appendChild(el)`), a `return el`, a reassignment, a second
+/// `.innerHTML` write, a read of `.innerHTML`, a computed access, or any other
+/// property — makes this return `false` so the write keeps flagging. A non-`const`
+/// binding or a non-`createElement` origin (parameter, `getElementById`,
+/// `querySelector`, member chain) also returns `false`.
+#[must_use]
+pub fn assignment_target_is_detached_text_parser(
+    member: &oxc_ast::ast::StaticMemberExpression,
+    semantic: &Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, VariableDeclarationKind};
+
+    if member.property.name.as_str() != "innerHTML" {
+        return false;
+    }
+    let Expression::Identifier(ident) = &member.object else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    // Origin must be `const el = document.createElement(...)`. A `let`/`var`
+    // binding, a parameter, or any non-`createElement` initializer fails closed.
+    let AstKind::VariableDeclarator(decl) = nodes.kind(scoping.symbol_declaration(sym_id)) else {
+        return false;
+    };
+    if decl.kind != VariableDeclarationKind::Const
+        || !decl.init.as_ref().is_some_and(initializer_is_create_element)
+    {
+        return false;
+    }
+    // The flagged write is identified by its span, so a *different* `.innerHTML`
+    // access on `el` (a second write or a read) is rejected as a non-text use.
+    // Exempt only when EVERY reference is the write or a `.textContent`/
+    // `.innerText` read AND at least one such read exists — positive evidence the
+    // element is an HTML→text parser, not a bare `div.innerHTML = x` sink.
+    let write_span = member.span;
+    let mut saw_text_read = false;
+    for reference in scoping.get_resolved_references(sym_id) {
+        match classify_detached_reference(reference.node_id(), write_span, semantic) {
+            DetachedRefUse::TextRead => saw_text_read = true,
+            DetachedRefUse::Write => {}
+            DetachedRefUse::Escape => return false,
+        }
+    }
+    saw_text_read
+}
+
+/// How a reference to a candidate detached-parser element is used.
+enum DetachedRefUse {
+    /// A `.textContent` / `.innerText` member access — plain-text extraction.
+    TextRead,
+    /// The single flagged `.innerHTML` write (matched by span).
+    Write,
+    /// Anything else — the element escapes (call argument, return, reassignment,
+    /// computed access) or acts as a sink (a different property, a second
+    /// `.innerHTML` access).
+    Escape,
+}
+
+/// Classify the reference at `ref_node_id`: a `.textContent`/`.innerText` read,
+/// the `.innerHTML` write identified by `write_span`, or an escape/sink use.
+fn classify_detached_reference(
+    ref_node_id: oxc_semantic::NodeId,
+    write_span: oxc_span::Span,
+    semantic: &oxc_semantic::Semantic,
+) -> DetachedRefUse {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let ref_span = nodes.get_node(ref_node_id).kind().span();
+    let AstKind::StaticMemberExpression(member) = nodes.kind(nodes.parent_id(ref_node_id)) else {
+        return DetachedRefUse::Escape;
+    };
+    // The reference must be the receiver of the member access, not a nested use.
+    if member.object.span() != ref_span {
+        return DetachedRefUse::Escape;
+    }
+    match member.property.name.as_str() {
+        "textContent" | "innerText" => DetachedRefUse::TextRead,
+        "innerHTML" if member.span == write_span => DetachedRefUse::Write,
+        _ => DetachedRefUse::Escape,
+    }
+}
+
+/// Whether an initializer is `document.createElement(<tag>)` — the DOM API that
+/// mints a fresh, detached element (object `document`, property `createElement`).
+fn initializer_is_create_element(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(callee) = &call.callee else {
+        return false;
+    };
+    callee.property.name.as_str() == "createElement"
+        && matches!(&callee.object, Expression::Identifier(obj) if obj.name.as_str() == "document")
+}
+
 /// Calls whose result is an array: `[...].map(...)`, `Object.keys(o)`,
 /// `Array.from(x)`, `str.split(...)`, etc. Matched on the member/static method
 /// name of the callee.
