@@ -1,12 +1,27 @@
 //! prefer-global-this OXC backend — flag `window.X` / `self.X` / `global.X`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, source_contains};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when `src` carries a Nuxt-specific marker (auto-import alias, Nuxt
+/// composable, or a `defineNuxt*` macro). Used to gate the `.client.` file-name
+/// exemption to genuine Nuxt files, so a same-named module in an unrelated
+/// project (e.g. a Node-side gRPC `service.client.ts`) stays subject to the rule.
+fn is_nuxt_source(src: &str) -> bool {
+    source_contains(src, "#imports")
+        || source_contains(src, "nuxt/app")
+        || source_contains(src, "#app")
+        || source_contains(src, "defineNuxtConfig")
+        || source_contains(src, "defineNuxtPlugin")
+        || source_contains(src, "defineNuxtRouteMiddleware")
+        || source_contains(src, "useNuxtApp")
+        || source_contains(src, "useRuntimeConfig")
+}
 
 /// True if the project's `package.json` declares a browser-like runtime target.
 fn project_allows_window(
@@ -138,6 +153,19 @@ impl OxcCheck for Check {
         // per-directory memoised) — gate it behind the rare identifier match
         // above so the vast majority of `a.b` accesses skip it entirely.
         if project_allows_window(ctx.project, ctx.path) {
+            return;
+        }
+
+        // Nuxt strips `*.client.{ts,js}` files entirely from the SSR bundle, so
+        // they execute only in the browser and never during server rendering.
+        // The `.client.` filename convention is itself the environment guard, so
+        // a bare `window`/`self`/`global` there is correct by construction, not a
+        // portability oversight. Gated on a Nuxt source marker (the predicate's
+        // documented precondition) so an unrelated `*.client.ts` in a non-Nuxt
+        // project stays flagged.
+        if is_nuxt_source(ctx.source)
+            && crate::rules::path_utils::is_nuxt_client_only_file(ctx.path)
+        {
             return;
         }
 
@@ -531,6 +559,57 @@ mod tests {
             d.len(),
             1,
             "top-level `window.*` must stay flagged despite an unrelated `.toString()`: {d:?}"
+        );
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn ignores_window_in_nuxt_client_only_file() {
+        // Regression for #6539: a Nuxt `*.client.ts` plugin is stripped from the
+        // SSR bundle and runs only in the browser, so `window.*` is correct by
+        // construction (the `.client.` filename is the environment guard).
+        let src = "export default defineNuxtPlugin(() => {\n  \
+                   window.localStorage?.setItem('k', 'v');\n  \
+                   window.matchMedia('(prefers-color-scheme: dark)');\n\
+                   });";
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "src/runtime/plugin.client.ts",
+        );
+        assert!(
+            d.is_empty(),
+            "`window.*` in a Nuxt `.client.ts` file must not be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_window_in_plain_ts_file_negative_control() {
+        // Negative control for #6539: the same `window.*` usage in a plain
+        // `.ts` file (no `.client.` infix) still fires.
+        let src = "export default defineNuxtPlugin(() => {\n  \
+                   window.localStorage?.setItem('k', 'v');\n\
+                   });";
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "src/runtime/plugin.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "`window.*` in a plain `.ts` file must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn flags_window_in_non_nuxt_client_file() {
+        // Negative control for #6539: a `*.client.ts` file with NO Nuxt marker
+        // (e.g. a Node-side gRPC client) is not exempt — the exemption is gated
+        // on Nuxt detection, not the filename alone.
+        let src = "window.localStorage?.setItem('k', 'v');";
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "src/service.client.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "`window.*` in a non-Nuxt `.client.ts` file must still be flagged: {d:?}"
         );
         assert!(d[0].message.contains("globalThis"));
     }
