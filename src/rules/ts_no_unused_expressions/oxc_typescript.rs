@@ -429,10 +429,14 @@ fn is_member_access_on_this(expr: &Expression) -> bool {
     }
 }
 
-/// True when `expr` is a member-access chain whose innermost object is a call
-/// to a known assertion root — `expect` (Chai) or `expectTypeOf` / `assertType`
-/// (expect-type / Vitest). The terminating getter access is the assertion, such
-/// as `expect(x).to.be.true` or `expectTypeOf(x).toBeString`.
+/// True when `expr` is a member-access chain whose innermost object is itself
+/// side-effectful, so the whole chain statement is intentional:
+///   - a call to a known assertion root — `expect` (Chai) or `expectTypeOf` /
+///     `assertType` (expect-type / Vitest); the terminating getter access is the
+///     assertion, such as `expect(x).to.be.true` or `expectTypeOf(x).toBeString`.
+///   - a `new` expression (`new Assertion(val).is.ok`); the constructor call is
+///     side-effectful by construction, consistent with `has_side_effects`'s own
+///     treatment of a bare `new`, and the getter chain runs the assertion logic.
 fn chain_roots_at_assertion(expr: &Expression) -> bool {
     match expr {
         Expression::CallExpression(call) => {
@@ -442,6 +446,7 @@ fn chain_roots_at_assertion(expr: &Expression) -> bool {
                     if matches!(id.name.as_str(), "expect" | "expectTypeOf" | "assertType")
             )
         }
+        Expression::NewExpression(_) => true,
         Expression::StaticMemberExpression(m) => chain_roots_at_assertion(&m.object),
         Expression::ComputedMemberExpression(m) => chain_roots_at_assertion(&m.object),
         Expression::ParenthesizedExpression(p) => chain_roots_at_assertion(&p.expression),
@@ -538,6 +543,34 @@ mod tests {
         // A bare member-access chain NOT rooted at expect(...) is still unused.
         let d = run_on("foo.to.be.true;");
         assert_eq!(d.len(), 1);
+    }
+
+    // Regression #6448: a member-access chain whose innermost object is a `new`
+    // expression (`new Assertion(val).is.ok`, `new Assertion(val).is['true']`)
+    // is side-effectful by construction — the constructor runs and the getter
+    // chain runs the assertion logic. It must not be flagged. Covers both
+    // static (`.is.ok`) and computed (`.is['true']`) member access.
+    #[test]
+    fn allows_member_chain_rooted_at_new_expression_issue_6448() {
+        assert!(
+            run_on("new Assertion(val, msg, assert.isOk, true).is.ok;").is_empty(),
+            "{:?}",
+            run_on("new Assertion(val, msg, assert.isOk, true).is.ok;")
+        );
+        assert!(
+            run_on("new Assertion(val, msg, assert.isTrue, true).is['true'];").is_empty(),
+            "{:?}",
+            run_on("new Assertion(val, msg, assert.isTrue, true).is['true'];")
+        );
+    }
+
+    #[test]
+    fn still_flags_pure_member_chain_rooted_at_identifier_issue_6448() {
+        // A pure member chain rooted at a plain identifier (no side effect at the
+        // root) is still an unused expression — static and computed alike.
+        assert_eq!(run_on("obj.a.b;").len(), 1);
+        assert_eq!(run_on("obj.a['b'];").len(), 1);
+        assert_eq!(run_on("a === b;").len(), 1);
     }
 
     #[test]
