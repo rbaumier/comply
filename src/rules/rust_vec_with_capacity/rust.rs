@@ -18,7 +18,10 @@
 //! (`&v`). Every other iterable shape is skipped: lazy/fallible ones in
 //! particular (`make_items()`, `Iter::new(r)?`, `v.iter().filter(..)`) have no
 //! cheaply known length to size the capacity from, so `with_capacity(n)` can't
-//! be written.
+//! be written. A bare identifier that is a generic `IntoIterator` function
+//! parameter (`fn new<I>(input: I)` or `fn new(input: impl IntoIterator)`) is
+//! likewise skipped: it has no `.len()`, so `Vec::with_capacity(input.len())`
+//! would not compile.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -52,7 +55,7 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         } else {
             continue;
         };
-        if iterable_has_known_length(for_node)
+        if iterable_has_known_length(for_node, source)
             && let Some(body) = for_node.child_by_field_name("body")
             && body_directly_pushes(body, var_name, source)
             && !body_has_continue(body)
@@ -98,7 +101,13 @@ fn extract_var_name<'a>(pattern: tree_sitter::Node<'a>, source: &'a [u8]) -> Opt
 /// `call_expression` (`make_items()`), a `try_expression` (`Iter::new(r)?`), or
 /// an iterator-adaptor chain (`v.iter().filter(..)`, parsed as a
 /// `call_expression` whose function is a `field_expression`).
-fn iterable_has_known_length(for_node: tree_sitter::Node) -> bool {
+///
+/// A bare `identifier` is also skipped when it resolves to a function parameter
+/// whose declared type is a generic `IntoIterator` — a bare type parameter of
+/// the enclosing function (`fn new<I>(input: I)` with `I: IntoIterator`) or an
+/// argument-position `impl IntoIterator`: such a value has no `.len()`, so
+/// `Vec::with_capacity(input.len())` would not compile.
+fn iterable_has_known_length(for_node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(value) = for_node.child_by_field_name("value") else { return false; };
     let inner = if value.kind() == "reference_expression" {
         match value.child_by_field_name("value") {
@@ -108,7 +117,105 @@ fn iterable_has_known_length(for_node: tree_sitter::Node) -> bool {
     } else {
         value
     };
-    matches!(inner.kind(), "identifier" | "field_expression")
+    if !matches!(inner.kind(), "identifier" | "field_expression") {
+        return false;
+    }
+    if inner.kind() == "identifier" && iterable_is_generic_param(inner, source) {
+        return false;
+    }
+    true
+}
+
+/// Whether the iterable `ident` resolves to a parameter of the enclosing
+/// function whose declared type is a generic `IntoIterator` rather than a
+/// concrete collection, so it has no cheaply-known `.len()`. Two shapes match:
+/// a bare type parameter (`fn new<I>(input: I)` — the type is a
+/// `type_identifier` listed in the function's `<...>` generics) and an
+/// argument-position `impl Trait` (`fn new(input: impl IntoIterator<..>)` —
+/// the type is an `abstract_type`). A parameter typed as a concrete collection
+/// (`Vec<T>`, `&[T]`) is neither and keeps its known length. The match is by
+/// parameter name; a local `let` rebinding that name, or a closure boundary
+/// between the loop and the function, falls back to treating the length as
+/// known.
+fn iterable_is_generic_param(ident: tree_sitter::Node, source: &[u8]) -> bool {
+    let Ok(name) = ident.utf8_text(source) else { return false; };
+
+    let mut node = ident;
+    let fn_node = loop {
+        let Some(parent) = node.parent() else { return false; };
+        match parent.kind() {
+            "closure_expression" => return false,
+            "function_item" => break parent,
+            _ => node = parent,
+        }
+    };
+
+    let Some(params) = fn_node.child_by_field_name("parameters") else { return false; };
+    let generics = generic_param_names(fn_node, source);
+
+    let mut cursor = params.walk();
+    for param in params.named_children(&mut cursor) {
+        if param.kind() != "parameter" {
+            continue;
+        }
+        let Some(pattern) = param.child_by_field_name("pattern") else { continue; };
+        if extract_var_name(pattern, source) != Some(name) {
+            continue;
+        }
+        let Some(ty) = param.child_by_field_name("type") else { return false; };
+        let unsized_iterable = match ty.kind() {
+            "abstract_type" => true,
+            "type_identifier" => ty
+                .utf8_text(source)
+                .map(|t| generics.contains(&t))
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !unsized_iterable {
+            return false;
+        }
+        // A local `let <name> = ...` shadows the parameter: the iterable is then
+        // the local, whose length we don't reason about here, so keep current
+        // behavior. Checked only on a confirmed match to avoid the body walk in
+        // the common concrete-parameter case.
+        if let Some(body) = fn_node.child_by_field_name("body")
+            && body_binds_name(body, name, source)
+        {
+            return false;
+        }
+        return true;
+    }
+    false
+}
+
+/// The names of the enclosing function's generic type parameters (the
+/// `type_identifier` in each `type_parameter` of its `<...>` list). Lifetimes
+/// and const params are excluded.
+fn generic_param_names<'a>(fn_node: tree_sitter::Node, source: &'a [u8]) -> Vec<&'a str> {
+    let Some(type_params) = fn_node.child_by_field_name("type_parameters") else {
+        return Vec::new();
+    };
+    let mut cursor = type_params.walk();
+    type_params
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "type_parameter")
+        .filter_map(|child| child.child_by_field_name("name"))
+        .filter_map(|name| name.utf8_text(source).ok())
+        .collect()
+}
+
+/// Whether any `let` declaration in the subtree binds `name`, shadowing a
+/// same-named function parameter so the iterable is the local, not the param.
+fn body_binds_name(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if node.kind() == "let_declaration"
+        && let Some(pattern) = node.child_by_field_name("pattern")
+        && extract_var_name(pattern, source) == Some(name)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| body_binds_name(child, name, source))
 }
 
 fn is_push_call(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
@@ -340,6 +447,36 @@ mod tests {
     #[test]
     fn flags_assignment_to_different_var_issue_3792() {
         let src = "fn f(items: Vec<i32>) {\n    let mut v = Vec::new();\n    let mut n = 0;\n    for x in items {\n        v.push(x);\n        n = n + 1;\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_generic_into_iterator_param_issue_6554() {
+        let src = "fn new<I, S>(input: I) -> Result<()>\nwhere\n    I: IntoIterator<Item = S>,\n    S: AsRef<str>,\n{\n    let mut args = Vec::new();\n    for arg in input {\n        args.push(arg);\n    }\n    Ok(())\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_impl_into_iterator_param_issue_6554() {
+        let src = "fn new(input: impl IntoIterator<Item = u32>) {\n    let mut args = Vec::new();\n    for arg in input {\n        args.push(arg);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_concrete_vec_param_in_generic_fn() {
+        let src = "fn f<T>(items: Vec<T>) {\n    let mut v = Vec::new();\n    for x in items {\n        v.push(x);\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_concrete_slice_param_in_generic_fn() {
+        let src = "fn g<T>(items: &[T]) {\n    let mut v = Vec::new();\n    for x in items {\n        v.push(x);\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_local_shadows_generic_param() {
+        let src = "fn f<I>(input: I) {\n    let input = vec![1, 2, 3];\n    let mut v = Vec::new();\n    for x in input {\n        v.push(x);\n    }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
