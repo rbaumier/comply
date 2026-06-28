@@ -6,9 +6,13 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::regex_helpers::is_inside_char_class;
 use std::sync::Arc;
 
-/// Scans a regex pattern for assertions (`^`, `$`, `(?=...)`, `(?!...)`,
-/// `(?<=...)`, `(?<!...)`) inside a group whose quantifier is `?` or `*`
-/// (i.e. the group may match zero times, making the assertion a no-op).
+/// Scans a regex pattern for a position anchor (`^` or `$`) inside a group
+/// whose quantifier is `?` or `*` (i.e. the group may match zero times, so the
+/// anchor is a no-op the group can simply skip over).
+///
+/// Lookaround sub-patterns (`(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`) are
+/// not counted: they constrain what the group matches *when* it matches, so
+/// they stay meaningful even inside an optional group.
 ///
 /// `^` / `$` inside a `[...]` character class are literal members (or the
 /// negation marker for a leading `^`), never positional assertions, so they
@@ -41,28 +45,6 @@ fn has_optional_assertion(pattern: &str) -> bool {
                     _ => {}
                 }
                 j += 1;
-            }
-            // Check for lookaround `(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`
-            // anywhere inside the group.
-            if !has_assertion {
-                let mut k = i + 1;
-                while k + 2 < j {
-                    if bytes[k] == b'(' && bytes[k + 1] == b'?' {
-                        let c = bytes[k + 2];
-                        if c == b'=' || c == b'!' {
-                            has_assertion = true;
-                            break;
-                        }
-                        if c == b'<' && k + 3 < j {
-                            let d = bytes[k + 3];
-                            if d == b'=' || d == b'!' {
-                                has_assertion = true;
-                                break;
-                            }
-                        }
-                    }
-                    k += 1;
-                }
             }
             if depth == 0 && has_assertion && j + 1 < len {
                 let next = bytes[j + 1];
@@ -185,5 +167,29 @@ mod tests {
     fn still_flags_real_end_anchor_in_optional_group() {
         // `$` outside any char class, inside a `?`-quantified group: a real no-op.
         assert_eq!(run_on(r#"const re = /(?:abc$)?/;"#).len(), 1);
+    }
+
+    // --- Lookaround-only-in-optional-group regression tests (issue #6517). ---
+
+    #[test]
+    fn allows_lookahead_only_in_optional_group() {
+        // A lookahead constrains what the group matches when it matches, so it
+        // is not a no-op the optional group can skip.
+        assert!(run_on(r#"const re = /(?:foo(?=\s*"))?/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_lookbehind_only_in_optional_group() {
+        // A lookbehind likewise stays meaningful inside an optional group; the
+        // `(?<...)` named-group syntax must not be confused with it either.
+        assert!(run_on(r#"const re = /(?:(?<="\s*)foo)?/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_mlly_export_named_re() {
+        // unjs/mlly EXPORT_NAMED_RE: the optional `from "..."` group contains
+        // only lookaheads/lookbehinds around `<specifier>`, never `^`/`$`.
+        let src = r#"const EXPORT_NAMED_RE = /\bexport\s*{(?<exports>[^}]+?)[\s,]*}(?:\s*from\s*["']\s*(?<specifier>(?<="\s*)[^"]*[^\s"](?=\s*")|(?<='\s*)[^']*[^\s'](?=\s*'))\s*["'][^\n;]*)?/g;"#;
+        assert!(run_on(src).is_empty());
     }
 }
