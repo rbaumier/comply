@@ -41,6 +41,70 @@ fn receiver_is_zod_chain(expr: &Expression) -> bool {
     }
 }
 
+/// `Promise.all` / `Promise.allSettled` / `Promise.race` / `Promise.any` —
+/// a static member access whose object is the global `Promise` identifier.
+fn is_promise_combinator_callee(callee: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    obj.name.as_str() == "Promise"
+        && matches!(
+            member.property.name.as_str(),
+            "all" | "allSettled" | "race" | "any"
+        )
+}
+
+/// True when `node` (a `.catch()` call) is — through transparent wrappers
+/// (parens, `as`, `satisfies`, `!`) — an element of the `ArrayExpression`
+/// argument of a `Promise.{all,allSettled,race,any}(...)` call. There the
+/// `.catch(() => fallback)` recovers one slot's rejection so the parallel
+/// combinator can still aggregate the rest; no `await` form expresses that
+/// per-element fallback without serializing the calls, so the chain is the
+/// idiomatic shape.
+fn in_promise_combinator_array<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The matched call must sit directly inside an array literal (its nearest
+    // non-transparent ancestor is an `ArrayExpression`).
+    let mut current = node.id();
+    let array_id = loop {
+        let parent = nodes.parent_node(current);
+        match parent.kind() {
+            AstKind::ArrayExpression(_) => break parent.id(),
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_) => current = parent.id(),
+            _ => return false,
+        }
+    };
+
+    // That array must be the argument of a Promise combinator call. We re-check
+    // `call.callee` below, so even when the array is itself the callee (`[...]()`)
+    // it cannot match the `Promise.<combinator>` member shape — argument position
+    // is implied by a matching callee.
+    let mut current = array_id;
+    loop {
+        let parent = nodes.parent_node(current);
+        match parent.kind() {
+            AstKind::CallExpression(call) => {
+                return is_promise_combinator_callee(&call.callee);
+            }
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_) => current = parent.id(),
+            _ => return false,
+        }
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -106,6 +170,16 @@ impl OxcCheck for Check {
                     )
                 })
             {
+                return;
+            }
+
+            // A `.catch(() => fallback)` that is an element of the array passed
+            // to `Promise.all` / `Promise.allSettled` / `Promise.race` /
+            // `Promise.any` makes one parallel slot's rejection non-fatal so the
+            // combinator can still aggregate the rest. Rewriting it with
+            // `try/catch` would force serial `await`s, destroying the
+            // parallelism — the chain is idiomatic here.
+            if in_promise_combinator_array(node, semantic) {
                 return;
             }
         }
@@ -220,6 +294,56 @@ mod tests {
     fn still_flags_awaited_then_chain() {
         // `.then` directly awaited is still a transform-chain the rule targets.
         let src = "async function f() { return await foo().then((x) => x + 1); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_catch_inside_promise_all_array() {
+        // Regression for issue #6451: a `.catch(() => null)` element of the
+        // array passed to `Promise.all([...])` makes one parallel slot's
+        // rejection non-fatal — no `await` form expresses that per-element
+        // recovery without serializing the calls.
+        let src = "async function f(event: E) {\n\
+                   \x20\x20const [session, user] = await Promise.all([\n\
+                   \x20\x20\x20\x20serverSupabaseSession(event).catch(() => null),\n\
+                   \x20\x20\x20\x20serverSupabaseUser(event).catch(() => null),\n\
+                   \x20\x20]);\n\
+                   \x20\x20return [session, user];\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_catch_inside_other_promise_combinators() {
+        // `allSettled` / `race` / `any` array elements get the same exemption.
+        for combinator in ["allSettled", "race", "any"] {
+            let src = format!(
+                "async function f() {{ return await Promise.{combinator}([p().catch(() => null), q()]); }}"
+            );
+            assert!(run(&src).is_empty(), "combinator {combinator} should be exempt");
+        }
+    }
+
+    #[test]
+    fn still_flags_catch_in_plain_array() {
+        // An array that is not a Promise-combinator argument keeps flagging.
+        let src = "function f() { const xs = [p().catch(() => null)]; return xs; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_catch_in_non_promise_all_array() {
+        // The receiver must be the global `Promise`: a same-named method on
+        // another object (e.g. a Bluebird-like `all`) is not exempt.
+        let src = "function f() { return Bluebird.all([p().catch(() => null)]); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_catch_in_non_combinator_promise_call() {
+        // A non-combinator `Promise` method (e.g. `Promise.resolve`) does not
+        // aggregate an array of promises, so the element stays flagged.
+        let src = "function f() { return Promise.resolve([p().catch(() => null)]); }";
         assert_eq!(run(src).len(), 1);
     }
 }
