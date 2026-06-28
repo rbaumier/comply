@@ -13,8 +13,9 @@
 //! that the round-trip preserves.
 //!
 //! The chain is also left alone when the owned iterator *escapes* its
-//! scope — it is a `return`/function-tail value or a struct field
-//! initializer — rather than being consumed locally. There the `Vec`
+//! scope — it is a `return`/function-tail value, a struct field
+//! initializer, or the right-hand side of an assignment — rather than
+//! being consumed locally. There the `Vec`
 //! materialization is load-bearing: it breaks a borrow so the source's
 //! owner can move into a downstream closure, or yields an owning
 //! `IntoIter` of the right type for the escaping slot. An escaping
@@ -121,9 +122,10 @@ fn into_iter_recollected(node: tree_sitter::Node, source: &[u8]) -> bool {
 
 /// True when the owned iterator (the `into_iter()` result plus any
 /// downstream lazy adapters) escapes its local scope: it is a
-/// `return`/function-tail value or a struct field initializer, rather
-/// than being consumed locally (a `let` binding, a `for`/`while`/loop
-/// subject, or a discarded `;` statement).
+/// `return`/function-tail value, a struct field initializer, or the
+/// right-hand side of an assignment, rather than being consumed locally
+/// (a `let` binding, a `for`/`while`/loop subject, or a discarded `;`
+/// statement).
 fn chain_escapes(node: tree_sitter::Node) -> bool {
     let outermost = chain_outermost(node);
 
@@ -133,6 +135,11 @@ fn chain_escapes(node: tree_sitter::Node) -> bool {
             // Escape positions.
             "return_expression" => return true,
             "field_initializer" | "shorthand_field_initializer" => return true,
+            // The right-hand side of an assignment: the LHS place has a fixed
+            // concrete type, so the `into_iter()` conversion is load-bearing.
+            // A `collect().into_iter()` is not an assignee expression, so
+            // reaching this node from below always means we are in the RHS.
+            "assignment_expression" => return true,
             "block" => {
                 // The implicit-return tail is the block's last named child
                 // with no trailing `;` — i.e. the child is the expression
@@ -362,6 +369,30 @@ mod tests {
         // Consumed locally by the loop — not an escape.
         let source = "fn f() { for x in xs.iter().map(g).collect::<Vec<_>>().into_iter() {} }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_expression_statement() {
+        // Discarded `;` statement — consumed locally, not an escape.
+        let source = "fn f() { it.collect::<Vec<_>>().into_iter(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_escape_via_assignment_rhs_enum_variant() {
+        // Issue #6459 (BurntSushi/walkdir): the chain flows into the RHS of
+        // `*self = ...`; the `DirList::Closed` variant holds a concrete
+        // `vec::IntoIter`, so the `into_iter()` conversion is load-bearing.
+        let source = "fn close(&mut self) { *self = DirList::Closed(self.collect::<Vec<_>>().into_iter()); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_escape_via_assignment_rhs_simple() {
+        // The LHS binding has a fixed concrete type; the round-trip yields the
+        // exact `vec::IntoIter` that place requires.
+        let source = "fn f(mut x: std::vec::IntoIter<u8>) { x = src.collect::<Vec<_>>().into_iter(); }";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
