@@ -2,10 +2,23 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_elements, has_text_content, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    collect_attr_names, extract_elements, has_text_content, is_vue_file,
+};
 
 #[derive(Debug)]
 pub struct Check;
+
+/// True when `attrs` carries a `v-html` or `v-text` directive. The directive is
+/// matched as a whole attribute name (quoted attribute values are skipped), so a
+/// substring inside another attribute name or value (e.g. `data-v-html-foo` or
+/// `aria-label="toggle v-html mode"`) does not match. Such a heading has its
+/// content supplied at runtime, so it is not empty.
+fn has_dynamic_content_directive(attrs: &str) -> bool {
+    collect_attr_names(attrs)
+        .iter()
+        .any(|name| matches!(*name, "v-html" | "v-text"))
+}
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
@@ -15,6 +28,11 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
             if !matches!(elem.tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+                continue;
+            }
+            // `v-html`/`v-text` inject the element's content at runtime, so the
+            // heading is announced by screen readers even when self-closing.
+            if has_dynamic_content_directive(elem.attrs) {
                 continue;
             }
             if elem.self_closing || !has_text_content(ctx.source, elem.line - 1, elem.tag) {
@@ -75,6 +93,48 @@ mod tests {
     #[test]
     fn flags_multiline_empty_heading() {
         let source = "<template>\n  <h2>\n\n  </h2>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_self_closing_heading_with_v_html() {
+        let source = "<template>\n  <h1 v-if=\"title\" class=\"text-lg font-bold\" v-html=\"title\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_self_closing_heading_with_v_text() {
+        let source = "<template>\n  <h2 v-text=\"label\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_heading_without_directive() {
+        let source = "<template>\n  <h1 />\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_substring_in_other_attr_not_directive() {
+        // An attribute whose value merely contains the text "v-html" is not the
+        // directive; the heading is still empty and must flag.
+        let source = "<template>\n  <h1 data-x=\"v-html\" />\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_substring_in_other_attr_name_not_directive() {
+        // `data-v-html-foo` is a distinct attribute name, not the `v-html`
+        // directive; the heading is still empty and must flag.
+        let source = "<template>\n  <h1 data-v-html-foo=\"x\" />\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_directive_word_inside_quoted_value() {
+        // `v-html` appearing inside a quoted attribute value is not the
+        // directive; the heading is still empty and must flag.
+        let source = "<template>\n  <h1 aria-label=\"toggle v-html mode\" />\n</template>";
         assert_eq!(run(source).len(), 1);
     }
 }
