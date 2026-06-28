@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, ForStatementLeft, VariableDeclarationKind};
+use oxc_ast::ast::{Expression, ForStatementInit, ForStatementLeft, VariableDeclarationKind};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -91,12 +91,34 @@ fn for_target_reassigned_symbol(
     semantic.scoping().get_reference(ref_id).symbol_id()
 }
 
+/// Byte span of the `let`/`const` initializer of a C-style `for (let i …)` /
+/// `for (const x …)` loop — the per-iteration binding(s). `None` for a `var`
+/// init, for an init that is not a variable declaration, and for any non-`for`
+/// loop. Per ES2015 §14.7.4.2 a `let`/`const` `for` init is re-bound fresh each
+/// iteration, so a closure capturing it reads its own value; a `var` init keeps
+/// one function-scoped binding mutated across iterations and stays a hazard.
+fn per_iteration_for_init_span(loop_kind: AstKind) -> Option<oxc_span::Span> {
+    let AstKind::ForStatement(stmt) = loop_kind else {
+        return None;
+    };
+    let Some(ForStatementInit::VariableDeclaration(decl)) = &stmt.init else {
+        return None;
+    };
+    matches!(
+        decl.kind,
+        VariableDeclarationKind::Let | VariableDeclarationKind::Const
+    )
+    .then_some(decl.span)
+}
+
 /// True when the function spanning `func_span` closes over at least one binding
 /// the enclosing loop introduces or re-assigns per iteration — a symbol declared
-/// inside the loop (header bindings or `let`/`const`/`var` in the body), or the
-/// pre-declared target of a `for (x of …)`/`for (x in …)` — that the function
+/// inside the loop (`var` header binding or `let`/`const`/`var` in the body), or
+/// the pre-declared target of a `for (x of …)`/`for (x in …)` — that the function
 /// references. Such a capture is the stale-shared-binding hazard this rule exists
-/// to catch. A function that only touches its own params and outer-stable values
+/// to catch. The `let`/`const` initializer of a C-style `for (let i …)` is exempt:
+/// it is re-bound fresh each iteration, so a closure capturing it reads its own
+/// value. A function that only touches its own params and outer-stable values
 /// (globals like `setTimeout`, bindings declared above the loop) captures nothing
 /// loop-scoped and is safe.
 fn captures_loop_binding<'a>(
@@ -105,6 +127,7 @@ fn captures_loop_binding<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let loop_span = loop_kind.span();
+    let per_iteration_init = per_iteration_for_init_span(loop_kind);
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
     let reassigned_target = for_target_reassigned_symbol(loop_kind, semantic);
@@ -116,6 +139,13 @@ fn captures_loop_binding<'a>(
             // are never a loop-iteration capture.
             && !span_contains(func_span, decl_span);
         if !is_loop_binding {
+            continue;
+        }
+        // The `let`/`const` loop variable of a C-style `for` is re-bound each
+        // iteration, so capturing it reads that iteration's own value — not the
+        // shared-binding hazard. `var` inits and bindings declared in the loop
+        // body remain hazards.
+        if per_iteration_init.is_some_and(|init_span| span_contains(init_span, decl_span)) {
             continue;
         }
         for reference in scoping.get_resolved_references(sym_id) {
@@ -269,9 +299,11 @@ mod tests {
     }
 
     #[test]
-    fn flags_arrow_in_for_in_prod_code() {
+    fn flags_arrow_in_c_style_for_var_prod_code() {
+        // `var i` is a single function-scoped binding shared across iterations, so
+        // the captured closure reads its final value — the genuine bug.
         let d = run(
-            "for (let i = 0; i < 10; i++) { const fn = () => i; }",
+            "for (var i = 0; i < 10; i++) { const fn = () => i; }",
             "src/app.ts",
         );
         assert_eq!(d.len(), 1);
@@ -360,10 +392,10 @@ mod tests {
 
     #[test]
     fn flags_unknown_callee_even_in_test_file() {
-        // C-style loop (shared binding): the test-registrar exemption must not
-        // blanket-exempt an unknown callee whose callback captures the loop var.
+        // C-style `var` loop (shared binding): the test-registrar exemption must
+        // not blanket-exempt an unknown callee whose callback captures the loop var.
         let src = r#"
-            for (let i = 0; i < cases.length; i++) {
+            for (var i = 0; i < cases.length; i++) {
                 myCustomRegister(cases[i].label, () => use(i));
             }
         "#;
@@ -373,10 +405,10 @@ mod tests {
 
     #[test]
     fn flags_vitest_pattern_outside_test_file() {
-        // C-style loop (shared binding) outside a test file: the test-registrar
+        // C-style `var` loop (shared binding) outside a test file: the test-registrar
         // exemption is gated on test files, so a callback capturing `i` stays flagged.
         let src = r#"
-            for (let i = 0; i < cases.length; i++) {
+            for (var i = 0; i < cases.length; i++) {
                 test(cases[i].label, async () => use(i));
             }
         "#;
@@ -419,8 +451,10 @@ mod tests {
 
     #[test]
     fn flags_stored_closure_pushed_in_loop() {
+        // `var i` is shared across iterations, so every stored closure reads the
+        // final value — the genuine stale-closure bug.
         let src = r#"
-            for (let i = 0; i < 10; i++) {
+            for (var i = 0; i < 10; i++) {
                 arr.push(() => i);
             }
         "#;
@@ -430,8 +464,9 @@ mod tests {
 
     #[test]
     fn flags_unknown_single_arg_callee_in_loop() {
+        // `var i` shared across iterations: the captured closure reads a stale value.
         let src = r#"
-            for (let i = 0; i < 10; i++) {
+            for (var i = 0; i < 10; i++) {
                 register(() => i);
             }
         "#;
@@ -485,12 +520,61 @@ mod tests {
     }
 
     #[test]
-    fn flags_arrow_in_c_style_for_let_capturing_shared_binding() {
-        // Negative-space guard: the genuine bug — a closure capturing the shared
-        // C-style loop binding — must STILL be flagged.
+    fn allows_arrow_in_c_style_for_let_capturing_per_iteration_binding() {
+        // Issue #6452: a `let` C-style `for` head is re-bound fresh each iteration
+        // (ES2015 §14.7.4.2), exactly like `for…of`/`for…in` with `let`/`const`, so
+        // the closure captures its own `i` — no shared-binding hazard.
         let src = r#"
             for (let i = 0; i < n; i++) {
                 setTimeout(() => console.log(i), 0);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_closure_capturing_per_iteration_let_for_head_fetch_retry() {
+        // Issue #6452 exact repro (nuxt-modules/supabase fetch-retry.ts): the arrow
+        // captures `attempt`, the per-iteration `let` head binding, plus its own
+        // `resolve` param and the global `setTimeout` — nothing shared.
+        let src = r#"
+            async function fetchRetry(req, init, retries) {
+                for (let attempt = 1; attempt <= retries; attempt++) {
+                    try {
+                        return await fetch(req, init);
+                    } catch (error) {
+                        await new Promise(resolve => setTimeout(resolve, 100 * attempt));
+                    }
+                }
+            }
+        "#;
+        let d = run(src, "src/runtime/utils/fetch-retry.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_arrow_in_c_style_for_const_capturing_per_iteration_binding() {
+        // A C-style `for` with a `const` init also re-binds per iteration, so the
+        // closure captures its own `x` — no shared-binding hazard.
+        let src = r#"
+            for (const x = seed(); cond(x); ) {
+                fns.push(() => x);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_closure_capturing_body_var_in_for_let_loop() {
+        // Precise, not coarse: a `for (let i …)` head is exempt, but a `var`
+        // declared in its body is a single function-scoped binding shared across
+        // iterations, so a closure capturing it must STILL be flagged.
+        let src = r#"
+            for (let i = 0; i < n; i++) {
+                var shared = compute();
+                cbs.push(() => shared);
             }
         "#;
         let d = run(src, "src/app.ts");
@@ -578,9 +662,9 @@ mod tests {
     #[test]
     fn flags_closure_capturing_loop_var_inside_promise_executor() {
         // Negative-space: even wrapped in `new Promise(...)`, a closure that
-        // captures the C-style loop binding `i` is the genuine bug — must flag.
+        // captures the shared C-style `var` loop binding `i` is the genuine bug.
         let src = r#"
-            for (let i = 0; i < n; i++) {
+            for (var i = 0; i < n; i++) {
                 await new Promise((resolve) => { arr.push(() => i); resolve(); });
             }
         "#;
