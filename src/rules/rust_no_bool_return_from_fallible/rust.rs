@@ -31,6 +31,12 @@
 //!   success/failure collapse — there is no failure path to surface as a
 //!   `Result`. A return forwarding a non-literal value keeps the function
 //!   in scope.
+//! - Functions whose `bool` is the `Some`/`None` discriminant of an
+//!   `Option` match (`match lookup() { Some(i) => { act(i); true } None =>
+//!   false }`): the bool reports presence ("was it found and removed?"),
+//!   the `BTreeSet::remove` idiom. `Option` carries no error, so the literal
+//!   is structural state, not a swallowed failure. A `Result` match
+//!   (`Ok`/`Err`) keeps flagging — its `Err` is a genuine failure path.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -155,6 +161,15 @@ impl AstCheck for Check {
         // Both literals must be reachable for the smell to exist; a return
         // forwarding a non-literal value leaves the function in scope.
         if returns_single_constant_bool(node, source_bytes) {
+            return;
+        }
+        // The `bool` is the `Some`/`None` discriminant of an `Option` match
+        // (`match lookup() { Some(i) => { act(i); true } None => false }`):
+        // it reports presence ("was it found and removed?"), the
+        // `BTreeSet::remove` idiom. `Option` has no error to surface as a
+        // `Result`, so the literal is structural state, not a swallowed
+        // failure. A `Result` match (`Ok`/`Err`) is not exempted here.
+        if returns_option_presence_bool(node, source_bytes) {
             return;
         }
         // mdBook tutorial example code (an ancestor `book.toml`) is
@@ -330,6 +345,96 @@ fn returns_single_constant_bool(func: tree_sitter::Node, source: &[u8]) -> bool 
     }
     // Exactly one of the two literals is reachable (and at least one is).
     returns.saw_true ^ returns.saw_false
+}
+
+/// Which side of an `Option` match an arm pattern selects.
+enum OptionArm {
+    /// `Some(..)` — a `tuple_struct_pattern` whose path ends in `Some`.
+    Present,
+    /// `None` — an identifier/path ending in `None`.
+    Absent,
+}
+
+/// True if the function's `bool` outcome is the `Some`/`None` discriminant of
+/// an `Option` match — a found-or-not indicator (the `BTreeSet::remove`
+/// idiom: act inside the `Some` arm, report presence as the `bool`). The
+/// body's tail is a `match` whose arms are `Some(..)` and `None`, each
+/// yielding a `bool` literal (a `Some` arm may run side effects before its
+/// literal tail). `Option` carries no error, so the `bool` reports presence,
+/// not a swallowed failure — there is no `Result` to offer instead. A
+/// `Result` match (`Ok`/`Err`) is deliberately not matched here: its `Err`
+/// arm is a genuine failure path the rule should still surface.
+fn returns_option_presence_bool(func: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    let Some(tail) = block_tail_expression(body) else {
+        return false;
+    };
+    if tail.kind() != "match_expression" {
+        return false;
+    }
+    let Some(match_body) = tail.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = match_body.walk();
+    let mut saw_some = false;
+    let mut saw_none = false;
+    for arm in match_body
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "match_arm")
+    {
+        let Some(pattern) = arm.child_by_field_name("pattern") else {
+            return false;
+        };
+        match option_arm_kind(pattern, source) {
+            Some(OptionArm::Present) => saw_some = true,
+            Some(OptionArm::Absent) => saw_none = true,
+            // A non-`Option` arm (`Ok`/`Err`, an enum variant, `_`, a binding)
+            // means this is not the presence idiom.
+            None => return false,
+        }
+        let Some(value) = arm.child_by_field_name("value") else {
+            return false;
+        };
+        if !arm_value_is_bool_literal(value) {
+            return false;
+        }
+    }
+    saw_some && saw_none
+}
+
+/// Classifies a match-arm pattern as `Some(..)` or `None`. Returns the
+/// absent `Option` (no classification) for anything else — `Ok`, `Err`,
+/// another enum variant, a wildcard `_`, or a bare binding.
+fn option_arm_kind(pattern: tree_sitter::Node, source: &[u8]) -> Option<OptionArm> {
+    let inner = if pattern.kind() == "match_pattern" {
+        pattern.named_child(0)?
+    } else {
+        pattern
+    };
+    let text = inner.utf8_text(source).ok()?.trim();
+    if let Some(paren) = text.find('(') {
+        let head = text[..paren].trim();
+        return (head == "Some" || head.ends_with("::Some")).then_some(OptionArm::Present);
+    }
+    let last = text.rsplit("::").next().unwrap_or(text).trim();
+    (last == "None").then_some(OptionArm::Absent)
+}
+
+/// True if an arm's `value` resolves to a `bool` literal: a bare `true` /
+/// `false`, or a `block` whose tail expression is one (the `Some` arm may run
+/// side effects before its literal).
+fn arm_value_is_bool_literal(value: tree_sitter::Node) -> bool {
+    let expr = if value.kind() == "block" {
+        match block_tail_expression(value) {
+            Some(tail) => tail,
+            None => return false,
+        }
+    } else {
+        value
+    };
+    expr.kind() == "boolean_literal"
 }
 
 /// Classifies a value in return position. `if`/`match` are descended into
@@ -1043,6 +1148,50 @@ mod tests {
         // A non-literal (forwarded) return makes the outcome non-constant, so
         // the function keeps its current behaviour and stays flagged.
         let src = "fn save_state(&mut self, x: &str) -> bool { if x.is_empty() { return self.try_save(x); } true }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #6607: the bool is the Some/None discriminant of an Option match
+    // (the `BTreeSet::remove` "found and removed?" idiom) — Option carries no
+    // error, so it is structural state, not a swallowed failure ---
+
+    #[test]
+    fn allows_remove_with_option_presence_match() {
+        // ajeetdsouza/zoxide `db/mod.rs` `remove` — `position()` yields an
+        // `Option`; the `Some` arm removes and reports `true`, the `None` arm
+        // reports `false` ("was not present"). No `Result` to offer instead.
+        let src = "\
+            pub fn remove(&mut self, path: impl AsRef<str>) -> bool {\n\
+                match self.dirs().iter().position(|dir| dir.path == path.as_ref()) {\n\
+                    Some(idx) => {\n\
+                        self.swap_remove(idx);\n\
+                        true\n\
+                    }\n\
+                    None => false,\n\
+                }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_remove_with_option_presence_match_inverted() {
+        // `None => true` / `Some => false` is still a presence indicator.
+        let src = "\
+            fn remove_entry(&mut self, k: K) -> bool {\n\
+                match self.find(k) { None => true, Some(i) => { self.drop(i); false } }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_result_okerr_match_collapsing_error() {
+        // A `Result` match collapses the `Err` into a bare `false`: the error
+        // path is real and must be surfaced as `Result`, so it still flags.
+        // This proves the exemption is `Option`-specific, not any 2-arm match.
+        let src = "\
+            fn save_record(&mut self, r: &Record) -> bool {\n\
+                match self.db.write(r) { Ok(_) => true, Err(_) => false }\n\
+            }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
