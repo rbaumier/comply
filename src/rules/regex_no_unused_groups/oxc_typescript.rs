@@ -72,13 +72,18 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::RegExpLiteral(re) = node.kind() else { return };
         let pattern = re.regex.pattern.text.as_str();
         let groups = extract_named_groups(pattern);
         if groups.is_empty() {
+            return;
+        }
+        // A `...expr.groups` spread copies every named group out as a property,
+        // so no named group in this file can be considered unused.
+        if crate::oxc_helpers::file_has_groups_spread(semantic) {
             return;
         }
         let destructured_keys = crate::oxc_helpers::groups_destructure_keys(ctx.source);
@@ -185,6 +190,36 @@ mod tests {
     #[test]
     fn flags_group_with_no_reference_or_destructure() {
         let src = r#"const re = /(?<unusedGroup>\d+)/;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- Regression tests for `...expr.groups` spread usage (#6516). ---
+
+    #[test]
+    fn allows_named_group_consumed_via_groups_spread() {
+        // unjs/mlly `matchAll` pattern: every named group flows out of the
+        // result object via `...match.groups`, never via a direct read.
+        let src = "const ESM_STATIC_IMPORT_RE = /import\\s+(?<imports>[\\w]+)\\s+from\\s+[\"'](?<specifier>[^\"']+)[\"']/g;\nfunction matchAll(regex, string, addition) {\n  const matches = [];\n  for (const match of string.matchAll(regex)) {\n    matches.push({ ...addition, ...match.groups, code: match[0] });\n  }\n  return matches;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_named_group_with_optional_chained_groups_spread() {
+        let src = "const re = /(?<year>\\d{4})/;\nconst o = { ...m?.groups };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_named_group_when_spread_is_not_dot_groups() {
+        // A spread whose final property is not `groups` must not suppress.
+        let src = "const re = /(?<year>\\d{4})/;\nconst o = { ...other.fields };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_named_group_when_spread_property_only_prefixes_groups() {
+        // `groupsCount` is not `groups`: the match is exact, not a prefix.
+        let src = "const re = /(?<year>\\d{4})/;\nconst o = { ...obj.groupsCount };";
         assert_eq!(run_on(src).len(), 1);
     }
 }
