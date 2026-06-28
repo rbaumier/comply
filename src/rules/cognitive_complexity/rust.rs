@@ -75,6 +75,11 @@ fn compute(node: tree_sitter::Node, source: &[u8], nesting: u32) -> u32 {
 }
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
+    // Test-only combination generators and exhaustive fixtures legitimately
+    // need deep nesting / high complexity; they ship only in the test binary.
+    if crate::rules::rust_helpers::is_in_test_context(node, source) {
+        return;
+    }
     let Some(body) = node.child_by_field_name("body") else { return };
     if body.kind() != "block" {
         return;
@@ -198,5 +203,65 @@ mod tests {
     fn clean_function_below_threshold_is_not_flagged() {
         let src = "fn add(a: i32, b: i32) -> i32 { a + b }";
         assert!(run_on(src).is_empty());
+    }
+
+    /// Issue #6486: an exhaustive combination generator inside a
+    /// `#[cfg(test)] mod tests {}` block is test-only — its deep nesting must
+    /// not be flagged.
+    #[test]
+    fn skips_complex_function_in_cfg_test_module() {
+        let src = r#"
+#[cfg(test)]
+mod tests {
+    fn all_attributes() {
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    for d in 0..2 {
+                        for e in 0..2 {
+                            for f in 0..2 {
+                                for g in 0..2 {
+                                    for h in 0..2 {
+                                        push(a, b, c, d, e, f, g, h);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// The same generator in production code is still flagged — the rule
+    /// keeps its value outside test context.
+    #[test]
+    fn still_flags_same_generator_in_production() {
+        let src = r#"
+fn all_attributes() {
+    for a in 0..2 {
+        for b in 0..2 {
+            for c in 0..2 {
+                for d in 0..2 {
+                    for e in 0..2 {
+                        for f in 0..2 {
+                            for g in 0..2 {
+                                for h in 0..2 {
+                                    push(a, b, c, d, e, f, g, h);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
