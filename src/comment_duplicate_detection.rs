@@ -868,45 +868,50 @@ fn is_doc_comment(raw: &[u8]) -> bool {
         || raw.starts_with(b"/*!")
 }
 
-/// Object-literal / type-literal member kinds whose name is the key documented
-/// by a leading comment. A JS runtime props object (`{ /* doc */ foo: … }`) and
-/// the matching TS type field (`type Props = { /* doc */ foo?: … }`) mirror the
-/// same prop API, so their identical per-member docs are intentional parallel
-/// documentation, not a copy. Per-member docs are conventionally a plain `//`
-/// (not `///` / `/**`), so unlike top-level declarations these earn the
-/// same-named exemption from any comment — see `documented_decl_name`.
+/// Object-literal / type-literal member kinds, plus Rust struct fields, whose
+/// name is the key documented by a leading comment. A JS runtime props object
+/// (`{ /* doc */ foo: … }`) and the matching TS type field
+/// (`type Props = { /* doc */ foo?: … }`) mirror the same prop API, and a Rust
+/// `field_declaration` repeated under two parallel iterator structs documents
+/// the same backing field, so their identical per-member docs are intentional
+/// parallel documentation, not a copy. Per-member docs are conventionally a
+/// plain `//` (not `///` / `/**`), so unlike top-level declarations these earn
+/// the same-named exemption from any comment — see `documented_decl_name`.
 fn is_named_member(kind: &str) -> bool {
-    matches!(kind, "pair" | "property_signature")
+    matches!(kind, "pair" | "property_signature" | "field_declaration")
 }
 
 /// The name a member node exposes to a leading comment: the `key` of an
-/// object-literal `pair` or the `name` of a TS `property_signature`. Only an
+/// object-literal `pair`, the `name` of a TS `property_signature`, or the `name`
+/// (a `field_identifier`) of a Rust `field_declaration`. Only an
 /// identifier/string key counts — a computed key (`[expr]: …`) names nothing
 /// stable to mirror across files.
 fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let key = member
         .child_by_field_name("key")
         .or_else(|| member.child_by_field_name("name"))?;
-    if !matches!(key.kind(), "property_identifier" | "string" | "identifier") {
+    if !matches!(key.kind(), "property_identifier" | "string" | "identifier" | "field_identifier") {
         return None;
     }
     key.utf8_text(source).ok().map(str::to_owned)
 }
 
 /// The name of the declaration or member a comment immediately documents, plus
-/// the owning type's name when that declaration is an enum variant or a
-/// type/interface member. Looks at the comment's next named sibling, skipping
-/// attributes/decorators. `(None, _)` for free-floating comments (no following
-/// declaration) or declarations without a recognizable name.
+/// the owning type's name when that declaration is an enum variant, a
+/// type/interface member, or a Rust struct field. Looks at the comment's next
+/// named sibling, skipping attributes/decorators. `(None, _)` for free-floating
+/// comments (no following declaration) or declarations without a recognizable
+/// name.
 ///
 /// A top-level declaration or enum variant is only documented by a *doc*-comment
 /// (`///`, `/**`, …) — a plain `//` above it is incidental prose, so a
-/// copy-pasted one is still a smell. Object/type members are an exception: their
-/// docs are conventionally a plain `//` above the field, so a plain `//` above a
-/// member still names it. The owner is returned for enum variants and TS
-/// interface/type members; it lets the caller treat same-named members of
-/// *different* owners as parallel API surfaces while a botched copy-paste within
-/// one owner (impossible — member names are unique per owner) cannot slip through.
+/// copy-pasted one is still a smell. Object/type members and Rust struct fields
+/// are an exception: their docs are conventionally a plain `//` above the field,
+/// so a plain `//` above a member still names it. The owner is returned for enum
+/// variants, TS interface/type members, and Rust struct fields; it lets the
+/// caller treat same-named members of *different* owners as parallel API surfaces
+/// while a botched copy-paste within one owner (impossible — member names are
+/// unique per owner) cannot slip through.
 fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<String>, Option<String>) {
     let Some(mut sibling) = comment.next_named_sibling() else {
         return (None, None);
@@ -952,24 +957,25 @@ fn enclosing_enum_name(variant: tree_sitter::Node, source: &[u8]) -> Option<Stri
         .map(str::to_owned)
 }
 
-/// The name of the TS `interface_declaration` / `type_alias_declaration` whose
-/// body holds `member`, walking up past the intervening `object_type` /
-/// `interface_body`. `None` for a member that has no stable named owner — an
-/// object-literal `pair`, or a type literal nested inline rather than bound to a
-/// named type alias. Without a named owner two same-named members cannot be
-/// proven parallel, so they stay eligible to flag (the cross-file member
-/// exemption still covers the named-prop-API-mirror case separately).
+/// The name of the TS `interface_declaration` / `type_alias_declaration` or the
+/// Rust `struct_item` whose body holds `member`, walking up past the intervening
+/// `object_type` / `interface_body` / `field_declaration_list`. `None` for a
+/// member that has no stable named owner — an object-literal `pair`, or a type
+/// literal nested inline rather than bound to a named type alias. Without a named
+/// owner two same-named members cannot be proven parallel, so they stay eligible
+/// to flag (the cross-file member exemption still covers the named-prop-API-mirror
+/// case separately).
 fn enclosing_named_type(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut node = member.parent();
     while let Some(n) = node {
         match n.kind() {
-            "interface_declaration" | "type_alias_declaration" => {
+            "interface_declaration" | "type_alias_declaration" | "struct_item" => {
                 return n
                     .child_by_field_name("name")
                     .and_then(|name| name.utf8_text(source).ok())
                     .map(str::to_owned);
             }
-            "object_type" | "interface_body" => node = n.parent(),
+            "object_type" | "interface_body" | "field_declaration_list" => node = n.parent(),
             _ => return None,
         }
     }
@@ -1726,6 +1732,65 @@ export type VueCalProps = {
         let b = write(&dir, "filler.ts", "export const x = 1;\n");
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "copy-pasted JSDoc on two fields of one interface is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_parallel_struct_field_comments_in_distinct_owners_issue_6272() {
+        // Regression (#6272): http's `IterMut` and `ValueIterMut` are two distinct
+        // iterator types that both hold a raw pointer to the same `extra_values`
+        // backing store, so each documents the same-named field with the same
+        // aliasing-invariant `//` comment. The identical doc describes the same
+        // field on parallel owners, not a copy-paste smell. Distinct struct owners
+        // keep the same-file member exemption surgical — a field name is unique per
+        // struct.
+        let dir = tempfile::tempdir().unwrap();
+        let field_doc = "    // This raw pointer aliases the original extra values backing allocation for the entire lifetime of the iterator here.\n";
+        let content = format!(
+            "pub struct IterMut {{\n{field_doc}    extra_values: usize,\n}}\n\
+             pub struct ValueIterMut {{\n{field_doc}    extra_values: usize,\n}}\n"
+        );
+        let a = write(&dir, "map.rs", &content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "same-named field's invariant comment on distinct structs must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_intra_struct_copy_pasted_field_comment_issue_6272() {
+        // Over-exclusion guard for #6272: two *different* fields of the *same*
+        // struct carrying the same copy-pasted `//` comment is real duplication.
+        // The shared owner keeps the parallel-member exemption from firing.
+        let dir = tempfile::tempdir().unwrap();
+        let field_doc = "    // This raw pointer aliases the original extra values backing allocation for the entire lifetime of the iterator here.\n";
+        let content = format!(
+            "pub struct IterMut {{\n{field_doc}    extra_values: usize,\n{field_doc}    other_values: usize,\n}}\n"
+        );
+        let a = write(&dir, "map.rs", &content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "copy-pasted comment on two fields of one struct is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_duplicate_comment_on_differently_named_struct_fields_issue_6272() {
+        // The struct-field exemption is name-keyed: the same `//` comment over two
+        // *differently named* fields of two different structs is real duplication.
+        // `are_parallel_owned_members` keys on a matching member name, so distinct
+        // owners alone do not exempt non-parallel field names.
+        let dir = tempfile::tempdir().unwrap();
+        let field_doc = "    // This raw pointer aliases the original extra values backing allocation for the entire lifetime of the iterator here.\n";
+        let content = format!(
+            "pub struct IterMut {{\n{field_doc}    extra_values: usize,\n}}\n\
+             pub struct ValueIterMut {{\n{field_doc}    cached_length: usize,\n}}\n"
+        );
+        let a = write(&dir, "map.rs", &content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "identical comment on differently-named fields is a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
