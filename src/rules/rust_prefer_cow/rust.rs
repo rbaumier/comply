@@ -26,6 +26,12 @@
 //! `'static` (e.g. `thread::spawn`) cannot capture a borrow at all. A borrow
 //! (`&name`) or a clone (`name.clone()`) outside a `move` closure does not
 //! consume the owned value and still warrants the warning.
+//!
+//! A function whose name is referenced as a bare value elsewhere in the file
+//! (e.g. `Some(gdbus_parse_color)` stored in a `fn(String) -> …` field, or
+//! `iter.map(gdbus_parse_color)`) is also left alone: such a reference uses the
+//! function as a pointer, so its signature is locked by the pointer type and
+//! relaxing `String` to `&str`/`Cow` would no longer match it (a compile error).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{is_in_test_context, is_pub};
@@ -36,6 +42,10 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
 
     let Some(params) = node.child_by_field_name("parameters") else { return; };
     let body = node.child_by_field_name("body");
+    // Lazily computed at most once: whether this function is referenced as a
+    // function-pointer value (which locks its signature). Only needed when a
+    // parameter would otherwise be flagged, so most functions never pay for it.
+    let mut referenced_as_pointer: Option<bool> = None;
     let mut cursor = params.walk();
     for param in params.named_children(&mut cursor) {
         if param.kind() != "parameter" { continue; }
@@ -59,6 +69,24 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
             && param_is_moved(body, source, param_name)
         {
             continue;
+        }
+
+        // Skip when the function itself is referenced as a bare value (a
+        // function pointer): the pointer type fixes its signature, so `String`
+        // cannot be relaxed. Computed once for the whole function.
+        let is_pointer = *referenced_as_pointer.get_or_insert_with(|| {
+            node.child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+                .is_some_and(|fn_name| {
+                    let mut root = node;
+                    while let Some(parent) = root.parent() {
+                        root = parent;
+                    }
+                    referenced_as_value(root, source, fn_name)
+                })
+        });
+        if is_pointer {
+            return;
         }
 
         diagnostics.push(Diagnostic::at_node(
@@ -180,6 +208,42 @@ fn is_param_identifier(
     node.is_some_and(|n| n.kind() == "identifier" && n.utf8_text(source) == Ok(param_name))
 }
 
+/// Whether `fn_name` is referenced as a bare value (a function-pointer value)
+/// anywhere in `root`'s subtree — e.g. `Some(gdbus_parse_color)` or
+/// `iter.map(gdbus_parse_color)`. Such a reference locks the function's
+/// signature to the pointer type, so its `String` parameter cannot be relaxed.
+///
+/// Every `identifier` node whose text equals `fn_name` counts, EXCEPT the
+/// definition/call positions reported by [`is_definition_or_call_callee`]
+/// (a `function_item` name or a direct call's callee). Method and field names
+/// are `field_identifier` nodes — not `identifier` — so `x.f` / `x.f()` never
+/// match. Suppression-only: an over-broad name match can only mute a warning
+/// (a harmless false negative), never raise a new one.
+fn referenced_as_value(root: tree_sitter::Node, source: &[u8], fn_name: &str) -> bool {
+    if root.kind() == "identifier"
+        && root.utf8_text(source) == Ok(fn_name)
+        && !is_definition_or_call_callee(root)
+    {
+        return true;
+    }
+    let mut cursor = root.walk();
+    root.named_children(&mut cursor)
+        .any(|child| referenced_as_value(child, source, fn_name))
+}
+
+/// Whether `node` (an `identifier`) sits in a position that is a definition or a
+/// direct call rather than a value reference: the `name` field of a
+/// `function_item` (a definition site, including the function's own name), or
+/// the `function` field of a `call_expression` (a direct call `f(…)`).
+fn is_definition_or_call_callee(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else { return false; };
+    let field = match parent.kind() {
+        "function_item" => parent.child_by_field_name("name"),
+        "call_expression" => parent.child_by_field_name("function"),
+        _ => return false,
+    };
+    field.map(|f| f.id()) == Some(node.id())
+}
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -400,5 +464,53 @@ mod tests {
             run("pub fn f(s: String) { std::thread::spawn(move || { unrelated(); }); show(&s); }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_fn_referenced_as_function_pointer_value() {
+        // Repro of #6651 (sharkdp/pastel): `gdbus_parse_color` is stored as
+        // `Some(gdbus_parse_color)` in a `fn(String) -> …` field, so the pointer
+        // type fixes its signature — `&str`/`Cow` would not type-check. The body
+        // only borrows `raw` (`.split('(')`), yet the function must stay silent.
+        assert!(
+            run(
+                "pub struct ColorPickerTool { pub post_process: Option<fn(String) -> Result<String, &'static str>> }\n\
+                 pub fn gdbus_parse_color(raw: String) -> Result<String, &'static str> { let _ = raw.split('('); Err(\"x\") }\n\
+                 fn make() -> ColorPickerTool { ColorPickerTool { post_process: Some(gdbus_parse_color) } }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fn_referenced_as_value_in_map() {
+        // Passed by value to an adapter — same function-pointer locking.
+        assert!(
+            run(
+                "pub fn upcase(s: String) -> String { s.to_uppercase() }\n\
+                 fn run(it: Vec<String>) -> Vec<String> { it.into_iter().map(upcase).collect() }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_borrow_only_fn_that_is_only_called() {
+        // Negative control: `f` is only ever CALLED (`f(...)`), never referenced
+        // as a value, and its param is only borrowed — the warning still holds.
+        assert_eq!(
+            run(
+                "pub fn f(s: String) -> usize { s.len() }\n\
+                 pub fn caller() -> usize { f(String::new()) }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_borrow_only_fn_referenced_nowhere() {
+        // Negative control: no value reference anywhere — still flags.
+        assert_eq!(run("pub fn f(s: String) -> usize { s.len() }").len(), 1);
     }
 }
