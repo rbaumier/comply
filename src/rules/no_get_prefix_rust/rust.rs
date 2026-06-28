@@ -1,11 +1,18 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_trait_definition, is_in_trait_impl};
+use crate::rules::rust_helpers::{is_in_test_context, is_in_trait_definition, is_in_trait_impl};
 
 crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return };
     let Ok(name) = name_node.utf8_text(source) else { return };
 
     if !name.starts_with("get_") { return; }
+
+    // A `get_`-prefixed method inside an inline `#[cfg(test)]` module or a
+    // `#[test]` function is test scaffolding, not production API: it has no
+    // C-GETTER (RFC 344) contract with external callers. This mirrors the
+    // path-based `skip_in_test_dir` exemption for Cargo integration tests under
+    // `tests/`, extending it to inline test modules declared inside src files.
+    if is_in_test_context(node, source) { return; }
 
     // `get_and_<verb>` (e.g. `get_and_reset`, `get_and_clear`, `get_and_take`)
     // is a compound read-modify-write operation — atomically read the value AND
@@ -712,5 +719,27 @@ mod tests {
             .is_empty(),
             "skip_in_test_dir must suppress the rule for Cargo integration-test files"
         );
+    }
+
+    #[test]
+    fn allows_get_prefix_inside_cfg_test_module_issue_6580() {
+        // A `get_*` helper defined inside an inline `#[cfg(test)]` module in a
+        // src file is test scaffolding, not production API — the C-GETTER
+        // convention does not apply, mirroring the `skip_in_test_dir` exemption.
+        let src = "#[cfg(test)]\n\
+            pub mod tests {\n\
+                impl<'a> FilePathsTestCase<'a> {\n\
+                    pub fn get_args(&self) -> Vec<String> { vec![] }\n\
+                }\n\
+            }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_in_production_code_issue_6580() {
+        // The test-context exemption must not relax production code: a `get_*`
+        // accessor outside any `#[cfg(test)]`/`#[test]` block still flags.
+        let src = "impl Foo {\n    pub fn get_foo(&self) -> &str { &self.foo }\n}";
+        assert_eq!(run(src).len(), 1);
     }
 }
