@@ -203,6 +203,23 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `a[0]` where `a` is an UNANNOTATED callback parameter of an element-typed
+        // iteration method (`.sort`/`.map`/`.forEach`/`.filter`/`.find`), or
+        // `section[0]` where `section` is an UNANNOTATED `for...of` binding — and
+        // the receiver/iterable array declares a non-empty tuple element type
+        // (e.g. `Record<string, [string, string[]][]>`). TypeScript infers the
+        // binding as that tuple element, so `[0]` is always in-bounds even without
+        // an explicit annotation on the binding. The element type is derived purely
+        // syntactically from the source array's declared type; any unresolved hop
+        // falls back to flagging.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && (sort_callback_param_tuple_element(obj_ident, semantic)
+                || for_of_tuple_element(node, obj_ident.name.as_str(), semantic))
+        {
+            return;
+        }
+
         // `v[0]` / `v[v.length - 1]` where `v`'s binding is annotated with a
         // gl-matrix fixed-size vector/matrix type (`vec2`/`vec3`/`vec4`,
         // `mat2`/`mat3`/`mat4`/`mat2d`, `quat`/`quat2`) imported from `gl-matrix`.
@@ -1674,6 +1691,277 @@ fn ts_type_is_nonempty_tuple(ty: &TSType) -> bool {
         }
         _ => false,
     }
+}
+
+/// Array iteration methods whose callback receives an array ELEMENT as its (first)
+/// parameter. When the receiver array's element type is a non-empty tuple, the
+/// unannotated parameter is that tuple, so its `[0]` is in-bounds. `reduce` is
+/// excluded: its first callback parameter is the accumulator, not an element.
+const ELEMENT_CALLBACK_METHODS: [&str; 5] = ["sort", "map", "forEach", "filter", "find"];
+
+/// Array methods that return an array with the SAME element type as their
+/// receiver, so element-type derivation can see through them onto the receiver.
+const ELEMENT_PRESERVING_METHODS: [&str; 4] = ["sort", "filter", "slice", "reverse"];
+
+/// Returns true when `ident` is an UNANNOTATED callback parameter of an
+/// element-typed iteration method ([`ELEMENT_CALLBACK_METHODS`]) whose receiver
+/// array has a non-empty tuple element type — so the parameter is bound to that
+/// tuple and `ident[0]` is in-bounds. Walks the parameter's binding to its
+/// enclosing function, then to the parent `CallExpression`, confirms the callee is
+/// `<recv>.<method>`, and derives `<recv>`'s element type via
+/// [`array_element_type_is_nonempty_tuple`]. An ANNOTATED parameter is already
+/// covered by [`resolves_to_nonempty_tuple_type`], so it is skipped here.
+fn sort_callback_param_tuple_element<'a>(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+
+    // The binding must be a formal parameter WITHOUT a type annotation.
+    let mut is_unannotated_param = false;
+    for kind in std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::FormalParameter(param) => {
+                if param.type_annotation.is_some() {
+                    return false;
+                }
+                is_unannotated_param = true;
+                break;
+            }
+            // The binding is not a parameter — out of scope for this case.
+            AstKind::VariableDeclarator(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    if !is_unannotated_param {
+        return false;
+    }
+
+    // The function owning the parameter, then its parent call. The callee must be
+    // `<recv>.<method>` for an element-typed iteration method whose receiver has a
+    // non-empty tuple element type.
+    let mut ancestors = nodes.ancestors(decl_node_id);
+    let Some(fn_node) = ancestors.by_ref().find(|n| {
+        matches!(
+            n.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        )
+    }) else {
+        return false;
+    };
+    let AstKind::CallExpression(call) = nodes.parent_kind(fn_node.id()) else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(callee) = &call.callee else {
+        return false;
+    };
+    if !ELEMENT_CALLBACK_METHODS.contains(&callee.property.name.as_str()) {
+        return false;
+    }
+    array_element_type_is_nonempty_tuple(&callee.object, semantic)
+}
+
+/// Returns true when `name` is the element binding of an enclosing
+/// `for (const name of <iterable>)` whose iterable array has a non-empty tuple
+/// element type. Mirrors [`is_matchall_for_of_element`]: walks ancestors
+/// innermost-first so the closest binding `for...of` wins. A `for...of` binding
+/// never carries a type annotation, so the element type is derived syntactically
+/// from the iterable via [`array_element_type_is_nonempty_tuple`].
+fn for_of_tuple_element<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    name: &str,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let AstKind::ForOfStatement(for_of) = ancestor.kind() else {
+            continue;
+        };
+        if !for_of_binds_name(&for_of.left, name) {
+            continue;
+        }
+        return array_element_type_is_nonempty_tuple(&for_of.right, semantic);
+    }
+    false
+}
+
+/// Returns true when the array that `expr` evaluates to has a non-empty tuple
+/// element type, derived purely syntactically. Conservative: any hop that cannot
+/// be resolved from declared types returns false, so the access keeps flagging.
+fn array_element_type_is_nonempty_tuple<'a>(
+    expr: &'a Expression<'a>,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> bool {
+    expr_declared_type(expr, semantic)
+        .and_then(array_type_element)
+        .is_some_and(ts_type_is_nonempty_tuple)
+}
+
+/// Derives the declared TYPE of expression `expr`, chaining through: `x!` / `(x)`
+/// unwrapping; an `x as T` cast (yielding `T`); element-preserving array methods
+/// (`.sort`/`.filter`/`.slice`/`.reverse`) onto their receiver (same array type);
+/// a bare identifier resolved via [`binding_type`]; and a computed member on a
+/// `Record<_, V>`-typed object (yielding `V`). Returns `None` when a hop is not
+/// syntactically resolvable.
+fn expr_declared_type<'a>(
+    expr: &'a Expression<'a>,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    match expr {
+        Expression::TSNonNullExpression(inner) => expr_declared_type(&inner.expression, semantic),
+        Expression::ParenthesizedExpression(inner) => {
+            expr_declared_type(&inner.expression, semantic)
+        }
+        Expression::TSAsExpression(as_expr) => Some(&as_expr.type_annotation),
+        Expression::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                return None;
+            };
+            if !ELEMENT_PRESERVING_METHODS.contains(&member.property.name.as_str()) {
+                return None;
+            }
+            expr_declared_type(&member.object, semantic)
+        }
+        Expression::Identifier(ident) => binding_type(ident, semantic),
+        Expression::ComputedMemberExpression(member) => {
+            expr_declared_type(&member.object, semantic).and_then(record_value_type)
+        }
+        _ => None,
+    }
+}
+
+/// Resolves the declared TYPE of identifier `ident`'s binding: its `: T`
+/// annotation, or — failing that — the type derived from its `const` initializer
+/// (e.g. `const s = expr as Record<_, _>` yields the cast type, `const xs =
+/// arr.sort(...)` yields `arr`'s type). Returns `None` when neither is resolvable.
+fn binding_type<'a>(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    if let Some(ty) = binding_declared_type(ident, semantic) {
+        return Some(ty);
+    }
+    binding_const_init(ident, semantic).and_then(|init| expr_declared_type(init, semantic))
+}
+
+/// Extracts the element type of an array type: `T[]` → `T`, and `Array<T>` /
+/// `ReadonlyArray<T>` → `T`. Any other type has no array element.
+fn array_type_element<'a>(ty: &'a TSType<'a>) -> Option<&'a TSType<'a>> {
+    match ty {
+        TSType::TSArrayType(arr) => Some(&arr.element_type),
+        TSType::TSTypeReference(reference) => {
+            let TSTypeName::IdentifierReference(name) = &reference.type_name else {
+                return None;
+            };
+            if name.name.as_str() != "Array" && name.name.as_str() != "ReadonlyArray" {
+                return None;
+            }
+            reference.type_arguments.as_ref()?.params.first()
+        }
+        _ => None,
+    }
+}
+
+/// Extracts the value type of a record/index-signature type: `Record<K, V>` → `V`,
+/// or `{ [k: K]: V }` → `V`. Any other type has no record value.
+fn record_value_type<'a>(ty: &'a TSType<'a>) -> Option<&'a TSType<'a>> {
+    match ty {
+        TSType::TSTypeReference(reference) => {
+            let TSTypeName::IdentifierReference(name) = &reference.type_name else {
+                return None;
+            };
+            if name.name.as_str() != "Record" {
+                return None;
+            }
+            reference.type_arguments.as_ref()?.params.get(1)
+        }
+        TSType::TSTypeLiteral(lit) => lit.members.iter().find_map(|member| match member {
+            TSSignature::TSIndexSignature(sig) => Some(&sig.type_annotation.type_annotation),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+/// Resolves `ident` to its binding and returns the declared `TSType` from the
+/// enclosing `FormalParameter` (`x: T`) or `VariableDeclarator` (`const x: T`).
+/// Returns `None` when the binding has no syntactic type annotation. Mirrors the
+/// resolution in [`resolves_to_nonempty_tuple_type`].
+fn binding_declared_type<'a>(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    for kind in std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        let annotation = match kind {
+            AstKind::FormalParameter(param) => &param.type_annotation,
+            AstKind::VariableDeclarator(decl) => &decl.type_annotation,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return None;
+            }
+            _ => continue,
+        };
+        return annotation.as_ref().map(|ann| &ann.type_annotation);
+    }
+    None
+}
+
+/// Resolves `ident` to a same-binding `const` declaration and returns its
+/// initializer expression, letting derivation see through an unannotated
+/// `const xs = arr.sort(...)`. Restricted to `const`: a `let`/`var` may be
+/// reassigned to a shorter or differently-typed array. Returns `None` when the
+/// binding is not a `const` variable.
+fn binding_const_init<'a>(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a Expression<'a>> {
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let mut init: Option<&'a Expression<'a>> = None;
+    for kind in std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::VariableDeclarator(decl) => {
+                init = decl.init.as_ref();
+            }
+            AstKind::VariableDeclaration(decl) => {
+                return if decl.kind == VariableDeclarationKind::Const {
+                    init
+                } else {
+                    None
+                };
+            }
+            AstKind::FormalParameter(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return None,
+            _ => continue,
+        }
+    }
+    None
 }
 
 /// gl-matrix fixed-size vector/matrix/quaternion type names. Each is a
@@ -3844,6 +4132,82 @@ mod tests {
         // The exemption is scoped to the first-element read. A `<obj>.length - 1`
         // last-read is not covered, so it stays flagged.
         let src = "function f(p: [number, number]) { return p[p.length - 1]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_sort_callback_tuple_element_index0_issue_6644() {
+        // The issue's repro: `sections` is `Record<string, [string, string[]][]>`,
+        // so `sections[group]!` is `[string, string[]][]`; the `.sort` callback
+        // params `a`/`b` are inferred as the tuple `[string, string[]]`. Neither is
+        // annotated, yet `a[0]`/`b[0]` are in-bounds. Both reads must be exempt.
+        let src = "const sections = Object.create(null) as Record<string, [string, string[]][]>; const sortedSections = sections[group]!.sort((a, b) => a[0].localeCompare(b[0]));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_of_tuple_element_index0_issue_6644() {
+        // `sortedSections` is an unannotated `const` whose `.sort(...)` initializer
+        // preserves the `[string, string[]]` element type; the `for...of` binding
+        // `section` is inferred as that tuple, so `section[0]` is in-bounds.
+        let src = "const sections = Object.create(null) as Record<string, [string, string[]][]>; const sortedSections = sections[group]!.sort((a, b) => 0); for (const section of sortedSections) { const heading = section[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_of_tuple_element_direct_array_index0_issue_6644() {
+        // `for...of` over a directly tuple-array-typed binding (`[number, number][]`)
+        // infers each element as `[number, number]`, so `row[0]` is in-bounds.
+        let src = "function f(rows: [number, number][]) { for (const row of rows) { return row[0]; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_map_callback_tuple_element_index0_issue_6644() {
+        // `.map` callback param is the receiver's element; a tuple-array receiver
+        // makes the unannotated `pair[0]` in-bounds.
+        let src = "function f(pairs: [string, number][]) { return pairs.map((pair) => pair[0]); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_sort_callback_string_array_element_issue_6644() {
+        // Negative control: the receiver is `string[]`, so the element is a plain
+        // `string`, not a tuple — `a[0]` may be `undefined` and stays flagged.
+        let src = "function f(xs: string[]) { return xs.sort((a, b) => a[0].localeCompare(b[0])); }";
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_for_of_string_array_element_issue_6644() {
+        // Negative control: a `string[]` element is not a tuple, so the `for...of`
+        // binding's `[0]` stays flagged.
+        let src = "function f(xs: string[]) { for (const x of xs) { return x[0]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_sort_callback_unresolvable_receiver_issue_6644() {
+        // Negative control (conservative fallback): the `.sort` receiver is an
+        // untyped/unresolvable identifier, so no tuple element type can be derived
+        // and the access stays flagged.
+        let src = "function f(xs) { return xs.sort((a, b) => a[0] - b[0]); }";
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_sort_callback_empty_tuple_element_issue_6644() {
+        // Negative control: an empty-tuple element `[]` has no index 0, so the
+        // callback param's `[0]` stays flagged.
+        let src = "function f(xs: [][]) { return xs.sort((a, b) => a[0]); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_annotated_non_tuple_array_alias_callback_issue_6644() {
+        // Negative control: an aliased element type (`Pair[]`) cannot be resolved to
+        // a tuple without type info, so the callback param's `[0]` stays flagged.
+        let src = "function f(xs: Pair[]) { return xs.sort((a, b) => a[0]); }";
         assert_eq!(run_on(src).len(), 1);
     }
 
