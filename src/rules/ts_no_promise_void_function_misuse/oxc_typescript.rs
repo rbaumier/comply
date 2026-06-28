@@ -169,9 +169,24 @@ fn is_consumed_by_promise_combinator(
         return false;
     }
 
-    let parent_kind = semantic.nodes().parent_node(node.id()).kind();
-    if is_awaiting_combinator_argument(parent_kind, call.span) {
+    let nodes = semantic.nodes();
+    let parent = nodes.parent_node(node.id());
+    if is_awaiting_combinator_argument(parent.kind(), call.span) {
         return true;
+    }
+
+    // Spread form `Promise.all([...arr.map(async ...)])`: the map call is wrapped in
+    // a SpreadElement inside an ArrayExpression that is the combinator's argument, so
+    // its rejections still propagate to the awaiting site. Walk the bounded chain
+    // SpreadElement -> ArrayExpression -> Promise.<all|allSettled|race|any>(...) call.
+    if matches!(parent.kind(), AstKind::SpreadElement(_)) {
+        let array = nodes.parent_node(parent.id());
+        if let AstKind::ArrayExpression(array_expr) = array.kind() {
+            let array_parent_kind = nodes.parent_node(array.id()).kind();
+            if is_awaiting_combinator_argument(array_parent_kind, array_expr.span) {
+                return true;
+            }
+        }
     }
 
     bound_variable(node, semantic)
@@ -309,6 +324,30 @@ mod tests {
     fn allows_promise_race_map_async() {
         let src = "Promise.race(arr.map(async (x) => { await save(x); }));";
         assert!(run(src).is_empty());
+    }
+
+    // --- #6559: map result spread into the Promise.all argument array ---
+
+    #[test]
+    fn allows_promise_all_spread_map_async() {
+        // The map call is spread into the array literal that is the awaited
+        // `Promise.all` argument; its rejections propagate, so it is consumed.
+        let src = "async function run() {\n\
+                       await Promise.all([\n\
+                           ...options.format.map(async (format, index) => {\n\
+                               await build(format, index);\n\
+                           }),\n\
+                       ]);\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_spread_map_async_into_plain_array() {
+        // Spread into an array literal that is NOT a combinator argument — the
+        // promises still float, so the diagnostic must fire.
+        let src = "const xs = [...arr.map(async (x) => { await save(x); })];";
+        assert_eq!(run(src).len(), 1);
     }
 
     // --- #3343: `.map(async ...)` bound to a variable then handled later ---
