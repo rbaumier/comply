@@ -122,6 +122,77 @@ fn is_typeof_operand(line: &str, abs: usize) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.ends_with(|c: char| !c.is_alphanumeric() && c != '_'))
 }
 
+/// True when the text immediately following a `typeof <global>` operand is a
+/// negated comparison against the `undefined` string (`!= 'undefined'` /
+/// `!== "undefined"`). Only this exact shape is `false` during SSR and thus
+/// short-circuits the `&&` chain; `===`, `!= null`, or `!== 'object'` stay `true`
+/// server-side (a `typeof` result is always a non-null string) and are rejected,
+/// so they never suppress a reachable access.
+fn is_negated_undefined_compare(after: &str) -> bool {
+    let Some(rest) = after.trim_start().strip_prefix("!=") else {
+        return false;
+    };
+    let rest = rest.strip_prefix('=').unwrap_or(rest).trim_start();
+    rest.starts_with("'undefined'") || rest.starts_with("\"undefined\"")
+}
+
+/// True when `line` carries a `typeof <ssr-global> !== 'undefined'` test — the
+/// SSR guard this rule recommends. Restricted to the SSR globals because only
+/// those are guaranteed `undefined` during server render; a `typeof someVar`
+/// existence check says nothing about the SSR environment. Only the line's last
+/// statement is inspected: a guard in an earlier `;`-terminated statement on the
+/// same line does not flow into a trailing `&&` continuation.
+fn has_negated_typeof_ssr_guard(line: &str) -> bool {
+    let stmt_start = line.rfind(';').map_or(0, |i| i + 1);
+    let line = &line[stmt_start..];
+    let in_string = string_literal_mask(line);
+    for g in SSR_GLOBALS {
+        let mut pos = 0;
+        while let Some(p) = line[pos..].find(g) {
+            let abs = pos + p;
+            let after_idx = abs + g.len();
+            let after = line.as_bytes().get(after_idx).map(|b| *b as char).unwrap_or(' ');
+            let is_word_after = after.is_alphanumeric() || after == '_';
+            if !is_word_after
+                && !in_string[abs]
+                && is_typeof_operand(line, abs)
+                && is_negated_undefined_compare(&line[after_idx..])
+            {
+                return true;
+            }
+            pos = after_idx;
+        }
+    }
+    false
+}
+
+/// True when a continuation line (one beginning with `&&` at brace-depth 0) is
+/// protected by a `typeof <ssr-global> !== 'undefined'` guard placed earlier in
+/// the same multi-line `&&` chain. `prior` holds the depth-0 lines above it in
+/// order; the scan walks back over the chain — skipping comment-only lines and
+/// the intermediate `&&` operands — and stops at the chain head (the first
+/// preceding non-comment line that does not itself begin with `&&`), which is
+/// still inspected.
+///
+/// Such a guard short-circuits to `false` during SSR, so every operand after it
+/// in the chain is unreachable server-side and therefore SSR-safe, whichever
+/// global it touches.
+fn guarded_by_typeof_in_chain(prior: &[&str]) -> bool {
+    for line in prior.iter().rev() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if has_negated_typeof_ssr_guard(line) {
+            return true;
+        }
+        if !trimmed.starts_with("&&") {
+            return false;
+        }
+    }
+    false
+}
+
 /// VueUse composables that accept a `window`/`document` target as a call argument
 /// and read it lazily inside an SSR-aware lifecycle hook. The composable internally
 /// guards the access (`isClient`/`useSupported`) and no-ops during server render, so
@@ -237,12 +308,19 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     // `const window = useWindow()`). Subsequent uses reference the local, not the
     // SSR-unsafe global, so they must not be flagged.
     let mut shadowed: Vec<&str> = Vec::new();
-    for (idx, line) in body.lines().enumerate() {
+    let lines: Vec<&str> = body.lines().collect();
+    for (idx, &line) in lines.iter().enumerate() {
         let trimmed_line = line.trim();
         if trimmed_line.starts_with("//") {
             continue;
         }
         if depth == 0 {
+            // A continuation line beginning with `&&` is the tail of a multi-line
+            // `&&` expression; a `typeof` SSR guard earlier in that chain
+            // short-circuits it, so every global it accesses is unreachable
+            // during server render and safe.
+            let continuation_guarded =
+                trimmed_line.starts_with("&&") && guarded_by_typeof_in_chain(&lines[..idx]);
             let in_string = string_literal_mask(line);
             for g in SSR_GLOBALS {
                 if shadowed.contains(g) {
@@ -262,6 +340,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     if !is_word
                         && !is_word_after
                         && !in_string[abs]
+                        && !continuation_guarded
                         && !guarded_before(line, abs)
                         && !runtime_guarded_before(line, abs)
                         && !is_typeof_operand(line, abs)
@@ -608,5 +687,48 @@ mod tests {
         let pkg = r#"{ "dependencies": { "nuxt": "^3.11.0" } }"#;
         let sfc = "<script setup>\nconst w = window.innerWidth\n</script>";
         assert_eq!(run_with_pkg(pkg, sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_typeof_guard_on_preceding_line_of_multiline_and_chain() {
+        // Issue #6464: nuxt/devtools NDarkToggle.vue. The `typeof document !==
+        // 'undefined'` guard sits on the head line of a multi-line `&&`
+        // expression; by short-circuit evaluation the `document` and `window`
+        // accesses on the continuation lines are never reached during SSR, even
+        // across an intervening comment-only line.
+        let sfc = "<script setup lang=\"ts\">\nconst isAppearanceTransition = typeof document !== 'undefined'\n  // @ts-expect-error document.startViewTransition can be undefined\n  && document.startViewTransition\n  && !window.matchMedia('(prefers-reduced-motion: reduce)').matches\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_continuation_global_without_typeof_guard() {
+        // A multi-line `&&` chain whose head carries no SSR guard does not
+        // protect the continuation-line global, so it is still flagged.
+        let sfc = "<script setup lang=\"ts\">\nconst x = someFlag\n  && window.matchMedia('(min-width: 0px)').matches\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
+    }
+
+    #[test]
+    fn flags_continuation_after_non_undefined_typeof_compare() {
+        // `typeof document != null` is always true in SSR (a `typeof` result is
+        // a non-null string), so it does not short-circuit; the continuation
+        // `window` access is reachable and must still be flagged.
+        let sfc = "<script setup lang=\"ts\">\nconst x = typeof document != null\n  && window.innerWidth\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
+    }
+
+    #[test]
+    fn flags_continuation_when_typeof_guard_is_a_separate_statement() {
+        // The `typeof document` guard belongs to a `;`-terminated statement on
+        // the head line; the `&& window.x` continuation extends the later
+        // `const b` statement, which is unguarded, so it is still flagged.
+        let sfc = "<script setup lang=\"ts\">\nconst a = typeof document !== 'undefined'; const b = ready\n  && window.innerWidth\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
     }
 }
