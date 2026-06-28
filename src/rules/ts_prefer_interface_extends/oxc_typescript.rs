@@ -4,13 +4,63 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::TSType;
+use oxc_ast::ast::{TSType, TSTypeName};
 use std::sync::Arc;
 
 pub struct Check;
 
 fn is_named_type_ref(ty: &TSType) -> bool {
     matches!(ty, TSType::TSTypeReference(_))
+}
+
+/// True when `ty` is — or, through a top-level union/intersection, contains —
+/// a primitive keyword type (`string`/`number`/`boolean`/`bigint`/`symbol`).
+/// An `interface` cannot `extends` a type that includes a primitive (TS2312),
+/// so an alias resolving to such a type is not a legal `extends` base.
+fn contains_primitive_keyword(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSStringKeyword(_)
+        | TSType::TSNumberKeyword(_)
+        | TSType::TSBooleanKeyword(_)
+        | TSType::TSBigIntKeyword(_)
+        | TSType::TSSymbolKeyword(_) => true,
+        TSType::TSUnionType(u) => u.types.iter().any(contains_primitive_keyword),
+        TSType::TSIntersectionType(i) => i.types.iter().any(contains_primitive_keyword),
+        _ => false,
+    }
+}
+
+/// True when intersection member `ty` is a `TSTypeReference` whose name resolves
+/// to a declaration that `interface … extends` cannot legally name, so the whole
+/// intersection must not be rewritten as an interface:
+/// - a same-module type alias whose aliased type contains a primitive keyword
+///   (e.g. `type FiniteNumber = number & Brand<…>`), which `extends` rejects; or
+/// - an imported binding, whose definition is not visible here and so cannot be
+///   confirmed to be an object type.
+///
+/// A reference that does not resolve (undeclared), or that resolves to an
+/// in-module `interface`/`class`/object-typed alias, does not block the rewrite.
+fn member_blocks_extends(ty: &TSType, semantic: &oxc_semantic::Semantic) -> bool {
+    let TSType::TSTypeReference(ref_ty) = ty else { return false };
+    let TSTypeName::IdentifierReference(ident) = &ref_ty.type_name else { return false };
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::TSTypeAliasDeclaration(alias) => {
+                return contains_primitive_keyword(&alias.type_annotation);
+            }
+            AstKind::TSInterfaceDeclaration(_) | AstKind::Class(_) => return false,
+            AstKind::ImportDeclaration(_) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 impl OxcCheck for Check {
@@ -22,7 +72,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TSTypeAliasDeclaration(alias) = node.kind() else { return };
@@ -49,6 +99,16 @@ impl OxcCheck for Check {
             return;
         }
         if !intersection.types.iter().all(is_named_type_ref) {
+            return;
+        }
+        // A rewrite to `interface … extends` is only legal when every member is
+        // an object type `extends` can name. Suppress when a member resolves to
+        // a primitive-containing alias or to an unresolvable (imported) binding.
+        if intersection
+            .types
+            .iter()
+            .any(|ty| member_blocks_extends(ty, semantic))
+        {
             return;
         }
 
@@ -137,5 +197,39 @@ mod tests {
         assert!(
             run_on("type X = { [key: string]: number } & Y;").is_empty()
         );
+    }
+
+    /// Negative control: an intersection of two object interfaces declared in
+    /// the same module is genuinely convertible and must still be flagged.
+    #[test]
+    fn flags_intersection_of_local_interfaces() {
+        let diags = run_on("interface A { a: number } interface B { b: string } type X = A & B;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    /// A member aliasing a bare primitive can't be an `extends` base (TS2312).
+    #[test]
+    fn allows_intersection_with_primitive_alias_member() {
+        assert!(run_on("type Id = string; type X = Id & Y;").is_empty());
+    }
+
+    /// An imported member's definition isn't visible, so we can't confirm it's
+    /// an object type — suppress rather than emit a possibly-invalid rewrite.
+    #[test]
+    fn allows_intersection_with_imported_member() {
+        assert!(
+            run_on("import { Foo } from './foo';\ntype X = Foo & Bar;").is_empty()
+        );
+    }
+
+    /// Regression for #6495 — a branded numeric alias resolves through a
+    /// same-module alias whose body is `number & Brand<…>`; rewriting the
+    /// derived intersection as `interface … extends` is rejected by TS2312.
+    #[test]
+    fn allows_intersection_of_primitive_branded_aliases() {
+        let src = "type Brand<Key extends string> = Readonly<Record<Key, true>>;\n\
+            export type FiniteNumber = number & Brand<'__finiteNumberBrand'>;\n\
+            export type Integer = FiniteNumber & Brand<'__integerBrand'>;";
+        assert!(run_on(src).is_empty());
     }
 }
