@@ -80,10 +80,13 @@ impl OxcCheck for Check {
             return;
         }
 
-        // A plain anchored literal like `/^Type invalide : chaîne…$/`
-        // is its own documentation — adding a comment that restates the
-        // sentence verbatim would be pure noise.
-        if super::is_simple_anchored_literal(&pattern) {
+        // A plain anchored literal like `/^Type invalide : chaîne…$/`,
+        // or a pure `|`-alternation of plain literals like
+        // `/jiti|node:internal|citty/`, is its own documentation —
+        // adding a comment that restates the literals would be pure noise.
+        if super::is_simple_anchored_literal(&pattern)
+            || super::is_pure_literal_alternation(&pattern)
+        {
             return;
         }
 
@@ -261,5 +264,32 @@ expect(result).toMatch(/^[a-z]+@[a-z]+\.[a-z]{2,4}$/);"#;
     fn still_flags_in_non_test_file() {
         let src = r#"const r = /^[a-z]+@[a-z]+\.[a-z]{2,4}$/;"#;
         assert_eq!(run_with_path(src, "src/auth.ts").len(), 1);
+    }
+
+    #[test]
+    fn ignores_pure_literal_alternation() {
+        // Regression for rbaumier/comply#6645 — a `|`-alternation of plain
+        // literals reads as "match any of these exact strings" and is its
+        // own documentation regardless of total length.
+        let src = r#"const InternalStackRe = /jiti|node:internal|citty|listhen|listenAndWatch/;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_alternation_with_metacharacter_alternative() {
+        let src = r#"const r = /foo|ba.r|something_long_enough/;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_quantified_group() {
+        let src = r#"const r = /(a|b)+ something long enough here/;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_character_class() {
+        let src = r#"const r = /[a-z]+ something long enough to trip/;"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
