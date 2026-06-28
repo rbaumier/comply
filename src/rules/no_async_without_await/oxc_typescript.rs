@@ -29,6 +29,30 @@ fn has_promise_return_type(
     text.contains("Promise<") || text.contains("PromiseLike<")
 }
 
+/// Check if an async arrow is the initializer of a variable whose explicit type
+/// annotation declares a `Promise`-returning function type, e.g.
+/// `const readAsset: (id: string) => Promise<Buffer> = async () => {...}`. The
+/// binding annotation owns the contract: without `async`, the arrow's inferred
+/// return type (e.g. `never` for a sync-throw body) would not satisfy the
+/// declared `Promise<T>`, so `async` is mandatory even when the body never
+/// awaits. Mirrors the arrow's own `has_promise_return_type` exemption, reading
+/// the annotation off the `VariableDeclarator` binding instead of the arrow.
+fn is_arrow_bound_to_promise_annotation(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    if !matches!(func_node.kind(), AstKind::ArrowFunctionExpression(_)) {
+        return false;
+    }
+    let AstKind::VariableDeclarator(decl) =
+        semantic.nodes().parent_node(func_node.id()).kind()
+    else {
+        return false;
+    };
+    has_promise_return_type(source, &decl.type_annotation)
+}
+
 /// Find the nearest enclosing async function/arrow for a given node,
 /// stopping at function boundaries. Returns the NodeId of the nearest
 /// enclosing function/arrow.
@@ -309,6 +333,19 @@ impl OxcCheck for Check {
             }
 
             if has_promise_return_type(ctx.source, return_type) {
+                continue;
+            }
+
+            // Async arrow bound to a variable whose explicit type annotation
+            // declares a Promise-returning function type, e.g. `const readAsset:
+            // (id: string) => Promise<Buffer> = async () => {...}`. The binding
+            // annotation owns the contract: without `async`, the arrow's inferred
+            // return type (e.g. `never` for a sync-throw body) would not satisfy
+            // the declared `Promise<T>`, so `async` is mandatory even when the
+            // body never awaits. This is the binding-annotation analog of the
+            // arrow's own `has_promise_return_type` exemption. A non-Promise
+            // binding annotation (`() => number`) or no annotation stays flagged.
+            if is_arrow_bound_to_promise_annotation(node, semantic, ctx.source) {
                 continue;
             }
 
@@ -845,6 +882,37 @@ mod tests {
                 this.foo = async () => { doSync(); };
             }
         }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_async_arrow_bound_to_promise_annotation() {
+        // Regression for rbaumier/comply#6566 — nitrojs/nitro
+        // `public-assets.ts`. The async arrow has no own return annotation, but
+        // its binding declares `(id: string) => Promise<Buffer>`. Without
+        // `async`, the sync-throw body's inferred return type is `never`, which
+        // does not satisfy `Promise<Buffer>`, so `async` is mandatory even though
+        // the body never awaits.
+        let src = r#"export const readAsset: (id: string) => Promise<Buffer> = async () => {
+            throw new Error("Asset not found");
+        };"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_arrow_bound_to_non_promise_annotation() {
+        // Negative space for #6566: a binding annotation that is NOT
+        // Promise-returning (`() => number`) gives `async` no type contract to
+        // satisfy — the arrow stays flagged.
+        let src = "const f: () => number = async () => { return 1; };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_arrow_without_annotation() {
+        // Negative space for #6566: an async arrow with no binding annotation and
+        // no await stays flagged.
+        let src = "const f = async () => { return 1; };";
         assert_eq!(run_on(src).len(), 1);
     }
 
