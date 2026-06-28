@@ -42,6 +42,22 @@ pub(crate) fn is_simple_anchored_literal(pattern: &str) -> bool {
             | '|' | '\\' | '{' | '}' | '^' | '$'))
 }
 
+/// True if `pattern` is a `|`-separated list of plain literal
+/// alternatives — each alternative free of metacharacters,
+/// quantifiers, groups, and escapes — optionally bracketed by `^`
+/// and `$` anchors. Such a regex reads as "match any of these exact
+/// strings"; the list of alternatives IS its own documentation, just
+/// like a single anchored literal.
+pub(crate) fn is_pure_literal_alternation(pattern: &str) -> bool {
+    let inner = pattern.strip_prefix('^').unwrap_or(pattern);
+    let inner = inner.strip_suffix('$').unwrap_or(inner);
+    !inner.is_empty() && inner.split('|').all(|alt| {
+        !alt.is_empty()
+            && !alt.chars().any(|c| matches!(c,
+                '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '\\' | '{' | '}' | '^' | '$'))
+    })
+}
+
 #[cfg(test)]
 mod helper_tests {
     use super::*;
@@ -70,6 +86,28 @@ mod helper_tests {
     fn rejects_empty_pattern() {
         assert!(!is_simple_anchored_literal(""));
         assert!(!is_simple_anchored_literal("^$"));
+    }
+
+    #[test]
+    fn accepts_pure_literal_alternation() {
+        assert!(is_pure_literal_alternation(
+            "jiti|node:internal|citty|listhen|listenAndWatch"
+        ));
+        assert!(is_pure_literal_alternation("^foo|bar|baz$"));
+    }
+
+    #[test]
+    fn rejects_alternation_with_metacharacter_alternative() {
+        assert!(!is_pure_literal_alternation("foo|ba.r"));
+        assert!(!is_pure_literal_alternation("a|b+"));
+        assert!(!is_pure_literal_alternation("(a|b)+"));
+        assert!(!is_pure_literal_alternation("[a-z]+"));
+    }
+
+    #[test]
+    fn rejects_alternation_with_empty_alternative() {
+        assert!(!is_pure_literal_alternation("foo||bar"));
+        assert!(!is_pure_literal_alternation(""));
     }
 }
 
