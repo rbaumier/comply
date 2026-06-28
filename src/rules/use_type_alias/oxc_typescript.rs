@@ -102,24 +102,34 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Skip occurrences inside type alias declarations: each alias names
-            // a distinct domain concept regardless of structural identity, so
-            // counting them as duplicates produces false positives.
+            // Skip occurrences that are part of a type *definition* rather than a
+            // usage-site annotation:
+            //   - inside a type alias declaration: each alias names a distinct
+            //     domain concept regardless of structural identity;
+            //   - as part of a generic type-parameter declaration — its
+            //     constraint or default (`T extends X | Y` / `T = X | Y`):
+            //     overload signatures must independently redeclare their type
+            //     parameters, so the repetition is structurally forced, not a
+            //     copy-paste smell a shared alias would simplify.
+            // Counting either as a duplicate produces false positives.
             {
                 let mut cur_id = node.id();
-                let mut in_alias = false;
+                let mut in_definition = false;
                 loop {
                     let p = semantic.nodes().parent_node(cur_id);
                     if p.id() == cur_id {
                         break;
                     }
-                    if matches!(p.kind(), AstKind::TSTypeAliasDeclaration(_)) {
-                        in_alias = true;
+                    if matches!(
+                        p.kind(),
+                        AstKind::TSTypeAliasDeclaration(_) | AstKind::TSTypeParameter(_)
+                    ) {
+                        in_definition = true;
                         break;
                     }
                     cur_id = p.id();
                 }
-                if in_alias {
+                if in_definition {
                     continue;
                 }
             }
@@ -373,5 +383,61 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_generic_type_parameter_constraint() {
+        // Regression #6537 — `string | readonly string[]` repeated across
+        // overload signatures only ever appears as a generic type-parameter
+        // constraint (`T extends ...`), which TypeScript forces each overload
+        // to redeclare. The repetition is structurally forced, not a
+        // copy-paste smell a shared alias would simplify.
+        let src = r#"
+            export function pascalCase<
+              T extends string | readonly string[],
+              UserCaseOptions extends CaseOptions = CaseOptions,
+            >(str: T, opts?: CaseOptions): PascalCase<T>;
+            export function pascalCase<
+              T extends string | readonly string[],
+              UserCaseOptions extends CaseOptions = CaseOptions,
+            >(str?: T, opts?: UserCaseOptions): string {
+              return "";
+            }
+            export function camelCase<
+              T extends string | readonly string[],
+            >(str: T): CamelCase<T>;
+            export function camelCase<
+              T extends string | readonly string[],
+            >(str?: T): string {
+              return "";
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_repeated_union_at_value_sites() {
+        // Negative control for #6537 — the constraint-position exemption does
+        // not globally whitelist the union: repeated at real value-binding
+        // annotation sites the same union must still fire.
+        let src = r#"
+            function a(x: string | readonly string[]) {}
+            function b(x: string | readonly string[]) {}
+            function c(x: string | readonly string[]) {}
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn constraint_occurrence_does_not_suppress_value_site_duplicates() {
+        // The constraint occurrence is exempt, but value-site repetitions of the
+        // same union count on their own — the fix excludes only constraint
+        // positions, it does not whitelist the union everywhere.
+        let src = r#"
+            function id<T extends string | readonly string[]>(x: T): T { return x; }
+            function a(x: string | readonly string[]) {}
+            function b(x: string | readonly string[]) {}
+        "#;
+        assert!(!run(src).is_empty());
     }
 }
