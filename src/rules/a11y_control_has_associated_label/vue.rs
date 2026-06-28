@@ -8,6 +8,29 @@ use crate::rules::vue_template_helpers::{
 
 const INTERACTIVE: &[&str] = &["button", "input", "select", "textarea"];
 
+/// True when the element carries a `v-bind` object-spread attribute
+/// (`v-bind="props"`, `v-bind="$attrs"`) with no `:argument`. Such a spread
+/// merges a caller-supplied object whose keys are statically unknown, so the
+/// element may receive `aria-label`/`aria-labelledby` at the usage site.
+///
+/// A single-attribute binding (`v-bind:class`, the `:value` shorthand) binds
+/// one named attribute and is not a spread: it is rejected here so those
+/// controls keep being flagged when they lack an accessible label.
+fn has_vbind_spread(attrs: &str) -> bool {
+    let bytes = attrs.as_bytes();
+    let mut start = 0;
+    while let Some(rel) = attrs[start..].find("v-bind") {
+        let pos = start + rel;
+        let at_boundary = pos == 0 || bytes[pos - 1].is_ascii_whitespace();
+        let after = &attrs[pos + "v-bind".len()..];
+        if at_boundary && after.trim_start().starts_with('=') {
+            return true;
+        }
+        start = pos + "v-bind".len();
+    }
+    false
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -42,6 +65,11 @@ impl TextCheck for Check {
                 continue;
             }
             if has_attr(elem.attrs, "aria-label") || has_attr(elem.attrs, "aria-labelledby") {
+                continue;
+            }
+            // A `v-bind` object spread may carry `aria-label`/`aria-labelledby`
+            // from the caller, making the attribute set statically unknowable.
+            if has_vbind_spread(elem.attrs) {
                 continue;
             }
             // Implicit label association: control nested inside a `<label>`.
@@ -139,6 +167,48 @@ mod tests {
     #[test]
     fn still_flags_input_after_closed_label() {
         let source = "<template>\n  <label for=\"x\">Name</label>\n  <input id=\"y\" type=\"text\" />\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    // Regression #6500: a base UI primitive spreads caller props via a `v-bind`
+    // object spread, which may carry `aria-label`/`aria-labelledby`.
+    #[test]
+    fn allows_input_with_vbind_spread() {
+        let source = "<template>\n  <input v-bind=\"props\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_select_with_vbind_attrs() {
+        let source = "<template>\n  <select v-bind=\"attrs\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_textarea_with_vbind_dollar_attrs() {
+        let source = "<template>\n  <textarea v-bind=\"$attrs\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    // The exact shadcn-style base input from the issue: the spread sits among
+    // single-attribute bindings (`:class`, `:value`) and event handlers.
+    #[test]
+    fn allows_input_with_vbind_spread_multiline() {
+        let source = "<template>\n  <input\n    v-bind=\"props\"\n    ref=\"input\"\n    data-slot=\"input\"\n    :class=\"styles\"\n    :value=\"modelValue\"\n    @input=\"handleInput\"\n  />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    // Negative control: a single-attribute binding is not a spread and does not
+    // introduce an unknown aria attribute, so the missing label still flags.
+    #[test]
+    fn still_flags_input_with_vbind_class_only() {
+        let source = "<template>\n  <input v-bind:class=\"x\" />\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_input_with_colon_value_only() {
+        let source = "<template>\n  <input :value=\"v\" />\n</template>";
         assert_eq!(run(source).len(), 1);
     }
 }
