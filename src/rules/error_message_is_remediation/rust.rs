@@ -17,14 +17,45 @@ const VERBS: &[&str] = &[
     "ensure", "provide", "specify", "use", "try", "retry", "pass", "set", "add", "remove",
     "update", "create", "delete", "call", "return", "expect", "require", "missing", "failed",
     "cannot", "unable", "exceeded", "denied", "rejected", "not", "invalid", "unknown", "unexpected",
-    "mismatched", "duplicate", "no", "none", "out", "exceeds", "expected", "wrong",
+    "mismatched", "duplicate", "no", "none", "out", "exceeds", "expected", "wrong", "parse",
+    "render", "compile", "load", "find",
 ];
 
+/// True if `word` (already lowercased) is a listed verb in its base form or a
+/// recognized inflection of one: third-person `-s` ("requires" → "require"),
+/// gerund `-ing` ("rendering" → "render", "parsing" → "parse" with the dropped
+/// silent `e` restored), or `n't` contraction ("couldn't" → "could").
+///
+/// Only accepts a token whose stem, after stripping a single recognized suffix,
+/// is itself a listed verb — an unknown `-s`/`-ing` word stays a non-verb.
+fn token_is_verb(word: &str) -> bool {
+    if VERBS.contains(&word) {
+        return true;
+    }
+    if let Some(stem) = word.strip_suffix("n't") {
+        if VERBS.contains(&stem) {
+            return true;
+        }
+    }
+    if let Some(stem) = word.strip_suffix("ing") {
+        // Bare stem ("loading" → "load"), or a listed verb whose silent trailing
+        // `e` was dropped before `-ing` ("parsing" → "parse", "rendering" → "render").
+        if VERBS.contains(&stem) || VERBS.iter().any(|v| v.strip_suffix('e') == Some(stem)) {
+            return true;
+        }
+    }
+    if let Some(stem) = word.strip_suffix('s') {
+        if VERBS.contains(&stem) {
+            return true;
+        }
+    }
+    false
+}
+
 fn has_verb(msg: &str) -> bool {
-    let lower = msg.to_ascii_lowercase();
-    VERBS
-        .iter()
-        .any(|v| lower.split_whitespace().any(|w| w == *v))
+    msg.to_ascii_lowercase()
+        .split_whitespace()
+        .any(token_is_verb)
 }
 
 /// True if `node` sits in the body of a `fn default()` whose enclosing `impl`
@@ -93,17 +124,30 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
 
     let Ok(full_text) = node.utf8_text(source) else { return };
 
-    // Extract the first string argument.
-    let msg = if let Some(start) = full_text.find('"') {
-        let rest = &full_text[start + 1..];
-        if let Some(end) = rest.find('"') {
-            &rest[..end]
-        } else {
-            return;
+    // Extract the first string literal argument. The closing delimiter is the
+    // first `"` that is not escaped, so an embedded `\"` (common when a message
+    // quotes a value, e.g. `op=\"fit_width\" requires …`) does not truncate the
+    // text before its verb.
+    let Some(open) = full_text.find('"') else { return };
+    let after_open = &full_text[open + 1..];
+    let mut close_rel = None;
+    let mut escaped = false;
+    for (idx, ch) in after_open.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
         }
-    } else {
-        return;
-    };
+        match ch {
+            '\\' => escaped = true,
+            '"' => {
+                close_rel = Some(idx);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let Some(close_rel) = close_rel else { return };
+    let msg = &after_open[..close_rel];
 
     // A literal that is nothing but a single bare format placeholder
     // (`{}`, `{:?}`, `{0}`, `{e}`, `{value:>8}`, …) carries no static text:
@@ -340,5 +384,64 @@ mod tests {
     fn still_flags_vague_static_message() {
         // No placeholder at all — a genuinely short static message still flags.
         assert_eq!(run_on(r#"fn f() { bail!("oops"); }"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_third_person_s_inflection() {
+        // getzola/zola #6562: "requires" is the third-person form of "require".
+        assert!(
+            run_on(r#"fn f() { anyhow!("op=\"fit_width\" requires a width argument"); }"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_gerund_inflection() {
+        // "parsing" is the gerund of "parse" (silent `e` dropped before `-ing`).
+        assert!(run_on(r#"fn f() { anyhow!("Error parsing YAML datetime here"); }"#).is_empty());
+    }
+
+    #[test]
+    fn allows_added_base_verbs_render_and_compile() {
+        // templates.rs:117 — "render" is a listed base verb; the embedded `{}`
+        // placeholder is surrounded by prose so the literal is still judged.
+        assert!(
+            run_on(r#"fn f() { bail!("Tried to render `{}` but the template wasn't found", name); }"#)
+                .is_empty()
+        );
+        // sass.rs:43 — escaped `\"` around quoted paths must not truncate the
+        // text before "compile".
+        assert!(
+            run_on(r#"fn f() { bail!("SASS path conflict: \"{}\" and \"{}\" both compile to \"{}\"", a, b, c); }"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_contracted_negation() {
+        // "Couldn't" → "could"; "find" is also a listed base verb.
+        assert!(
+            run_on(r#"fn f() { panic!("Couldn't find section in the page index"); }"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_verbless_long_message_after_inflection_support() {
+        // No base or inflected verb anywhere — stemming only accepts tokens whose
+        // stem is a known verb, so a verbless message keeps flagging.
+        assert_eq!(
+            run_on(r#"fn f() { bail!("wonky thingamajig somewhere nearby"); }"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_unknown_inflected_word() {
+        // "thingamajigs"/"gizmos" end in `-s` but their stems are not listed
+        // verbs, so the message is still vague — stemming is not a blanket pass.
+        assert_eq!(
+            run_on(r#"fn f() { bail!("thingamajigs and gizmos everywhere abound"); }"#).len(),
+            1
+        );
     }
 }
