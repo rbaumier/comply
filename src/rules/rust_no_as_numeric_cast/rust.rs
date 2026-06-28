@@ -91,7 +91,7 @@ use crate::rules::rust_helpers::{
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
-    cast_operand_is_non_negative_guarded,
+    cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
     is_in_enum_discriminant, is_in_test_context,
@@ -227,6 +227,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     // `(x % N) as uT` with a non-negative `x` and `N - 1 <= uT::MAX` is in range
     // — the unsigned-remainder narrowing in `(width % 256) as u8` (#6151).
     if cast_operand_is_modulo_bounded(node, source_bytes) {
+        return false;
+    }
+    // `let v = x % N; v as uT` — the modulo bound carried through a `let` binding
+    // to an identifier cast (#6485), the let-bound form of the above.
+    if cast_operand_is_modulo_bounded_via_binding(node, source_bytes) {
         return false;
     }
     // `<recv>.min(BOUND) as uT` where the `.min()` clamp proves the value fits the
@@ -609,6 +614,84 @@ name = "normal_lib"
         // provably unsigned from the AST, so the cast stays flagged.
         assert_eq!(
             run_on("fn f(d: Duration) -> u32 { (d.as_nanos() % 1_000_000) as u32 }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_modulo_bounded_via_let_binding() {
+        // Issue #6485: itoa stages `remain % 1_00_00` in a `let` before casting
+        // the identifier — `quad` is in `[0, 9999] ⊆ u32`, so `quad as u32` is
+        // lossless even though the modulo is no longer the cast's direct operand.
+        assert!(
+            run_on("fn f(remain: u64) -> u32 { let quad = remain % 1_00_00; quad as u32 }")
+                .is_empty()
+        );
+        // An intervening reassignment of an *unrelated* binding does not break the
+        // bound (mirrors itoa's `remain /= 1_00_00;` between the `let` and cast).
+        assert!(
+            run_on(
+                "fn f(mut remain: u64) -> u32 \
+                 { let quad = remain % 1_00_00; remain /= 1_00_00; quad as u32 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_modulo_let_binding_reassigned() {
+        // A reassignment of the bound identifier between the modulo `let` and the
+        // cast replaces the bounded value — the cast must stay flagged.
+        assert_eq!(
+            run_on(
+                "fn f(mut remain: u64, other: u64) -> u32 \
+                 { let mut quad = remain % 1_00_00; quad = other; quad as u32 }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_modulo_let_binding_shadowed() {
+        // A shadowing `let quad = big` between the modulo `let` and the cast is the
+        // value the cast actually reads — the modulo bound no longer applies.
+        assert_eq!(
+            run_on(
+                "fn f(remain: u64, big: u64) -> u32 \
+                 { let quad = remain % 1_00_00; let quad = big; quad as u32 }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_modulo_let_binding_bound_exceeds_target() {
+        // `100_000 - 1 = 99_999` does not fit `u8`, so the let-bound modulo is not
+        // exempt — same bound check as the inline form.
+        assert_eq!(
+            run_on("fn f(remain: u64) -> u8 { let quad = remain % 100_000; quad as u8 }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_let_binding_without_modulo() {
+        // A plain `let x = foo(); x as u32` carries no modulo bound, so the
+        // narrowing cast keeps its diagnostic.
+        assert_eq!(
+            run_on("fn f() -> u32 { let x = foo(); x as u32 }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_modulo_let_binding_signed_dividend() {
+        // A signed dividend `s: i64` can make `s % N` negative, so `quad as u32`
+        // wraps — the bound `[0, N - 1]` only holds for an unsigned dividend.
+        assert_eq!(
+            run_on("fn f(s: i64) -> u32 { let quad = s % 1_00_00; quad as u32 }").len(),
             1
         );
     }

@@ -4137,10 +4137,21 @@ pub fn cast_operand_is_modulo_bounded(cast: Node, source: &[u8]) -> bool {
     } else {
         (1u128 << target_bits) - 1
     };
-
-    let Some(mut value) = cast.child_by_field_name("value") else {
+    let Some(value) = cast.child_by_field_name("value") else {
         return false;
     };
+    binary_is_modulo_bounded(value, target_max, source)
+}
+
+/// True when `value` (parens transparent) is `x % N` whose remainder always fits
+/// an unsigned target of maximum `target_max`: `N` is an integer literal with
+/// `N - 1 <= target_max`, and the dividend `x` is provably non-negative per
+/// [`expr_is_provably_nonneg`] (so `x % N` lands in `[0, N - 1]`). The shared
+/// bound check behind both the inline `(x % N) as uT` exemption
+/// ([`cast_operand_is_modulo_bounded`]) and its let-bound form
+/// ([`cast_operand_is_modulo_bounded_via_binding`]).
+fn binary_is_modulo_bounded(value: Node, target_max: u128, source: &[u8]) -> bool {
+    let mut value = value;
     while value.kind() == "parenthesized_expression" {
         let Some(inner) = value.named_child(0) else {
             return false;
@@ -4176,6 +4187,85 @@ pub fn cast_operand_is_modulo_bounded(cast: Node, source: &[u8]) -> bool {
         return false;
     }
     expr_is_provably_nonneg(left, source)
+}
+
+/// True when `cast` (a `type_cast_expression`) narrows `v as uT` where `v` is an
+/// identifier last bound by `let v = x % N` whose modulo bound carries to the
+/// cast site — the let-bound counterpart of [`cast_operand_is_modulo_bounded`]'s
+/// inline `(x % N) as uT`.
+///
+/// Digit-extraction loops (itoa's `enc_*`) stage the remainder in a local before
+/// casting it: `let quad = remain % 1_00_00; divmod100(quad as u32)`. The cast's
+/// operand is then a bare `identifier`, so the inline modulo check cannot see the
+/// bound. This predicate resolves the identifier to its innermost preceding `let`
+/// in the enclosing block and applies the SAME bound check
+/// ([`binary_is_modulo_bounded`]): unsigned target, literal `N` with
+/// `N - 1 <= uT::MAX`, provably non-negative dividend.
+///
+/// Soundness adds a binding guard on top of that bound: the modulo value proves
+/// `v`'s value only while `v` is unchanged between the `let` and the cast. A
+/// shadowing re-`let v` or a reassignment (`v = …` / `v += …`) in between
+/// replaces it, so [`name_rebound_in_range`] vetoes the exemption and the cast
+/// stays flagged. A later non-modulo `let v = big` therefore keeps flagging.
+///
+/// Only the innermost enclosing `block` is scanned, so a `let` in an outer scope
+/// is left unresolved (a conservative false-negative, never an unsound
+/// exemption). Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`.
+pub fn cast_operand_is_modulo_bounded_via_binding(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = value.utf8_text(source) else {
+        return false;
+    };
+    let Some(target_bits) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .and_then(unsigned_int_bits)
+    else {
+        return false;
+    };
+    let target_max: u128 = if target_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << target_bits) - 1
+    };
+
+    let Some((block, cast_stmt)) = enclosing_block_statement(cast) else {
+        return false;
+    };
+    let cast_start = cast.start_byte();
+    let mut cursor = block.walk();
+    for stmt in block.named_children(&mut cursor) {
+        if stmt.id() == cast_stmt.id() {
+            break;
+        }
+        if stmt.kind() != "let_declaration" {
+            continue;
+        }
+        let binds_name = stmt
+            .child_by_field_name("pattern")
+            .is_some_and(|p| pattern_contains_identifier(p, name, source));
+        if !binds_name {
+            continue;
+        }
+        let Some(bound_value) = stmt.child_by_field_name("value") else {
+            continue;
+        };
+        if !binary_is_modulo_bounded(bound_value, target_max, source) {
+            continue;
+        }
+        // The modulo bound proves `name`'s value only while it stays unchanged
+        // between the `let` and the cast; a shadowing re-`let` or reassignment in
+        // `(let, cast)` replaces it and vetoes the exemption.
+        if !name_rebound_in_range(block, stmt.end_byte(), cast_start, name, source) {
+            return true;
+        }
+    }
+    false
 }
 
 /// True when `node`'s value is provably `>= 0` from the AST alone (no type
