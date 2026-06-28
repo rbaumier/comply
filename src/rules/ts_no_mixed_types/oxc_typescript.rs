@@ -47,6 +47,22 @@ fn has_iterator_protocol_method(sigs: &oxc_allocator::Vec<'_, TSSignature>) -> b
     })
 }
 
+/// An anonymous call signature (`(...): T`) or construct signature
+/// (`new (...): T`) makes the interface a hybrid callable/constructable
+/// function-object (jQuery `$`-style). Its non-call members describe slots
+/// attached to the function value, where mixing property signatures (function
+/// values) with method signatures (true methods) is an intentional design, not
+/// the plain data-model inconsistency this rule targets.
+fn has_call_signature(sigs: &oxc_allocator::Vec<'_, TSSignature>) -> bool {
+    sigs.iter().any(|sig| {
+        matches!(
+            sig,
+            TSSignature::TSCallSignatureDeclaration(_)
+                | TSSignature::TSConstructSignatureDeclaration(_)
+        )
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSInterfaceDeclaration, AstType::TSTypeAliasDeclaration]
@@ -65,7 +81,9 @@ impl OxcCheck for Check {
                 if !(has_prop && has_method) {
                     return;
                 }
-                if has_iterator_protocol_method(&iface.body.body) {
+                if has_iterator_protocol_method(&iface.body.body)
+                    || has_call_signature(&iface.body.body)
+                {
                     return;
                 }
                 let name = iface.id.name.as_str();
@@ -92,7 +110,9 @@ impl OxcCheck for Check {
                 if !(has_prop && has_method) {
                     return;
                 }
-                if has_iterator_protocol_method(&lit.members) {
+                if has_iterator_protocol_method(&lit.members)
+                    || has_call_signature(&lit.members)
+                {
                     return;
                 }
                 let name = alias.id.name.as_str();
@@ -184,6 +204,69 @@ interface CustomIterator<T> {
 "#,
         );
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_callable_hybrid_interface() {
+        // From unjs/defu (src/types.ts): `DefuInstance` is a callable interface
+        // (anonymous call signature). The mix of property signatures (`fn`,
+        // `arrayFn`) and a method signature (`extend`) describes slots attached
+        // to the function value, an intentional function-object design.
+        let d = run_on(
+            r#"
+export interface DefuInstance {
+    <Source extends Input, Defaults extends Array<Input | IgnoredInput>>(
+        source: Source | IgnoredInput,
+        ...defaults: Defaults
+    ): Defu<Source, Defaults>;
+    fn: DefuFn;
+    arrayFn: DefuFn;
+    extend(merger?: Merger): DefuFn;
+}
+"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_constructable_hybrid_interface() {
+        // A construct signature (`new (...)`) likewise marks a hybrid
+        // function-object; mixing property and method members is intentional.
+        let d = run_on(
+            r#"
+interface WidgetFactory {
+    new (name: string): Widget;
+    defaults: WidgetOptions;
+    create(name: string): Widget;
+}
+"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_callable_hybrid_type_alias() {
+        // Parity with the interface branch: a callable object-type alias is a
+        // hybrid function-object, so its property/method mix is intentional.
+        let d = run_on(
+            r#"
+type DefuType = {
+    <Source>(source: Source): Source;
+    fn: DefuFn;
+    extend(merger?: Merger): DefuFn;
+};
+"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_interface_without_call_signature() {
+        // Negative control: a plain data-model interface mixing a property with
+        // a method but carrying NO call/construct signature is still flagged.
+        let d = run_on("interface X { a: () => void; b(): void; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("X"));
     }
 
     #[test]
