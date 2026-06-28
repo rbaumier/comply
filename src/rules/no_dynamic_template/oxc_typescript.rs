@@ -5,14 +5,21 @@
 //! Exemptions on innerHTML/outerHTML assignments: a compile-time-constant string
 //! (a StringLiteral or a TemplateLiteral with no expressions), a template
 //! literal whose every `${...}` is provably numeric (numbers cannot carry HTML
-//! markup), and a write to a provable `<template>` element (its content is an
+//! markup), a write to a provable `<template>` element (its content is an
 //! inert off-document fragment, the standard safe HTML parser, not a live-DOM
-//! sink). Assignments and HTML-construction calls inside a Playwright/Puppeteer
-//! injection callback (`page.evaluate(...)`) are also exempt: they run in a
-//! controlled automation browser, not the application DOM.
+//! sink), and a write to a detached `document.createElement(...)` element used
+//! only as an HTML→text parser (every other reference reads `.textContent`/
+//! `.innerText`, the element never reaches the live DOM; see
+//! `oxc_helpers::assignment_target_is_detached_text_parser`). Assignments and
+//! HTML-construction calls inside a Playwright/Puppeteer injection callback
+//! (`page.evaluate(...)`) are also exempt: they run in a controlled automation
+//! browser, not the application DOM.
 
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_browser_injection_callback};
+use crate::oxc_helpers::{
+    assignment_target_is_detached_text_parser, byte_offset_to_line_col,
+    is_inside_browser_injection_callback,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::html_sink_helpers::{is_numeric_only_template, lhs_object_is_template_element};
 use oxc_ast::ast::{AssignmentTarget, Expression};
@@ -112,6 +119,14 @@ impl OxcCheck for Check {
                         // Writing to a `<template>` element's `.innerHTML` is an inert HTML
                         // parse (off-document fragment, no script execution), not a sink.
                         if lhs_object_is_template_element(lhs_object, semantic) {
+                            return;
+                        }
+                        // A detached `document.createElement(...)` element used only to
+                        // read `.textContent`/`.innerText` is an HTML→text parser that
+                        // never reaches the live DOM, not a dynamic-HTML sink.
+                        if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
+                            && assignment_target_is_detached_text_parser(member, semantic)
+                        {
                             return;
                         }
                         emit(ctx, assign.span.start, prop, diagnostics);
@@ -328,6 +343,52 @@ mod tests {
     #[test]
     fn flags_member_chain_receiver() {
         let src = "function f(x) { this.tmpl.innerHTML = x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Repro for #6593: a detached `document.createElement('div')` used only as an
+    // HTML→text parser (assign `.innerHTML`, then read `.textContent`) is not a
+    // dynamic-HTML sink.
+    #[test]
+    fn allows_detached_create_element_text_extraction() {
+        let src = "function f(html) { const el = document.createElement('div'); el.innerHTML = html; const text = el.textContent; return text; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_detached_create_element_inner_text_read() {
+        let src = "function f(html) { const el = document.createElement('span'); el.innerHTML = html; return el.innerText; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative controls: the element escapes to the live DOM, so it keeps flagging.
+    #[test]
+    fn flags_detached_element_appended_to_dom() {
+        let src = "function f(html) { const el = document.createElement('div'); el.innerHTML = html; document.body.appendChild(el); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_detached_element_with_append_child_receiver() {
+        let src = "function f(html, child) { const el = document.createElement('div'); el.innerHTML = html; el.appendChild(child); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_detached_element_returned() {
+        let src = "function f(html) { const el = document.createElement('div'); el.innerHTML = html; return el; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_non_create_element_origin() {
+        let src = "function f(html) { const el = document.getElementById('x'); el.innerHTML = html; const text = el.textContent; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_param_element_only_text_read() {
+        let src = "function f(el, html) { el.innerHTML = html; const text = el.textContent; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
