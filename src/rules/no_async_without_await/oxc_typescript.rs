@@ -180,6 +180,26 @@ fn is_method_of_implementing_class(
     enclosing_class(member.id(), nodes).is_some_and(|class| ClassShape::of(class).has_implements)
 }
 
+/// Check if the async function is a class method marked `override`. The
+/// `override` keyword binds the method's signature to the parent class's
+/// contract (possibly an external type, e.g. the Cloudflare Workers
+/// `DurableObject`): when the parent declares the method `async`/`Promise`-
+/// returning, the override must stay `async` to preserve the `Promise` return
+/// type under Liskov substitution, so the missing `await` is not a smell. The
+/// immediate parent must be the `MethodDefinition`; a nested arrow inside the
+/// body is not the override and stays flagged. Mirrors the interface-driven
+/// `is_method_of_implementing_class` exemption for the `extends`-only case,
+/// where `ClassShape::has_implements` is false.
+fn is_override_method(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    matches!(
+        semantic.nodes().parent_node(func_node.id()).kind(),
+        AstKind::MethodDefinition(method) if method.r#override
+    )
+}
+
 /// Check if the async function is the value of an assignment `this.X = async
 /// () => {...}` whose enclosing class declares an `async X()` method. Reassigning
 /// the method on the instance must preserve its `Promise`-returning type: callers
@@ -303,6 +323,18 @@ impl OxcCheck for Check {
             // of a class without `implements`, and standalone functions, stay
             // flagged.
             if is_method_of_implementing_class(node, semantic) {
+                continue;
+            }
+
+            // Async class method marked `override`. The `override` keyword binds
+            // the method's signature to the parent class's contract (possibly an
+            // external type such as the Cloudflare Workers `DurableObject`): when
+            // the parent declares the method `async`, the override must stay
+            // `async` to preserve the `Promise` return type under Liskov
+            // substitution, so the missing `await` is not a smell. This is the
+            // `extends`-only analog of `is_method_of_implementing_class`, since an
+            // `extends`-only class has `ClassShape::has_implements == false`.
+            if is_override_method(node, semantic) {
                 continue;
             }
 
@@ -669,6 +701,53 @@ mod tests {
         // Only the nested arrow is flagged; the `run` method awaits nothing but is
         // exempt as a member of an implementing class.
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_override_async_method_extends_only_class() {
+        // Regression for rbaumier/comply#6564 — nitrojs/nitro
+        // `$DurableObject extends DurableObject`. The `override` keyword binds the
+        // method to the parent class's contract: the Cloudflare Workers
+        // `DurableObject.webSocketMessage` is declared `async`/`Promise<void>`, so
+        // the override must stay `async` even though the body never awaits.
+        // The class uses `extends` only (no `implements`), so the interface
+        // exemption does not fire — the `override` keyword carries the contract.
+        let src = r#"export class $DurableObject extends DurableObject {
+            override async webSocketMessage(client: WebSocket, message: ArrayBuffer | string) {
+                if (import.meta._websocket) {
+                    return ws!.handleDurableMessage(this, client, message);
+                }
+            }
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_override_async_method_extends_only_class() {
+        // Negative space for #6564: a plain (non-`override`) async method with no
+        // await in an `extends`-only class has no parent-owned contract — it stays
+        // flagged. Only the `override` keyword carries the exemption.
+        let src = r#"class C extends Base {
+            async foo() { return 1; }
+        }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_top_level_async_function_alongside_override_exemption() {
+        // Negative space for #6564: a top-level async function with no await is
+        // unaffected by the `override` exemption and stays flagged.
+        assert_eq!(run_on("async function bar() { return 1; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_override_async_method_with_await_unchanged() {
+        // An `override async` method that does await is already passing via the
+        // has-await path; confirm the new exemption does not change that.
+        let src = r#"class C extends Base {
+            override async baz() { await x(); }
+        }"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
