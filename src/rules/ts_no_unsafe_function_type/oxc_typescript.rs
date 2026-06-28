@@ -4,6 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSTypeName;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -36,6 +37,17 @@ impl OxcCheck for Check {
         if name != "Function" {
             return;
         }
+        let nodes = semantic.nodes();
+        // `T extends Function ? A : B`: in a conditional type the `extends`
+        // operand is the idiomatic "is this callable?" predicate, not a
+        // value-type annotation, and has no narrower replacement in that
+        // position. Exempt only that constraint slot (the type to the right of
+        // `extends`); `Function` in the branches or other annotations still flags.
+        if let AstKind::TSConditionalType(cond) = nodes.parent_kind(node.id())
+            && cond.extends_type.span() == type_ref.span
+        {
+            return;
+        }
         // `value is Function` / `asserts value is Function`: when `Function` is
         // the narrowed type of a type predicate it asserts only that the value is
         // callable with an unknown signature — no concrete call signature like
@@ -43,7 +55,6 @@ impl OxcCheck for Check {
         // predicate wraps its type in a `TSTypeAnnotation`, so the direct slot is
         // parent = `TSTypeAnnotation`, grandparent = `TSTypePredicate`; `Function`
         // nested deeper (e.g. `value is Function[]`) stays flagged.
-        let nodes = semantic.nodes();
         if matches!(nodes.parent_kind(node.id()), AstKind::TSTypeAnnotation(_))
             && matches!(
                 nodes.parent_kind(nodes.parent_id(node.id())),
@@ -156,5 +167,40 @@ mod tests {
         // the narrowed type (here an array element) keeps a narrower replacement.
         let src = "function isFns(v: unknown): v is Function[] { return Array.isArray(v); }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_function_in_conditional_extends_operand_issue6533() {
+        // unjs/defu src/types.ts:81,89 — `Merge<>` conditional type. Both
+        // `extends Function` sites are the idiomatic "is callable?" predicate
+        // with no narrower replacement, so neither flags.
+        let src = "export type Merge<Destination, Defaults> = Destination extends Function \
+                   ? Destination | Defaults \
+                   : Defaults extends Function \
+                   ? Destination | Defaults \
+                   : MergeObjects<Destination, Defaults>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_function_inside_conditional_extends_array_issue6533() {
+        // Only the bare `extends Function` constraint slot is exempt; `Function`
+        // nested in an array within the `extends` operand has a narrower
+        // replacement, so it flags.
+        assert_eq!(run("type T<U> = U extends Function[] ? U : never;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_function_in_conditional_branch_issue6533() {
+        // `Function` in the true/false branch of a conditional type is a
+        // value-type annotation, not the constraint predicate — still flags.
+        assert_eq!(run("type T<U> = U extends string ? Function : never;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_level_function_annotation_issue6533() {
+        // Negative control: ordinary value-level annotations still flag.
+        assert_eq!(run("const fn: Function = () => {};").len(), 1);
+        assert_eq!(run("function f(cb: Function) {}").len(), 1);
     }
 }
