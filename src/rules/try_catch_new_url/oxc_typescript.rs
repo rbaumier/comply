@@ -57,7 +57,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if arg_is_trusted(new_expr) {
+        if arg_is_trusted(new_expr, semantic) {
             return;
         }
 
@@ -84,9 +84,13 @@ impl OxcCheck for Check {
 /// untrusted input: a string literal, a template literal whose every
 /// interpolation roots in an env-validated config object (`config.…` / `env.…`),
 /// a direct member access rooted in `config` / `env`, a WHATWG `Request.url`
-/// getter, or the `Location.href` getter for the current page URL.
+/// getter, the `Location.href` getter for the current page URL, or an identifier
+/// whose binding is typed `URL` (or `URL | undefined`).
 /// Those cannot fail at runtime in a way the author hasn't already controlled.
-fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
+fn arg_is_trusted(
+    new_expr: &oxc_ast::ast::NewExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
     use oxc_ast::ast::Expression;
     let Some(arg) = new_expr.arguments.first().and_then(|a| a.as_expression()) else {
         return false;
@@ -115,8 +119,76 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
         // `request.url()`, `req.url()`, `res.request().url()`, and
         // `event.request().url()`.
         Expression::CallExpression(call) if is_request_url_call(call) => true,
+        // `new URL(urlObject)` stringifies an existing `URL` via its `.href`,
+        // an already-validated absolute URL, so the constructor cannot throw.
+        Expression::Identifier(id) => binding_is_url_typed(id, semantic),
         _ => false,
     }
+}
+
+/// True when `ident` resolves to a binding (function parameter or variable
+/// declarator) whose explicit TypeScript type annotation is `URL` or a union of
+/// `URL` with `undefined`/`null`. The binding is resolved through the symbol
+/// table (`reference_id` → symbol → declaration node), so it honours scope and
+/// shadowing rather than matching on the name. A `URL` value passed to
+/// `new URL(...)` is stringified via `.href`, an already-validated absolute URL,
+/// so the constructor cannot throw.
+fn binding_is_url_typed(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    let scoping = semantic.scoping();
+    let Some(symbol_id) = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(symbol_id);
+    let annotation = match nodes.kind(decl_id) {
+        AstKind::VariableDeclarator(decl) => decl.type_annotation.as_ref(),
+        AstKind::FormalParameter(param) => param.type_annotation.as_ref(),
+        _ => None,
+    };
+    annotation.is_some_and(|ann| type_annotation_is_url(&ann.type_annotation))
+}
+
+/// True for a `URL` type reference, or a union of `URL` with `undefined`/`null`
+/// (`URL | undefined`). The `URL` constructor's parameter is `string | URL`, so
+/// a `URL | undefined` value must be narrowed to `URL` before it can reach
+/// `new URL(...)` in type-checking code; the declared annotation is then the
+/// structural signal that the value is a `URL` object. Any other union member
+/// (`URL | string`) leaves the value untrusted.
+fn type_annotation_is_url(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::TSType;
+    if is_url_reference(ty) {
+        return true;
+    }
+    let TSType::TSUnionType(union) = ty else {
+        return false;
+    };
+    let mut has_url = false;
+    for member in &union.types {
+        if is_url_reference(member) {
+            has_url = true;
+        } else if !matches!(member, TSType::TSUndefinedKeyword(_) | TSType::TSNullKeyword(_)) {
+            return false;
+        }
+    }
+    has_url
+}
+
+/// True for a bare `URL` type reference (`TSTypeReference` named `URL`), not a
+/// qualified or generic-applied form.
+fn is_url_reference(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSTypeReference(tref) = ty else {
+        return false;
+    };
+    matches!(&tref.type_name, TSTypeName::IdentifierReference(id) if id.name == "URL")
 }
 
 /// True when the base URL of `new URL(...)` is structurally guaranteed to be a
@@ -956,5 +1028,68 @@ mod tests {
     fn still_flags_untrusted_new_url_in_production_file() {
         let d = run_at("const loc = new URL(resp.headers.get('location')!);", "src/app.ts");
         assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    // Regression for #6582: a parameter typed `: URL` already holds a valid URL
+    // object; `new URL(urlObject)` stringifies its `.href` and cannot throw.
+    #[test]
+    fn allows_url_typed_parameter() {
+        let src = r#"
+            const f = (fileUrl: URL) => {
+                const cleanFileUrl = new URL(fileUrl);
+                return cleanFileUrl;
+            };
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A `URL | undefined`-typed binding carries the `URL` structural signal:
+    // under the type system it must be narrowed to `URL` before reaching
+    // `new URL(...)`, so the value is a URL object and the constructor cannot throw.
+    #[test]
+    fn allows_url_or_undefined_typed_variable() {
+        let src = r#"
+            function f(maybe: URL | undefined) {
+                const u: URL | undefined = maybe;
+                return new URL(u);
+            }
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A `: string`-annotated binding is the common throw case the rule targets —
+    // still flagged.
+    #[test]
+    fn still_flags_string_typed_parameter() {
+        let src = r#"
+            function f(s: string) {
+                return new URL(s);
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // An unannotated binding gives no `: URL` signal — still flagged.
+    #[test]
+    fn still_flags_unannotated_variable() {
+        let src = r#"
+            function f(input) {
+                const x = input;
+                return new URL(x);
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // A union mixing `URL` with a non-nullish member is not provably a `URL`
+    // value — still flagged.
+    #[test]
+    fn still_flags_url_or_string_union() {
+        let src = r#"
+            function f(u: URL | string) {
+                return new URL(u);
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 }
