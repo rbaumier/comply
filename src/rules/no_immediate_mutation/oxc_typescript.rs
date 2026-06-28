@@ -4,6 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{ArrayExpressionElement, AssignmentTarget, Expression, Statement};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -57,21 +58,19 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Find the next sibling statement by looking at the parent
-            let parent_id = semantic.nodes().parent_id(node.id());
-            if parent_id == node.id() {
-                continue;
-            }
-            let _parent = semantic.nodes().get_node(parent_id);
-
-            // The parent should be something that contains statements
-            // We need to find the next statement after this declaration
-            let decl_end = decl.span.end;
-            let Some(next_stmt_text) = find_next_statement_text(ctx.source, decl_end as usize) else {
+            // The next statement is the AST sibling immediately following this
+            // declaration in its enclosing block. Resolving it structurally —
+            // rather than scanning raw source up to the next `;` — keeps the
+            // considered text to exactly one statement. In semicolon-free (ASI)
+            // code the first `;` after the declaration is often a `for`-header
+            // separator many statements away, which would otherwise splice
+            // several statements together and surface a spurious assignment.
+            let Some(next_stmt) = find_next_sibling_statement(semantic, node) else {
                 continue;
             };
-
-            let next_stmt_text = next_stmt_text.trim();
+            let next_stmt_span = next_stmt.span();
+            let next_stmt_text =
+                ctx.source[next_stmt_span.start as usize..next_stmt_span.end as usize].trim();
             if next_stmt_text.is_empty() {
                 continue;
             }
@@ -85,7 +84,7 @@ impl OxcCheck for Check {
                     // computed member with a non-literal key (`x[index]`), which has
                     // no array-literal syntax. Mutator methods stay flagged regardless.
                     let assignment_chainable = !array_init_has_spread(init)
-                        && !next_assignment_is_computed_dynamic(semantic, node, var_name);
+                        && !statement_is_computed_dynamic_assignment(next_stmt, var_name);
                     is_method_call_on_text(next_stmt_text, var_name, ARRAY_MUTATORS)
                         || (assignment_chainable
                             && is_property_assignment_text(next_stmt_text, var_name))
@@ -103,11 +102,8 @@ impl OxcCheck for Check {
             };
 
             if flagged {
-                // Find position of next_stmt in source after decl_end
-                let after_decl = &ctx.source[decl_end as usize..];
-                let trimmed = after_decl.trim_start();
-                let offset = decl_end as usize + (after_decl.len() - trimmed.len());
-                let (line, column) = byte_offset_to_line_col(ctx.source, offset);
+                let (line, column) =
+                    byte_offset_to_line_col(ctx.source, next_stmt_span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
                     line,
@@ -164,48 +160,8 @@ fn array_init_has_spread(init: &Expression) -> bool {
         .any(|el| matches!(el, ArrayExpressionElement::SpreadElement(_)))
 }
 
-/// True when the statement immediately after `decl_node` assigns to a computed
-/// member of `var_name` with a non-static-literal key (`var_name[expr] = ...`,
-/// where `expr` is not a numeric/string literal). A dynamic index can never be
-/// inlined into an array literal.
-fn next_assignment_is_computed_dynamic(
-    semantic: &oxc_semantic::Semantic,
-    decl_node: &oxc_semantic::AstNode,
-    var_name: &str,
-) -> bool {
-    let nodes = semantic.nodes();
-    let parent_id = nodes.parent_id(decl_node.id());
-    if parent_id == decl_node.id() {
-        return false;
-    }
-    let stmts: &oxc_allocator::Vec<Statement> = match nodes.kind(parent_id) {
-        AstKind::FunctionBody(body) => &body.statements,
-        AstKind::BlockStatement(block) => &block.body,
-        AstKind::Program(program) => &program.body,
-        _ => return false,
-    };
-
-    let decl_span = match decl_node.kind() {
-        AstKind::VariableDeclaration(decl) => decl.span,
-        _ => return false,
-    };
-
-    // The sibling immediately following the declaration.
-    let mut found_self = false;
-    for stmt in stmts.iter() {
-        if found_self {
-            return statement_is_computed_dynamic_assignment(stmt, var_name);
-        }
-        if let Statement::VariableDeclaration(d) = stmt
-            && d.span == decl_span
-        {
-            found_self = true;
-        }
-    }
-    false
-}
-
-/// True when `stmt` is `var_name[expr] = ...` with a non-literal key `expr`.
+/// True when `stmt` is `var_name[expr] = ...` with a non-literal key `expr`. A
+/// dynamic computed index can never be inlined into an array literal.
 fn statement_is_computed_dynamic_assignment(stmt: &Statement, var_name: &str) -> bool {
     let Statement::ExpressionStatement(expr_stmt) = stmt else {
         return false;
@@ -229,18 +185,45 @@ fn statement_is_computed_dynamic_assignment(stmt: &Statement, var_name: &str) ->
     )
 }
 
-/// Find the text of the next statement after a given byte offset.
-fn find_next_statement_text(source: &str, after: usize) -> Option<&str> {
-    let rest = source.get(after..)?;
-    let trimmed = rest.trim_start();
-    if trimmed.is_empty() {
+/// The statement immediately following `decl_node` in its enclosing statement
+/// list (a `Program`, `BlockStatement`, or `FunctionBody` body), or `None` when
+/// the declaration is the last statement in its block or is not a direct child
+/// of a statement list. Resolving the next statement from the AST guarantees the
+/// caller sees exactly one statement, never a span spliced across a later
+/// `for`-loop header by a raw-text semicolon scan.
+fn find_next_sibling_statement<'a>(
+    semantic: &oxc_semantic::Semantic<'a>,
+    decl_node: &oxc_semantic::AstNode<'a>,
+) -> Option<&'a Statement<'a>> {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(decl_node.id());
+    if parent_id == decl_node.id() {
         return None;
     }
-    // Find end of statement (next semicolon or newline-terminated expression)
-    let end = trimmed.find(';').map(|i| i + 1)
-        .or_else(|| trimmed.find('\n'))
-        .unwrap_or(trimmed.len());
-    Some(&trimmed[..end])
+    let stmts: &'a oxc_allocator::Vec<Statement> = match nodes.kind(parent_id) {
+        AstKind::FunctionBody(body) => &body.statements,
+        AstKind::BlockStatement(block) => &block.body,
+        AstKind::Program(program) => &program.body,
+        _ => return None,
+    };
+
+    let decl_span = match decl_node.kind() {
+        AstKind::VariableDeclaration(decl) => decl.span,
+        _ => return None,
+    };
+
+    let mut found_self = false;
+    for stmt in stmts.iter() {
+        if found_self {
+            return Some(stmt);
+        }
+        if let Statement::VariableDeclaration(d) = stmt
+            && d.span == decl_span
+        {
+            found_self = true;
+        }
+    }
+    None
 }
 
 /// Check if text looks like `varName.method(...)` where method is in the list.
@@ -498,5 +481,16 @@ mod tests {
     #[test]
     fn flags_object_simple_assignment_after_spread() {
         assert_eq!(run_on("const u = { ...route }; u.name = f();").len(), 1);
+    }
+
+    // --- Regression for #6520: in semicolon-free (ASI) code, a `.forEach` read
+    // must not be flagged just because a later `for` loop's header semicolons
+    // make a raw-text scan splice multiple statements together. The next
+    // statement is resolved from the AST sibling, so the `=` in a later typed
+    // declaration is never attributed to `arr`. ---
+    #[test]
+    fn allows_foreach_read_with_later_for_loop_asi() {
+        let src = "const arr = ['a', 'b']\narr.forEach((x) => {\n  console.log(x)\n})\nconst typed: string[] = []\nfor (let i = 0; i < 10; i++) {\n  typed.push(String(i))\n}";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 }
