@@ -1218,6 +1218,80 @@ name = "normal_lib"
     }
 
     #[test]
+    fn repro_6484_const_identifier_guard_not_flagged() {
+        // The itoa `div_rem_1e16` pattern: the upper bound is a function-local
+        // `const` resolving to an integer literal `10^16 < u64::MAX`, so
+        // `n < D` proves `n as u64` cannot truncate — same as `n < 10^16`.
+        let src = "fn div_rem_1e16(n: u128) -> (u128, u64) { \
+                   const D: u128 = 1_0000_0000_0000_0000; \
+                   if n < D { return (0, n as u64); } (n, 0) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6484_module_const_identifier_guard_not_flagged() {
+        // Same bound declared at module scope, resolved by walking out of the
+        // function to the `source_file`.
+        let src = "const D: u128 = 1_0000_0000_0000_0000; \
+                   fn f(n: u128) -> u64 { if n < D { n as u64 } else { 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6484_const_literal_too_large_still_flagged() {
+        // The const resolves to a literal `10^38`, which exceeds `u64::MAX`, so
+        // `n < HUGE` does not prove the cast fits — still a real finding.
+        let src = "fn f(n: u128) -> u64 { \
+                   const HUGE: u128 = 100000000000000000000000000000000000000; \
+                   if n < HUGE { n as u64 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6484_const_shift_value_still_flagged() {
+        // The const's value is a shift expression (`1 << 100`), not a plain
+        // integer literal, so it is left unresolved (conservative) — flagged.
+        let src = "fn f(n: u128) -> u64 { \
+                   const BIG: u128 = 1 << 100; \
+                   if n < BIG { n as u64 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6484_const_shift_53_still_flagged() {
+        // `1 << 53` is likewise a non-literal value — unresolvable, so the guard
+        // grants no exemption.
+        let src = "fn f(n: u128) -> u64 { \
+                   const E: u128 = 1 << 53; \
+                   if n < E { n as u64 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6484_unguarded_const_shape_still_flagged() {
+        // No guard at all on the same u128 -> u64 narrowing — a real finding.
+        assert_eq!(run_on("fn f(n: u128) -> u64 { n as u64 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6484_param_shadows_const_still_flagged() {
+        // A parameter `d` shadows the outer `const d`: the bound reads the
+        // runtime parameter (value unknown), so the shadowed const must not be
+        // resolved and the narrowing stays flagged.
+        let src = "const d: u128 = 1_0000_0000_0000_0000; \
+                   fn f(n: u128, d: u128) -> u64 { if n < d { n as u64 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6484_let_shadows_const_still_flagged() {
+        // A `let d` shadows the outer `const d`; same conservative outcome.
+        let src = "const d: u128 = 1_0000_0000_0000_0000; \
+                   fn f(n: u128, m: u128) -> u64 { let d = m; if n < d { n as u64 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn repro_6173_else_branch_upper_bound_not_flagged() {
         // The tonic xds pattern: `if value > 100 { Err } else { value as u8 }`.
         // The else is reached only when `value <= 100`, which fits u8.

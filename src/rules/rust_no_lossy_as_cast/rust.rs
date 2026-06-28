@@ -1075,6 +1075,17 @@ mod tests {
     }
 
     #[test]
+    fn repro_6484_const_identifier_guard_not_flagged() {
+        // The itoa `div_rem_1e16` pattern: the range guard's upper bound is a
+        // `const` resolving to `10^16 < u64::MAX`, so the narrowing is exempt
+        // here too (this rule defers integer narrowing to `rust-no-as-numeric-cast`).
+        let src = "fn div_rem_1e16(n: u128) -> (u128, u64) { \
+                   const D: u128 = 1_0000_0000_0000_0000; \
+                   if n < D { return (0, n as u64); } (n, 0) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn repro_6173_else_branch_upper_bound_not_flagged() {
         // `if value > 100 { Err } else { value as u8 }`: the else is reached only
         // when `value <= 100`, which fits u8.
