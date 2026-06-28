@@ -22,6 +22,14 @@
 //! private package (a bundled app/dashboard/internal tool) ships everything at
 //! build time, so importing from `devDependencies` is correct.
 //!
+//! A file outside the nearest `package.json`'s `files` publish whitelist is never
+//! flagged: when a package declares an exact `files` array, any file it does not
+//! cover (matched as a path or a recursively-shipped directory, plus npm's
+//! always-shipped `main`/`exports`/`bin` entry and the default root `index.js`)
+//! is never included in the npm tarball, so a downstream consumer cannot break at
+//! install time regardless of the file's name. A package with no `files` field,
+//! or one whose `files` uses a glob, is not exempt on this basis.
+//!
 //! Type-only imports are never flagged: a declaration-level `import type { X }`,
 //! or an import whose named specifiers all carry the inline `type` qualifier,
 //! is erased at compile time and emits no JavaScript, so it creates no runtime

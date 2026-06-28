@@ -181,6 +181,15 @@ pub struct PackageJson {
     /// entry, so this whitelist is the package's published surface when no
     /// `main`/`exports`/`module` exists.
     pub files: BTreeSet<String>,
+    /// True when the raw `files` array contains a glob entry (`*`, `?`, `[]`, `{}`).
+    /// [`files`] drops glob entries at parse time, so when this is set the stored
+    /// whitelist is no longer an exact representation of the publish surface: a
+    /// file covered only by a dropped glob would look absent. Consumers proving a
+    /// file *excluded* from the publish tarball must treat such a package as
+    /// unprovable and fall back to their default behavior.
+    ///
+    /// [`files`]: PackageJson::files
+    pub files_has_wildcard: bool,
 }
 
 impl PackageJson {
@@ -265,6 +274,7 @@ impl PackageJson {
             entries_outside_src: entries_outside_src(&json),
             export_entry_stems: collect_export_entry_stems(&json),
             files: collect_files_whitelist(&json),
+            files_has_wildcard: files_whitelist_has_wildcard(&json),
         })
     }
 
@@ -875,6 +885,22 @@ fn collect_files_whitelist(json: &Value) -> BTreeSet<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// True when the raw `files` array declares at least one entry containing a glob
+/// metacharacter (`*`, `?`, `[`/`]`, `{`/`}` — npm matches `files` with
+/// glob/minimatch semantics). A glob entry is not an exact path, so a package
+/// that uses one has no exact publish whitelist in [`PackageJson::files`]: a file
+/// covered only by the glob looks absent, so proving a file *excluded* from the
+/// whitelist would be unsound.
+fn files_whitelist_has_wildcard(json: &Value) -> bool {
+    json.get("files")
+        .and_then(Value::as_array)
+        .is_some_and(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .any(|entry| entry.contains(['*', '?', '[', ']', '{', '}']))
+        })
 }
 
 /// Normalize one `files` entry: strip a leading `./`, convert backslashes to
@@ -3673,6 +3699,50 @@ impl ProjectCtx {
             Some(dir) => path.starts_with(manifest_dir.join(dir)),
             None => manifest_dir.join(entry) == path,
         })
+    }
+
+    /// True when `path` is provably absent from its package's npm publish tarball
+    /// because the nearest `package.json` declares an exact `files` whitelist that
+    /// does not cover it. A file outside the tarball is never `npm install`ed by a
+    /// downstream consumer, so it cannot break an install — a test helper,
+    /// build/example script, or any tooling left out of `files` may freely import
+    /// a `devDependency`.
+    ///
+    /// A `files` entry covers `path` when it names `path` or an ancestor directory
+    /// of `path` (npm ships a listed directory recursively, matched component-wise
+    /// so `lib` covers `lib/util.js` but not `library/`). npm additionally always
+    /// ships the `main`/`exports`/`bin` entry ([`is_package_entry_file`]) and, when
+    /// no `main` is declared, the default root `index.js` regardless of `files`, so
+    /// those are treated as covered and never reported excluded.
+    ///
+    /// Returns false — preserving the caller's default behavior — when no `files`
+    /// field is declared (npm then ships nearly everything, so exclusion cannot be
+    /// proven) or when the `files` array uses a glob (the parsed whitelist drops
+    /// globs, so it is no longer exact and a glob-covered file could be wrongly
+    /// judged excluded).
+    ///
+    /// [`is_package_entry_file`]: ProjectCtx::is_package_entry_file
+    pub fn is_excluded_from_files_whitelist(&self, path: &Path) -> bool {
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        if pkg.files.is_empty() || pkg.files_has_wildcard {
+            return false;
+        }
+        if manifest_dir.join("index.js") == path {
+            return false;
+        }
+        if self.is_package_entry_file(path) {
+            return false;
+        }
+        let covered = pkg.files.iter().any(|entry| {
+            let entry = entry.strip_suffix('/').unwrap_or(entry);
+            path.starts_with(manifest_dir.join(entry))
+        });
+        !covered
     }
 
     /// True when `path` is invoked directly as a CLI entry by its nearest
