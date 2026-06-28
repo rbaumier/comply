@@ -1,7 +1,7 @@
 //! no-async-without-await OXC backend — flag `async` functions that contain
 //! no `await` or `for await` in their own body.
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{ClassShape, byte_offset_to_line_col, enclosing_class};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
@@ -282,6 +282,104 @@ fn is_async_method_override_on_this(
     })
 }
 
+/// True if `b` can appear inside a JS/TS identifier, used to require that an
+/// alias name occurs in a type's text as a standalone identifier rather than as
+/// a substring of a longer one (so `Unregister` is not matched inside
+/// `NamespacedUnregister`).
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+/// True if `name` occurs in `haystack` bounded by non-identifier characters,
+/// i.e. as a standalone identifier reference.
+fn mentions_identifier(haystack: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let bytes = haystack.as_bytes();
+    let mut search_from = 0;
+    while let Some(rel) = haystack[search_from..].find(name) {
+        let start = search_from + rel;
+        let end = start + name.len();
+        let before_is_ident = start > 0 && is_ident_byte(bytes[start - 1]);
+        let after_is_ident = end < bytes.len() && is_ident_byte(bytes[end]);
+        if !before_is_ident && !after_is_ident {
+            return true;
+        }
+        // Advance past this match. `end` is a char boundary (`name` is a
+        // substring found at `start`), and since alias names are identifiers,
+        // any occurrence overlapping `[start, end)` is preceded by an identifier
+        // byte and therefore never standalone — so skipping to `end` is safe.
+        search_from = end;
+    }
+    false
+}
+
+/// Collect every `type X = ...` alias declared in the file, mapping the alias
+/// name to its right-hand-side source text. Used to resolve a named asserted
+/// type (`as NamespacedUnregister`) to the `Promise` it ultimately denotes.
+fn build_alias_map<'s>(
+    semantic: &oxc_semantic::Semantic,
+    source: &'s str,
+) -> FxHashMap<&'s str, &'s str> {
+    let mut map = FxHashMap::default();
+    for node in semantic.nodes().iter() {
+        if let AstKind::TSTypeAliasDeclaration(alias) = node.kind() {
+            let name = &source[alias.id.span.start as usize..alias.id.span.end as usize];
+            let rhs_span = alias.type_annotation.span();
+            let rhs = &source[rhs_span.start as usize..rhs_span.end as usize];
+            map.insert(name, rhs);
+        }
+    }
+    map
+}
+
+/// Detect whether `type_text` denotes a `Promise`-returning type — either
+/// directly (the text contains `Promise<`/`PromiseLike<`, mirroring
+/// `has_promise_return_type`) or transitively, by following references to type
+/// aliases declared in the same file. `aliases` maps each in-file `type X = ...`
+/// name to its right-hand-side text; `visited` guards against cyclic aliases.
+fn type_text_denotes_promise<'s>(
+    type_text: &str,
+    aliases: &FxHashMap<&'s str, &'s str>,
+    visited: &mut FxHashSet<&'s str>,
+) -> bool {
+    if type_text.contains("Promise<") || type_text.contains("PromiseLike<") {
+        return true;
+    }
+    for (&name, &rhs) in aliases {
+        if visited.contains(name) || !mentions_identifier(type_text, name) {
+            continue;
+        }
+        visited.insert(name);
+        if type_text_denotes_promise(rhs, aliases, visited) {
+            return true;
+        }
+    }
+    false
+}
+
+/// If `func_node` (optionally wrapped in parentheses) is the operand of a
+/// `TSAsExpression` or `TSSatisfiesExpression`, return the asserted/satisfied
+/// type's source text; otherwise `None`.
+fn asserted_type_text<'s>(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &'s str,
+) -> Option<&'s str> {
+    let nodes = semantic.nodes();
+    let mut parent = nodes.parent_node(func_node.id());
+    while matches!(parent.kind(), AstKind::ParenthesizedExpression(_)) {
+        parent = nodes.parent_node(parent.id());
+    }
+    let span = match parent.kind() {
+        AstKind::TSAsExpression(e) => e.type_annotation.span(),
+        AstKind::TSSatisfiesExpression(e) => e.type_annotation.span(),
+        _ => return None,
+    };
+    Some(&source[span.start as usize..span.end as usize])
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -319,6 +417,11 @@ impl OxcCheck for Check {
         // Now check all async functions/arrows.
         let mut diagnostics = Vec::new();
 
+        // Lazily built map of in-file `type X = ...` aliases, used only to
+        // resolve a named asserted type (`as NamespacedUnregister`) to the
+        // `Promise` it denotes. Built at most once per file, on first need.
+        let mut alias_map: Option<FxHashMap<&str, &str>> = None;
+
         for node in semantic.nodes().iter() {
             let (is_async, return_type, span, has_body) = match node.kind() {
                 AstKind::Function(f) => (f.r#async, &f.return_type, f.span, f.body.is_some()),
@@ -347,6 +450,27 @@ impl OxcCheck for Check {
             // binding annotation (`() => number`) or no annotation stays flagged.
             if is_arrow_bound_to_promise_annotation(node, semantic, ctx.source) {
                 continue;
+            }
+
+            // Async arrow/function asserted to a Promise-returning type via a
+            // `TSAsExpression`/`TSSatisfiesExpression`, e.g. `(async () => {...})
+            // as () => Promise<void>` or `... as NamespacedUnregister` where the
+            // named type resolves — through type aliases declared in the same
+            // file — to a `Promise`-returning signature. The assertion owns the
+            // contract: without `async`, the arrow's inferred return type
+            // (`void`/`never`) is not assignable to the asserted `Promise<T>`,
+            // so `async` is mandatory even when the body never awaits. Mirrors
+            // the `has_promise_return_type` text scan, applied to the asserted
+            // type (resolved one or more hops through in-file aliases). A
+            // non-Promise asserted type, or a named alias whose definition is
+            // not in this file, stays flagged.
+            if let Some(asserted) = asserted_type_text(node, semantic, ctx.source) {
+                let aliases =
+                    alias_map.get_or_insert_with(|| build_alias_map(semantic, ctx.source));
+                let mut visited = FxHashSet::default();
+                if type_text_denotes_promise(asserted, aliases, &mut visited) {
+                    continue;
+                }
             }
 
             if has_decorators(node, semantic) {
@@ -913,6 +1037,97 @@ mod tests {
         // Negative space for #6566: an async arrow with no binding annotation and
         // no await stays flagged.
         let src = "const f = async () => { return 1; };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_async_arrow_asserted_to_inline_promise_type() {
+        // Inline-Promise variant of #6583: the arrow is asserted to a function
+        // type whose call signature returns `Promise<void>`. Without `async`,
+        // the body's inferred return type is `void`, not assignable to the
+        // asserted `() => Promise<void>`, so `async` is load-bearing.
+        let src = r#"const unregister = (async () => {
+            doSync();
+            cleanup();
+        }) as () => Promise<void>;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_arrow_asserted_to_named_promise_alias() {
+        // Regression for rbaumier/comply#6583 — privatenumber/tsx
+        // `register.ts`. The async arrow is asserted `as NamespacedUnregister`,
+        // a named alias that resolves (through in-file aliases) to
+        // `() => Promise<void>`. Without `async`, the body's inferred return
+        // type is `void`, not assignable to the asserted Promise-returning
+        // signature, so `async` is mandatory even though the body never awaits.
+        let src = r#"type Unregister = () => Promise<void>;
+        type NamespacedUnregister = Unregister & {
+            import: ScopedImport;
+            unregister: Unregister;
+        };
+        function register() {
+            const unregister = (async () => {
+                hookData.active = false;
+                registeredHooks.deregister();
+            }) as NamespacedUnregister;
+            return unregister;
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_arrow_satisfies_promise_type() {
+        // The `satisfies` operator carries the same contract as `as`.
+        let src = r#"const handler = (async () => {
+            doSync();
+        }) satisfies () => Promise<void>;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_arrow_asserted_to_non_promise_type() {
+        // Negative space for #6583: an asserted type whose call signature does
+        // not return a Promise gives `async` no contract to satisfy — the arrow
+        // stays flagged.
+        let src = r#"const f = (async () => {
+            return 1;
+        }) as () => number;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_arrow_asserted_to_named_non_promise_alias() {
+        // Negative space for #6583: a named alias that does NOT resolve to a
+        // Promise-returning type leaves the diagnostic firing.
+        let src = r#"type SyncFn = () => number;
+        const f = (async () => {
+            return 1;
+        }) as SyncFn;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_async_arrow_asserted_to_promise_through_double_parens() {
+        // The operand may be wrapped in more than one layer of parentheses; the
+        // assertion still owns the contract.
+        let src = r#"const f = ((async () => {
+            doSync();
+        })) as () => Promise<void>;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_arrow_asserted_to_non_ascii_named_alias() {
+        // Guards alias-name scanning against non-ASCII identifier names: the
+        // asserted type `XΩmega` is a sync alias and must stay flagged, and
+        // scanning it for the unrelated `Ωmega` alias must not panic on the
+        // multi-byte boundary.
+        let src = r#"type Ωmega = () => Promise<void>;
+        type XΩmega = () => number;
+        const f = (async () => {
+            doSync();
+        }) as XΩmega;"#;
         assert_eq!(run_on(src).len(), 1);
     }
 
