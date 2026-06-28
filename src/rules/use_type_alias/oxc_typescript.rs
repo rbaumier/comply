@@ -58,6 +58,57 @@ fn is_trivial_nullable_union(types: &[TSType]) -> bool {
     types.iter().any(is_null_or_undefined)
 }
 
+/// True when `ident` (a type-position identifier) resolves to a symbol whose
+/// declaration node is a `TSTypeParameter` — i.e. a generic parameter bound to
+/// an enclosing class, function, interface, or type-alias scope.
+fn resolves_to_type_parameter(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl = scoping.symbol_declaration(sym_id);
+    matches!(semantic.nodes().kind(decl), AstKind::TSTypeParameter(_))
+}
+
+/// True when `ty` references at least one enclosing-scope type parameter,
+/// looking through union/intersection members and into generic type arguments
+/// (so `CTEBuilderCallback<N>` is seen to reference `N`). Such an expression is
+/// instantiation-dependent: identical source text denotes a different concrete
+/// type per instantiation, so extracting it to a module-level alias only renames
+/// the duplication — and TypeScript forbids a class-body-local alias anyway.
+fn references_enclosing_type_parameter(t: &TSType, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::ast::TSTypeName;
+    match t {
+        TSType::TSTypeReference(tref) => {
+            if let TSTypeName::IdentifierReference(id) = &tref.type_name
+                && resolves_to_type_parameter(id, semantic)
+            {
+                return true;
+            }
+            tref.type_arguments.as_ref().is_some_and(|args| {
+                args.params
+                    .iter()
+                    .any(|p| references_enclosing_type_parameter(p, semantic))
+            })
+        }
+        TSType::TSUnionType(u) => u
+            .types
+            .iter()
+            .any(|m| references_enclosing_type_parameter(m, semantic)),
+        TSType::TSIntersectionType(i) => i
+            .types
+            .iter()
+            .any(|m| references_enclosing_type_parameter(m, semantic)),
+        _ => false,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [crate::rules::backend::AstType] {
         &[]
@@ -81,7 +132,7 @@ impl OxcCheck for Check {
         let mut annotation_lines: FxHashMap<String, Vec<usize>> = FxHashMap::default();
 
         for node in semantic.nodes().iter() {
-            let span = match node.kind() {
+            let (span, members) = match node.kind() {
                 AstKind::TSUnionType(u) => {
                     // A trivial nullable union (`T | null`, `T | undefined`)
                     // is rarely a shared domain concept — counting it
@@ -90,9 +141,9 @@ impl OxcCheck for Check {
                     if is_trivial_nullable_union(&u.types) {
                         continue;
                     }
-                    u.span
+                    (u.span, &u.types)
                 }
-                AstKind::TSIntersectionType(i) => i.span,
+                AstKind::TSIntersectionType(i) => (i.span, &i.types),
                 _ => continue,
             };
 
@@ -126,6 +177,18 @@ impl OxcCheck for Check {
 
             let text = &ctx.source[span.start as usize..span.end as usize];
             if text.len() <= 5 {
+                continue;
+            }
+
+            // Skip unions/intersections that reference an enclosing-scope type
+            // parameter (`TT | ST`, `DB & T`, `N | CTEBuilderCallback<N>`): each
+            // textual occurrence is a different concrete type per instantiation,
+            // and TypeScript forbids hoisting them to a class-body-local alias —
+            // a module-level generic alias only renames the duplication.
+            if members
+                .iter()
+                .any(|m| references_enclosing_type_parameter(m, semantic))
+            {
                 continue;
             }
 
@@ -289,5 +352,78 @@ mod tests {
             const b: 'a' | 'b' | 'c' = 'b';
         "#;
         assert!(!run_with_path(src, "foo.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_repeated_concrete_object_union() {
+        // Positive control for #6256 — a fully concrete union with no type
+        // parameters must still be flagged; the type-parameter guard must not
+        // erode the rule's core value.
+        let src = r#"
+            function f(x: { a: number } | { b: string }) {}
+            function g(x: { a: number } | { b: string }) {}
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_class_type_parameter_union() {
+        // #6256 — `TT | ST` composed of class type parameters cannot be hoisted
+        // to a class-body-local alias and is a different concrete type per
+        // instantiation; it must not be flagged.
+        let src = r#"
+            class Builder<TT, ST> {
+                a(): TT | ST { return null as any; }
+                b(): TT | ST { return null as any; }
+                c(): TT | ST { return null as any; }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_type_parameter_intersection() {
+        // #6256 — `DB & T` (intersection of enclosing type parameters), and
+        // `TB & string` (type parameter intersected with a keyword) are
+        // instantiation-dependent and must not be flagged.
+        let src = r#"
+            class ReadonlyKysely<DB> {
+                a<T>(): DB & T { return null as any; }
+                b<T>(): DB & T { return null as any; }
+            }
+            function widen<TB>(): TB & string { return null as any; }
+            function widen2<TB>(): TB & string { return null as any; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_type_parameter_in_nested_type_argument() {
+        // #6256 — the type parameter is reachable only inside a generic type
+        // argument (`Foo<N>`), not as a direct union member; the recursion into
+        // type arguments must still exempt it.
+        let src = r#"
+            class CTE<N> {
+                a(): string | CTEBuilderCallback<N> { return null as any; }
+                b(): string | CTEBuilderCallback<N> { return null as any; }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_kysely_merge_query_builder() {
+        // #6256 reproduction — `TT | ST` recurring across a generic class's
+        // implements clause and method signatures (kysely-org/kysely).
+        let src = r#"
+            export class WheneableMergeQueryBuilder<DB, TT extends keyof DB, ST extends keyof DB, O>
+                implements
+                    MultiTableReturningInterface<DB, TT | ST, O>,
+                    OutputInterface<DB, TT | ST, O> {
+                returning(): SelectQueryBuilder<DB, TT | ST, O> { return null as any; }
+                output(): MergeResult | TT | ST { return null as any; }
+            }
+        "#;
+        assert!(run(src).is_empty());
     }
 }
