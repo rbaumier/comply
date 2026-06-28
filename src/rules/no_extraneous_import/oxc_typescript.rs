@@ -623,6 +623,37 @@ import { DndContext } from '@dnd-kit/core';
     }
 
     #[test]
+    fn allows_dev_dep_in_nuxt_devtools_dir() {
+        // Issue #6639: nuxt-modules/robots `devtools/lib/robots/state.ts` is the
+        // Nuxt module's Devtools UI integration. It is bundled separately into the
+        // devtools iframe and never ships in the published package, so importing
+        // `vue` and `nuxtseo-layer-devtools` from devDependencies is correct.
+        let pkg = r#"{
+            "devDependencies": {
+                "vue": "^3",
+                "nuxtseo-layer-devtools": "^1"
+            }
+        }"#;
+        let src = r#"
+import { appFetch } from 'nuxtseo-layer-devtools/composables/rpc';
+import { computed, ref, watch } from 'vue';
+"#;
+        let d = run_with_pkg_at_path(pkg, "devtools/lib/robots/state.ts", src);
+        assert!(d.is_empty(), "devtools/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_devtools_dir() {
+        // Guard against over-relaxing: a path where "devtools" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"vue":"^3"}}"#;
+        let src = r#"import { ref } from 'vue';"#;
+        let d = run_with_pkg_at_path(pkg, "src/mydevtools/state.ts", src);
+        assert_eq!(d.len(), 1, "non-devtools dir should still flag: {d:?}");
+        assert!(d[0].message.contains("vue"));
+    }
+
+    #[test]
     fn allows_dev_dep_in_co_located_test_ts_file() {
         // Issue #1390: date-fns `src/endOfWeek/test.ts` is a co-located test
         // file whose whole name is `test.ts` (no `.test.` infix). It imports
