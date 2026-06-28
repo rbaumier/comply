@@ -107,11 +107,13 @@ impl OxcCheck for Check {
             return;
         }
 
-        // A hex literal carrying an explanatory inline comment on the same line
-        // (`case 0x5b: // [`) is self-documenting — the comment names the value
-        // exactly as a `const LEFT_BRACKET = 0x5b` would. This is the canonical
-        // char-code idiom of hand-written lexers/parsers.
-        if is_hex_literal(text)
+        // A hex (`0x`) or octal (`0o`) literal carrying an explanatory inline
+        // comment on the same line (`case 0x5b: // [`, `0o755 /* rwx r-x r-x */`)
+        // is self-documenting — the comment names the value exactly as a
+        // `const LEFT_BRACKET = 0x5b` / `const MODE = 0o755` would. The hex form is
+        // the char-code idiom of hand-written lexers/parsers; the octal form is the
+        // Unix permission-mask idiom (`chmod`-style mode arguments).
+        if (is_hex_literal(text) || is_octal_literal(text))
             && has_same_line_trailing_comment(num.span, ctx.source, semantic.comments())
         {
             return;
@@ -559,6 +561,13 @@ fn property_key_name<'a>(key: &'a PropertyKey<'a>) -> Option<&'a str> {
 fn is_hex_literal(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.len() > 2 && bytes[0] == b'0' && (bytes[1] == b'x' || bytes[1] == b'X')
+}
+
+/// `0o...` integer literal (the octal notation JS/TS uses for Unix
+/// permission masks, e.g. `0o755`).
+fn is_octal_literal(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() > 2 && bytes[0] == b'0' && (bytes[1] == b'o' || bytes[1] == b'O')
 }
 
 /// True when an explanatory comment is bound to this literal as its trailing
@@ -1945,6 +1954,35 @@ mod tests {
         // exemption does not apply; `* 0xDEAD` keeps it out of the bitwise-operand
         // exemption so the comment-binding logic is what is under test.)
         let src = "function f(x) { let y = x * 0xDEAD; g(); /* note */ return y; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #6588: an octal permission literal documented by an
+    // inline comment naming its bit layout (`0o755 /* rwx r-x r-x */`) is
+    // self-documenting, exactly as the hex char-code idiom is. Mirrors the
+    // hex-with-comment exemption.
+    #[test]
+    fn allows_octal_permission_with_inline_comment() {
+        let src = r#"function f(p) { return fsp.chmod(p, 0o755 /* rwx r-x r-x */); }"#;
+        assert!(
+            run(src).is_empty(),
+            "documented octal permission literal must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_octal_without_explanatory_comment() {
+        // The exemption is the inline comment, not the octal format: a bare
+        // undocumented octal literal is still a magic number.
+        let src = r#"function f(p) { return fsp.chmod(p, 0o755); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_decimal_with_inline_comment() {
+        // The comment gate is scoped to hex/octal literals; a bare decimal magic
+        // number stays flagged even with a same-line trailing comment.
+        let src = r#"function f(x) { return x * 42 /* answer */; }"#;
         assert_eq!(run(src).len(), 1);
     }
 
