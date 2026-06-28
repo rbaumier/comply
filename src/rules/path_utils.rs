@@ -202,8 +202,9 @@ fn has_path_segment(path: &Path, names: &[&str]) -> bool {
 /// Directory names where dev-only tooling lives and rules that exempt
 /// "not shipped in the published package" code (e.g. `no-extraneous-import`)
 /// are relaxed. The broad set: build/CI scripts, demonstration code,
-/// generator scaffold templates, and performance benchmark suites. Matched as
-/// exact path segments.
+/// generator scaffold templates, performance benchmark suites, and the Nuxt
+/// `devtools/` UI integration (bundled into the devtools iframe, never the
+/// published package). Matched as exact path segments.
 const AUX_DIR_SEGMENTS: &[&str] = &[
     "scripts",
     "bin",
@@ -215,6 +216,7 @@ const AUX_DIR_SEGMENTS: &[&str] = &[
     "example-apps",
     "playground",
     "playgrounds",
+    "devtools",
     "templates",
     "template",
     "scaffold",
@@ -1719,6 +1721,7 @@ mod aux_path_tests {
             "example-apps",
             "playground",
             "playgrounds",
+            "devtools",
             "templates",
             "template",
             "scaffold",
@@ -1741,6 +1744,7 @@ mod aux_path_tests {
         assert!(!is_aux_dir_path(&PathBuf::from("src/appconfig/index.ts")));
         assert!(!is_aux_dir_path(&PathBuf::from("src/mysamples/index.ts")));
         assert!(!is_aux_dir_path(&PathBuf::from("src/templated/index.ts")));
+        assert!(!is_aux_dir_path(&PathBuf::from("src/mydevtools/index.ts")));
         assert!(!is_aux_dir_path(&PathBuf::from("src/app/login.ts")));
     }
 
