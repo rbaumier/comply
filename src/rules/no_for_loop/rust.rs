@@ -17,6 +17,12 @@
 //! Two-pointer loops are exempt: when the body mutates two or more distinct
 //! index variables (`old_idx += 1`, `new_idx += 1`), the indices advance at
 //! different rates and no single iterator combinator expresses the traversal.
+//!
+//! Loops with a compound logical condition (`while i < n && predicate(i)` or
+//! `... || ...`) are exempt: the extra conjunct/disjunct is an early-exit
+//! predicate, so the loop is a scan-until/search and the index's exit value is
+//! meaningful afterward. A `for`/`.iter()` rewrite would traverse
+//! unconditionally and lose the early-exit semantics.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use rustc_hash::FxHashSet;
@@ -27,6 +33,16 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
 
     // Heuristic: `i < something.len()` or `i < N`.
     if !cond_text.contains(".len()") && !cond_text.contains("< ") {
+        return;
+    }
+
+    // Exempt loops whose condition is a compound logical expression
+    // (`i < n && predicate(i)` / `... || ...`): the extra conjunct or disjunct
+    // makes the loop exit early (a scan-until/search), so the index's exit
+    // value is meaningful and no `for`/`.iter()` rewrite preserves the
+    // early-exit semantics. A simple comparison (`while i < n`) is not compound
+    // and remains eligible.
+    if is_compound_logical_condition(condition, source) {
         return;
     }
 
@@ -88,6 +104,25 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
         severity: Severity::Warning,
         span: None,
     });
+}
+
+/// True if the `while` condition's outermost node is a compound logical
+/// expression — a `binary_expression` whose operator is `&&` or `||`. One
+/// wrapping parenthesis layer is unwrapped first, so `while (i < n && p)` is
+/// also recognized. A simple comparison (`while i < n`, outermost `<`) is not
+/// compound and returns false.
+fn is_compound_logical_condition(condition: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut node = condition;
+    if node.kind() == "parenthesized_expression"
+        && let Some(inner) = node.named_child(0)
+    {
+        node = inner;
+    }
+    node.kind() == "binary_expression"
+        && node
+            .child_by_field_name("operator")
+            .and_then(|op| op.utf8_text(source).ok())
+            .is_some_and(|op| op == "&&" || op == "||")
 }
 
 /// Extract the loop's index variable from the condition: the bare identifier
@@ -389,5 +424,48 @@ mod tests {
         // `self.i` is a `field_expression`, not a bare local index.
         let src = "fn f(&mut self) { while self.i < self.buf.len() { self.i += 1; } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_scan_until_mismatch_compound_condition_issue_6513() {
+        // BurntSushi/memchr twoway.rs find_*_imp: the compound `&&` condition is
+        // a scan-until-mismatch — the loop exits early on a byte mismatch and
+        // `i`'s exit value is consumed by the following `if i < needle.len()`.
+        // A `for i in 0..needle.len()` would traverse unconditionally.
+        let src = "fn f(needle: &[u8], haystack: &[u8], pos: usize) { \
+                   let mut i = 0; \
+                   while i < needle.len() && needle[i] == haystack[pos + i] { i += 1; } \
+                   if i < needle.len() { use_it(i); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_parenthesized_compound_condition() {
+        // The whole condition wrapped in parens: one paren layer is unwrapped,
+        // so `while (i < n && p)` is still recognized as a compound condition.
+        let src = "fn f(v: &[i32], p: bool) { \
+                   let mut i = 0; \
+                   while (i < v.len() && p) { use_it(v[i]); i += 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_disjunction_compound_condition() {
+        // A `||` outermost operator is also compound: the loop continues while
+        // either operand holds, so it is not a bounded index traversal.
+        let src = "fn f(v: &[i32], flag: bool) { \
+                   let mut i = 0; \
+                   while i < v.len() || flag { use_it(v[i]); i += 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_simple_condition_index_loop_negative_control_issue_6513() {
+        // Negative control for the compound-condition guard: a SIMPLE comparison
+        // condition (`i < n`, no `&&`/`||`) is a pure traversal and still fires.
+        let src = "fn f(arr: &[i32], sum: &mut i32) { \
+                   let mut i = 0; \
+                   while i < arr.len() { *sum += arr[i]; i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
