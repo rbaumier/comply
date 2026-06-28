@@ -3547,16 +3547,18 @@ fn name_rebound_before_cast(consequence: Node, cast: Node, name: &str, source: &
 }
 
 /// True if `condition` is a comparison that upper-bounds the identifier `name`
-/// against an integer literal proving a value fits an unsigned target of
+/// against an integer-literal bound — or a `const` identifier resolving to one
+/// ([`resolve_int_bound`]) — proving a value fits an unsigned target of
 /// `target_bits` width.
 ///
-/// Recognized shapes (the literal is the *upper* bound on `name`):
+/// Recognized shapes (the bound `N` is the *upper* bound on `name`):
 /// - `name < N` / `name <= N` (identifier on the left);
 /// - `N > name` / `N >= name` (identifier on the right).
 ///
 /// `name < N` proves `name <= N - 1`, which fits when `N <= 2^bits`; `name <= N`
-/// proves `name <= N`, which fits when `N <= 2^bits - 1`. A literal that does not
-/// parse, or a bound too large for the target, returns false.
+/// proves `name <= N`, which fits when `N <= 2^bits - 1`. A bound that does not
+/// resolve to an integer literal, or a bound too large for the target, returns
+/// false.
 fn condition_upper_bounds(condition: Node, name: &str, target_bits: u16, source: &[u8]) -> bool {
     if condition.kind() != "binary_expression" {
         return false;
@@ -3573,14 +3575,14 @@ fn condition_upper_bounds(condition: Node, name: &str, target_bits: u16, source:
 
     // Normalize to `<identifier> <op'> <literal>`, mapping `>`/`>=` (identifier
     // on the right) onto the corresponding `<`/`<=`.
-    let (lit_node, inclusive) = match op {
-        "<" => (ident_then_literal(left, right, name, source), false),
-        "<=" => (ident_then_literal(left, right, name, source), true),
-        ">" => (ident_then_literal(right, left, name, source), false),
-        ">=" => (ident_then_literal(right, left, name, source), true),
+    let (bound_node, inclusive) = match op {
+        "<" => (ident_then_bound(left, right, name, source), false),
+        "<=" => (ident_then_bound(left, right, name, source), true),
+        ">" => (ident_then_bound(right, left, name, source), false),
+        ">=" => (ident_then_bound(right, left, name, source), true),
         _ => return false,
     };
-    let Some(bound) = lit_node.and_then(|n| parse_int_literal(n, source)) else {
+    let Some(bound) = bound_node.and_then(|n| resolve_int_bound(n, source)) else {
         return false;
     };
     // Max value the target can hold (2^bits - 1), computed without overflowing
@@ -3602,9 +3604,10 @@ fn condition_upper_bounds(condition: Node, name: &str, target_bits: u16, source:
 }
 
 /// True if the NEGATION of `condition` upper-bounds the identifier `name` against
-/// an integer literal proving a value fits an unsigned target of `target_bits`
-/// width — the bound that holds in the `else` / `alternative` branch of
-/// `if <condition> { … }`, where the condition is known to be false.
+/// an integer-literal bound — or a `const` identifier resolving to one
+/// ([`resolve_int_bound`]) — proving a value fits an unsigned target of
+/// `target_bits` width — the bound that holds in the `else` / `alternative`
+/// branch of `if <condition> { … }`, where the condition is known to be false.
 ///
 /// Recognized shapes (the literal *lower*-bounds `name` in the condition, so its
 /// negation is an *upper* bound in the else branch):
@@ -3612,8 +3615,9 @@ fn condition_upper_bounds(condition: Node, name: &str, target_bits: u16, source:
 /// - the mirrored `N < name` / `N <= name`.
 ///
 /// `name <= N` fits when `N <= 2^bits - 1`; `name < N` proves `name <= N - 1`,
-/// which fits when `N - 1 <= 2^bits - 1`. A literal that does not parse, or a
-/// bound too large for the target, returns false.
+/// which fits when `N - 1 <= 2^bits - 1`. The bound `N` may be an integer literal
+/// or a `const` identifier resolving to one ([`resolve_int_bound`]); a bound that
+/// does not resolve, or one too large for the target, returns false.
 fn negated_condition_upper_bounds(
     condition: Node,
     name: &str,
@@ -3637,14 +3641,14 @@ fn negated_condition_upper_bounds(
     // to an inclusive `<= N` bound, `>=` to an exclusive `< N` bound. `>` / `>=`
     // carry the identifier on the left; the mirrored `<` / `<=` carry it on the
     // right (`N < name` ≡ `name > N`).
-    let (lit_node, inclusive) = match op {
-        ">" => (ident_then_literal(left, right, name, source), true),
-        ">=" => (ident_then_literal(left, right, name, source), false),
-        "<" => (ident_then_literal(right, left, name, source), true),
-        "<=" => (ident_then_literal(right, left, name, source), false),
+    let (bound_node, inclusive) = match op {
+        ">" => (ident_then_bound(left, right, name, source), true),
+        ">=" => (ident_then_bound(left, right, name, source), false),
+        "<" => (ident_then_bound(right, left, name, source), true),
+        "<=" => (ident_then_bound(right, left, name, source), false),
         _ => return false,
     };
-    let Some(bound) = lit_node.and_then(|n| parse_int_literal(n, source)) else {
+    let Some(bound) = bound_node.and_then(|n| resolve_int_bound(n, source)) else {
         return false;
     };
     // Max value the target can hold (2^bits - 1), computed without overflowing the
@@ -3665,21 +3669,102 @@ fn negated_condition_upper_bounds(
     }
 }
 
-/// If `ident` is the identifier `name` and `lit` is an integer literal, return
-/// the literal node; otherwise `None`.
-fn ident_then_literal<'a>(
+/// If `ident` is the identifier `name` and `bound` is an integer literal or a
+/// plain `identifier` (a candidate `const`-identifier bound, resolved later by
+/// [`resolve_int_bound`]), return the `bound` node; otherwise `None`.
+fn ident_then_bound<'a>(
     ident: Node<'a>,
-    lit: Node<'a>,
+    bound: Node<'a>,
     name: &str,
     source: &[u8],
 ) -> Option<Node<'a>> {
     if ident.kind() == "identifier"
         && ident.utf8_text(source).is_ok_and(|t| t == name)
-        && lit.kind() == "integer_literal"
+        && matches!(bound.kind(), "integer_literal" | "identifier")
     {
-        Some(lit)
+        Some(bound)
     } else {
         None
+    }
+}
+
+/// Resolve `node` — an upper-bound operand — to its `u128` value. An
+/// `integer_literal` is parsed directly; an `identifier` is resolved to an
+/// enclosing `const` whose value is itself an integer literal (see
+/// [`resolve_const_int`]). Any other shape, or a `const` whose value is not a
+/// plain integer literal, yields `None`, leaving the cast unexempted.
+fn resolve_int_bound(node: Node, source: &[u8]) -> Option<u128> {
+    match node.kind() {
+        "integer_literal" => parse_int_literal(node, source),
+        "identifier" => resolve_const_int(node, source),
+        _ => None,
+    }
+}
+
+/// Resolve a `const`-identifier `ident` to its integer-literal value by purely
+/// structural tree-sitter lookup (no type inference): walk the ancestors of
+/// `ident` and, at each enclosing scope, scan its direct children for a
+/// `const_item` whose `name` matches `ident` and whose `value` is an
+/// `integer_literal`, returning that literal's parsed value. The nearest such
+/// `const` wins. Returns `None` when no matching `const` is found, or the
+/// matched `const`'s value is not a plain integer literal (e.g. `1 << 53`, a
+/// call, or another const) — keeping the bound, and thus the cast, unexempted.
+///
+/// A nearer non-`const` binding of the same name (a `let` in an enclosing block,
+/// or a parameter of the enclosing fn/closure) shadows any outer `const`: the
+/// bound then reads a runtime local of unknown value, so the walk stops and
+/// returns `None` rather than resolving the shadowed `const`.
+fn resolve_const_int(ident: Node, source: &[u8]) -> Option<u128> {
+    let target = ident.utf8_text(source).ok()?;
+    let mut scope = ident.parent();
+    while let Some(node) = scope {
+        if scope_binds_name_nonconst(node, target, source) {
+            return None;
+        }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "const_item"
+                && child.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok())
+                    == Some(target)
+            {
+                let value = child.child_by_field_name("value")?;
+                return (value.kind() == "integer_literal")
+                    .then(|| parse_int_literal(value, source))
+                    .flatten();
+            }
+        }
+        scope = node.parent();
+    }
+    None
+}
+
+/// True if `scope` introduces a non-`const` binding of `name`: a `let_declaration`
+/// whose pattern binds `name` (when `scope` is a `block` or similar body), or a
+/// `parameter` binding `name` (when `scope` is a `function_item` /
+/// `closure_expression`). Such a binding shadows any outer `const` of the same
+/// name, so [`resolve_const_int`] must not resolve past it.
+fn scope_binds_name_nonconst(scope: Node, name: &str, source: &[u8]) -> bool {
+    let binds_pattern = |node: Node| {
+        node.child_by_field_name("pattern")
+            .is_some_and(|pattern| pattern_contains_identifier(pattern, name, source))
+    };
+    match scope.kind() {
+        "function_item" | "closure_expression" => scope
+            .child_by_field_name("parameters")
+            .is_some_and(|params| {
+                let mut cursor = params.walk();
+                params
+                    .named_children(&mut cursor)
+                    .filter(|p| p.kind() == "parameter")
+                    .any(binds_pattern)
+            }),
+        _ => {
+            let mut cursor = scope.walk();
+            scope
+                .named_children(&mut cursor)
+                .filter(|c| c.kind() == "let_declaration")
+                .any(binds_pattern)
+        }
     }
 }
 
