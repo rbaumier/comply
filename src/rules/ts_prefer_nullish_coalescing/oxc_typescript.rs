@@ -4,6 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator, UnaryOperator};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -174,6 +175,38 @@ fn rhs_is_default_like(expr: &Expression) -> bool {
     }
 }
 
+/// True when this `||` sits in the condition/test position of an
+/// `if`/`while`/`do-while`/`for` statement — a place where the result is
+/// consumed purely as a boolean. There `||` is logical disjunction and `??`
+/// is never a meaningful drop-in, so the suggestion is not actionable. The
+/// upward walk crosses only transparent expression wrappers (nested
+/// `||`/`&&`, parentheses) and stops at the first statement, so a `||` in an
+/// `if`/`for` body, or in a `for` init/update clause, is left untouched (it
+/// sits in value position and still flags). For `for`, `test` and `update`
+/// are both optional expressions, so the span of the test is matched
+/// explicitly to exclude the update clause.
+fn is_in_boolean_test_position<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let mut current = node;
+    loop {
+        let parent = semantic.nodes().parent_node(current.id());
+        match parent.kind() {
+            AstKind::LogicalExpression(_) | AstKind::ParenthesizedExpression(_) => {
+                current = parent;
+            }
+            AstKind::IfStatement(s) => return s.test.span() == current.kind().span(),
+            AstKind::WhileStatement(s) => return s.test.span() == current.kind().span(),
+            AstKind::DoWhileStatement(s) => return s.test.span() == current.kind().span(),
+            AstKind::ForStatement(s) => {
+                return s.test.as_ref().map(GetSpan::span) == Some(current.kind().span());
+            }
+            _ => return false,
+        }
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::LogicalExpression]
@@ -183,7 +216,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::LogicalExpression(logical) = node.kind() else {
@@ -193,6 +226,11 @@ impl OxcCheck for Check {
             return;
         }
         if !rhs_is_default_like(&logical.right) {
+            return;
+        }
+        // `||` in the test of an `if`/`while`/`do-while`/`for` is logical
+        // disjunction consumed as a boolean; `??` is never a valid drop-in.
+        if is_in_boolean_test_position(node, semantic) {
             return;
         }
         // Boolean `||` chains (`a.endsWith(":asc") || a.endsWith(":desc")`,
@@ -460,6 +498,71 @@ mod tests {
     #[test]
     fn still_flags_non_env_member_fallback() {
         let src = r#"const x = config.maybe || "info";"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #6586: a `||` chain of boolean-returning calls in an `if`
+    // condition is logical disjunction, not a nullish fallback. Also asserts
+    // the duplicate diagnostic (both nested `||` nodes) is gone.
+    #[test]
+    fn allows_call_or_chain_in_if_condition() {
+        let src = r#"
+            function f(a: unknown[], x: number, y: number, z: number) {
+                if (arrayIncludes(a, x) || arrayIncludes(a, y) || arrayIncludes(a, z)) {
+                    return true;
+                }
+                return false;
+            }
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_call_or_in_while_condition() {
+        let src = r#"while (next() || retry()) {}"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_call_or_in_dowhile_condition() {
+        let src = r#"do {} while (next() || retry());"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_call_or_in_for_test_condition() {
+        let src = r#"for (let i = 0; next() || retry(); i++) {}"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The exemption is restricted to the test position: a `||` in the BODY of
+    // an `if` is value position and still flags.
+    #[test]
+    fn still_flags_call_or_in_if_body() {
+        let src = r#"if (cond) { const x = maybe() || "default"; }"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // A `for`-init clause is value position, not the test — still flags.
+    #[test]
+    fn still_flags_call_or_in_for_init() {
+        let src = r#"for (let i = maybe() || "default"; i < n; i++) {}"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // A `for`-update clause is value position, not the test. The `||`'s direct
+    // parent is the `ForStatement`, so this exercises the test-vs-update span
+    // discrimination — it must still flag.
+    #[test]
+    fn still_flags_call_or_in_for_update() {
+        let src = r#"for (let i = 0; i < n; report() || "x") {}"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Plain assignment outside any condition still flags (current behavior).
+    #[test]
+    fn still_flags_call_or_in_assignment() {
+        let src = r#"const x = maybe() || "default";"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
