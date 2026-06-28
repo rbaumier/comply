@@ -658,16 +658,22 @@ fn has_length_guard_ancestor(
                     && node_span.end <= cond.consequent.span().end;
                 let in_test = cond.test.span().start <= node_span.start
                     && node_span.end <= cond.test.span().end;
+                let in_alternate = cond.alternate.span().start <= node_span.start
+                    && node_span.end <= cond.alternate.span().end;
                 if in_consequent || in_test {
                     let cond_text = &source
                         [cond.test.span().start as usize..cond.test.span().end as usize];
                     // `.length` guard applies to the truthy consequent. Optional
                     // chaining is normalized on both sides so `arr?.length` matches.
+                    // A `<obj_text>.length === 0` (or `< 1` / `<= 0`) test is the
+                    // exception: its truthy branch is the EMPTY case, so the consequent
+                    // access stays flagged.
                     if in_consequent
                         && normalize_optional_chaining(cond_text).contains(&format!(
                             "{}.length",
                             normalize_optional_chaining(obj_text)
                         ))
+                        && !is_length_zero_check(&cond.test, obj_text, source)
                     {
                         return true;
                     }
@@ -677,6 +683,16 @@ fn has_length_guard_ancestor(
                     if is_first && condition_guards_index0(&cond.test, obj_text, source, false) {
                         return true;
                     }
+                }
+                // `cond ? <consequent> : <alternate>` — the alternate runs only when
+                // `cond` is FALSY. When `cond` is `<obj_text>.length === 0` (or `< 1`
+                // / `<= 0`), possibly one OR-disjunct among others, its falsity forces
+                // every disjunct false, so `<obj_text>.length >= 1` and the access is
+                // in-bounds. The dual of the consequent `.length` guard.
+                if in_alternate
+                    && alternate_guarded_by_empty_length(&cond.test, obj_text, source)
+                {
+                    return true;
                 }
             }
             AstKind::LogicalExpression(logical) => {
@@ -788,6 +804,46 @@ fn condition_guards_index0(
         Expression::ParenthesizedExpression(paren) => {
             condition_guards_index0(&paren.expression, obj_text, source, negated)
         }
+        _ => false,
+    }
+}
+
+/// Returns true when `expr` (a ternary condition) contains a `<obj_text>.length`
+/// emptiness check (see [`is_length_zero_check`]) reachable from the root through
+/// `||` (`LogicalOr`) connectives only. A ternary's alternate runs exactly when
+/// the condition is falsy; with only `||` between the root and the check, that
+/// falsity forces the check false, so `<obj_text>.length >= 1` and the access is
+/// in-bounds. `&&` is NOT traversed: a check under `&&` need not be false when the
+/// whole condition is false, so it does not prove non-emptiness.
+fn alternate_guarded_by_empty_length(expr: &Expression, obj_text: &str, source: &str) -> bool {
+    match expr {
+        Expression::ParenthesizedExpression(paren) => {
+            alternate_guarded_by_empty_length(&paren.expression, obj_text, source)
+        }
+        Expression::LogicalExpression(logical)
+            if logical.operator == LogicalOperator::Or =>
+        {
+            alternate_guarded_by_empty_length(&logical.left, obj_text, source)
+                || alternate_guarded_by_empty_length(&logical.right, obj_text, source)
+        }
+        _ => is_length_zero_check(expr, obj_text, source),
+    }
+}
+
+/// Returns true when `expr` asserts `<obj_text>.length` is zero — the array is
+/// empty: `<obj_text>.length === 0`, `== 0`, `< 1`, or `<= 0`.
+fn is_length_zero_check(expr: &Expression, obj_text: &str, source: &str) -> bool {
+    let Expression::BinaryExpression(binary) = expr else {
+        return false;
+    };
+    if !is_length_of(&binary.left, obj_text, source) {
+        return false;
+    }
+    match binary.operator {
+        BinaryOperator::StrictEquality | BinaryOperator::Equality | BinaryOperator::LessEqualThan => {
+            is_numeric_literal(&binary.right, 0, source)
+        }
+        BinaryOperator::LessThan => is_numeric_literal(&binary.right, 1, source),
         _ => false,
     }
 }
@@ -3390,6 +3446,53 @@ mod tests {
         // An access in the `alternate` (falsy) branch runs when the guard failed,
         // so it stays flagged.
         let src = "function f(arr) { return arr.length === 2 ? null : arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_ternary_alternate_length_zero_or_disjunct_execa_issue_6236() {
+        // The issue's repro: `nextTokens[0]` sits in the ALTERNATE of a ternary whose
+        // condition has `nextTokens.length === 0` as an OR-disjunct. The alternate runs
+        // only when every disjunct is false, so `nextTokens.length > 0` and `[0]` is
+        // in-bounds.
+        let src = "const concatTokens = (tokens, nextTokens, isSeparated) => isSeparated || tokens.length === 0 || nextTokens.length === 0 ? [...tokens, ...nextTokens] : [...tokens.slice(0, -1), `${tokens.at(-1)}${nextTokens[0]}`, ...nextTokens.slice(1)];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_ternary_alternate_length_eq_zero_issue_6236() {
+        let src = "function f(arr) { return arr.length === 0 ? fallback : arr[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_ternary_alternate_length_lt_one_issue_6236() {
+        let src = "function f(arr) { return arr.length < 1 ? x : arr[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_ternary_alternate_length_zero_under_and_issue_6236() {
+        // Negative space: the `length === 0` check sits under `&&`. The condition being
+        // false does NOT force `arr.length === 0` false (it can be false because `a` is
+        // false), so the alternate is not proven non-empty — it stays flagged.
+        let src = "function f(arr, a) { return a && arr.length === 0 ? x : arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_ternary_consequent_length_zero_issue_6236() {
+        // Negative space: `arr.length === 0` truthy is the EMPTY case, and the
+        // consequent runs on truthy — so the consequent `arr[0]` is out-of-bounds.
+        let src = "function f(arr) { return arr.length === 0 ? arr[0] : y; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_ternary_alternate_length_zero_other_array_issue_6236() {
+        // Negative space: the guard is `other.length === 0`, but the access is on a
+        // DIFFERENT array `arr`, so `arr` may still be empty.
+        let src = "function f(arr, other) { return other.length === 0 ? x : arr[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
