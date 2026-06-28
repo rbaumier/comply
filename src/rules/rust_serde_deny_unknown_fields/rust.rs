@@ -40,10 +40,17 @@
 //! feed the deserializer random/malformed bytes; `deny_unknown_fields`
 //! would reject inputs before the fuzz target can exercise the serde
 //! code paths, defeating the fuzzer's purpose.
+//!
+//! **Exception:** a struct defined as a local item inside a function body
+//! (any `function_item` ancestor, including an impl-method body) is skipped.
+//! Such locals are ad-hoc partial parsers that intentionally capture only
+//! the fields the caller needs from an external format; `deny_unknown_fields`
+//! would reject every real input carrying the fields they deliberately
+//! ignore. They are never public-API types needing strict field validation.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{enclosing_fn, is_in_test_context};
 
 const KINDS: &[&str] = &["struct_item"];
 
@@ -77,6 +84,15 @@ impl AstCheck for Check {
         // Structs defined inside a test function or `#[cfg(test)]` module
         // are throwaway fixtures that never see untrusted input.
         if is_in_test_context(node, source_bytes) {
+            return;
+        }
+        // A struct defined as a local item inside a function body (any
+        // `function_item` ancestor, including an impl-method body) is an
+        // ad-hoc partial parser of an external format, capturing only the
+        // fields the caller needs. `deny_unknown_fields` would reject every
+        // real input carrying the extra fields the parser deliberately
+        // ignores, so these locals are never flagged.
+        if enclosing_fn(node).is_some() {
             return;
         }
         let attrs = collect_preceding_attrs(node, source_bytes);
@@ -695,6 +711,72 @@ mod tests {
             run_on(source).len(),
             1,
             "should still flag: serde Deserialize without Archive is the real target"
+        );
+    }
+
+    #[test]
+    fn allows_local_struct_inside_function_body() {
+        // tokei `fn parse_jupyter` — `Jupyter` is a local item inside a
+        // non-test function body, an ad-hoc partial parser of the Jupyter
+        // notebook format that intentionally ignores the file's many other
+        // fields. `deny_unknown_fields` would make every real notebook fail
+        // to parse. (Closes #6578)
+        let source = "fn parse_jupyter(json: &[u8]) -> Option<CodeStats> {\n\
+                      #[derive(Deserialize)]\n\
+                      struct Jupyter {\n\
+                          cells: Vec<JupyterCell>,\n\
+                          metadata: JupyterMetadata,\n\
+                      }\n\
+                      let jupyter: Jupyter = serde_json::from_slice(json).ok()?;\n\
+                      None\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: local Deserialize struct inside a fn body flagged"
+        );
+    }
+
+    #[test]
+    fn allows_local_struct_inside_impl_method_body() {
+        // A struct local to an impl-method body is still a local partial
+        // parser — the method is a `function_item`, so it is exempted.
+        let source = "impl Parser {\n\
+                      fn parse(&self, json: &[u8]) -> Option<()> {\n\
+                      #[derive(Deserialize)]\n\
+                      struct Cell { source: Vec<String> }\n\
+                      None\n\
+                      }\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: local Deserialize struct inside an impl-method body flagged"
+        );
+    }
+
+    #[test]
+    fn still_flags_top_level_struct_outside_any_fn() {
+        // Negative control: a module-level `Deserialize` struct (no
+        // `function_item` ancestor) missing `deny_unknown_fields` still flags.
+        let source = "#[derive(Deserialize)]\nstruct Config { rate: u32 }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "top-level Deserialize struct must still flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_struct_inside_plain_module() {
+        // Negative control: a struct inside `mod m { ... }` but not inside any
+        // function body still flags — `mod` is not a `function_item`.
+        let source = "mod m {\n\
+                      #[derive(Deserialize)]\n\
+                      struct Config { rate: u32 }\n\
+                      }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "module-level Deserialize struct must still flag"
         );
     }
 
