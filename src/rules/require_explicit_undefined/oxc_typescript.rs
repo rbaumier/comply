@@ -1,5 +1,6 @@
 //! OXC backend for require-explicit-undefined — flag bare `return;` in functions
-//! whose return type is not `void` or `never`.
+//! whose return type produces a value, i.e. not `void`, `never`, `Promise<void>`,
+//! `Promise<never>`, or an assertion signature (`asserts x` / `asserts x is T`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -67,6 +68,12 @@ impl OxcCheck for Check {
                 let trimmed = ret_text.trim_start_matches(':').trim();
 
                 if trimmed == "void" || trimmed == "never" {
+                    return;
+                }
+                // Assertion signatures (`asserts x`, `asserts x is T`) make a type
+                // assertion rather than producing a value; a bare `return;` means the
+                // assertion held, so `return undefined;` would be semantically wrong.
+                if trimmed.starts_with("asserts ") {
                     return;
                 }
                 if trimmed == "Promise<void>" || trimmed == "Promise<never>" {
@@ -176,5 +183,23 @@ mod tests {
     fn flags_in_method_with_return_type() {
         let src = "class C { find(): Item | undefined { return; } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_return_in_assertion_signature() {
+        let src = "function assertOk(value: unknown): asserts value { if (!value) throw new Error('x'); return; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_return_in_assertion_is_signature() {
+        let src = "function assertString(value: unknown): asserts value is string { if (typeof value !== 'string') throw new Error('x'); return; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_return_in_assertion_method() {
+        let src = "class C { check(value: unknown, label: string): asserts value { for (const p of this.ps) { try { run(value, label, p); return; } catch (e) {} } } }";
+        assert!(run_on(src).is_empty());
     }
 }
