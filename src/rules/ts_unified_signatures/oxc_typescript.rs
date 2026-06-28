@@ -87,15 +87,14 @@ fn param_type_text<'a>(shape: &SigShape<'a>, index: usize, source: &'a str) -> O
     Some(&source[span.start as usize..span.end as usize])
 }
 
-/// The count of parameter positions at which the equal-arity signatures do not all
-/// share the same parameter type text. Two same-arity overloads unify into one only
-/// by unioning a *single* position's type; differing at two or more positions means
-/// a per-position union would also admit cross combinations none of the overloads
-/// declared (e.g. an `'error'` event paired with the catch-all listener), so such a
-/// group cannot be merged.
-fn differing_param_positions<'a>(shapes: &[SigShape<'a>], source: &'a str) -> usize {
-    let arity = shapes.first().map_or(0, |s| s.params.items.len());
-    (0..arity)
+/// How many of the first `count` parameter positions have a parameter type text not
+/// shared by every signature in the group. A unified signature can union at most one
+/// position, so two or more differing positions (the equal-arity case) block the
+/// merge; for differing-arity overloads any differing *shared* position blocks it,
+/// because adding only a trailing parameter requires the shorter signature to be a
+/// type-prefix of the longer.
+fn differing_param_positions<'a>(shapes: &[SigShape<'a>], count: usize, source: &'a str) -> usize {
+    (0..count)
         .filter(|&pos| {
             let baseline = param_type_text(&shapes[0], pos, source);
             shapes[1..]
@@ -135,11 +134,15 @@ fn signatures_narrow_return_type<'a>(shapes: &[SigShape<'a>], source: &'a str) -
 /// * Parameter counts may differ by at most one — a larger gap would need more
 ///   than one optional trailing parameter, which the overloads do not express.
 /// * When the counts *do* differ, the unified form has to add an optional
-///   trailing parameter, so the declared return types must be identical;
-///   otherwise the merge would erase the per-overload return-type distinction
-///   (the curried zero-arg vs one-arg overload idiom, and the D3-style
-///   getter/setter idiom where the 0-arg getter returns the value and the 1-arg
-///   setter returns `this`).
+///   trailing parameter, so the declared return types must be identical (otherwise
+///   the merge would erase the per-overload return-type distinction — the curried
+///   zero-arg vs one-arg overload idiom, and the D3-style getter/setter idiom where
+///   the 0-arg getter returns the value and the 1-arg setter returns `this`) *and*
+///   every shared parameter position must have identical type text, since adding
+///   only a trailing parameter requires the shorter signature to be a type-prefix of
+///   the longer; a differing shared position (the kysely `innerJoin(table, k1, k2)`
+///   vs `innerJoin(table, callback)` idiom) would force a union at an internal
+///   position, over-permitting combinations the overloads reject.
 /// * When the counts are equal the merge unions a single parameter's type. This is
 ///   unsafe — so the group is not unifiable — when either the signatures form an
 ///   overloaded-narrowing group (distinct parameter lists each mapping to a
@@ -164,11 +167,14 @@ fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> boo
         if signatures_narrow_return_type(shapes, source) {
             return false;
         }
-        return differing_param_positions(shapes, source) < 2;
+        return differing_param_positions(shapes, min, source) < 2;
     }
 
     let first_return = return_type_text(&shapes[0], source);
-    shapes[1..].iter().all(|s| return_type_text(s, source) == first_return)
+    if shapes[1..].iter().any(|s| return_type_text(s, source) != first_return) {
+        return false;
+    }
+    differing_param_positions(shapes, min, source) == 0
 }
 
 /// One overload group sharing a name: the source offsets where each signature
@@ -497,5 +503,23 @@ mod tests {
              off(event: string, listener: (e: unknown) => void): this\n}",
         );
         assert_eq!(diags.len(), 1);
+    }
+
+    // Regression #6255: kysely `innerJoin` — a 3-param `(table, k1, k2)` overload and
+    // a 2-param `(table, callback)` overload sharing the same return type. The counts
+    // differ by one, but shared position 1 differs (`K1` vs `FN`), so the shorter
+    // signature is not a type-prefix of the longer: adding only a trailing optional
+    // parameter cannot express both without a union at an internal position that
+    // over-permits. Not unifiable.
+    #[test]
+    fn allows_diff_one_overloads_with_differing_shared_position() {
+        assert!(
+            run_on(
+                "interface SelectQueryBuilder<DB, TB, O> {\n  \
+                 innerJoin<TE extends TableExpression<DB, TB>, K1 extends JoinReferenceExpression<DB, TB, TE>, K2 extends JoinReferenceExpression<DB, TB, TE>>(table: TE, k1: K1, k2: K2): SelectQueryBuilderWithInnerJoin<DB, TB, O, TE>\n  \
+                 innerJoin<TE extends TableExpression<DB, TB>, const FN extends JoinCallbackExpression<DB, TB, TE>>(table: TE, callback: FN): SelectQueryBuilderWithInnerJoin<DB, TB, O, TE>\n}"
+            )
+            .is_empty()
+        );
     }
 }
