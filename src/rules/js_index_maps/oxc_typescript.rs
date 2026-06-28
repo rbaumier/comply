@@ -10,6 +10,11 @@
 //! a method-call chain rooted in an inline literal array (`["./", "/"].includes(x)`,
 //! `[a, b].flat().filter(Boolean)`) has a fixed, hardcoded size independent of
 //! input, so the scan is O(1), not flagged;
+//! an identifier bound to a `const` NON-EMPTY inline array literal
+//! (`const valid = ["yes", "no"]; valid.includes(x)`) is the same fixed-size
+//! lookup table one binding removed, so the scan is O(1), not flagged (an
+//! empty-array init like `const seen = []` is a growing accumulator and IS
+//! still flagged);
 //! a lookup in the iterable expression of a `for..of`/`for..in`
 //! (`for (const x of arr.filter(...))`) runs once before the loop, not per
 //! iteration, so it is not an O(n*m) site for that loop (an enclosing outer loop
@@ -18,7 +23,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, CallExpression, Expression, NewExpression, Statement, UnaryOperator};
+use oxc_ast::ast::{
+    Argument, CallExpression, Expression, NewExpression, Statement, UnaryOperator,
+    VariableDeclarationKind,
+};
 use oxc_semantic::ReferenceFlags;
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -109,6 +117,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip when the receiver is an identifier bound to a `const` non-empty
+        // inline array literal (`const valid = ["yes", "no"]; valid.includes(x)`).
+        // The binding is immutable and the array's size is fixed at the
+        // declaration site, so the scan is O(constant) — structurally the inline
+        // `["yes", "no"].includes(x)` form one `const` binding removed.
+        if receiver_is_const_bound_nonempty_array(&member.object, semantic) {
+            return;
+        }
+
         if !is_inside_loop(node, semantic) {
             return;
         }
@@ -151,6 +168,40 @@ fn root_receiver_is_literal_array(expr: &Expression<'_>) -> bool {
         },
         _ => false,
     }
+}
+
+/// True when `expr` is an identifier bound to a `const` declaration whose
+/// initializer is a NON-EMPTY inline array literal. Such a binding names a
+/// fixed-size lookup table at the declaration site — structurally the inline
+/// `["yes", "no"].includes(x)` form one binding removed, so a membership scan
+/// over it is O(constant) and building a Set/Map would only add allocation
+/// overhead. An empty-array init (`const seen = []`) is excluded: it is a
+/// growing accumulator (`seen.push(x)`), the genuine O(n*m) collection the rule
+/// targets. `let`/`var` bindings are excluded too: they could be reassigned to a
+/// larger array, so the size is not statically bounded.
+fn receiver_is_const_bound_nonempty_array<'a>(
+    expr: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(id) = expr else {
+        return false;
+    };
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let AstKind::VariableDeclarator(decl) =
+        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
+    else {
+        return false;
+    };
+    if decl.kind != VariableDeclarationKind::Const {
+        return false;
+    }
+    matches!(&decl.init, Some(Expression::ArrayExpression(arr)) if !arr.elements.is_empty())
 }
 
 /// True when `call`'s callback predicate is a (possibly negated) `.has()`
@@ -953,6 +1004,78 @@ for (const x of items) { const m = list.filter(v => v === x); }
         // the ascent must still reach the outer loop and flag it.
         let diags = run(r#"
 for (const o of outer) { for (const x of inner.filter(p => p.ok)) { use(x); } }
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_const_bound_inline_array_includes_in_loop() {
+        // Regression for #6623: `validValues` is a `const` bound to a fixed
+        // 2-element array literal declared in the loop body — O(constant), the
+        // inline `["yes", "no"].includes(x)` form one binding removed.
+        assert!(
+            run(r#"
+for (const item of xmlItems) {
+    const validValues = ['yes', 'no'];
+    if (validValues.includes(item.family_friendly)) { keep(item); }
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_const_bound_four_element_array_includes_in_loop() {
+        // A larger but still statically-fixed const array is equally bounded.
+        assert!(
+            run(r#"
+for (const price of prices) {
+    const validTypes = ['rent', 'purchase', 'package', 'subscription'];
+    if (!validTypes.includes(price.type)) { reject(price); }
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_const_bound_empty_array_accumulator_in_loop() {
+        // `const seen = []` is a growing accumulator (`seen.push(x)`) — the
+        // genuine O(n*m) membership scan the rule targets. The empty-array init
+        // must NOT be exempted.
+        let diags = run(r#"
+const seen = [];
+for (const x of xs) {
+    if (seen.includes(x)) { continue; }
+    seen.push(x);
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_let_bound_inline_array_includes_in_loop() {
+        // A `let` binding could be reassigned to a larger array — the size is not
+        // statically bounded, so it is still flagged.
+        let diags = run(r#"
+for (const item of items) {
+    let validValues = ['yes', 'no'];
+    if (validValues.includes(item.flag)) { keep(item); }
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_param_receiver_includes_in_loop() {
+        // A function-parameter receiver is unbounded — not bound to a literal
+        // array declaration — so it is still flagged.
+        let diags = run(r#"
+function check(validValues) {
+    for (const item of items) {
+        if (validValues.includes(item.flag)) { keep(item); }
+    }
+}
 "#);
         assert_eq!(diags.len(), 1);
     }
