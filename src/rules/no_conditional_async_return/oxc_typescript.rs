@@ -35,7 +35,7 @@ impl OxcCheck for Check {
                     let Some(body) = &func.body else {
                         continue;
                     };
-                    if annotation_permits_promise_branches(func.return_type.as_deref()) {
+                    if annotation_permits_promise_branches(func.return_type.as_deref(), semantic) {
                         continue;
                     }
                     let kinds = collect_return_kinds(&body.statements, ctx.source);
@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                     if arrow.expression {
                         continue;
                     }
-                    if annotation_permits_promise_branches(arrow.return_type.as_deref()) {
+                    if annotation_permits_promise_branches(arrow.return_type.as_deref(), semantic) {
                         continue;
                     }
                     let kinds = collect_return_kinds(&arrow.body.statements, ctx.source);
@@ -100,9 +100,17 @@ fn is_promise_type(ty: &TSType) -> bool {
 /// mixed-promise contract? A plain `Promise<T>` guarantees every branch is a
 /// Promise (TypeScript enforces assignability), and a `Promise<T>`-bearing
 /// union (e.g. `void | Promise<void>`, `T | Promise<T>`) deliberately documents
-/// the mixed-return contract. In both cases the conditional return is
-/// intentional, so trust the annotation rather than the syntactic classifier.
-fn annotation_permits_promise_branches(return_type: Option<&TSTypeAnnotation>) -> bool {
+/// the mixed-return contract. `ReturnType<F>` where `F` is an enclosing-scope
+/// type parameter (e.g. `ReturnType<CallFunction>`) is equally abstract: the
+/// return type is deferred to whatever the generic function returns, so a body
+/// that is sync in one branch and a Promise in another mirrors the generic
+/// contract exactly, just like an explicit `T | Promise<T>` union. In all these
+/// cases the conditional return is intentional, so trust the annotation rather
+/// than the syntactic classifier.
+fn annotation_permits_promise_branches(
+    return_type: Option<&TSTypeAnnotation>,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
     let Some(rt) = return_type else { return false };
     let mut ty = &rt.type_annotation;
     while let TSType::TSParenthesizedType(paren) = ty {
@@ -111,10 +119,35 @@ fn annotation_permits_promise_branches(return_type: Option<&TSTypeAnnotation>) -
     if is_promise_type(ty) {
         return true;
     }
+    if is_returntype_of_type_parameter(ty, semantic) {
+        return true;
+    }
     let TSType::TSUnionType(union) = ty else {
         return false;
     };
     union.types.iter().any(is_promise_type) && union.types.iter().any(|t| !is_promise_type(t))
+}
+
+/// Is this annotation the built-in `ReturnType<F>` utility whose type argument
+/// references an enclosing-scope type parameter? The type parameter is resolved
+/// via the semantic model (not by name), so `ReturnType<typeof concreteFn>` or
+/// `ReturnType<SomeConcreteType>` — whose argument is not a type parameter — is
+/// not matched and a mixed-return body there is still flagged.
+fn is_returntype_of_type_parameter(ty: &TSType, semantic: &oxc_semantic::Semantic) -> bool {
+    let TSType::TSTypeReference(tref) = ty else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(id) = &tref.type_name else {
+        return false;
+    };
+    if id.name.as_str() != "ReturnType" {
+        return false;
+    }
+    tref.type_arguments.as_ref().is_some_and(|args| {
+        args.params.iter().any(|p| {
+            crate::oxc_helpers::type_references_enclosing_type_parameter(p, semantic)
+        })
+    })
 }
 
 /// Classify a return-value expression as promise-returning or sync.
@@ -373,5 +406,32 @@ mod tests {
         // are `x ?? Promise.resolve()` and `Promise.resolve()` is all-Promise.
         let src = "const f = (x: boolean) => { if (x) { return foo() ?? Promise.resolve(); } return Promise.resolve(); };";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_returntype_of_generic_type_parameter() {
+        // Regression for #6471: unjs/hookable's `callHookWith` is annotated
+        // `ReturnType<CallFunction>` where `CallFunction` is a generic type
+        // parameter. The return type defers entirely to the generic caller, so a
+        // Promise branch (`result.finally(...)`) alongside a sync branch
+        // (`return result;`) mirrors the contract just like `T | Promise<T>`.
+        let src = "function callHookWith<CallFunction extends (...args: any[]) => any>(caller: CallFunction): ReturnType<CallFunction> {
+            const result = caller();
+            if ((result as any) instanceof Promise) {
+                return result.finally(() => {});
+            }
+            return result;
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_returntype_of_concrete_typeof() {
+        // Negative control for #6471: the discriminator is structural, not a
+        // blanket `ReturnType` name suppression. `ReturnType<typeof concreteFn>`
+        // captures a concrete function's return (the type argument is not a type
+        // parameter), so a genuinely mixed body still fires.
+        let src = "function f(x: boolean): ReturnType<typeof concreteFn> { if (x) return 1; return Promise.resolve(2); }";
+        assert_eq!(run(src).len(), 1);
     }
 }

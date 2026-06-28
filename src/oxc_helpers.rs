@@ -4076,6 +4076,64 @@ pub fn return_type_admits_void_or_undefined(
     })
 }
 
+/// True when `ident` (a type-position identifier) resolves to a symbol whose
+/// declaration node is a `TSTypeParameter` — i.e. a generic parameter bound to
+/// an enclosing class, function, interface, or type-alias scope. Resolves the
+/// reference via `reference_id` → symbol → declaration node, so a same-named
+/// concrete type or value binding is correctly rejected.
+#[must_use]
+fn ident_resolves_to_type_parameter(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl = scoping.symbol_declaration(sym_id);
+    matches!(semantic.nodes().kind(decl), AstKind::TSTypeParameter(_))
+}
+
+/// True when `t` references at least one enclosing-scope type parameter, looking
+/// through union/intersection members and into generic type arguments (so
+/// `ReturnType<CallFunction>` and `CTEBuilderCallback<N>` are both seen to
+/// reference their parameter). Such a type is instantiation-dependent: its
+/// concrete form is deferred to whatever the parameter is bound to per call.
+#[must_use]
+pub fn type_references_enclosing_type_parameter(
+    t: &oxc_ast::ast::TSType,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    match t {
+        TSType::TSTypeReference(tref) => {
+            if let TSTypeName::IdentifierReference(id) = &tref.type_name
+                && ident_resolves_to_type_parameter(id, semantic)
+            {
+                return true;
+            }
+            tref.type_arguments.as_ref().is_some_and(|args| {
+                args.params
+                    .iter()
+                    .any(|p| type_references_enclosing_type_parameter(p, semantic))
+            })
+        }
+        TSType::TSUnionType(u) => u
+            .types
+            .iter()
+            .any(|m| type_references_enclosing_type_parameter(m, semantic)),
+        TSType::TSIntersectionType(i) => i
+            .types
+            .iter()
+            .any(|m| type_references_enclosing_type_parameter(m, semantic)),
+        _ => false,
+    }
+}
+
 /// True when any enclosing function/arrow of `node_id` declares a type-predicate
 /// (`value is T`) return type. Such a function IS a hand-written type guard: the
 /// `as` casts in its body are needed to read discriminant properties off the
