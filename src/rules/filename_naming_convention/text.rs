@@ -539,7 +539,15 @@ impl TextCheck for Check {
         if is_composable_name(convention_stem) {
             return Vec::new();
         }
-        if is_locale_tag(convention_stem, is_in_locale_dir(ctx.path)) {
+        let in_locale_dir = is_in_locale_dir(ctx.path);
+        if is_locale_tag(convention_stem, in_locale_dir) {
+            return Vec::new();
+        }
+        // Inside a locale/i18n data directory, a snake_case filename maps directly
+        // to the locale-definition property key it populates (`first_name`,
+        // `state_abbr`), a systematic per-subdirectory convention. Accept
+        // snake_case there regardless of the project's dominant convention.
+        if in_locale_dir && is_snake_case(convention_stem) {
             return Vec::new();
         }
         if is_ts_or_jsx_file(ctx.path)
@@ -969,6 +977,51 @@ mod tests {
     fn kebab_case_name_is_not_a_locale_tag_issue_4521() {
         assert!(!is_locale_tag("my-component", true));
         assert!(run("src/my-component.ts").is_empty());
+    }
+
+    // Regression for #6336: inside a locale data directory, a snake_case filename
+    // maps directly to the locale-definition property key it populates
+    // (`first_name`, `state_abbr`, `last_name_pattern`) — a systematic
+    // per-subdirectory convention. Accepted regardless of the project's dominant
+    // convention (here the empty test project has none).
+    #[test]
+    fn allows_snake_case_locale_data_files_issue_6336() {
+        assert!(run("src/locales/af_ZA/person/first_name.ts").is_empty());
+        assert!(run("src/locales/af_ZA/person/last_name.ts").is_empty());
+        assert!(run("src/locales/af_ZA/person/state_abbr.ts").is_empty());
+        assert!(run("src/locales/sk/person/last_name_pattern.ts").is_empty());
+    }
+
+    // #6336: the allowance covers every recognized locale data directory name, not
+    // just `locales/` — an `i18n/` ancestor exempts snake_case data files too.
+    #[test]
+    fn allows_snake_case_in_i18n_dir_issue_6336() {
+        assert!(run("src/i18n/zh/error_messages.ts").is_empty());
+    }
+
+    // Load-bearing guard for #6336: the gate is the locale directory, not a
+    // project-wide convention. The same snake_case shape OUTSIDE a locale dir, with
+    // no dominant convention (empty test project), must STILL fire.
+    #[test]
+    fn flags_snake_case_outside_locale_dir_issue_6336() {
+        assert_eq!(run("src/utils/some_helper.ts").len(), 1);
+    }
+
+    // Load-bearing guard for #6336: the locale-dir allowance is snake-SHAPED, not a
+    // blanket "anything under locales/". A mixed-case stem (`Foo_Bar`, uppercase so
+    // neither snake/kebab/camel/pascal nor a locale tag) inside `locales/` still fires.
+    #[test]
+    fn flags_non_snake_shape_inside_locale_dir_issue_6336() {
+        assert_eq!(run("src/locales/af_ZA/Foo_Bar.ts").len(), 1);
+    }
+
+    // #6336: the gate reuses the rule's i18n-directory predicate, so the allowance
+    // applies under every recognized message-catalog directory name — including
+    // `messages/` (next-intl/FormatJS) — intentionally, not only the literal
+    // `locales/`/`i18n/`. Pins that this is by design.
+    #[test]
+    fn allows_snake_case_in_messages_dir_issue_6336() {
+        assert!(run("src/messages/error_messages.ts").is_empty());
     }
 
     // Regression for #1758: Next.js Pages Router dynamic-segment and numeric
