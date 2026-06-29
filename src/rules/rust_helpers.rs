@@ -1798,10 +1798,13 @@ pub fn arm_body_is_diverging(arm: Node, source: &[u8]) -> bool {
     expr_is_diverging(value, source)
 }
 
-/// Classify a match-arm body expression as diverging/error. A `block`
-/// body with a single statement is unwrapped to its inner expression so
-/// `{ bail!("…"); }` is treated like `bail!("…")`.
-fn expr_is_diverging(expr: Node, source: &[u8]) -> bool {
+/// Classify an expression (or single-statement block) as diverging/early-exit:
+/// a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!` macro
+/// invocation, or a `return Err(...)` / `return None`. A `block` body with a
+/// single statement is unwrapped to its inner expression so `{ bail!("…"); }`
+/// is treated like `bail!("…")`; a block doing other work before diverging is
+/// not classified as diverging.
+pub fn expr_is_diverging(expr: Node, source: &[u8]) -> bool {
     match expr.kind() {
         "block" => {
             // Only an unconditional single-statement body is a guard:
