@@ -790,6 +790,19 @@ pub fn has_type_probe_infix(path: &Path) -> bool {
         .is_some_and(|name| name.to_ascii_lowercase().contains(".tp."))
 }
 
+/// A Rust/TS test-support *module file* whose stem is a canonical
+/// test-scaffolding name (`test_helpers`, `test_utils`). This is the
+/// snake_case single-file form of the already-recognized `test-helpers/` /
+/// `test-helper/` directory convention: such a module is gated
+/// `#[cfg(test)] mod …;` (or imported only from tests) and ships nothing,
+/// so its types have no production API boundary.
+pub fn is_test_support_module_file(path: &std::path::Path) -> bool {
+    matches!(
+        path.file_stem().and_then(|s| s.to_str()),
+        Some("test_helpers" | "test_utils")
+    )
+}
+
 /// Directory-segment conventions for tsd/dtslint type-test files — matched as
 /// exact path segments (between `/` delimiters). These directories hold files
 /// whose sole purpose is asserting type relationships with `expectType` /
