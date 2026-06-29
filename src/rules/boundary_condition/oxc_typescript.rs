@@ -1650,17 +1650,19 @@ fn is_nonempty_fixed_array_construction(new_expr: &NewExpression) -> bool {
     }
 }
 
-/// Returns true when `ident`'s binding has a literal tuple type annotation with
-/// at least one element — making `ident[0]` provably in-bounds. Resolves the
+/// Returns true when `ident`'s binding has a type annotation denoting a
+/// non-empty tuple — making `ident[0]` provably in-bounds. Resolves the
 /// reference to its declaration and reads the `type_annotation` on the enclosing
 /// `FormalParameter` (`p: [A, B]`) or `VariableDeclarator` (`const p: [A, B]`).
-/// A `readonly [...]` wrapper is unwrapped. An aliased tuple type
-/// (`LineSegment<T>`) is a `TSTypeReference`, not a `TSTupleType`, so it does not
-/// match: resolving the alias to its tuple definition needs type information this
-/// native backend doesn't have.
-fn resolves_to_nonempty_tuple_type(
+/// The annotation qualifies when it is a literal tuple (`[A, B]`, with a
+/// `readonly [...]` wrapper unwrapped) or a bare named alias that resolves to one
+/// (`type Semver = [number, number, number]`; see
+/// [`ts_type_resolves_to_nonempty_tuple`]). A generic reference (`LineSegment<T>`)
+/// stays unresolved — its tuple shape needs type information this native backend
+/// doesn't have.
+fn resolves_to_nonempty_tuple_type<'a>(
     ident: &IdentifierReference,
-    semantic: &oxc_semantic::Semantic,
+    semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let Some(ref_id) = ident.reference_id.get() else {
         return false;
@@ -1685,7 +1687,7 @@ fn resolves_to_nonempty_tuple_type(
         };
         return annotation
             .as_ref()
-            .is_some_and(|ann| ts_type_is_nonempty_tuple(&ann.type_annotation));
+            .is_some_and(|ann| ts_type_resolves_to_nonempty_tuple(&ann.type_annotation, semantic));
     }
     false
 }
@@ -1703,6 +1705,87 @@ fn ts_type_is_nonempty_tuple(ty: &TSType) -> bool {
         }
         _ => false,
     }
+}
+
+/// Maximum type-alias hops to follow when resolving a named tuple alias. Bounds
+/// a long alias chain (`type A = B; type B = C; ...`); combined with the
+/// visited-name set in [`ts_type_resolves_to_nonempty_tuple`], it also stops a
+/// self-referential alias from looping forever.
+const MAX_TUPLE_ALIAS_HOPS: usize = 8;
+
+/// Returns true when `ty` denotes a non-empty tuple: either directly (a literal
+/// `[A, B]`, `readonly` unwrapped — see [`ts_type_is_nonempty_tuple`]) or by
+/// resolving a bare named alias to its declared type
+/// (`type Semver = [number, number, number]`). Only a bare `TSTypeReference` with
+/// no type arguments is followed; a generic reference (`LineSegment<T>`) needs
+/// type information this native backend lacks and stays unresolved. Alias chains
+/// (`type A = B; type B = [..]`) are followed up to [`MAX_TUPLE_ALIAS_HOPS`] hops,
+/// tracking visited names so a self-referential alias cannot loop forever. An
+/// alias whose declaration is not in the file stays unresolved (returns false),
+/// so the read is still flagged.
+fn ts_type_resolves_to_nonempty_tuple<'a>(
+    ty: &'a TSType<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    if ts_type_is_nonempty_tuple(ty) {
+        return true;
+    }
+    let Some(name) = bare_type_reference_name(ty) else {
+        return false;
+    };
+    let mut current = name;
+    let mut visited: Vec<&str> = Vec::new();
+    for _ in 0..MAX_TUPLE_ALIAS_HOPS {
+        if visited.contains(&current) {
+            return false;
+        }
+        visited.push(current);
+        let Some(declared) = find_type_alias_declared_type(current, semantic) else {
+            return false;
+        };
+        if ts_type_is_nonempty_tuple(declared) {
+            return true;
+        }
+        let Some(next) = bare_type_reference_name(declared) else {
+            return false;
+        };
+        current = next;
+    }
+    false
+}
+
+/// If `ty` is a bare `TSTypeReference` (a plain type name with NO type
+/// arguments), return the referenced identifier name; otherwise `None`. A
+/// generic reference (`Foo<T>`) or a qualified name (`A.B`) returns `None`.
+fn bare_type_reference_name<'a>(ty: &'a TSType<'a>) -> Option<&'a str> {
+    let TSType::TSTypeReference(reference) = ty else {
+        return None;
+    };
+    if reference.type_arguments.is_some() {
+        return None;
+    }
+    let TSTypeName::IdentifierReference(name) = &reference.type_name else {
+        return None;
+    };
+    Some(name.name.as_str())
+}
+
+/// Returns the declared type of the file's `type <name> = ...` alias, or `None`
+/// if no such alias is declared. Mirrors the `semantic.nodes()` scan that
+/// `collect_keyof_typeof_aliases` uses in the `ts-no-enum-object-literal-pattern`
+/// rule.
+fn find_type_alias_declared_type<'a>(
+    name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    for node in semantic.nodes().iter() {
+        if let AstKind::TSTypeAliasDeclaration(decl) = node.kind()
+            && decl.id.name.as_str() == name
+        {
+            return Some(&decl.type_annotation);
+        }
+    }
+    None
 }
 
 /// Array iteration methods whose callback receives an array ELEMENT as its (first)
@@ -4277,10 +4360,43 @@ mod tests {
 
     #[test]
     fn still_flags_aliased_tuple_param_index0_issue_1240() {
-        // Negative space (residual): an aliased tuple type cannot be resolved to
-        // its tuple definition without type information, so it stays flagged. This
-        // is the issue's own `LineSegment<GlobalPoint>` case — needs --type-aware.
+        // Negative space: a generic reference (`LineSegment<GlobalPoint>`, with type
+        // arguments) cannot be resolved to its tuple definition without type
+        // information, so it stays flagged. Only a bare alias (no type arguments) is
+        // followed.
         let src = "function f(seg: LineSegment<GlobalPoint>) { return seg[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_named_tuple_alias_param_index0_issue_6675() {
+        // The issue's repro: `Semver` is a bare alias for the fixed-length tuple
+        // `[number, number, number]`, so `semverA[0]` / `semverB[0]` are in-bounds.
+        let src = "type Semver = [number, number, number]; const compareSemver = (semverA: Semver, semverB: Semver) => (semverA[0] - semverB[0] || semverA[1] - semverB[1] || semverA[2] - semverB[2]);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_alias_param_index0_issue_6675() {
+        // Negative space: a bare alias to a plain array (`type Nums = number[]`) is
+        // NOT a fixed-length tuple, so `a[0]` may be `undefined` and stays flagged.
+        let src = "type Nums = number[]; const f = (a: Nums) => a[0] - 1;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_named_tuple_alias_chain_param_index0_issue_6675() {
+        // A bounded alias chain (`type A = B; type B = [..]`) resolves to the tuple,
+        // so `p[0]` is in-bounds.
+        let src = "type B = [number, number]; type A = B; const f = (p: A) => p[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_self_referential_alias_param_index0_issue_6675() {
+        // A self-referential alias (`type A = A`) is not a tuple; the cycle guard
+        // must terminate the resolution (no hang) and leave the read flagged.
+        let src = "type A = A; const f = (p: A) => p[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 
