@@ -43,7 +43,16 @@ fn has_contradiction(pattern: &str) -> bool {
             && let Some(close) = find_close_paren(bytes, i)
         {
             let after = close + 1;
-            if after < len && bytes[i + 3] == bytes[after] {
+            // A negative-lookahead contradiction (`(?!a)a`) exists only when the
+            // lookahead body is exactly one literal character identical to the
+            // element that follows. `close == i + 4` proves a single-char body;
+            // `is_ascii_alphanumeric` rejects metacharacters (`.`/`*`/…) so a
+            // multi-char body like `(?!.*X)` is not treated as a contradiction.
+            if after < len
+                && close == i + 4
+                && bytes[i + 3].is_ascii_alphanumeric()
+                && bytes[i + 3] == bytes[after]
+            {
                 return true;
             }
         }
@@ -162,6 +171,18 @@ mod tests {
     #[test]
     fn allows_consistent_lookahead() {
         assert!(run_on(r#"const re = /(?=a)a/;"#).is_empty());
+    }
+
+    // #6326: a multi-char negative-lookahead body is not a contradiction even
+    // when its first byte equals the following element.
+    #[test]
+    fn allows_multichar_negative_lookahead_starting_with_metachar() {
+        assert!(run_on(r#"const re = /^(?!.*font-family\s*:).*$/s;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_multichar_negative_lookahead_literal_body() {
+        assert!(run_on(r#"const re = /(?!ab)a/;"#).is_empty());
     }
 
     #[test]
