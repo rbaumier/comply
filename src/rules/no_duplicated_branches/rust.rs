@@ -46,6 +46,13 @@ fn check_if_branches(
         return;
     }
 
+    // Defer to an author's `#[allow(clippy::if_same_then_else)]` on the
+    // if-expression: this rule mirrors that clippy lint, so the explicit
+    // machine-readable suppression of it overrides the duplicate-branch flag.
+    if crate::rules::rust_helpers::has_clippy_allow(node, source, "if_same_then_else") {
+        return;
+    }
+
     let mut branches: Vec<Branch> = Vec::new();
     collect_if_branches(node, source, &mut branches);
 
@@ -321,6 +328,62 @@ mod tests {
         baz();
     } else {
         baz();
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// #6653 (sharkdp/pastel src/distinct.rs:149): an `#[allow(clippy::if_same_then_else)]`
+    /// on the if-expression is the author's explicit opt-out; the duplicate
+    /// adjacent branches must not be flagged.
+    #[test]
+    fn allows_if_chain_with_clippy_allow() {
+        let src = r#"fn f(result: Pair, params: Params, rng: Rng) -> usize {
+    #[allow(clippy::if_same_then_else)]
+    if result.closest_pair.0 < params.num_fixed_colors {
+        result.closest_pair.1
+    } else if result.closest_pair.1 < params.num_fixed_colors {
+        result.closest_pair.0
+    } else if rng.random() {
+        result.closest_pair.0
+    } else {
+        result.closest_pair.1
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Same chain WITHOUT the allow: the adjacent identical branches are still
+    /// a real duplicate and stay flagged (the rule is not gutted).
+    #[test]
+    fn flags_if_chain_without_clippy_allow() {
+        let src = r#"fn f(result: Pair, params: Params, rng: Rng) -> usize {
+    if result.closest_pair.0 < params.num_fixed_colors {
+        result.closest_pair.1
+    } else if result.closest_pair.1 < params.num_fixed_colors {
+        result.closest_pair.0
+    } else if rng.random() {
+        result.closest_pair.0
+    } else {
+        result.closest_pair.1
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// An UNRELATED `#[allow]` does not suppress the duplicate-branch flag.
+    #[test]
+    fn flags_if_chain_with_unrelated_clippy_allow() {
+        let src = r#"fn f(result: Pair, params: Params, rng: Rng) -> usize {
+    #[allow(clippy::needless_return)]
+    if result.closest_pair.0 < params.num_fixed_colors {
+        result.closest_pair.1
+    } else if result.closest_pair.1 < params.num_fixed_colors {
+        result.closest_pair.0
+    } else if rng.random() {
+        result.closest_pair.0
+    } else {
+        result.closest_pair.1
     }
 }"#;
         assert_eq!(run_on(src).len(), 1);
