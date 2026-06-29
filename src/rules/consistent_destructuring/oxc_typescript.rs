@@ -56,6 +56,16 @@ impl OxcCheck for Check {
         // both carry a `None` symbol and are disambiguated by text).
         let mut mutated_props: FxHashSet<(Option<SymbolId>, String, String)> = FxHashSet::default();
 
+        // Properties that are GETTERS (`get prop() { … }`) on a class in this
+        // file. A getter re-evaluates on every access (it can read mutable
+        // internal state), so caching it via a one-time destructure would
+        // capture a stale value — reads of a getter are not a style violation.
+        // Collected by name file-wide: a conservative over-approximation (it
+        // may also spare a same-named plain field on an unrelated object),
+        // matching the over-approximation already used for `mutated_props`; the
+        // cost is only a missed suggestion, never a wrong rewrite.
+        let mut getter_names: FxHashSet<String> = FxHashSet::default();
+
         for node in nodes.iter() {
             match node.kind() {
                 AstKind::VariableDeclarator(decl) => {
@@ -258,12 +268,25 @@ impl OxcCheck for Check {
                         start_byte: member.span().start,
                     });
                 }
+                AstKind::MethodDefinition(method)
+                    if method.kind == MethodDefinitionKind::Get =>
+                {
+                    if let Some(name) = method.key.static_name() {
+                        getter_names.insert(name.to_string());
+                    }
+                }
                 _ => {}
             }
         }
 
         // Phase 3: match candidates against destructured objects
         for c in &candidates {
+            // Accessing a getter is not equivalent to caching its value — each
+            // read re-evaluates the getter body, so a one-time destructure
+            // would freeze a stale value. Skip it.
+            if getter_names.contains(&c.prop_text) {
+                continue;
+            }
             // A property that is written anywhere on this object cannot be
             // cached via destructuring without risking a stale value, so its
             // reads are never a style violation. Over-approximate over the
@@ -728,6 +751,54 @@ mod tests {
         let diags = run(code);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("value"));
+    }
+
+    #[test]
+    fn allows_getter_access_issue_6711() {
+        // Issue #6711: `fullCmd`/`sync` are class getters. After `self` is
+        // destructured, reading `self.fullCmd`/`self.sync` re-evaluates the
+        // getter body (which reads mutable internal state), so a one-time
+        // destructure would capture a stale value. These reads are required,
+        // not a style violation.
+        let code = r#"
+            class ProcessPromise {
+                get fullCmd() { return this._cmd; }
+                get sync() { return this._sync; }
+                _run() {
+                    const self = this;
+                    const { id } = self;
+                    if (self.sync) {
+                        console.log(self.fullCmd);
+                    }
+                    return id;
+                }
+            }
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag access to a getter after destructuring the same object"
+        );
+    }
+
+    #[test]
+    fn flags_plain_field_access_still() {
+        // Negative-space guard for #6711: the same shape but `plain` is an
+        // ordinary data field, not a getter. Reading it after destructuring is
+        // a genuine inconsistency and must still be flagged — the getter
+        // exemption must not blanket-disable the rule.
+        let code = r#"
+            class ProcessPromise {
+                get fullCmd() { return this._cmd; }
+                _run() {
+                    const self = this;
+                    const { id } = self;
+                    return self.plain;
+                }
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("plain"));
     }
 }
 
