@@ -33,7 +33,9 @@
 //! and stays flagged; a lone empty `Err` arm likewise stays flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{arm_body_is_diverging, tuple_struct_pattern_binds_const};
+use crate::rules::rust_helpers::{
+    arm_body_is_diverging, expr_is_diverging, tuple_struct_pattern_binds_const,
+};
 
 crate::ast_check! { on ["match_arm", "let_condition", "let_chain", "if_expression"] => |node, source, ctx, diagnostics|
 match node.kind() {
@@ -108,6 +110,20 @@ match node.kind() {
             }
             let Some(cons) = node.child_by_field_name("consequence") else { return };
             if !is_empty_block(&cons, source) {
+                return;
+            }
+            // A controlled assertion: `if let Err(Foo) = expr {} else { panic!() }`
+            // asserts the result must be this exact error — the empty then-block is
+            // the success case and the diverging `else` proves intent, not silent
+            // error-swallowing. This mirrors the `match_arm` diverging-sibling guard.
+            // The `alternative` field is an `else_clause`; its first named child is
+            // the `else` `block` (or an `if_expression` for `else if`, which
+            // `expr_is_diverging` classifies as non-diverging — leaving `else if`
+            // chains flagged).
+            if let Some(alt) = node.child_by_field_name("alternative")
+                && let Some(else_body) = alt.named_child(0)
+                && expr_is_diverging(else_body, source)
+            {
                 return;
             }
             push_diag(node, ctx, diagnostics);
@@ -651,6 +667,69 @@ mod tests {
                    Ok(v) => go(v), // trailing comment on the Ok arm\n\
                    Err(_) => {} \
                    } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_if_let_err_with_panicking_else_issue_6323() {
+        // Issue #6323: `if let Err(X) = expr {} else { panic!(...) }` asserts
+        // the result must be exactly this error — the empty then-block is the
+        // success case and the diverging `else` proves intent.
+        let src = "fn t() { if let Err(CapacityOverflow) = empty_bytes.try_reserve(usize::MAX) { } \
+                   else { panic!(\"usize::MAX should trigger an overflow!\"); } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_if_let_err_with_unreachable_else_issue_6323() {
+        let src = "fn t() { if let Err(_) = expr { } else { unreachable!() } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_if_let_err_no_else_issue_6323() {
+        // Narrowness guard: no `else` branch — still a silent swallow.
+        let src = "fn t() { if let Err(_) = expr { } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_if_let_err_with_non_diverging_else_issue_6323() {
+        // Narrowness guard: a non-diverging `else` does real work without
+        // asserting — the empty then-block still swallows the success case.
+        let src = "fn t() { if let Err(_) = expr { } else { log(e); } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_if_let_err_with_work_then_diverging_else_issue_6323() {
+        // Narrowness guard: an `else` that does other work before diverging is
+        // not a pure assertion guard — it stays flagged.
+        let src = "fn t() { if let Err(_) = expr { } else { cleanup(); panic!(); } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_if_let_err_with_return_err_else_issue_6323() {
+        // `else { return Err(e); }` diverges by propagating — the empty
+        // then-block is the asserted success case, not a swallow.
+        let src = "fn t() -> Result<(), E> { if let Err(_) = expr { } else { return Err(e); } Ok(()) }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_if_let_err_named_binding_with_panic_else_issue_6323() {
+        // A named payload binding does not change the verdict — the diverging
+        // `else` still proves the assertion intent.
+        let src = "fn t() { if let Err(e) = expr { } else { panic!(\"expected an error\"); } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_if_let_err_with_else_if_chain_issue_6323() {
+        // Narrowness guard: an `else if` chain is not a diverging else — the
+        // outer empty then-block still swallows the success case and fires.
+        let src = "fn t() { if let Err(_) = expr { } else if cond { } else { panic!(); } }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 }
