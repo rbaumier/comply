@@ -53,6 +53,18 @@
 //! `.unwrap()`/`.expect()` the only valid implementation. Matches bare and
 //! path-qualified `impl Index`/`impl ops::Index`/`impl std::ops::IndexMut`.
 //!
+//! `.expect("documented reason")` in a scope that cannot propagate via `?` is
+//! exempted — when the nearest enclosing function/closure's return type does
+//! not denote a `Result` (an elided return type, `Option<_>`, `bool`, a plain
+//! value, etc.), `?` is syntactically impossible, so a documented `.expect()`
+//! is the only non-API-breaking invariant assertion (the same reasoning the
+//! `Index`/`IndexMut` exemption applies to `fn index`). The message must be a
+//! non-empty string literal; `.expect("")` and `.unwrap()` — which carry no
+//! documented reason — still flag, and any `Result` return (including
+//! `io::Result`, `fmt::Result`, `anyhow::Result`) keeps flagging because `?`
+//! works there. The walk bails (keeps flagging) at an `async_block` boundary,
+//! where error propagation is undeterminable.
+//!
 //! This rule is equivalent to `clippy::unwrap_used` + `clippy::expect_used`
 //! (both restriction-group lints, off by default in clippy). Running it
 //! via comply means you get the check without having to enable the lints
@@ -184,6 +196,17 @@ impl AstCheck for Check {
         if field_text == "unwrap" && is_fixed_size_key_delegation(function, node, source_bytes) {
             return;
         }
+        // Skip `.expect("documented reason")` when the enclosing function/closure
+        // cannot propagate via `?` — its return type does not denote a `Result`.
+        // `?` is then syntactically impossible, so a documented `.expect()` is the
+        // only non-API-breaking invariant assertion. `.unwrap()` (no message) and
+        // `.expect("")` (no documented reason) are never exempted here.
+        if field_text == "expect"
+            && expect_has_nonempty_message(node)
+            && enclosing_fn_cannot_propagate(node, source_bytes)
+        {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -199,6 +222,55 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when `call`'s first argument is a non-empty string literal — i.e. this
+/// is `.expect("documented reason")`. `.expect("")` (empty message) and
+/// `.expect(non_literal)` return false; a bare `.unwrap()` (no argument) never
+/// reaches here.
+fn expect_has_nonempty_message(call: tree_sitter::Node) -> bool {
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return false;
+    };
+    let Some(first) = args.named_child(0) else {
+        return false;
+    };
+    if !matches!(first.kind(), "string_literal" | "raw_string_literal") {
+        return false;
+    }
+    // A non-empty string literal carries a `string_content` child spanning its
+    // text; an empty `""` / `r""` has none.
+    let mut cursor = first.walk();
+    first
+        .named_children(&mut cursor)
+        .any(|c| c.kind() == "string_content" && !c.byte_range().is_empty())
+}
+
+/// True when the nearest enclosing function/closure of `node` has a return type
+/// that does not denote a `Result`, so `?` cannot propagate an error out of this
+/// scope. Walks up to the first `function_item` / `closure_expression`: an
+/// absent return type (`-> ()` elided) counts as non-Result; a present one is
+/// non-Result iff its text contains no `Result` token (so `io::Result<…>`,
+/// `anyhow::Result<T>`, `fmt::Result` keep flagging). Reads the `return_type`
+/// field only, never the whole signature, so a *parameter* typed `Result<…>`
+/// does not prevent the exemption. Returns false — keep flagging — when an
+/// `async_block` is crossed first (propagation across an async boundary is
+/// undeterminable) or no fn/closure encloses the call.
+fn enclosing_fn_cannot_propagate(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "function_item" | "closure_expression" => {
+                let Some(ret) = parent.child_by_field_name("return_type") else {
+                    return true;
+                };
+                return ret.utf8_text(source).is_ok_and(|t| !t.contains("Result"));
+            }
+            "async_block" => return false,
+            _ => cur = parent,
+        }
+    }
+    false
 }
 
 /// True for the RustCrypto `KeyInit::new` shape:
@@ -412,8 +484,13 @@ mod tests {
     }
 
     #[test]
-    fn flags_expect_in_production_fn() {
-        assert_eq!(run_on(r#"fn f() { let x = y.expect("msg"); }"#).len(), 1);
+    fn flags_expect_in_result_returning_fn() {
+        // The enclosing fn returns `Result`, so `?` IS possible — `.expect()` is
+        // flagged (the non-Result-return carve-out does not apply).
+        assert_eq!(
+            run_on(r#"fn f() -> Result<(), ()> { let x = y.expect("msg"); Ok(()) }"#).len(),
+            1
+        );
     }
 
     #[test]
@@ -792,9 +869,11 @@ mod tests {
     #[test]
     fn flags_expect_on_checked_mul() {
         // `.expect()` is itself flagged; the checked-arith exemption is
-        // `.unwrap()`-only, so `checked_mul(...).expect(...)` still flags.
+        // `.unwrap()`-only, so `checked_mul(...).expect(...)` still flags. The fn
+        // returns `Result`, so `?` is possible and the non-Result-return carve-out
+        // does not apply.
         let source =
-            r#"fn f(a: usize, b: usize) -> usize { a.checked_mul(b).expect("overflow") }"#;
+            r#"fn f(a: usize, b: usize) -> Result<usize, E> { Ok(a.checked_mul(b).expect("overflow")) }"#;
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -808,5 +887,77 @@ mod tests {
     }
 }"#;
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_expect_in_option_returning_fn() {
+        // #6251: `fn search(&self) -> Option<Match>` cannot propagate via `?`, so
+        // a documented `.expect()` is the only non-API-breaking invariant assertion.
+        let source = r#"fn search(&self) -> Option<Match> { self.aut.try_find(&self.input).expect("already checked") }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_in_bool_returning_fn() {
+        // #6251: `fn is_match(&self) -> bool` — same reasoning, `?` impossible.
+        let source = r#"fn is_match(&self) -> bool { self.aut.try_find(&i).expect("not expected to fail").is_some() }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_in_unit_returning_fn() {
+        // #6251: no return type → the fn returns `()` → `?` impossible → exempt.
+        let source = r#"fn f() { let x = y.expect("invariant"); }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unwrap_in_option_returning_fn() {
+        // #6251: `.unwrap()` carries no documented reason — it is never exempted by
+        // the non-Result-return carve-out, even where `?` is impossible.
+        let source =
+            r#"fn search(&self) -> Option<Match> { self.aut.try_find(&self.input).unwrap() }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_expect_in_io_result_fn() {
+        // #6251: a path-qualified `io::Result` return still contains `Result`, so
+        // `?` is possible and `.expect()` keeps flagging.
+        let source = r#"fn f() -> io::Result<()> { let x = y.expect("m"); Ok(()) }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_expect_in_non_result_fn() {
+        // #6251: `.expect("")` has no documented reason, so it still flags even
+        // where `?` is impossible.
+        let source = r#"fn f() -> bool { y.expect("") }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_expect_in_async_block_in_non_result_fn() {
+        // #6251: error propagation across an async boundary is undeterminable, so
+        // the walk bails at `async_block` and keeps flagging even though the
+        // enclosing fn returns a non-Result type.
+        let source = r#"fn spawn(&self) -> Handle { run(async move { x.expect("m") }) }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_expect_in_non_result_closure() {
+        // #6251: a closure with an explicit non-Result return type cannot propagate
+        // via `?`, so a documented `.expect()` is exempt at the closure boundary.
+        let source = r#"fn f(v: &[Item]) { v.iter().map(|x| -> u8 { x.expect("m") }); }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_with_result_typed_param_in_non_result_fn() {
+        // #6251: the `return_type` field is read, not the signature, so a
+        // *parameter* typed `Result<…>` does not block the exemption.
+        let source = r#"fn f(x: Result<u8, E>) -> bool { x.expect("m") }"#;
+        assert!(run_on(source).is_empty());
     }
 }
