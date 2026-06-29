@@ -69,15 +69,19 @@ fn is_semantic_grouping_prefix(prefix: &str) -> bool {
 /// the cluster heuristic is suppressed. `*Rules` is a per-field knob bag of
 /// the same shape (one independent `Rule` per protocol field, e.g. an
 /// EIP-4337 `UserOperationRules` mapping each spec field to a validation
-/// rule), so it joins the convention.
+/// rule), so it joins the convention. `*Properties` is the idiomatic
+/// TypeScript property-bag suffix (`CSSProperties`, `SVGPathProperties`) —
+/// the same semantic class as `*Props`, a named collection of independent
+/// attribute knobs — so it joins the convention too.
 fn is_configuration_type_name(type_name: &str) -> bool {
-    const CONFIG_SUFFIXES: [&str; 9] = [
+    const CONFIG_SUFFIXES: [&str; 10] = [
         "Config",
         "Configuration",
         "Options",
         "Opts",
         "Settings",
         "Props",
+        "Properties",
         "Params",
         "Args",
         "Rules",
@@ -569,6 +573,34 @@ mod tests {
   documentTransformTypeName?: string;
 };"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_properties_suffix_property_bag() {
+        // Regression for #6363: `*Properties` is the idiomatic TypeScript
+        // property-bag suffix (cf. `CSSProperties`). `SVGPathProperties`
+        // collects three independent SVG path-animation knobs sharing the
+        // `path` bucket; any subset can be set at once, so the cluster is a
+        // semantic grouping, not a discriminated-union state encoding.
+        let src = r#"interface SVGPathProperties {
+  pathLength?: number
+  pathOffset?: number
+  pathSpacing?: number
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_path_cluster_in_non_properties_interface() {
+        // Guardrail for #6363: the `Properties` suffix suppression must not
+        // leak into ordinary domain types. The same `path` prefix clump in a
+        // non-`*Properties` interface stays flagged.
+        let src = r#"interface Route {
+  pathLength?: number
+  pathOffset?: number
+  pathSpacing?: number
+}"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
