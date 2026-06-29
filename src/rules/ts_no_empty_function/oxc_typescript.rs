@@ -7,11 +7,16 @@
 //! Empty method stubs in a type-constrained object literal (`const x: T = { m:
 //! () => {} }`, `{ … } satisfies T`, `{ … } as T`) are exempt: the constraining
 //! interface makes them mandatory no-op implementations (Null Object pattern).
+//! An empty function as the right operand of a `??` / `||` fallback
+//! (`existing ?? (() => {})`) is exempt: the no-op body is the intended behavior
+//! when the left operand is nullish/falsy.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression, FunctionBody, ObjectPropertyKind, PropertyKey};
+use oxc_ast::ast::{
+    Argument, Expression, FunctionBody, LogicalOperator, ObjectPropertyKind, PropertyKey,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -175,6 +180,39 @@ fn is_typed_object_literal_method_stub(
     }
 }
 
+/// Returns true when the empty function — after transparently unwrapping a
+/// single `ParenthesizedExpression` — is the RIGHT operand of a `??` or `||`
+/// logical expression (`existing ?? (() => {})`, `existing || function () {}`).
+/// A no-op fallback is intentional: the function does nothing when the left
+/// operand is null/undefined (`??`) or falsy (`||`). Emptiness is the semantics,
+/// not an oversight. Only `||` / `??` qualify (not `&&`), and only the right
+/// operand (a left-operand empty function is not a fallback).
+fn is_logical_fallback_position(
+    nodes: &oxc_semantic::AstNodes,
+    node_id: oxc_semantic::NodeId,
+) -> bool {
+    // Unwrap at most one ParenthesizedExpression wrapper, mirroring how
+    // `is_placeholder_callback_position` looks through parens.
+    let mut outer_id = node_id;
+    let parent_id = nodes.parent_id(outer_id);
+    if parent_id != outer_id && matches!(nodes.kind(parent_id), AstKind::ParenthesizedExpression(_))
+    {
+        outer_id = parent_id;
+    }
+
+    let logical_id = nodes.parent_id(outer_id);
+    if logical_id == outer_id {
+        return false;
+    }
+    let AstKind::LogicalExpression(expr) = nodes.kind(logical_id) else {
+        return false;
+    };
+    if !matches!(expr.operator, LogicalOperator::Or | LogicalOperator::Coalesce) {
+        return false;
+    }
+    expr.right.span() == nodes.kind(outer_id).span()
+}
+
 /// Returns true when the function body is empty: no statements, no directives,
 /// and no comment between the braces. A comment is the explicit "intentionally
 /// empty" signal, so a comment-bearing body is treated as non-empty.
@@ -224,6 +262,14 @@ impl OxcCheck for Check {
         }
 
         if !is_empty_body(body, semantic) {
+            return;
+        }
+
+        // An empty function as the RIGHT operand of `??` or `||` is a no-op
+        // fallback (`existing ?? (() => {})`): the empty body is the intended
+        // behavior when the left operand is nullish/falsy, not dead code. Exempt
+        // regardless of file kind.
+        if is_logical_fallback_position(semantic.nodes(), node.id()) {
             return;
         }
 
@@ -593,6 +639,64 @@ mod tests {
             const p = new NotProxy(() => {}, {});
         "#;
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "proxy.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_arrow_as_nullish_coalescing_fallback_in_production() {
+        // Repro #6330 (mobxjs/mobx): an empty arrow as the right operand of `??`
+        // is a callable no-op fallback used when the left side is null/undefined.
+        let src = r#"
+            const clearTimers = reg["finalizeAllImmediately"] ?? (() => {});
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "index.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_arrow_as_logical_or_fallback_in_production() {
+        let src = r#"
+            const f = existing || (() => {});
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_function_expression_as_logical_or_fallback_in_production() {
+        let src = r#"
+            const f = existing || function () {};
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_plain_empty_arrow_assignment_not_a_fallback() {
+        // Negative space: a bare assignment is not a fallback position — the guard
+        // must not broaden to all empty functions.
+        let src = r#"
+            const f = () => {};
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_arrow_as_logical_and_operand() {
+        // Negative space: `&&` is not a fallback idiom — only `||` / `??` qualify.
+        let src = r#"
+            const f = cond && (() => {});
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_arrow_as_left_operand_of_fallback() {
+        // Negative space: a LEFT-operand empty function is not a fallback; only the
+        // right operand (the no-op default) is exempt.
+        let src = r#"
+            const f = (() => {}) || existing;
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(diags.len(), 1);
     }
 }
