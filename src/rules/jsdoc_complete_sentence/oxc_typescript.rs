@@ -39,8 +39,9 @@ pub struct Check;
 /// introduces such a block (a line ending in `:`, like `Example:`) is a
 /// code-block heading, not a concluding sentence, so it too is dropped.
 ///
-/// A trailing bare URL (a reference link, e.g. `https://docs.example/`) is
-/// not prose either: it ends with a path or query, not with `.`, `!`, or
+/// A trailing bare URL (a reference link, e.g. `https://docs.example/`) or a
+/// labeled URL reference (e.g. `Source: https://…`) is not prose either: it is
+/// a reference citation that ends with a path or query, not with `.`, `!`, or
 /// `?`, so it is excluded and never gates the punctuation check.
 ///
 /// A trailing Markdown table (lines starting with `|`) is structural markup,
@@ -85,14 +86,16 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
 }
 
 /// Drop a trailing line that is a bare URL (e.g. a reference link like
-/// `https://docs.example/`). Such a line is not a prose sentence, so it
-/// must not gate the terminal-punctuation check. The `:`-terminated label
-/// that introduces the link (e.g. `Learn more:`) is a heading for the
-/// reference, not a concluding sentence, so it is dropped too.
+/// `https://docs.example/`) or a labeled URL reference (e.g.
+/// `Source: https://en.wikipedia.org/wiki/…`). Such a line is a reference
+/// citation, not a prose sentence, so it must not gate the terminal-
+/// punctuation check. The `:`-terminated label that introduces a bare-URL
+/// line (e.g. `Learn more:`) is a heading for the reference, not a
+/// concluding sentence, so it is dropped too.
 fn drop_trailing_bare_url(description_lines: &mut Vec<(String, usize)>) {
     if description_lines
         .last()
-        .is_some_and(|(text, _)| is_bare_url(text))
+        .is_some_and(|(text, _)| is_bare_url(text) || is_labeled_url(text))
     {
         description_lines.pop();
         drop_trailing_code_block_label(description_lines);
@@ -125,6 +128,15 @@ fn is_bare_url(text: &str) -> bool {
     let trimmed = text.trim();
     (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
         && !trimmed.contains(char::is_whitespace)
+}
+
+/// Whether a line is a labeled URL reference: a `<label>: <url>` form whose
+/// value after the first `": "` is a bare URL (`Source: https://...`,
+/// `See: https://...`). A reference citation, not a prose sentence, so it must
+/// not gate the terminal-punctuation check.
+fn is_labeled_url(text: &str) -> bool {
+    text.split_once(": ")
+        .is_some_and(|(label, rest)| !label.trim().is_empty() && is_bare_url(rest))
 }
 
 /// Drop a trailing `:`-terminated label that introduces a non-prose
@@ -697,6 +709,134 @@ function uniform(): void {}
  * but remember to read the notes
  */
 function uniform(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn ignores_trailing_labeled_url_after_sentence() {
+        // Regression for rbaumier/comply#6338 — a `.`-terminated sentence
+        // followed by a `Source: <url>` reference citation must not flag the
+        // labeled URL line as missing punctuation.
+        let source = r#"
+/**
+ * Returns a random color space name from the worldwide accepted color spaces.
+ * Source: https://en.wikipedia.org/wiki/List_of_color_spaces_and_their_uses
+ */
+function colorSpace(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_standalone_labeled_url() {
+        // Regression for rbaumier/comply#6338 — a description whose only line is
+        // a `Source: <url>` reference empties the description, so neither the
+        // capital nor the punctuation check fires.
+        let source = r#"
+/**
+ * Source: https://pl.wikipedia.org/wiki/ULIC
+ */
+function ulic(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_trailing_labeled_url_other_labels() {
+        // The drop matches any `<label>: <bare-url>` shape, not a fixed list of
+        // label names — `See:` and `Ref:` reference citations are dropped too.
+        let see = r#"
+/**
+ * Parses the input into tokens.
+ * See: https://example.com/spec
+ */
+function parse(): void {}
+"#;
+        assert!(run_on(see).is_empty());
+
+        let reference = r#"
+/**
+ * Parses the input into tokens.
+ * Ref: https://example.com/spec
+ */
+function parse(): void {}
+"#;
+        assert!(run_on(reference).is_empty());
+    }
+
+    #[test]
+    fn still_flags_prose_missing_punctuation_with_no_url() {
+        // A plain prose description with no terminal punctuation and no URL must
+        // still be flagged after the labeled-URL fix.
+        let source = r#"
+/**
+ * Returns the value
+ */
+function getValue(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_labeled_non_url_line() {
+        // The drop requires the value after `": "` to be a bare URL — a labeled
+        // prose line (`Note: this is important`) is not a reference citation and
+        // still requires terminal punctuation.
+        let source = r#"
+/**
+ * Returns the value.
+ * Note: this is important
+ */
+function getValue(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_empty_label_before_url() {
+        // The label before `": "` must be non-empty — a line that is just a
+        // colon then a URL is not a `<label>: <url>` citation and is not dropped.
+        let source = r#"
+/**
+ * Returns the value
+ * : https://example.com/spec
+ */
+function getValue(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn ignores_labeled_url_with_port_in_value() {
+        // The `": "` split lands on the label boundary, not on a `host:port`
+        // colon inside the URL, so a labeled URL with a port is still dropped.
+        let source = r#"
+/**
+ * Connects to the local service.
+ * Source: https://localhost:8080/health
+ */
+function connect(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_prose_after_labeled_url_line() {
+        // Only a *trailing* labeled URL is dropped — a labeled URL mid-
+        // description followed by a prose sentence missing terminal punctuation
+        // must still flag.
+        let source = r#"
+/**
+ * Parses the input into tokens.
+ * Source: https://example.com/spec
+ * but remember to read the notes
+ */
+function parse(): void {}
 "#;
         let d = run_on(source);
         assert!(d.iter().any(|d| d.message.contains("end with")));
