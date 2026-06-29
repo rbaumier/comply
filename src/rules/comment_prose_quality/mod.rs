@@ -110,9 +110,11 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
 
 /// Lint a set of comment AST nodes. Walks each comment line by line so that
 /// the lexical-illusion check (last word of line N == first word of line N+1)
-/// behaves exactly like the original text-based scan. Across nodes the
-/// "previous word" only carries over when nodes are on adjacent source
-/// lines — otherwise unrelated comments would falsely trigger.
+/// behaves exactly like the original text-based scan. The "previous word" and
+/// the code-fence (` ``` `) state both carry across nodes only when nodes sit
+/// on adjacent source lines; a gap between non-contiguous nodes resets both, so
+/// an unclosed fence in one comment block never leaks into a later, separate one
+/// and unrelated comments never falsely trigger.
 pub(crate) fn lint_comment_nodes(
     ctx: &CheckCtx,
     source: &[u8],
@@ -122,6 +124,8 @@ pub(crate) fn lint_comment_nodes(
     let mut prev_last_word: Option<(String, usize)> = None;
     let mut prev_line: Option<usize> = None;
     let mut text_of_prev_line: Option<String> = None;
+    let mut in_code_block = false;
+    let mut prev_node_end_row: Option<usize> = None;
 
     for node in nodes {
         let Ok(raw) = node.utf8_text(source) else {
@@ -131,7 +135,9 @@ pub(crate) fn lint_comment_nodes(
             || raw.starts_with("//!")
             || raw.starts_with("/**");
         let start_row = node.start_position().row;
-        let mut in_code_block = false;
+        if prev_node_end_row.is_some_and(|e| start_row != e + 1) {
+            in_code_block = false;
+        }
         for (offset, line) in raw.lines().enumerate() {
             let line_no = start_row + offset + 1;
             let text = strip_marker(line);
@@ -226,6 +232,8 @@ pub(crate) fn lint_comment_nodes(
             prev_line = Some(line_no);
             text_of_prev_line = Some(text.to_string());
         }
+        let line_count = raw.lines().count();
+        prev_node_end_row = Some(start_row + line_count.saturating_sub(1));
     }
     diagnostics
 }
@@ -240,12 +248,16 @@ pub(crate) fn lint_comment_spans(
     let mut prev_last_word: Option<(String, usize)> = None;
     let mut prev_line: Option<usize> = None;
     let mut text_of_prev_line: Option<String> = None;
+    let mut in_code_block = false;
+    let mut prev_span_end_row: Option<usize> = None;
 
     for &(raw, start_row) in spans {
         let is_doc_comment = raw.starts_with("///")
             || raw.starts_with("//!")
             || raw.starts_with("/**");
-        let mut in_code_block = false;
+        if prev_span_end_row.is_some_and(|e| start_row != e + 1) {
+            in_code_block = false;
+        }
         for (offset, line) in raw.lines().enumerate() {
             let line_no = start_row + offset + 1;
             let text = strip_marker(line);
@@ -334,6 +346,8 @@ pub(crate) fn lint_comment_spans(
             prev_line = Some(line_no);
             text_of_prev_line = Some(text.to_string());
         }
+        let line_count = raw.lines().count();
+        prev_span_end_row = Some(start_row + line_count.saturating_sub(1));
     }
     diagnostics
 }
