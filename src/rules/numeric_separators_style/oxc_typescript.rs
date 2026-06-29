@@ -194,6 +194,16 @@ fn format_prefixed(prefix: &str, digits: &str, suffix: &str) -> String {
         // does not enforce separators on hex literals.
         _ => return format!("{}{}{}", prefix, digits, suffix),
     };
+    // Separators only aid readability when they yield BALANCED groups: the
+    // digit count must span at least two full groups and divide evenly by the
+    // group size. A 5-bit mask (`0b00001`) would otherwise become `0b0_0001`,
+    // an unbalanced 1+4 split whose leading single digit marks no nibble
+    // boundary and breaks the column alignment that makes the bit layout
+    // readable.
+    let digit_count = digits.chars().filter(|&c| c != '_').count();
+    if digit_count < 2 * group || digit_count % group != 0 {
+        return format!("{}{}{}", prefix, digits, suffix);
+    }
     let formatted = add_separators(digits, group);
     format!("{}{}{}", prefix, formatted, suffix)
 }
@@ -358,11 +368,58 @@ mod tests {
         assert!(run_on("const hash = 0x0bcaa747;").is_empty());
     }
 
-    // Binary literals keep nibble grouping — that convention is unambiguous.
+    // Binary literals keep nibble grouping — that convention is unambiguous —
+    // but only when the digit count is a balanced multiple of 4. A 12-digit
+    // literal groups into three full nibbles.
     #[test]
     fn still_groups_long_binary_literal() {
-        let d = run_on("const flags = 0b101010101;");
+        let d = run_on("const flags = 0b101010101010;");
         assert_eq!(d.len(), 1, "{:?}", d);
+        assert!(d[0].message.contains("0b1010_1010_1010"), "{:?}", d);
+    }
+
+    // Regression #6337: a binary literal whose digit count is not a multiple of
+    // 4 (here 5-bit reaction-state masks) would be split into an unbalanced
+    // leading partial group (`0b00001` -> `0b0_0001`), which conveys no nibble
+    // boundary and breaks column alignment. Such literals are exempt.
+    #[test]
+    fn allows_unbalanced_binary_mask_issue_6337() {
+        assert!(run_on("const m = 0b00001;").is_empty());
+        let src = "const a = 0b00001; const b = 0b00010; const c = 0b00100; \
+                   const d = 0b01000; const e = 0b10000; const f = 0b00000;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Regression #6337: a 9-digit binary literal is not a multiple of 4, so
+    // grouping would leave an unbalanced 1+4+4 leading partial group — exempt.
+    #[test]
+    fn allows_nine_digit_binary_literal_issue_6337() {
+        assert!(run_on("const flags = 0b101010101;").is_empty());
+    }
+
+    // Regression #6337: an 8-digit binary literal divides evenly into two full
+    // nibbles, so balanced grouping still applies and is enforced.
+    #[test]
+    fn still_groups_balanced_eight_digit_binary_issue_6337() {
+        let d = run_on("const m = 0b00000001;");
+        assert_eq!(d.len(), 1, "{:?}", d);
+        assert!(d[0].message.contains("0b0000_0001"), "{:?}", d);
+    }
+
+    // Regression #6337: an octal literal whose digit count is not a multiple of
+    // 4 is exempt for the same balanced-grouping reason.
+    #[test]
+    fn allows_unbalanced_octal_literal_issue_6337() {
+        assert!(run_on("const o = 0o12345;").is_empty());
+    }
+
+    // Regression #6337: an 8-digit octal literal divides evenly into two full
+    // groups, so balanced grouping is still enforced.
+    #[test]
+    fn still_groups_balanced_eight_digit_octal_issue_6337() {
+        let d = run_on("const o = 0o00000001;");
+        assert_eq!(d.len(), 1, "{:?}", d);
+        assert!(d[0].message.contains("0o0000_0001"), "{:?}", d);
     }
 
     // Regression #4713: numeric object-property keys are fixed-length opaque
