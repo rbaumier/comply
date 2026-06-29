@@ -1329,6 +1329,48 @@ fn is_method_call_name<'a>(
     false
 }
 
+/// True when the identifier is a function/arrow parameter whose name matches the
+/// `parameterName` of the enclosing function's `TSTypePredicate` return type
+/// (`(val): val is Date => …`). The name is part of the type guard's public
+/// signature — it appears literally in the `val is X` predicate — so it is
+/// contract-prescribed, not a lazily generic value. The walk requires a
+/// `FormalParameter` ancestor (so only parameters qualify) and stops at the
+/// first enclosing function/arrow.
+fn is_type_predicate_parameter<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    name: &str,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut saw_param = false;
+    for kind in nodes.ancestor_kinds(node.id()) {
+        match kind {
+            AstKind::FormalParameter(_) => saw_param = true,
+            AstKind::ArrowFunctionExpression(arrow) if saw_param => {
+                return return_type_predicate_targets(arrow.return_type.as_deref(), name);
+            }
+            AstKind::Function(func) if saw_param => {
+                return return_type_predicate_targets(func.return_type.as_deref(), name);
+            }
+            AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// True when `ann` is a `TSTypePredicate` whose parameter name is the identifier
+/// `name` (`val is X` → matches `val`). The `asserts x is T` form matches the
+/// same way via `parameter_name`; a `this is T` predicate uses the `This`
+/// variant and never matches here (and `this` is not a banned word anyway).
+fn return_type_predicate_targets(ann: Option<&TSTypeAnnotation>, name: &str) -> bool {
+    let Some(ann) = ann else { return false };
+    let TSType::TSTypePredicate(pred) = &ann.type_annotation else {
+        return false;
+    };
+    matches!(&pred.parameter_name, TSTypePredicateName::Identifier(id) if id.name.as_str() == name)
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::IdentifierReference, AstType::BindingIdentifier]
@@ -1383,6 +1425,12 @@ impl OxcCheck for Check {
                     // `function Item() { return <li/>; }`) is the conventional
                     // design-system component export name, not a generic value.
                     if binding_is_pascal_case_react_component(node, semantic, name) {
+                        return;
+                    }
+                    // The parameter of a TS type-guard whose name is the predicate's
+                    // `parameterName` (`(val): val is Date => …`) is part of the function's
+                    // public type signature, not a lazily generic value.
+                    if is_type_predicate_parameter(node, semantic, name) {
                         return;
                     }
                     if PARAM_ALLOWED_WORDS.contains(&lower.as_str())
@@ -1606,6 +1654,42 @@ mod tests {
     // JSX must be parsed as TSX; a `.tsx` path enables the JSX source type.
     fn run_tsx(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn no_fp_type_predicate_parameter_issue_6705() {
+        // `val` is the predicate's `parameterName` in `(val): val is X`, so it is
+        // part of the type guard's public signature, not a generic value.
+        assert!(
+            run("export const isDate = (val): val is Date => val instanceof Date;").is_empty()
+        );
+        assert!(
+            run("export const isBigIntObject = (val: any): val is bigint => typeof val === \"bigint\";")
+                .is_empty()
+        );
+        // Function-declaration form is exempted the same way.
+        assert!(
+            run("function isReg(val: unknown): val is RegExp { return val instanceof RegExp; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_val_without_matching_type_predicate_issue_6705() {
+        // Negative space: the exemption requires a parameter whose name matches
+        // the enclosing function's predicate `parameterName`.
+        // Not a parameter, no predicate.
+        assert_eq!(run("const val = 5;").len(), 1);
+        // Parameter `val` but the return type is not a type predicate.
+        assert_eq!(run("function f(val: string): string { return val; }").len(), 1);
+        // The predicate names `x`, not `val`, so the generic `val` param still flags.
+        let diags = run("function g(val: number, x: unknown): x is string { return typeof x === \"string\"; }");
+        assert!(!diags.is_empty());
+        assert!(diags.iter().any(|d| d.message.contains("val")));
+        // The `saw_param` gate must not exempt a non-parameter binding declared in
+        // the body of a predicate-returning function — only the parameter qualifies.
+        let body = run("const isX = (a): a is Date => { const val = 5; return a instanceof Date; };");
+        assert!(body.iter().any(|d| d.message.contains("val")));
     }
 
     #[test]
