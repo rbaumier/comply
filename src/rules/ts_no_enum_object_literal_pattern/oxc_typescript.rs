@@ -124,9 +124,89 @@ fn type_param_constraint_keys_obj<'a>(
     false
 }
 
+/// Strip `TSParenthesizedType` wrappers. The parser preserves parentheses, so
+/// the element type of `(keyof typeof X)[]` is a parenthesized node around the
+/// `keyof typeof` operator.
+fn skip_parens<'r, 'a>(mut ty: &'r TSType<'a>) -> &'r TSType<'a> {
+    while let TSType::TSParenthesizedType(p) = ty {
+        ty = &p.type_annotation;
+    }
+    ty
+}
+
+/// True when `expr` is a `TSAsExpression` casting to `(keyof typeof obj_name)[]`
+/// — a `TSArrayType` whose element type resolves to `keyof typeof obj_name`.
+fn as_expr_is_keyof_array(
+    expr: &Expression,
+    obj_name: &str,
+    aliases: &FxHashMap<&str, &str>,
+) -> bool {
+    let Expression::TSAsExpression(as_expr) = expr else { return false };
+    let TSType::TSArrayType(arr) = &as_expr.type_annotation else { return false };
+    type_keys_obj(skip_parens(&arr.element_type), obj_name, aliases)
+}
+
+/// True when `expr` is — or is an identifier resolving (a single hop) to a
+/// `VariableDeclarator` whose initializer is — a cast to `(keyof typeof
+/// obj_name)[]`. Such an array's elements are statically known keys, so a value
+/// taken out of it by element access is itself a known key.
+fn array_elem_keys_obj<'a>(
+    expr: &Expression<'a>,
+    obj_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    aliases: &FxHashMap<&str, &str>,
+) -> bool {
+    if as_expr_is_keyof_array(expr, obj_name, aliases) {
+        return true;
+    }
+    let Expression::Identifier(id) = expr else { return false };
+    let Some(ref_id) = id.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(d) = kind {
+            return d
+                .init
+                .as_ref()
+                .is_some_and(|init| as_expr_is_keyof_array(init, obj_name, aliases));
+        }
+    }
+    false
+}
+
+/// True when `init` extracts an element from a `(keyof typeof obj_name)[]` array
+/// — via `recv.find(...)`/`.findLast(...)`/`.at(...)` or a computed subscript
+/// `recv[i]`. The extracted element is then a known key of `obj_name`.
+fn init_yields_obj_key<'a>(
+    init: &Expression<'a>,
+    obj_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    aliases: &FxHashMap<&str, &str>,
+) -> bool {
+    match init {
+        Expression::CallExpression(call) => {
+            if let Expression::StaticMemberExpression(m) = &call.callee
+                && matches!(m.property.name.as_str(), "find" | "findLast" | "at")
+            {
+                return array_elem_keys_obj(&m.object, obj_name, semantic, aliases);
+            }
+            false
+        }
+        Expression::ComputedMemberExpression(m) => {
+            array_elem_keys_obj(&m.object, obj_name, semantic, aliases)
+        }
+        _ => false,
+    }
+}
+
 /// True when the index identifier's declared type is `keyof typeof obj_name`
 /// (directly or via alias), or a generic type parameter whose constraint
-/// resolves to it — the lookup is then statically key-narrow and safe.
+/// resolves to it — the lookup is then statically key-narrow and safe. For an
+/// un-annotated variable, also true when its initializer extracts an element
+/// from a `(keyof typeof obj_name)[]` array (its elements are known keys).
 fn index_ident_keys_obj<'a>(
     id: &IdentifierReference<'a>,
     obj_name: &str,
@@ -142,7 +222,16 @@ fn index_ident_keys_obj<'a>(
     {
         let ann = match kind {
             AstKind::FormalParameter(param) => param.type_annotation.as_ref(),
-            AstKind::VariableDeclarator(decl) => decl.type_annotation.as_ref(),
+            AstKind::VariableDeclarator(decl) => {
+                // No annotation: accept when the initializer extracts an element
+                // from a `(keyof typeof Obj)[]` array (its elements are keys).
+                if decl.type_annotation.is_none() {
+                    return decl.init.as_ref().is_some_and(|init| {
+                        init_yields_obj_key(init, obj_name, semantic, aliases)
+                    });
+                }
+                decl.type_annotation.as_ref()
+            }
             _ => continue,
         };
         let Some(ann) = ann else { return false };
@@ -373,6 +462,48 @@ mod tests {
     fn still_flags_plain_string_typed_key() {
         let src = "const BREAKPOINTS = { sm: 640 } as const;\n\
                    function f(value: string) { return BREAKPOINTS[value]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_index_from_keyof_cast_array_via_find() {
+        // Regression for issue #6676: `keys` is cast `(keyof typeof m)[]`, so the
+        // element returned by `.find()` is a known key — the lookup is statically
+        // key-narrow, not the widening enum pattern.
+        let src = "const m = { a: [1], b: [2] } as const;\n\
+                   const keys = Object.keys(m) as (keyof typeof m)[];\n\
+                   function g(p: string) {\n\
+                   const k = keys.find(x => p.endsWith(x));\n\
+                   if (!k) { return; }\n\
+                   return m[k];\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_from_keyof_cast_array_via_subscript() {
+        let src = "const m = { a: [1], b: [2] } as const;\n\
+                   const keys = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_string_key_with_no_keyof_cast() {
+        let src = "const m = { a: 1 } as const;\n\
+                   function f(s: string) { const k: string = s; return m[k]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index_from_non_keyof_array() {
+        // `arr` is `string[]` (no `keyof typeof m` cast), so an element pulled out
+        // of it is not a known key of `m`.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const arr = ['a', 'b'];\n\
+                   const k = arr.find(x => x === 'a');\n\
+                   const v = m[k];";
         assert_eq!(run(src).len(), 1);
     }
 }
