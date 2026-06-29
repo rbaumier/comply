@@ -7,10 +7,13 @@
 //!   target (the `s = s + x` shape), or
 //! - a `compound_assignment_expr` with `+=` (the `s += x` shape).
 //!
-//! `push_str` in a loop is NOT flagged — it is the recommended fix.
+//! `push_str` in a loop is NOT flagged — it is the recommended fix. A string
+//! accumulator declared *inside* the loop body is also not flagged — it is a
+//! fresh value each iteration, not a cross-iteration accumulator.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers;
 
 const KINDS: &[&str] = &["for_expression", "while_expression", "loop_expression"];
 
@@ -33,7 +36,7 @@ impl AstCheck for Check {
         let Some(body) = node.child_by_field_name("body") else {
             return;
         };
-        if let Some(culprit) = find_concat(body, source) {
+        if let Some(culprit) = find_concat(node, body, source) {
             diagnostics.push(Diagnostic::at_node(
                 ctx.path,
                 &culprit,
@@ -49,13 +52,16 @@ impl AstCheck for Check {
     }
 }
 
-fn find_concat<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_sitter::Node<'a>> {
-    let mut stack = vec![node];
+fn find_concat<'a>(
+    loop_node: tree_sitter::Node<'a>,
+    body: tree_sitter::Node<'a>,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    let mut stack = vec![body];
     while let Some(cur) = stack.pop() {
-        if is_self_concat_assign(cur, source) {
-            return Some(cur);
-        }
-        if is_compound_concat_assign(cur, source) {
+        if (is_self_concat_assign(cur, source) || is_compound_concat_assign(cur, source))
+            && !binds_inside_loop(cur, loop_node, source)
+        {
             return Some(cur);
         }
         let mut cursor = cur.walk();
@@ -72,6 +78,61 @@ fn find_concat<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_si
         }
     }
     None
+}
+
+/// True when the assignment target of `culprit` (`s` in `s += …` / `s = s + …`)
+/// is a simple identifier whose nearest `let` binding lives inside
+/// `loop_node`'s body. Such an accumulator is recreated each iteration and
+/// consumed within it, so it never accumulates across iterations — the
+/// per-iteration reallocation premise does not hold and it must not be flagged.
+///
+/// Resolution is lexical and conservative: walking outward from `culprit` up to
+/// `loop_node`, each enclosing scope is scanned for a `let` declaration that
+/// lexically precedes the accumulation (a preceding sibling) and binds the same
+/// name. The innermost such declaration wins, so an outer-then-inner shadow
+/// resolves to the loop-local binding. If no in-loop binding is found — the
+/// variable is declared before the loop or in an enclosing scope — it returns
+/// `false` so the genuine cross-iteration accumulator stays flagged.
+fn binds_inside_loop(
+    culprit: tree_sitter::Node,
+    loop_node: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Some(lhs) = culprit.child_by_field_name("left") else {
+        return false;
+    };
+    if lhs.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = lhs.utf8_text(source) else {
+        return false;
+    };
+
+    let mut child = culprit;
+    while let Some(parent) = child.parent() {
+        let mut cursor = parent.walk();
+        for sib in parent.children(&mut cursor) {
+            // Only declarations that lexically precede `child` (and thus the
+            // accumulation) can bind it — stop at `child` itself.
+            if sib.id() == child.id() {
+                break;
+            }
+            if sib.kind() == "let_declaration"
+                && sib
+                    .child_by_field_name("pattern")
+                    .is_some_and(|pattern| rust_helpers::let_pattern_binds(pattern, name, source))
+            {
+                return true;
+            }
+        }
+        // Stop at the loop boundary: a binding found above `loop_node` lives in
+        // an enclosing scope, not inside the loop body.
+        if parent.id() == loop_node.id() {
+            break;
+        }
+        child = parent;
+    }
+    false
 }
 
 /// True if `node` is `s += …` (compound assignment with `+=`) whose
@@ -404,5 +465,46 @@ mod tests {
     fn allows_with_capacity_pre_loop() {
         let src = r#"fn f() { let s = String::with_capacity(100); for _ in v { let _ = &s; } }"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_loop_local_accumulator() {
+        // #6672: `str` is declared *inside* the loop body (a match arm), so it
+        // is a fresh value per iteration consumed within the same iteration —
+        // not a cross-iteration accumulator.
+        let src = r#"fn f() { for _ in 0..n { let part = match v { X => { let mut str = init(); if c { str += " "; str += &x.to_string(); } str } }; let _ = part; } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_accumulator_declared_before_loop() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s += &x.to_string(); } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_inner_shadow_of_before_loop_accumulator() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { let mut s = String::new(); s += &x.to_string(); } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_accumulator_declared_in_enclosing_scope() {
+        let src = r#"fn f() { let mut s = String::new(); { for x in v { s += &x.to_string(); } } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_same_name_declared_after_accumulation() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s += &x.to_string(); let s = 0; } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_before_loop_culprit_alongside_loop_local_one() {
+        // A loop-local accumulator (`t`) is skipped, but the genuine
+        // before-loop accumulator (`s`) in the same body is still reported.
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s += &x.to_string(); let mut t = String::new(); t += &x.to_string(); } }"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
