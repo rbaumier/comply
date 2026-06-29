@@ -81,12 +81,19 @@ impl OxcCheck for Check {
                         continue;
                     }
                     // Skip if the symbol is also used locally — converting to a
-                    // re-export would remove the local binding.
+                    // re-export would remove the local binding. The only
+                    // reference position that is *not* local usage is the
+                    // specifier inside `export { name }` itself, whose node is
+                    // an `ExportSpecifier`. References inside exported
+                    // function/class/variable declaration bodies (e.g.
+                    // `export function f() { name() }`) sit under an
+                    // `ExportNamedDeclaration` but not an `ExportSpecifier`, so
+                    // they count as genuine local usage.
                     if let Some(symbol_id) = sym_id {
                         let has_local_usage =
                             scoping.get_resolved_references(*symbol_id).any(|reference| {
                                 !nodes.ancestor_kinds(reference.node_id()).any(|k| {
-                                    matches!(k, AstKind::ExportNamedDeclaration(_))
+                                    matches!(k, AstKind::ExportSpecifier(_))
                                 })
                             });
                         if has_local_usage {
@@ -228,6 +235,27 @@ mod tests {
         let d = run(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("export { Foo } from './m'"));
+    }
+
+    #[test]
+    fn no_fp_when_used_inside_exported_function_body() {
+        // Regression test for issue #6355: the binding is used at a call site
+        // inside an exported function body. Because `export async function`
+        // wraps the body in an `ExportNamedDeclaration`, the call must still be
+        // counted as local usage, so the import-then-reexport stays.
+        let src = "import { init as initClientBundle } from '#build/x';\n\
+                   export { initClientBundle };\n\
+                   export async function loadIcon() { initClientBundle(); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_used_inside_exported_class_method_body() {
+        // Same as above but the local use is inside an exported class method.
+        let src = "import { foo } from './m';\n\
+                   export { foo };\n\
+                   export class C { m() { foo(); } }";
+        assert!(run(src).is_empty());
     }
 
     #[test]
