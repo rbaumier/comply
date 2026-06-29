@@ -4,7 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BinaryOperator, Expression, LogicalOperator, TSLiteral, TSType, UnaryOperator,
+    BinaryOperator, CallExpression, ChainElement, Expression, LogicalOperator, TSLiteral, TSType,
+    UnaryOperator,
 };
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -142,20 +143,41 @@ fn is_process_env(expr: &Expression) -> bool {
     matches!(member.object.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "process")
 }
 
+/// True if a call's callee is a `Number`/`parseInt`/`parseFloat` global (can
+/// return `NaN`) or a string-returning method (can return `""`) — both falsy
+/// but not nullish, so `||` is intentional and `??` would be wrong.
+fn call_produces_non_nullish_falsy(call: &CallExpression) -> bool {
+    match &call.callee {
+        Expression::Identifier(id) => NUMBER_FUNCTIONS.contains(&id.name.as_str()),
+        Expression::StaticMemberExpression(member) => {
+            STRING_METHODS.contains(&member.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
 /// True if `expr` can produce a non-nullish falsy value — `NaN` from a
 /// `Number`/`parseInt`/`parseFloat` call, `""` from a string method call, or an
 /// empty-string env var accessed via `process.env.X` / `process.env["X"]`.
 /// In these cases `||` is semantically correct and `??` would be wrong: an
 /// empty-string env (`PORT=`) should fall back rather than pass through.
+///
+/// Recurses through `||`: `a || b` evaluates to `b` when `a` is falsy, so the
+/// result can be non-nullish falsy when the right operand can (only `||`, not
+/// `&&`). Optional-chain calls (`x?.toString()`) are wrapped in a
+/// `ChainExpression`, so that is unwrapped to reach the inner call. Together
+/// these exempt the outer `||` of `a?.message || a?.toString() || ""`, whose
+/// LHS is the inner `||` chain ending in a string-method call.
 fn lhs_may_produce_non_nullish_falsy(expr: &Expression) -> bool {
     match expr.without_parentheses() {
-        Expression::CallExpression(call) => match &call.callee {
-            Expression::Identifier(id) => NUMBER_FUNCTIONS.contains(&id.name.as_str()),
-            Expression::StaticMemberExpression(member) => {
-                STRING_METHODS.contains(&member.property.name.as_str())
-            }
-            _ => false,
-        },
+        Expression::CallExpression(call) => call_produces_non_nullish_falsy(call),
+        Expression::ChainExpression(chain) => matches!(
+            &chain.expression,
+            ChainElement::CallExpression(call) if call_produces_non_nullish_falsy(call)
+        ),
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::Or => {
+            lhs_may_produce_non_nullish_falsy(&logical.right)
+        }
         Expression::StaticMemberExpression(member) => is_process_env(&member.object),
         Expression::ComputedMemberExpression(member) => is_process_env(&member.object),
         _ => false,
@@ -713,6 +735,45 @@ mod tests {
             let x: string | null = compute();
             const y = x || "d";
         "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #6426: the outer `||` of `a?.message || a?.toString() || ""`
+    // has a `LogicalExpression` LHS whose right branch is the optional-chain
+    // string-method call `a?.toString()` — a `ChainExpression`-wrapped call that
+    // can return `""`. `||` deliberately falls through `""`, so `??` would change
+    // behavior; the outer `||` must not flag.
+    #[test]
+    fn allows_optional_chain_tostring_or_chain() {
+        let src = r#"const m = ctx.error?.message || ctx.error?.toString() || "";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Non-optional variant: the inner right branch is a plain `CallExpression`
+    // string method (no `ChainExpression`), so the `LogicalExpression` recursion
+    // still reaches it and the outer `||` is exempt. The inner `a.trim()` LHS is
+    // itself a string method, so the inner `||` is exempt too — nothing flags.
+    #[test]
+    fn allows_plain_tostring_or_chain() {
+        let src = r#"const m = a.trim() || a.toString() || "";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The widened exemption stays scoped to string-producing method calls: a
+    // genuinely nullish member access still flags (the rule is not gutted).
+    #[test]
+    fn still_flags_plain_member_string_fallback() {
+        let src = r#"const x = data.value || "fallback";"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // An inner `||` whose right branch is NOT a string-producing call must not
+    // become exempt via the new recursion: `(a.foo || b) || "default"` recurses
+    // into the inner chain, finds the bare identifier `b` (no string method), and
+    // still flags the outer `||`.
+    #[test]
+    fn still_flags_inner_chain_without_string_method() {
+        let src = r#"const x = (a.foo || b) || "default";"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
