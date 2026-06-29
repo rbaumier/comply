@@ -46,6 +46,19 @@ impl TextCheck for Check {
             // Find the matching `*/` close.
             let Some(end_rel) = src[abs..].find("*/") else { break };
             let after = abs + end_rel + 2;
+            // A `/* eslint-disable */` that is the first non-whitespace
+            // content of the file is the standard whole-file suppression
+            // idiom (ESLint's `allowWholeFile`): it is meant to apply to the
+            // entire file and intentionally has no `eslint-enable` pair, so
+            // flagging it would be circular. Only whitespace (and an optional
+            // leading BOM) may precede it; preceding code or comments make it
+            // a mid-file disable that should still be paired.
+            let before = &src[..abs];
+            let before = before.strip_prefix('\u{feff}').unwrap_or(before);
+            if before.trim().is_empty() {
+                from = after;
+                continue;
+            }
             // Is there a corresponding `/* eslint-enable */` later in the
             // file? We're permissive: any block comment with
             // `eslint-enable` is enough — we don't enforce that the rule
@@ -80,15 +93,42 @@ mod tests {
     }
 
     #[test]
-    fn flags_disable_without_enable() {
-        let src = "/* eslint-disable no-console */\nconsole.log('x');\n";
+    fn flags_mid_file_disable_without_enable() {
+        let src = "const x = 1;\n/* eslint-disable no-console */\nconsole.log('x');\n";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn allows_disable_with_enable() {
+        let src = "const x = 1;\n/* eslint-disable no-console */\nconsole.log('x');\n/* eslint-enable */\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_top_of_file_disable_without_enable() {
+        // Whole-file suppression idiom: first content of the file, no enable.
+        let src = "/* eslint-disable unicorn/no-nested-ternary */\nimport * as recast from \"recast\";\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_top_of_file_disable_after_whitespace_and_bom() {
+        // Leading BOM plus blank lines still count as start-of-file.
+        let src = "\u{feff}\n\n  /* eslint-disable no-console */\nconsole.log('x');\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_top_of_file_disable_with_enable() {
         let src = "/* eslint-disable no-console */\nconsole.log('x');\n/* eslint-enable */\n";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_mid_file_disable_after_comment() {
+        // A line comment before the disable means it is not start-of-file.
+        let src = "// header\n/* eslint-disable no-console */\nconsole.log('x');\n";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
