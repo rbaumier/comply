@@ -1,12 +1,26 @@
 //! banned-comment-words — Rust backend.
 //!
-//! Walks `line_comment` and `block_comment` nodes and flags those
-//! whose body contains a dismissive filler word at a word boundary.
+//! Walks `line_comment` and `block_comment` nodes and flags inline `//` and
+//! `/* */` comments whose body contains a dismissive filler word at a word
+//! boundary. Doc comments (`///`, `//!`, `/** */`, `/*! */`) are skipped.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
+    // Doc comments (`///`, `//!`, `/** */`, `/*! */`) are deliberate API prose
+    // rendered by rustdoc, where words like `just`/`only`/`simply` are legitimate
+    // precision qualifiers, not dismissive filler. Mirror `comment-prose-quality`,
+    // which restricts this class of prose check to inline comments. Only inline
+    // `//` and `/* */` comments are checked.
+    let trimmed = text.trim_start();
+    if trimmed.starts_with("///")
+        || trimmed.starts_with("//!")
+        || trimmed.starts_with("/**")
+        || trimmed.starts_with("/*!")
+    {
+        return;
+    }
     let Some(word) = super::find_banned_word(text) else { return; };
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -74,5 +88,26 @@ mod tests {
     fn allows_actually_and_inherently() {
         // Both words are excluded as too false-positive-prone in code.
         assert!(run("// actually safe because inherently single-threaded\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_banned_word_in_doc_comment_issue_6462() {
+        assert!(run("/// just the word \"deprecated\"\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_banned_word_in_inner_doc_comment() {
+        assert!(run("//! just a module-level doc\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_banned_word_in_block_doc_comment() {
+        assert!(run("/** obviously fine */\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_banned_word_in_inline_comment_still() {
+        assert_eq!(run("// just do it\nfn f() {}").len(), 1);
+        assert_eq!(run("/* simply */\nfn f() {}").len(), 1);
     }
 }
