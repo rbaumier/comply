@@ -8,7 +8,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::walker::walk_tree;
 
 #[derive(Debug)]
 pub struct Check;
@@ -169,20 +168,28 @@ pub(super) fn parses_as_rust_code(body: &str) -> bool {
     if root.has_error() {
         return false;
     }
-    contains_rich_code(&tree)
+    // Scan only inside the wrapper body — the artificial `fn __probe__` itself
+    // is a `function_item` (a "rich" kind) and must not count as
+    // commented-out code.
+    let Some(func) = root.child(0).filter(|n| n.kind() == "function_item") else {
+        return false;
+    };
+    let Some(block) = func.child_by_field_name("body") else {
+        return false;
+    };
+    contains_rich_code(block)
 }
 
-fn contains_rich_code(tree: &tree_sitter::Tree) -> bool {
-    let mut found = false;
-    walk_tree(tree, |node| {
-        if found {
-            return;
-        }
-        if is_rich_rust_kind(node.kind()) {
-            found = true;
-        }
-    });
-    found
+/// Return `true` if `node`'s subtree contains a rich Rust construct (a
+/// `let`, call, macro, control-flow expression, item, …). Called on the
+/// probe body block, so a nested commented-out construct is found while
+/// the synthetic wrapper that holds it is never inspected.
+fn contains_rich_code(node: tree_sitter::Node) -> bool {
+    if is_rich_rust_kind(node.kind()) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(contains_rich_code)
 }
 
 fn is_rich_rust_kind(kind: &str) -> bool {
@@ -340,5 +347,24 @@ macro_rules! m {
 }
 "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_string_literal_shape_comment() {
+        // #6348: a bare string literal documenting an assembled string is not
+        // commented-out code, even though it contains code-shape characters.
+        assert!(run(r#"// "{msg} ({lhs} vs {rhs})""#).is_empty());
+    }
+
+    #[test]
+    fn allows_string_literal_with_semicolons() {
+        assert!(run(r#"// "a; b; c""#).is_empty());
+    }
+
+    #[test]
+    fn flags_nested_commented_function() {
+        // Scanning inside the probe body still catches an inner `function_item`
+        // / `call_expression`, so the fix does not blanket-exempt functions.
+        assert_eq!(run("// fn helper() { do_thing(); }").len(), 1);
     }
 }
