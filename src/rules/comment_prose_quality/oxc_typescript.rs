@@ -109,6 +109,24 @@ mod tests {
         );
     }
 
+    // Regression for #6328: each `//` line is a separate comment span, so a
+    // code fence opened on one span must keep the enclosed cross-line repetition
+    // exempt on the following spans.
+    #[test]
+    fn allows_fence_across_separate_line_comments() {
+        let src = "// ```abnf\n\
+                   // key = simple-key / dotted-key\n\
+                   // dotted-key = simple-key\n\
+                   // ```\nfunction f() {}";
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion")),
+            "{:?}",
+            run(src)
+        );
+    }
+
     // A genuine doubled word in a JSDoc description must still be flagged.
     #[test]
     fn flags_lexical_illusion_in_jsdoc_description() {

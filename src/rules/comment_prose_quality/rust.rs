@@ -80,6 +80,53 @@ mod tests {
         assert!(run(src).iter().all(|d| !d.message.contains("Lexical")));
     }
 
+    // Regression for #6328: each `///` line is a separate tree-sitter node, so a
+    // ```abnf fence opened on one node must keep the enclosed cross-line
+    // repetition (`dotted-key` ... `dotted-key`) exempt on the following nodes.
+    #[test]
+    fn allows_abnf_fence_across_separate_doc_nodes() {
+        let src = "/// ```abnf\n\
+                   /// key = simple-key / dotted-key\n\
+                   /// dotted-key = simple-key 1*( dot-sep simple-key )\n\
+                   /// ```\nfn f() {}";
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion")),
+            "{:?}",
+            run(src)
+        );
+    }
+
+    // A genuine doubled word across two adjacent prose `///` lines outside any
+    // fence must still be flagged — proves the fence persistence didn't disable
+    // the lexical-illusion check.
+    #[test]
+    fn flags_lexical_illusion_outside_fence() {
+        let src = "/// This handles the\n/// the processing step.\nfn f() {}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("Lexical illusion"));
+    }
+
+    // An unclosed fence in one doc block must not leak into a later,
+    // non-contiguous block: the gap resets the fence so a real cross-line
+    // illusion in the second block still flags.
+    #[test]
+    fn fence_state_resets_across_node_gap() {
+        let src = "/// ```\n\
+                   /// some code line\n\
+                   fn a() {}\n\
+                   \n\
+                   /// This handles the\n\
+                   /// the processing step.\nfn b() {}";
+        let count = run(src)
+            .iter()
+            .filter(|d| d.message.contains("Lexical illusion"))
+            .count();
+        assert_eq!(count, 1);
+    }
+
     #[test]
     fn allows_rustdoc_heading_echo() {
         let src = "/// # Panics\n/// Panics if the buffer is empty.\nfn f() {}";
