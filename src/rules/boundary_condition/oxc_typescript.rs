@@ -57,6 +57,19 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `arr[0] === 'h'` / `path[0] !== '/'` / `arguments[0] !== kConstruct` —
+        // the access is the direct operand of an equality/inequality comparison
+        // against a non-nullish value. An out-of-bounds index yields `undefined`,
+        // and comparing `undefined` to a concrete value never throws and produces
+        // the correct "no match" result (`undefined === 'h'` is `false`,
+        // `undefined !== kConstruct` is `true`), so the comparison acts as an
+        // implicit guard — the same rationale as the `typeof` exemption above. A
+        // `=== undefined` / `=== null` comparison stays flagged: there the
+        // emptiness IS the thing being checked, so it is a value read.
+        if is_equality_comparison_operand(node, semantic) {
+            return;
+        }
+
         // jest/vitest mock-introspection arrays — `<spy>.mock.calls[0]`,
         // `.mock.results[0]`, `.mock.instances[0]` (and a further index into a
         // call entry, `.mock.calls[0][1]`). These arrays are framework-managed
@@ -562,6 +575,68 @@ fn is_typeof_operand(
             AstKind::UnaryExpression(unary) => {
                 return unary.operator == UnaryOperator::Typeof
                     && unary.argument.span() == current_span;
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Returns true when the index-access `node` is the DIRECT left or right operand
+/// of an equality/inequality comparison (`===`, `!==`, `==`, `!=`) whose OTHER
+/// operand is neither the identifier `undefined` nor a `NullLiteral` —
+/// `arr[0] === 'h'`, `path[0] !== '/'`, `(value[0]) === 'h'`. An out-of-bounds
+/// index yields `undefined`, and comparing `undefined` against a non-nullish
+/// value never throws and produces the correct "no match" result, so the
+/// possibly-empty array is harmless — the same rationale as [`is_typeof_operand`].
+///
+/// Climbs only through `ParenthesizedExpression` wrappers (so a parenthesized
+/// operand still counts), then requires the immediate enclosing node to be a
+/// `BinaryExpression` with an equality operator. "Direct operand" is enforced by
+/// the parent walk: `arr[0].foo === x` has `arr[0]` as the object of a member
+/// access (its parent is a member expression, not the comparison), so it stays
+/// flagged — reading `undefined.foo` would throw. An `undefined` / `null` other
+/// operand is rejected: `arr[0] === undefined` is a deliberate emptiness check,
+/// not a comparison against a concrete value.
+fn is_equality_comparison_operand(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node.id();
+    let mut current_span = node.kind().span();
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        match parent.kind() {
+            AstKind::ParenthesizedExpression(paren) => {
+                current_span = paren.span;
+                current_id = parent_id;
+            }
+            AstKind::BinaryExpression(bin) => {
+                if !matches!(
+                    bin.operator,
+                    BinaryOperator::StrictEquality
+                        | BinaryOperator::StrictInequality
+                        | BinaryOperator::Equality
+                        | BinaryOperator::Inequality
+                ) {
+                    return false;
+                }
+                // The climbed node is a direct child of the comparison, so it is
+                // exactly one of the operands; the other is what it is compared to.
+                let other = if bin.left.span() == current_span {
+                    &bin.right
+                } else {
+                    &bin.left
+                };
+                return match other {
+                    Expression::NullLiteral(_) => false,
+                    Expression::Identifier(id) if id.name.as_str() == "undefined" => false,
+                    _ => true,
+                };
             }
             _ => return false,
         }
@@ -4933,11 +5008,15 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_index0_value_use_alongside_typeof_issue_5302() {
-        // Negative space: the `typeof` operates on a different expression; the
-        // `arr[0]` here is read as a real value, so it stays flagged.
+    fn no_fp_index0_equality_operand_against_typeof_issue_6231() {
+        // `typeof x === arr[0]` — `arr[0]` is the direct right operand of `===`,
+        // and the other operand (`typeof x`) is a non-nullish string, so the
+        // equality-operand exemption applies: `<string> === undefined` is `false`
+        // and never throws. (`arr[0]` is correctly NOT a `typeof` operand here, the
+        // precision of `is_typeof_operand` checked by the `arr[0].length` test
+        // below.) Issue #6231.
         let src = "function f(arr) { return typeof x === arr[0]; }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -5187,5 +5266,80 @@ mod tests {
         // `arr` empty), so the body did not run and `arr[0]` is out-of-bounds.
         let src = "function f(arr, cond) { if (cond && arr.length === 0) { arr = [1]; } const x = arr[0]; }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_strict_equality_string_issue_6231() {
+        // nodejs/undici `isHttpOrHttpsPrefixed`: `value[0] === 'h'`. An empty
+        // string makes `value[0]` `undefined`, and `undefined === 'h'` is `false`
+        // (never throws) — the comparison is the guard. Issue #6231.
+        let src = "function f(value) { return value[0] === 'h'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_strict_inequality_string_issue_6231() {
+        // nodejs/undici `util.js`: `path[0] !== '/'`. `undefined !== '/'` is
+        // `true`, the correct "not absolute" result. Issue #6231.
+        let src = "function f(path) { return path[0] !== '/'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_arguments_index0_inequality_sentinel_issue_6231() {
+        // nodejs/undici cache constructor guard: `arguments[0] !== kConstruct`.
+        // The sentinel `kConstruct` is a non-nullish identifier. Issue #6231.
+        let src = "function f() { return arguments[0] !== kConstruct; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_parenthesized_index0_equality_issue_6231() {
+        // A parenthesized operand is still the direct operand: `(value[0]) === 'h'`
+        // is identical to `value[0] === 'h'`. Issue #6231.
+        let src = "function f(value) { return (value[0]) === 'h'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_index0_outside_comparison_issue_6231() {
+        // Negative space: a bare first-element read with no equality comparison
+        // around it stays flagged. Issue #6231.
+        let src = "function f(arr) { const x = arr[0]; return x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_member_on_index0_in_comparison_issue_6231() {
+        // Negative space: `arr[0].foo === 'h'` — the computed access is the OBJECT
+        // of a member access, not the direct comparison operand. Reading
+        // `undefined.foo` on an empty array throws, so it stays flagged. Issue #6231.
+        let src = "function f(arr) { return arr[0].foo === 'h'; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_equality_against_undefined_issue_6231() {
+        // Negative space: `arr[0] === undefined` is a deliberate emptiness check,
+        // not a comparison against a concrete value — the other operand is the
+        // `undefined` identifier, so it is excluded and stays flagged. Issue #6231.
+        let src = "function f(arr) { return arr[0] === undefined; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_loose_equality_against_null_issue_6231() {
+        // Negative space: `arr[0] == null` is a deliberate nullish check (the other
+        // operand is a `NullLiteral`), so it is excluded and stays flagged. Issue #6231.
+        let src = "function f(arr) { return arr[0] == null; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_loose_equality_string_issue_6231() {
+        // Loose `==` against a non-nullish literal is exempt for the same reason as
+        // strict `===`: `undefined == 'h'` is `false` and never throws. Issue #6231.
+        let src = "function f(value) { return value[0] == 'h'; }";
+        assert!(run_on(src).is_empty());
     }
 }
