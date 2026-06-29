@@ -13,6 +13,24 @@ fn is_named_type_ref(ty: &TSType) -> bool {
     matches!(ty, TSType::TSTypeReference(_))
 }
 
+/// TypeScript built-in generics that carry a numeric index signature
+/// (`[n: number]: T`). Merging two such bases into one `interface … extends`
+/// — even with different names — produces conflicting index signatures that TS
+/// rejects, so the intersection must stay a type alias.
+const ARRAY_LIKE_INDEX_TYPES: &[&str] = &["Array", "ReadonlyArray"];
+
+/// The base identifier name of an intersection member when it is a simple
+/// `TSTypeReference` (e.g. `Array` in `Array<T>`), else `None`.
+fn base_type_name<'a>(ty: &'a TSType) -> Option<&'a str> {
+    match ty {
+        TSType::TSTypeReference(ref_ty) => match &ref_ty.type_name {
+            TSTypeName::IdentifierReference(ident) => Some(ident.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// True when `ty` is — or, through a top-level union/intersection, contains —
 /// a primitive keyword type (`string`/`number`/`boolean`/`bigint`/`symbol`).
 /// An `interface` cannot `extends` a type that includes a primitive (TS2312),
@@ -99,6 +117,25 @@ impl OxcCheck for Check {
             return;
         }
         if !intersection.types.iter().all(is_named_type_ref) {
+            return;
+        }
+        // Extending the same generic base twice (e.g. `Array<X> & Array<Y>`), or
+        // two array-like bases whose numeric index signatures conflict (e.g.
+        // `ReadonlyArray<X> & Array<Y>`), can't be expressed as one
+        // `interface … extends`; TS rejects the merged index signatures.
+        let base_names: Vec<&str> =
+            intersection.types.iter().filter_map(base_type_name).collect();
+        let has_duplicate_base = base_names
+            .iter()
+            .enumerate()
+            .any(|(i, name)| base_names[i + 1..].contains(name));
+        let multiple_array_like = base_names
+            .iter()
+            .copied()
+            .filter(|name| ARRAY_LIKE_INDEX_TYPES.contains(name))
+            .count()
+            >= 2;
+        if has_duplicate_base || multiple_array_like {
             return;
         }
         // A rewrite to `interface … extends` is only legal when every member is
@@ -219,6 +256,32 @@ mod tests {
     fn allows_intersection_with_imported_member() {
         assert!(
             run_on("import { Foo } from './foo';\ntype X = Foo & Bar;").is_empty()
+        );
+    }
+
+    /// Regression for #6367 — extending the same generic base twice produces a
+    /// conflicting numeric index signature, so TS rejects the interface rewrite.
+    #[test]
+    fn allows_intersection_of_duplicate_array_base() {
+        assert!(run_on("type Type = Array<{x: string}> & Array<{z: number}>;").is_empty());
+    }
+
+    /// Regression for #6367 — two array-like bases (different names) each carry
+    /// `[n: number]`, which conflict when merged into one interface.
+    #[test]
+    fn allows_intersection_of_readonly_array_and_array() {
+        assert!(
+            run_on("type Type = ReadonlyArray<{x: string}> & Array<{z: number}>;").is_empty()
+        );
+    }
+
+    /// Regression for #6367 — nested object type args don't change the verdict;
+    /// the duplicate `Array` base still blocks the rewrite.
+    #[test]
+    fn allows_intersection_of_duplicate_array_base_nested() {
+        assert!(
+            run_on("type Type = Array<{x: string}> & Array<{z: number; d: {e: string; f: boolean}}>;")
+                .is_empty()
         );
     }
 
