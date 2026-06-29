@@ -1,10 +1,13 @@
 //! Flags `Command::new(...)` executions (`.output()`/`.spawn()`/`.status()`)
 //! that have no nearby timeout, as they can hang indefinitely.
 //!
-//! Exempted because they never run in production:
-//! - `build.rs` build scripts.
-//! - test contexts: a `#[cfg(test)]` module / `#[test]` fn, or a file under a
-//!   `tests/` integration directory.
+//! Not flagged:
+//! - A `.spawn()` with no output capture (`.output()`/`.stdout(`/`.stderr(`):
+//!   stdio is inherited, so it is an interactive foreground process (editor,
+//!   shell, user script) where a timeout would be wrong.
+//! - `build.rs` build scripts and test contexts (a `#[cfg(test)]` module /
+//!   `#[test]` fn, or a file under a `tests/` integration directory): they
+//!   never run in production, so the timeout requirement does not apply.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -32,6 +35,19 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Command::new"] => |node
     let context_str: String = context.join("\n");
 
     if context_str.contains("timeout") || context_str.contains("Duration") || context_str.contains("exec_timeout") {
+        return;
+    }
+
+    // `.spawn()` with no output capture (`.output()`/`.stdout(`/`.stderr(`) inherits
+    // the parent's stdio: an interactive foreground launch (editor, shell, user
+    // script) that may run arbitrarily long under user control. A timeout would
+    // kill it mid-use, so it is not the unguarded-background-command this rule
+    // targets.
+    if context_str.contains(".spawn()")
+        && !context_str.contains(".output()")
+        && !context_str.contains(".stdout(")
+        && !context_str.contains(".stderr(")
+    {
         return;
     }
 
@@ -92,9 +108,21 @@ mod tests {
     }
 
     #[test]
-    fn flags_command_spawn_without_timeout() {
+    fn allows_bare_interactive_spawn() {
         let src = "fn f() { Command::new(\"ls\").spawn().unwrap(); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_command_spawn_with_piped_stdout() {
+        let src = "fn f() { Command::new(\"ls\").stdout(Stdio::piped()).spawn().unwrap(); }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_interactive_spawn_with_inherited_stdio_issue_6701() {
+        let src = "fn f() {\n    let r = Command::new(exe)\n        .args(args.iter())\n        .spawn()\n        .and_then(|mut p| p.wait());\n}";
+        assert!(run(src).is_empty());
     }
 
     #[test]
