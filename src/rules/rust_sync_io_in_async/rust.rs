@@ -106,10 +106,13 @@ fn matched_sync_api(text: &str) -> Option<&'static str> {
     SYNC_IO_SUFFIXES.iter().copied().find(|full| text == *full)
 }
 
-/// True if `node` sits inside a `closure_expression` that is itself an
-/// argument to a call whose callee's final path segment is one of
-/// `OFFLOAD_COMBINATORS`. Such a closure runs on the blocking thread
-/// pool, so the sync syscall does not park the async worker.
+/// True if `node` sits inside a `closure_expression` handed to a call
+/// whose callee's final path segment is one of `OFFLOAD_COMBINATORS`.
+/// The closure may be the call's direct argument, or the final
+/// expression of an initializing block passed to the combinator
+/// (`spawn_blocking({ let x = ...; move || { ... } })`). Such a closure
+/// runs on the blocking thread pool, so the sync syscall does not park
+/// the async worker.
 ///
 /// Walks the ancestor chain, stopping at the enclosing `function_item`
 /// so a closure in an outer scope can't exempt a call in the async fn
@@ -121,15 +124,22 @@ fn is_inside_offload_closure(node: tree_sitter::Node, source: &[u8]) -> bool {
         if parent.kind() == "function_item" {
             return false;
         }
-        if parent.kind() == "closure_expression"
-            && let Some(args) = parent.parent()
-            && args.kind() == "arguments"
-            && let Some(call) = args.parent()
-            && call.kind() == "call_expression"
-            && let Some(fn_text) = call_function_name(call, source)
-            && is_offload_combinator(fn_text)
-        {
-            return true;
+        if parent.kind() == "closure_expression" {
+            // Skip one intervening init block: a closure that is the block's
+            // tail expression is exactly what the combinator receives.
+            let args = match parent.parent() {
+                Some(block) if block.kind() == "block" => block.parent(),
+                other => other,
+            };
+            if let Some(args) = args
+                && args.kind() == "arguments"
+                && let Some(call) = args.parent()
+                && call.kind() == "call_expression"
+                && let Some(fn_text) = call_function_name(call, source)
+                && is_offload_combinator(fn_text)
+            {
+                return true;
+            }
         }
         cur = parent;
     }
@@ -234,6 +244,32 @@ mod tests {
     #[test]
     fn flags_std_fs_in_non_offload_closure() {
         let source = r#"async fn f() { items.iter().map(|x| std::fs::read(x)); }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_sync_io_in_spawn_blocking_init_block_issue_6707() {
+        let source = r#"
+            async fn f() {
+                spawn_blocking({
+                    let p = path.clone();
+                    move || { let _ = std::fs::write(&p, "x"); }
+                });
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_sync_io_in_non_offload_init_block() {
+        let source = r#"
+            async fn f() {
+                items.map({
+                    let p = path.clone();
+                    move || std::fs::read(&p)
+                });
+            }
+        "#;
         assert_eq!(run_on(source).len(), 1);
     }
 
