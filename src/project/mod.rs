@@ -811,9 +811,11 @@ fn wildcard_target_matches(pattern: &str, rel: &str) -> bool {
 /// monaco-editor whose `main` is `./min/...` and `module` is `./esm/...`): the
 /// shipped bundle inlines its build-time dependencies, so `src/` files importing
 /// a devDependency carry no runtime dependency. Considers `main`, `module`, every
-/// `exports` target (every subpath, not just `.`), and the `browser`/
-/// `react-native` substitutes. Returns false when a published entry IS under
-/// `src/` — that package ships its source, so `src/` is runtime code.
+/// `exports` target (every subpath, not just `.`), the `browser`/`react-native`
+/// substitutes, and `bin` (its single-string form and every value of its object
+/// form — a CLI whose executable is the bundled artifact). Returns false when a
+/// published entry IS under `src/` — that package ships its source, so `src/` is
+/// runtime code.
 fn entries_outside_src(json: &Value) -> bool {
     let mut targets = BTreeSet::new();
     if let Some(main) = json.get("main").and_then(Value::as_str)
@@ -834,6 +836,25 @@ fn entries_outside_src(json: &Value) -> bool {
     }
     if let Some(native) = json.get("react-native") {
         collect_substitute_targets(native, &mut targets);
+    }
+    if let Some(bin) = json.get("bin") {
+        match bin {
+            Value::String(s) => {
+                if let Some(rel) = normalize_main_path(s) {
+                    targets.insert(rel);
+                }
+            }
+            Value::Object(map) => {
+                for v in map.values() {
+                    if let Some(s) = v.as_str()
+                        && let Some(rel) = normalize_main_path(s)
+                    {
+                        targets.insert(rel);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
     !targets.is_empty() && targets.iter().all(|rel| !rel.starts_with("src/"))
 }
@@ -6937,6 +6958,51 @@ mod tests {
 
         let ctx = ProjectCtx::empty();
         assert!(!ctx.is_bundled_build_input(&dir.path().join("src/feature.js")));
+    }
+
+    #[test]
+    fn entries_outside_src_true_for_bin_only_string() {
+        // pkgroll: a CLI with only `bin` (no main/module/exports) pointing at the
+        // bundled `dist/` artifact. `src/` is build input, not shipped runtime.
+        let json = serde_json::json!({ "name": "pkgroll", "bin": "./dist/cli.mjs" });
+        assert!(entries_outside_src(&json));
+    }
+
+    #[test]
+    fn entries_outside_src_true_for_bin_only_object() {
+        // The object form maps command names to bundled executables.
+        let json = serde_json::json!({
+            "name": "pkgroll",
+            "bin": { "pkgroll": "./dist/cli.mjs" }
+        });
+        assert!(entries_outside_src(&json));
+    }
+
+    #[test]
+    fn entries_outside_src_false_for_bin_into_src() {
+        // An unbundled CLI shipping its source: `src/` IS runtime code.
+        let json = serde_json::json!({ "name": "raw-cli", "bin": "./src/cli.ts" });
+        assert!(!entries_outside_src(&json));
+    }
+
+    #[test]
+    fn entries_outside_src_false_when_no_entries() {
+        let json = serde_json::json!({});
+        assert!(!entries_outside_src(&json));
+    }
+
+    #[test]
+    fn is_bundled_build_input_true_for_bin_only_cli() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"pkgroll","bin":"./dist/cli.mjs","files":["dist"]}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src/utils")).unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_bundled_build_input(&dir.path().join("src/utils/log.ts")));
     }
 
     #[test]
