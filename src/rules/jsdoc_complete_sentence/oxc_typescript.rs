@@ -47,6 +47,11 @@ pub struct Check;
 /// A trailing Markdown table (lines starting with `|`) is structural markup,
 /// not a prose sentence: its rows are excluded, and the `:`-terminated label
 /// that introduces the table is dropped too, so neither gates the check.
+///
+/// A trailing footnote anchor (`[N]`, e.g. `[1]`) is a reference marker, not a
+/// prose sentence: it is the target of an earlier `([N] …)` footnote reference
+/// and typically anchors following `@see`/`@link` tags, so it is excluded and
+/// never gates the punctuation check.
 fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     let mut description_lines = Vec::new();
     let mut in_fence = false;
@@ -81,6 +86,7 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     }
 
     drop_trailing_bare_url(&mut description_lines);
+    drop_trailing_footnote_anchor(&mut description_lines);
     drop_trailing_table_rows(&mut description_lines);
     description_lines
 }
@@ -120,6 +126,29 @@ fn drop_trailing_table_rows(description_lines: &mut Vec<(String, usize)>) {
     if popped_any {
         drop_trailing_code_block_label(description_lines);
     }
+}
+
+/// Drop a trailing footnote-anchor line (`[N]`) — the target of an earlier
+/// `([N] …)` footnote reference, typically anchoring following `@see`/`@link`
+/// reference tags. It is a structural marker, not the concluding sentence.
+fn drop_trailing_footnote_anchor(description_lines: &mut Vec<(String, usize)>) {
+    if description_lines
+        .last()
+        .is_some_and(|(text, _)| is_footnote_anchor(text))
+    {
+        description_lines.pop();
+    }
+}
+
+/// Whether a line is a footnote anchor: a bracket-delimited run of ASCII
+/// digits (e.g. `[1]`, `[12]`). Such a line is a reference marker, not a
+/// prose sentence, so it must not gate the terminal-punctuation check.
+fn is_footnote_anchor(text: &str) -> bool {
+    let t = text.trim();
+    t.starts_with('[')
+        && t.ends_with(']')
+        && t.len() > 2
+        && t[1..t.len() - 1].bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Whether a line is a bare URL: a single `http(s)://` token with no
@@ -840,5 +869,69 @@ function parse(): void {}
 "#;
         let d = run_on(source);
         assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn ignores_trailing_footnote_anchor_before_see_tags() {
+        // Regression for rbaumier/comply#6353 — a description whose last non-blank
+        // line is a bare footnote anchor `[1]` (the target of an earlier
+        // `([1] …)` reference), followed by `@see` reference tags, must not flag
+        // the anchor as missing punctuation; the concluding sentence above it
+        // already ends with `.`.
+        let source = r#"
+/**
+ * Subscribes to React's external store ([1] We don't really care when/how React does it).
+ *
+ * [1]
+ * @see https://react.dev/reference/react/useSyncExternalStore
+ * @param _usage the usage marker
+ */
+function useSyncExternalStore(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_trailing_multi_digit_footnote_anchor() {
+        // A multi-digit anchor `[12]` is dropped the same way as `[1]`.
+        let source = r#"
+/**
+ * Subscribes to the store (see footnote [12] for the rationale).
+ *
+ * [12]
+ * @see https://example.com/ref
+ */
+function subscribe(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_prose_revealed_by_footnote_anchor_drop() {
+        // Dropping the trailing `[1]` anchor reveals the genuine concluding
+        // prose line, which is still checked — a sentence missing terminal
+        // punctuation above the anchor must still flag.
+        let source = r#"
+/**
+ * Subscribes to the store but does not unsubscribe
+ *
+ * [1]
+ * @see https://example.com/ref
+ */
+function subscribe(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn footnote_anchor_detection_is_shape_only() {
+        // The anchor signal is purely the `[<digits>]` shape: an empty bracket,
+        // non-digit content, or trailing prose is not an anchor.
+        assert!(is_footnote_anchor("[1]"));
+        assert!(is_footnote_anchor("[12]"));
+        assert!(!is_footnote_anchor("[]"));
+        assert!(!is_footnote_anchor("[note]"));
+        assert!(!is_footnote_anchor("[1] text"));
     }
 }
