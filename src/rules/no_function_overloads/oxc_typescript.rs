@@ -48,6 +48,27 @@ fn generics_in_return_type(source: &str, f: &Function) -> Option<Vec<String>> {
     if names.is_empty() { None } else { Some(names) }
 }
 
+/// Positional flags aligned with `param_types`: index `i` is true when parameter
+/// `i`'s type annotation contains one of THIS signature's own generic parameter
+/// names. A parameter without an annotation, or a signature with no generics,
+/// yields `false` at that position.
+fn params_with_own_generic(source: &str, f: &Function) -> Vec<bool> {
+    let type_params = f.type_parameters.as_deref();
+    f.params
+        .items
+        .iter()
+        .map(|param| {
+            let (Some(tps), Some(ann)) = (type_params, param.type_annotation.as_ref()) else {
+                return false;
+            };
+            let span = ann.type_annotation.span();
+            tps.params.iter().any(|tp| {
+                source_contains_ident(source, span.start, span.end, tp.name.name.as_str())
+            })
+        })
+        .collect()
+}
+
 /// True when the signature's return type is a `x is T` type predicate. Such
 /// overloads narrow the return type per input variant and cannot collapse into
 /// a single union signature without erasing that narrowing at every call site.
@@ -195,6 +216,9 @@ impl OxcCheck for Check {
                     if preserves_generic_return_inference(&sigs) {
                         continue;
                     }
+                    if preserves_varying_param_generic_inference(&sigs) {
+                        continue;
+                    }
                     if preserves_tagged_template_call(&sigs) {
                         continue;
                     }
@@ -261,6 +285,11 @@ struct OverloadSig {
     /// Source text of each fixed parameter's type annotation, positionally.
     /// Excludes a trailing rest parameter (tracked via arity / `first_param_is_rest`).
     param_types: Vec<String>,
+    /// Positional flags aligned with `param_types`: index `i` is true when this
+    /// signature's parameter `i` carries one of this signature's own generic
+    /// parameter names in its type annotation. False at positions with no
+    /// annotation, or in a signature without generics.
+    params_with_own_generic: Vec<bool>,
 }
 
 /// True when EVERY overload signature has a generic type parameter that appears
@@ -275,6 +304,42 @@ struct OverloadSig {
 /// return type does not qualify: that signature collapses into the union cleanly.
 fn preserves_generic_return_inference(sigs: &[OverloadSig]) -> bool {
     sigs.iter().all(|sig| !sig.generics_in_return.is_empty())
+}
+
+/// True when the overloads route per-overload generic inference through a single
+/// varying parameter position: every signature has the same arity, exactly one
+/// parameter position varies across the group, and at that varying position EVERY
+/// signature's type annotation contains one of that signature's own generic
+/// parameters. Each overload then infers its own generics from the discriminating
+/// argument (e.g. Vue `defineComponent`-style overloads whose second argument
+/// selects `Props`/`PropNames`/`PropsOptions`), so collapsing the varying position
+/// into a union would erase that per-call-site inference — even when every overload
+/// returns `void` and no return-type exemption applies.
+///
+/// A group whose generic sits in a NON-varying position, or whose varying position
+/// carries no generic, is NOT exempted here: it collapses cleanly (e.g.
+/// `f<T>(x: T, y: number): void; f<T>(x: T, y: string): void;` →
+/// `f<T>(x: T, y: number | string)`).
+fn preserves_varying_param_generic_inference(sigs: &[OverloadSig]) -> bool {
+    let arity = sigs[0].param_types.len();
+    if arity == 0 || sigs.iter().any(|s| s.param_types.len() != arity) {
+        return false;
+    }
+    if sigs.iter().any(|s| s.first_param_is_rest) {
+        return false;
+    }
+    let varying: Vec<usize> = (0..arity)
+        .filter(|&i| {
+            let first = sigs[0].param_types[i].as_str();
+            sigs.iter().any(|s| s.param_types[i] != first)
+        })
+        .collect();
+    if varying.len() != 1 {
+        return false;
+    }
+    let v = varying[0];
+    sigs.iter()
+        .all(|s| s.params_with_own_generic.get(v).copied().unwrap_or(false))
 }
 
 /// True when ANY overload signature leads with the tagged-template marker type
@@ -570,6 +635,7 @@ fn sig_from_function(source: &str, f: &Function) -> Option<OverloadSig> {
         first_param_is_rest,
         return_type: return_type_text(source, f),
         param_types: param_type_texts(source, f),
+        params_with_own_generic: params_with_own_generic(source, f),
     })
 }
 
@@ -1189,6 +1255,51 @@ export function setTestContext(context?: TestContext): TestContext | undefined {
 function f(x: string): number;
 function f(x?: string): number;
 function f(x?: string): number { return 0; }
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn allows_varying_param_generic_inference_void_overloads() {
+        // Regression for #6414: nuxt/test-utils `mockComponent` mirrors Vue's
+        // `defineComponent` API — every overload is arity 2 with an identical
+        // `path: string` first parameter, a second parameter that varies and
+        // carries each overload's OWN generics (`Props`/`PropNames`), and a `void`
+        // return. The generics route per-call-site inference through the second
+        // argument; collapsing it into a union would erase that inference. No
+        // return-type exemption fires because the return is uniformly `void`.
+        let source = r#"
+export function mockComponent<Props, RawBindings = object>(path: string, setup: SetupFn<Props, RawBindings>): void;
+export function mockComponent<Props = {}, RawBindings = {}>(path: string, options: ComponentOptionsWithoutProps<Props, RawBindings>): void;
+export function mockComponent<PropNames extends string, RawBindings = {}>(path: string, options: ComponentOptionsWithArrayProps<PropNames, RawBindings>): void;
+export function mockComponent(_path: string, _component: unknown): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_generic_in_non_varying_position_void_overloads() {
+        // Negative control for #6414: the generic `T` sits in the NON-varying
+        // position 0 (`x: T` is identical across both), while the varying position
+        // 1 carries no generic (`number` vs `string`). The group collapses cleanly
+        // into `g<T>(x: T, y: number | string): void`, so it must still flag.
+        let source = "
+function g<T>(x: T, y: number): void;
+function g<T>(x: T, y: string): void;
+function g(x: any, y: any): void {}
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn flags_plain_void_overloads_without_generics() {
+        // Negative control for #6414: a `void`-returning group with no generics
+        // collapses into `h(x: number | string): void`. Proves a `void` return
+        // alone never triggers the varying-param generic-inference exemption.
+        let source = "
+function h(x: number): void;
+function h(x: string): void;
+function h(x: number | string): void {}
 ";
         assert_eq!(run_on(source).len(), 2);
     }
