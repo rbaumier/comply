@@ -6,7 +6,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{has_doc_hidden, is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{
+    has_doc_hidden, has_test_attribute, is_in_test_context, is_under_tests_dir,
+};
 use std::path::{Path, PathBuf};
 
 const KINDS: &[&str] = &["enum_item"];
@@ -69,9 +71,14 @@ impl AstCheck for Check {
         }
         // Test-helper enum: `#[non_exhaustive]` would force wildcard match
         // arms in tests, defeating exhaustiveness checking. Not an external API.
-        // A `pub enum` under a `tests/` directory (integration tests, fixtures)
-        // is likewise never a SemVer-bound published surface.
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+        // Covers an enum carrying `#[cfg(test)]` as its own preceding item-level
+        // attribute, an enum inside an enclosing `#[cfg(test)]` module, and a
+        // `pub enum` under a `tests/` directory (integration tests, fixtures) —
+        // none of which is a SemVer-bound published surface.
+        if is_in_test_context(node, source_bytes)
+            || has_test_attribute(node, source_bytes)
+            || is_under_tests_dir(ctx.path)
+        {
             return;
         }
         // Vendored third-party source: a file opening with a `Vendored from` /
@@ -589,6 +596,50 @@ mod tests {
         // checking in tests.
         let source = "#[cfg(test)]\nmod tests {\n    pub enum FixtureProvider { Git, Hg }\n}";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_pub_enum_with_direct_cfg_test_attribute() {
+        // #6345: the rust-lang/log `Token` enum carries `#[cfg(test)]` as its
+        // own preceding item-level attribute (the enclosing `mod` is NOT
+        // `#[cfg(test)]`). It compiles only in test builds and is never part of
+        // the published API — `#[non_exhaustive]` would force wildcard match
+        // arms and defeat exhaustiveness checking.
+        let diagnostics = crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n[lib]\n",
+            "#[cfg(test)]\n#[derive(Debug, PartialEq)]\npub enum Token<'v> { None, Bool(bool), Str(&'v str) }",
+            "src/lib.rs",
+        );
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn flags_pub_enum_without_cfg_test_attribute() {
+        // #6345 negative space: the same publishable context, a plain `pub enum`
+        // with no `#[cfg(test)]` attribute, is still flagged — the exemption is
+        // gated on the test attribute, not on the type's shape.
+        let diagnostics = crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n[lib]\n",
+            "pub enum Token<'v> { None, Bool(bool), Str(&'v str) }",
+            "src/lib.rs",
+        );
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn flags_pub_enum_with_cfg_not_test_attribute() {
+        // #6345 negative space: `#[cfg(not(test))]` is production-only — the
+        // shared helper does not treat it as a test attribute, so the enum
+        // stays flagged.
+        let diagnostics = crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n[lib]\n",
+            "#[cfg(not(test))]\n#[derive(Debug, PartialEq)]\npub enum Token<'v> { None, Bool(bool), Str(&'v str) }",
+            "src/lib.rs",
+        );
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
