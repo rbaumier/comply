@@ -71,10 +71,12 @@ impl OxcCheck for Check {
             return;
         }
 
-        // An explicit `: void` / `: undefined` / `: T | void` / `: T | undefined`
-        // return type admits both a bare `return;` (yields `undefined`) and a
-        // value return (e.g. a void tail-call, or the `undefined` arm of the
-        // declared union). That is the canonical idiom, not an inconsistency.
+        // An explicit `: void` / `: undefined` / `: any` / `: T | void` /
+        // `: T | undefined` return type admits both a bare `return;` (yields
+        // `undefined`) and a value return (e.g. a void tail-call, the `undefined`
+        // arm of the declared union, or the `JSON.parse` reviver idiom where a
+        // bare `return;` drops a key under a `: any` contract). That is the
+        // canonical idiom, not an inconsistency.
         if has_value && has_bare && return_type_admits_void_or_undefined(return_type) {
             return;
         }
@@ -372,6 +374,35 @@ async function load(x): Promise<NormalizedConfig> {
 }
 "#;
         assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn allows_any_return_type_with_mixed_returns() {
+        // Regression for issue #6440 (unjs/destr src/index.ts): the canonical
+        // `JSON.parse` reviver idiom `(key, value): any` returns `undefined`
+        // (bare `return;`) to drop a key and a value otherwise. `any` includes
+        // `undefined`, so this is not an inconsistency.
+        let code = r#"
+function jsonParseTransform(key: string, value: any): any {
+    if (key === "__proto__") {
+        return;
+    }
+    return value;
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_union_with_any_return_type() {
+        // `: any | string` — the `any` member admits a bare `return;`.
+        let code = r#"
+function f(x): any | string {
+    if (x) return;
+    return "v";
+}
+"#;
+        assert!(run_on(code).is_empty());
     }
 
     #[test]
