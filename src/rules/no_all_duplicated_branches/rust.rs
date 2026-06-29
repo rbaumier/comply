@@ -2,6 +2,9 @@
 //!
 //! Flag if/else chains where every branch has identical code.
 //! Also flags match expressions where all arms have identical bodies.
+//! Branches are compared by their ordered AST leaf tokens, so formatting and
+//! indentation differences are ignored while string-literal content (including
+//! internal whitespace) stays significant.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -9,33 +12,47 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 #[derive(Debug)]
 pub struct Check;
 
-fn normalize(text: &str) -> String {
-    text.lines()
-        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Collect the text of every leaf (childless) descendant of `node`, in order.
+/// Inter-token whitespace is not a node, so formatting differences vanish; a
+/// string/char literal's content leaf is preserved verbatim.
+fn leaf_tokens<'a>(node: tree_sitter::Node, source: &'a [u8], out: &mut Vec<&'a str>) {
+    if node.child_count() == 0 {
+        if let Ok(t) = node.utf8_text(source) {
+            out.push(t);
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        leaf_tokens(child, source, out);
+    }
 }
 
-fn block_body_text<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    if node.kind() != "block" {
-        return None;
+/// Signature of a `block`'s interior — its statements' leaf tokens, excluding
+/// the `{`/`}` delimiters (so an empty block yields an empty signature and is
+/// not flagged).
+fn block_interior_signature(block: tree_sitter::Node, source: &[u8]) -> String {
+    let mut out = Vec::new();
+    let mut cursor = block.walk();
+    for child in block.named_children(&mut cursor) {
+        leaf_tokens(child, source, &mut out);
     }
-    let start = node.start_byte() + 1;
-    let end = node.end_byte().saturating_sub(1);
-    if start >= end {
-        return Some("");
-    }
-    std::str::from_utf8(&source[start..end]).ok()
+    out.join("\u{1f}")
+}
+
+/// Signature of an arbitrary expression/body node (used for match-arm values,
+/// which may be a block expression or a bare expression).
+fn node_signature(node: tree_sitter::Node, source: &[u8]) -> String {
+    let mut out = Vec::new();
+    leaf_tokens(node, source, &mut out);
+    out.join("\u{1f}")
 }
 
 fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
     let mut branches = Vec::new();
 
-    if let Some(consequence) = if_node.child_by_field_name("consequence")
-        && let Some(text) = block_body_text(consequence, source)
-    {
-        branches.push(normalize(text));
+    if let Some(consequence) = if_node.child_by_field_name("consequence") {
+        branches.push(block_interior_signature(consequence, source));
     }
 
     if let Some(alternative) = if_node.child_by_field_name("alternative") {
@@ -48,10 +65,8 @@ fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> Vec<String>
                         branches.extend(sub);
                         return branches;
                     }
-                    if child.kind() == "block"
-                        && let Some(text) = block_body_text(child, source)
-                    {
-                        branches.push(normalize(text));
+                    if child.kind() == "block" {
+                        branches.push(block_interior_signature(child, source));
                     }
                 }
             }
@@ -60,9 +75,7 @@ fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> Vec<String>
                 branches.extend(sub);
             }
             "block" => {
-                if let Some(text) = block_body_text(alternative, source) {
-                    branches.push(normalize(text));
-                }
+                branches.push(block_interior_signature(alternative, source));
             }
             _ => {}
         }
@@ -118,9 +131,8 @@ impl AstCheck for Check {
                 for child in node.named_children(&mut cursor) {
                     if child.kind() == "match_arm"
                         && let Some(body) = child.child_by_field_name("value")
-                        && let Ok(text) = body.utf8_text(source_bytes)
                     {
-                        arm_bodies.push(normalize(text));
+                        arm_bodies.push(node_signature(body, source_bytes));
                     }
                 }
 
@@ -207,6 +219,64 @@ fn f() {
 fn f() {
     if condition {
         do_something();
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    // https://github.com/rbaumier/comply/issues/6347
+    #[test]
+    fn allows_branches_differing_only_in_string_whitespace() {
+        let source = r#"
+fn f() {
+    if self.number.is_some() {
+        self.inner.write_str("       ")?;
+    } else {
+        self.inner.write_str("    ")?;
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_identical_branches_including_strings() {
+        let source = r#"
+fn f() {
+    if c {
+        f("x");
+    } else {
+        f("x");
+    }
+}
+"#;
+        let d = run_on(source);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_branches_differing_only_in_formatting() {
+        let source = r#"
+fn f() {
+    if c {
+        do_something();
+    } else {
+        do_something() ;
+    }
+}
+"#;
+        let d = run_on(source);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_match_arms_differing_only_in_string_whitespace() {
+        let source = r#"
+fn f() {
+    match k {
+        x => w.write_str("    "),
+        _ => w.write_str("  "),
     }
 }
 "#;
