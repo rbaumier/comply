@@ -215,6 +215,17 @@ impl OxcCheck for Check {
                     let obj_text = &source[member.object.span().start as usize..member.object.span().end as usize];
                     let prop_text = member.property.name.as_str();
 
+                    // A property whose name is a reserved keyword cannot be a
+                    // destructuring shorthand binding identifier:
+                    // `const { extends } = config` is a syntax error. The only
+                    // legal destructuring requires a rename
+                    // (`const { extends: x } = config`), which the rule cannot
+                    // infer, so such an access can never be rewritten to a
+                    // destructured variable — skip it.
+                    if oxc_syntax::keyword::is_reserved_keyword(prop_text) {
+                        continue;
+                    }
+
                     // Skip when this access sits in the initializer of a
                     // `const`/`let` whose binding name equals the property:
                     // destructuring that property from the same object would
@@ -663,6 +674,60 @@ mod tests {
         let diags = run(code);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("external"));
+    }
+
+    #[test]
+    fn skips_reserved_keyword_property_issue_6695() {
+        // Issue #6695: `extends` is a reserved keyword, so
+        // `const { extends } = config` is a syntax error. The access cannot be
+        // rewritten to a destructured variable without a rename the rule
+        // cannot infer, so it must not be flagged. `config` is destructured
+        // first and `config.extends` is then read as a live candidate (no
+        // mutation masks it), so this asserts the keyword guard specifically.
+        let code = r#"
+            function parse(config) {
+                const { compilerOptions } = config;
+                if (config.extends) {
+                    const x = config.extends;
+                }
+            }
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag an access to a reserved-keyword-named property"
+        );
+    }
+
+    #[test]
+    fn skips_reserved_keyword_class_and_default() {
+        // Other reserved keywords (`class`, `default`) are equally invalid as
+        // shorthand binding identifiers and must not be flagged.
+        let code = r#"
+            function read(obj) {
+                const { name } = obj;
+                console.log(obj.class);
+                console.log(obj.default);
+            }
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag accesses to `class`/`default` reserved-keyword properties"
+        );
+    }
+
+    #[test]
+    fn flags_non_reserved_property_after_reserved_fix() {
+        // Negative-space guard: a normal (non-reserved) repeated property
+        // access is still a genuine inconsistency and must keep firing.
+        let code = r#"
+            function read(obj) {
+                const { name } = obj;
+                console.log(obj.value);
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("value"));
     }
 }
 
