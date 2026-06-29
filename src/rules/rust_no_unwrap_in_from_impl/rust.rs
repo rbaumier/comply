@@ -68,6 +68,17 @@
 //! it expresses a deliberate, documented invariant rather than the surprising,
 //! undocumented panic this rule guards against. A bare `.unwrap()` with no
 //! preceding assertion in its block still flags.
+//! A `.unwrap()` / `.expect()` is also skipped when an earlier statement in its
+//! enclosing block is an early-return `if` guard that proves the receiver is
+//! `Some` on fall-through: the guard's consequence unconditionally exits the
+//! block (a `return`/`break`/`continue` or a `panic!`/`unreachable!`/`todo!`/
+//! `unimplemented!`) and its condition tests the unwrap's receiver for nullity —
+//! `<receiver>.is_none()` (as the sole condition or a top-level `||` disjunct) or
+//! `if let None = <receiver>`. Not taking the branch then guarantees the receiver
+//! is `Some`, so the unwrap is provably infallible. An `is_none()` under `&&`
+//! (`A && receiver.is_none()`) or a negated `is_some()` check does NOT prove
+//! non-nullity on fall-through and still flags, as does a consequence that only
+//! sometimes exits (a nested conditional).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -170,6 +181,11 @@ fn collect_unwraps_in(
             // unwrap unreachable — a deliberate, documented invariant, not the
             // surprising panic this rule guards against.
             && !preceded_by_assert_in_block(node, source)
+            // An earlier early-return `if` guard in the same block proves the
+            // receiver is `Some` on fall-through (its consequence always exits and
+            // its condition is `receiver.is_none()` / `if let None = receiver`),
+            // so the unwrap is provably infallible at this point.
+            && !preceded_by_is_none_guard(node, function, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -234,6 +250,197 @@ fn preceded_by_assert_in_block(call: tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// True when an earlier statement in the `.unwrap()`/`.expect()` call's enclosing
+/// block is an early-return `if` guard that proves the unwrap's receiver is `Some`
+/// on fall-through. The guard must (1) unconditionally exit its consequence block
+/// — its last statement is a `return`/`break`/`continue` or a `panic!`/
+/// `unreachable!`/`todo!`/`unimplemented!` — and (2) test the receiver for nullity
+/// such that, when the branch is NOT taken, the receiver is `Some`:
+///   - `if let None = <receiver> { exit }` — fall-through ⟹ receiver is `Some`;
+///   - `<receiver>.is_none()` as the sole condition;
+///   - `<receiver>.is_none()` as a top-level `||` disjunct (`A || receiver.is_none()`):
+///     not taking the branch falsifies the whole `||`, hence every disjunct, so
+///     `is_none()` is false ⟹ receiver is `Some`.
+///
+/// An `is_none()` under `&&` (`A && receiver.is_none()`) or a negated `is_some()`
+/// check does NOT prove non-nullity on fall-through and is not exempted. Receiver
+/// identity is matched by trimmed source text, like the other receiver-matching
+/// exemptions.
+///
+/// Conservative: only statements *before* the call's own statement in the same
+/// block are considered, mirroring `preceded_by_assert_in_block`.
+fn preceded_by_is_none_guard(
+    call: tree_sitter::Node,
+    field_expr: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Some(receiver) = field_expr.child_by_field_name("value") else {
+        return false;
+    };
+    let Ok(receiver_text) = receiver.utf8_text(source) else {
+        return false;
+    };
+    let receiver_text = receiver_text.trim();
+    let Some((block, call_stmt)) = enclosing_block_statement(call) else {
+        return false;
+    };
+    let mut cursor = block.walk();
+    for stmt in block.named_children(&mut cursor) {
+        if stmt.id() == call_stmt.id() {
+            return false; // reached the unwrap's own statement; no earlier guard
+        }
+        if statement_is_is_none_guard(stmt, receiver_text, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `stmt` is an early-return `if` guard whose consequence
+/// unconditionally exits and whose condition proves `receiver_text` is `Some` on
+/// fall-through. The `if` may appear directly or wrapped in an
+/// `expression_statement`.
+fn statement_is_is_none_guard(
+    stmt: tree_sitter::Node,
+    receiver_text: &str,
+    source: &[u8],
+) -> bool {
+    let if_expr = match stmt.kind() {
+        "if_expression" => stmt,
+        "expression_statement" => match stmt.named_child(0) {
+            Some(c) if c.kind() == "if_expression" => c,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let Some(consequence) = if_expr.child_by_field_name("consequence") else {
+        return false;
+    };
+    if !block_unconditionally_exits(consequence, source) {
+        return false;
+    }
+    let Some(condition) = if_expr.child_by_field_name("condition") else {
+        return false;
+    };
+    condition_proves_some(condition, receiver_text, source)
+}
+
+/// True when `block`'s last statement unconditionally leaves the enclosing block:
+/// a `return`/`break`/`continue` expression, or a `panic!`/`unreachable!`/`todo!`/
+/// `unimplemented!` macro invocation. Conservative — only the block's final
+/// statement is inspected, so a consequence that only *sometimes* exits (its last
+/// statement is itself a nested conditional) does not qualify.
+fn block_unconditionally_exits(block: tree_sitter::Node, source: &[u8]) -> bool {
+    if block.kind() != "block" {
+        return false;
+    }
+    let mut cursor = block.walk();
+    let Some(last) = block.named_children(&mut cursor).last() else {
+        return false;
+    };
+    let inner = match last.kind() {
+        "expression_statement" => match last.named_child(0) {
+            Some(c) => c,
+            None => return false,
+        },
+        _ => last,
+    };
+    match inner.kind() {
+        "return_expression" | "break_expression" | "continue_expression" => true,
+        "macro_invocation" => matches!(
+            inner
+                .child_by_field_name("macro")
+                .and_then(|m| m.utf8_text(source).ok()),
+            Some("panic" | "unreachable" | "todo" | "unimplemented")
+        ),
+        _ => false,
+    }
+}
+
+/// True when `condition` being FALSE (the guard's branch not taken) guarantees
+/// `receiver_text` is `Some`. Handles `if let None = <receiver>` (a sole
+/// `let_condition`), `<receiver>.is_none()` as the sole condition, and
+/// `<receiver>.is_none()` as a top-level `||` disjunct. Recurses only through
+/// `||` and parentheses: an `is_none()` under `&&` does not prove non-nullity on
+/// fall-through, and a `let_chain` (`if let None = r && …`) is not a sole
+/// `let_condition` so it is not matched either.
+fn condition_proves_some(
+    condition: tree_sitter::Node,
+    receiver_text: &str,
+    source: &[u8],
+) -> bool {
+    match condition.kind() {
+        "let_condition" => let_condition_is_none_on(condition, receiver_text, source),
+        "parenthesized_expression" => condition
+            .named_child(0)
+            .is_some_and(|inner| condition_proves_some(inner, receiver_text, source)),
+        "binary_expression" => {
+            // Only `||` distributes the guarantee to the fall-through path; `&&`
+            // does not, so we never recurse through a conjunction.
+            let is_or = condition
+                .child_by_field_name("operator")
+                .and_then(|op| op.utf8_text(source).ok())
+                == Some("||");
+            if !is_or {
+                return false;
+            }
+            condition
+                .child_by_field_name("left")
+                .is_some_and(|n| condition_proves_some(n, receiver_text, source))
+                || condition
+                    .child_by_field_name("right")
+                    .is_some_and(|n| condition_proves_some(n, receiver_text, source))
+        }
+        "call_expression" => is_matching_is_none_call(condition, receiver_text, source),
+        _ => false,
+    }
+}
+
+/// True when `cond` is `let None = <receiver>` whose value text matches.
+fn let_condition_is_none_on(
+    cond: tree_sitter::Node,
+    receiver_text: &str,
+    source: &[u8],
+) -> bool {
+    let Some(pattern) = cond.child_by_field_name("pattern") else {
+        return false;
+    };
+    if pattern.utf8_text(source).map(str::trim) != Ok("None") {
+        return false;
+    }
+    cond.child_by_field_name("value")
+        .and_then(|v| v.utf8_text(source).ok())
+        .map(str::trim)
+        == Some(receiver_text)
+}
+
+/// True when `call` is `<receiver_text>.is_none()` — a method call whose method is
+/// `is_none` and whose receiver text matches.
+fn is_matching_is_none_call(
+    call: tree_sitter::Node,
+    receiver_text: &str,
+    source: &[u8],
+) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    if function
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        != Some("is_none")
+    {
+        return false;
+    }
+    function
+        .child_by_field_name("value")
+        .and_then(|v| v.utf8_text(source).ok())
+        .map(str::trim)
+        == Some(receiver_text)
 }
 
 /// The enclosing `block` and the call's own statement node within it (the direct
@@ -1953,6 +2160,133 @@ mod tests {
         assert!(
             run_on(source).is_empty(),
             "the `byte.get()` in the let's own initializer is still the NonZeroU8 param"
+        );
+    }
+
+    /// Closes #6669: `if x.is_absolute() || path.parent().is_none() { return … }`
+    /// exits early when `path.parent()` is `None`, so on fall-through
+    /// `path.parent()` is `Some` and `path.parent().unwrap()` is provably
+    /// infallible. The `is_none()` is a top-level `||` disjunct, so the unwrap
+    /// must not be flagged.
+    #[test]
+    fn allows_unwrap_after_is_none_or_disjunct_guard() {
+        let source = r#"impl From<&Path> for SymLink {
+            fn from(path: &Path) -> Self {
+                if let Ok(target) = read_link(path) {
+                    if target.is_absolute() || path.parent().is_none() {
+                        return Self { valid: target.exists(), target: Some(target) };
+                    }
+                    return Self {
+                        target: Some(target),
+                        valid: path.parent().unwrap().join(target).exists(),
+                    };
+                }
+                Self { target: None, valid: false }
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "an early-return is_none() || guard proves path.parent() is Some on fall-through"
+        );
+    }
+
+    /// A sole-condition `if path.parent().is_none() { return; }` guard equally
+    /// proves the receiver is `Some` on fall-through — the unwrap must not flag.
+    #[test]
+    fn allows_unwrap_after_sole_is_none_guard() {
+        let source = r#"impl From<&Path> for X {
+            fn from(path: &Path) -> Self {
+                if path.parent().is_none() {
+                    return X::default();
+                }
+                X(path.parent().unwrap())
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// An `if let None = receiver { return; }` guard proves the receiver is `Some`
+    /// on fall-through — the unwrap must not flag.
+    #[test]
+    fn allows_unwrap_after_if_let_none_guard() {
+        let source = r#"impl From<Option<u32>> for B {
+            fn from(foo: Option<u32>) -> B {
+                if let None = foo {
+                    return B::default();
+                }
+                B(foo.unwrap())
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// SOUNDNESS: `is_none()` as an `&&` conjunct does NOT prove non-nullity on
+    /// fall-through — not taking `a && receiver.is_none()` means `!a || is_some`,
+    /// which does not guarantee `is_some`. The unwrap must STILL flag.
+    #[test]
+    fn flags_unwrap_after_is_none_and_conjunct_guard() {
+        let source = r#"impl From<&Path> for X {
+            fn from(path: &Path) -> Self {
+                if a && path.parent().is_none() {
+                    return X::default();
+                }
+                X(path.parent().unwrap())
+            }
+        }"#;
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "an is_none() under && does not prove Some on fall-through"
+        );
+    }
+
+    /// A bare `path.parent().unwrap()` with no preceding guard is the surprising
+    /// panic this rule guards against — it must STILL flag (rule not gutted).
+    #[test]
+    fn flags_unwrap_with_no_is_none_guard() {
+        let source = r#"impl From<&Path> for X {
+            fn from(path: &Path) -> Self {
+                X(path.parent().unwrap())
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// SOUNDNESS: a negated `is_some()` guard exits early when the receiver IS
+    /// `Some`, so on fall-through the receiver is `None` and the unwrap WOULD
+    /// panic — it must STILL flag.
+    #[test]
+    fn flags_unwrap_after_negated_is_some_guard() {
+        let source = r#"impl From<&Path> for X {
+            fn from(path: &Path) -> Self {
+                if path.parent().is_some() {
+                    return X::default();
+                }
+                X(path.parent().unwrap())
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// SOUNDNESS: a guard whose consequence only *sometimes* exits (its last
+    /// statement is a nested conditional, not an unconditional exit) does not make
+    /// the unwrap unreachable on fall-through — it must STILL flag.
+    #[test]
+    fn flags_unwrap_after_sometimes_exiting_is_none_guard() {
+        let source = r#"impl From<&Path> for X {
+            fn from(path: &Path) -> Self {
+                if path.parent().is_none() {
+                    if cond {
+                        return X::default();
+                    }
+                }
+                X(path.parent().unwrap())
+            }
+        }"#;
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a consequence that only sometimes exits does not prove infallibility"
         );
     }
 }
