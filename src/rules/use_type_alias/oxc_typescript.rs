@@ -11,6 +11,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSType;
+use oxc_span::GetSpan;
 
 pub struct Check;
 
@@ -58,6 +59,27 @@ fn is_trivial_nullable_union(types: &[TSType]) -> bool {
     types.iter().any(is_null_or_undefined)
 }
 
+/// Canonical grouping key for a commutative type form (union/intersection).
+///
+/// Collects each direct member's source text (whitespace-trimmed), sorts the
+/// members lexicographically, then joins them with `sep`. Because unions and
+/// intersections are unordered, `number | string`, `string | number` and
+/// `number|string` all map to the same key — reordered occurrences of one
+/// type are counted together instead of split into separate groups. oxc
+/// keeps a flat same-kind chain (`A | B | C`) flat, so sorting the direct
+/// members canonicalizes the common case.
+fn canonical_key(members: &[TSType], source: &str, sep: &str) -> String {
+    let mut parts: Vec<&str> = members
+        .iter()
+        .map(|m| {
+            let span = m.span();
+            source[span.start as usize..span.end as usize].trim()
+        })
+        .collect();
+    parts.sort_unstable();
+    parts.join(sep)
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [crate::rules::backend::AstType] {
         &[]
@@ -81,7 +103,7 @@ impl OxcCheck for Check {
         let mut annotation_lines: FxHashMap<String, Vec<usize>> = FxHashMap::default();
 
         for node in semantic.nodes().iter() {
-            let (span, members) = match node.kind() {
+            let (span, members, sep) = match node.kind() {
                 AstKind::TSUnionType(u) => {
                     // A trivial nullable union (`T | null`, `T | undefined`)
                     // is rarely a shared domain concept — counting it
@@ -90,9 +112,9 @@ impl OxcCheck for Check {
                     if is_trivial_nullable_union(&u.types) {
                         continue;
                     }
-                    (u.span, &u.types)
+                    (u.span, &u.types, " | ")
                 }
-                AstKind::TSIntersectionType(i) => (i.span, &i.types),
+                AstKind::TSIntersectionType(i) => (i.span, &i.types, " & "),
                 _ => continue,
             };
 
@@ -163,9 +185,13 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Key on the canonical (member-sorted) form so commutative
+            // reorderings of one type — `number | string` vs `string | number`
+            // — aggregate into a single group and count, rather than splitting
+            // into two redundant alias suggestions for the same concept.
             let (line, _) = byte_offset_to_line_col(ctx.source, span.start as usize);
             annotation_lines
-                .entry(text.to_string())
+                .entry(canonical_key(members, ctx.source, sep))
                 .or_default()
                 .push(line);
         }
@@ -483,5 +509,60 @@ mod tests {
         let diags = run(src);
         assert_eq!(diags.len(), 2);
         assert!(diags.iter().all(|d| d.message.contains(r#""alpha" | "beta""#)));
+    }
+
+    #[test]
+    fn merges_commutative_union_orderings() {
+        // Regression #6663 — `number | string` and `string | number` are the
+        // same TypeScript type (unions are unordered). Each ordering appears
+        // once (below the threshold), but they must aggregate into a single
+        // group that crosses it, yielding ONE canonical suggestion.
+        let src = r#"
+            interface IPXModifiers {
+                quality: number | string;
+                width:   string | number;
+            }
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 2, "both orderings counted as one group");
+        let messages: std::collections::HashSet<_> =
+            diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages.len(), 1, "a single canonical suggestion");
+        assert!(diags[0].message.contains("`number | string`"));
+        assert!(diags[0].message.contains("appears 2 times"));
+    }
+
+    #[test]
+    fn no_fp_on_single_occurrence() {
+        // A type that occurs only once stays below the threshold even after
+        // canonicalization — the merge must not over-count one occurrence.
+        let src = r#"
+            interface A {
+                only: number | string;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn distinct_unions_stay_separate() {
+        // Normalization sorts members but must not merge genuinely distinct
+        // types: `number | string` and `number | boolean` differ. Each
+        // commutative pair merges within its own group, leaving two groups.
+        let src = r#"
+            interface A {
+                a: number | string;
+                b: number | boolean;
+                c: string | number;
+                d: boolean | number;
+            }
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 4);
+        let messages: std::collections::HashSet<_> =
+            diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages.len(), 2, "two distinct canonical groups");
+        assert!(messages.iter().any(|m| m.contains("`number | string`")));
+        assert!(messages.iter().any(|m| m.contains("`boolean | number`")));
     }
 }
