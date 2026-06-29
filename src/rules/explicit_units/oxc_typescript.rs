@@ -320,7 +320,10 @@ const PAGINATION_SIBLINGS: &[&str] = &[
 ///     `.skip(...)` query-builder call (`query.limit(limit)`), or
 ///   - the binding is an object-property value paired with a pagination sibling
 ///     key (`offset`/`page`/`pageSize`/`perPage`/`skip`/`take`/`cursor`) in the
-///     same object literal (`{ limit, offset }`).
+///     same object literal (`{ limit, offset }`), or
+///   - the binding is an operand of a binary expression whose *other* operand is
+///     a `.size` member access (`this.#queue.size < limit`) — compared against a
+///     collection capacity (Map/Set size), a dimensionless count.
 ///
 /// Anchoring on usage keeps a dimensioned `limit` flagged — a byte/size limit or
 /// a time limit passed to `setTimeout`/a size API has neither shape.
@@ -348,6 +351,11 @@ fn used_as_pagination_count(
                 let object_id = nodes.parent_id(nodes.parent_id(ref_node));
                 matches!(nodes.kind(object_id), AstKind::ObjectExpression(obj)
                     if object_has_pagination_sibling(obj))
+            }
+            // `this.#queue.size < limit` — compared against a collection `.size`, a
+            // dimensionless capacity count (Map/Set size), not a dimensioned magnitude.
+            AstKind::BinaryExpression(bin) => {
+                is_size_member(&bin.left) || is_size_member(&bin.right)
             }
             _ => false,
         }
@@ -432,6 +440,12 @@ fn used_as_char_count(
 /// marker that a co-operand is a character count.
 fn is_length_member(expr: &Expression) -> bool {
     matches!(expr, Expression::StaticMemberExpression(m) if m.property.name.as_str() == "length")
+}
+
+/// Whether the expression is a `.size` member access (`queue.size`), the marker
+/// that a co-operand is a collection-capacity count (Map/Set size).
+fn is_size_member(expr: &Expression) -> bool {
+    matches!(expr, Expression::StaticMemberExpression(m) if m.property.name.as_str() == "size")
 }
 
 /// Whether the call is a string-layout method (`padStart`/`padEnd`/`repeat`/...).
@@ -1016,6 +1030,19 @@ mod tests {
         );
         assert!(
             run_on("function f(limit: number, pageSize: number) { return { limit, pageSize }; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_limit_compared_against_collection_size() {
+        // A `limit` compared against a collection `.size` (Map/Set capacity) is a
+        // dimensionless item count, not a dimensioned magnitude — `limitMs`/
+        // `limitBytes` would be wrong (#6420). The `.size` is excluded from the
+        // ambiguous bases as a dimensionless capacity; a `limit` measured against
+        // it is the same kind of count.
+        assert!(
+            run_on("function onSizeLessThan(queue: Set<number>, limit: number) { return queue.size < limit; }")
                 .is_empty()
         );
     }
