@@ -52,14 +52,20 @@ enum FnLocation {
 
 /// Extract parameter names from a function's formal parameters.
 ///
-/// Underscore-prefixed names (`_`, `__`, `_done`, …) are intentionally-unused
-/// positional placeholders: ignore markers with no semantic identity, fixed by
-/// the callee's API. They are not data-clump members, so they are dropped.
-fn extract_param_names(params: &FormalParameters) -> Vec<String> {
+/// Two kinds of parameter are dropped because they carry no semantic identity and
+/// cannot be members of a meaningful parameter group:
+/// - Underscore-prefixed names (`_`, `__`, `_done`, …): intentionally-unused
+///   positional placeholders, ignore markers fixed by the callee's API.
+/// - Single-character names that are never read in the function body: arity /
+///   positional placeholders (e.g. a generated function's `.length` stamp, whose
+///   body reads `arguments` instead). A single-character parameter that IS read
+///   (a `(x, y, z)` coordinate) keeps its identity and stays a candidate.
+fn extract_param_names(params: &FormalParameters, scoping: &oxc_semantic::Scoping) -> Vec<String> {
     let mut names = Vec::new();
     for param in &params.items {
         if let BindingPattern::BindingIdentifier(ref id) = param.pattern
             && !id.name.starts_with('_')
+            && !is_unused_single_char_placeholder(id, scoping)
         {
             names.push(id.name.to_string());
         }
@@ -67,10 +73,29 @@ fn extract_param_names(params: &FormalParameters) -> Vec<String> {
     if let Some(ref rest) = params.rest
         && let BindingPattern::BindingIdentifier(id) = &rest.rest.argument
         && !id.name.starts_with('_')
+        && !is_unused_single_char_placeholder(id, scoping)
     {
         names.push(id.name.to_string());
     }
     names
+}
+
+/// A single-character parameter that is never read in its function body is an
+/// arity/positional placeholder (e.g. a generated function's `.length` stamp,
+/// whose body reads `arguments` instead). It carries no semantic identity and
+/// cannot be a member of a meaningful parameter group, so it is not a data-clump
+/// candidate. A single-character parameter that IS read (a `(x, y, z)` coordinate)
+/// keeps its identity and stays a candidate.
+fn is_unused_single_char_placeholder(
+    id: &BindingIdentifier,
+    scoping: &oxc_semantic::Scoping,
+) -> bool {
+    id.name.chars().count() == 1
+        && id.symbol_id.get().is_some_and(|sym| {
+            !scoping
+                .get_resolved_references(sym)
+                .any(|r| r.flags().contains(oxc_semantic::ReferenceFlags::Read))
+        })
 }
 
 /// Check if a function node is a callback to a framework method like
@@ -183,7 +208,7 @@ impl OxcCheck for Check {
             };
 
             if let Some(params) = params {
-                let mut names = extract_param_names(params);
+                let mut names = extract_param_names(params, semantic.scoping());
                 names.sort();
                 names.dedup();
                 if names.len() >= 3 {
@@ -415,5 +440,31 @@ function auth(req, res, next) { next(); }
 function errorHandler(err, req, res, next) { next(err); }
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_unused_single_char_arity_placeholders() {
+        // Regression for issue #6349 — sinon `src/sinon/proxy.js` generates
+        // arity-stamped proxies whose single-char params (`a, b, c, …`) exist only
+        // to fix `.length`; the body reads `arguments`, never the params. They
+        // carry no semantic identity, so the accidental subset relationship between
+        // higher- and lower-arity signatures is not a data clump.
+        let src = r#"
+function proxy3(a, b, c) { return invoke(this, arguments); }
+function proxy4(a, b, c, d) { return invoke(this, arguments); }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_single_char_params_that_are_read() {
+        // Single-char params that ARE read (`(x, y, z)` coordinates) keep their
+        // identity and remain a refactorable clump — this is why dropping by name
+        // length alone would be wrong.
+        let src = r#"
+function move(x, y, z) { return x + y + z; }
+function scale(x, y, z) { return x * y * z; }
+"#;
+        assert_eq!(run(src).len(), 2);
     }
 }
