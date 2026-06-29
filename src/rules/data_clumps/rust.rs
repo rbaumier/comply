@@ -11,6 +11,13 @@
 //! declared generic type parameters (e.g. `g: G`, `init: Init`,
 //! `r: PhantomData<R>`) is also excluded: extracting it yields a struct that
 //! must re-declare the same parameters, so no duplication is removed.
+//!
+//! Strong/weak ownership-pair structs are excluded as well: when every shared
+//! field is `Arc<X>`/`Rc<X>` in one struct and `Weak<X>` in the other (same
+//! inner `X`), the two are a deliberate strong/weak counterpart pair (the
+//! `Weak` struct mirrors the owner's field names so `upgrade()` reconstructs
+//! the strong form). They cannot be merged — the wrapper changes from a strong
+//! to a weak handle — so they do not form a data clump.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -22,6 +29,11 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
 
     let mut struct_fields: Vec<StructFields> = Vec::new();
     collect_structs(node, source, &mut struct_fields);
+
+    let ptrs_by_line: FxHashMap<usize, &FxHashMap<String, (Strength, String)>> = struct_fields
+        .iter()
+        .map(|sf| (sf.line, &sf.smart_ptr_fields))
+        .collect();
 
     // For each 3-field subset, record every struct that contains it, noting
     // whether that struct types the subset entirely with its own declared
@@ -49,6 +61,16 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             .filter(|&&(_, all_generic)| !all_generic)
             .map(|&(line, _)| line)
             .collect();
+        // A two-struct clash whose every shared field is `Arc<X>`/`Rc<X>` in one
+        // and `Weak<X>` in the other (same inner `X`) is a strong/weak ownership
+        // pair, not a data clump.
+        if flaggable.len() == 2
+            && let Some(&a) = ptrs_by_line.get(&flaggable[0])
+            && let Some(&b) = ptrs_by_line.get(&flaggable[1])
+            && is_strong_weak_pair(subset, a, b)
+        {
+            continue;
+        }
         if flaggable.len() >= 2 {
             for &line in &flaggable {
                 if flagged_lines.insert(line) {
@@ -87,6 +109,19 @@ struct StructFields {
     /// Field names whose type is determined solely by the struct's own declared
     /// generic type parameters.
     generic_param_only: FxHashSet<String>,
+    /// For each field typed as a single `Arc`/`Rc`/`Weak` smart pointer, its
+    /// strength and inner type text (`Weak<Mutex<S>>` → `(Weak, "Mutex<S>")`).
+    /// Used to recognise strong/weak ownership-pair structs.
+    smart_ptr_fields: FxHashMap<String, (Strength, String)>,
+}
+
+/// Strength of a reference-counted smart-pointer wrapper.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Strength {
+    /// `Arc<X>` or `Rc<X>` — owns a strong reference.
+    Strong,
+    /// `Weak<X>` — a non-owning back-reference.
+    Weak,
 }
 
 /// Recursively collect struct field sets from the AST.
@@ -99,6 +134,7 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
         // Look for field_declaration_list child.
         let mut names: Vec<String> = Vec::new();
         let mut generic_param_only: FxHashSet<String> = FxHashSet::default();
+        let mut smart_ptr_fields: FxHashMap<String, (Strength, String)> = FxHashMap::default();
         let child_count = node.named_child_count();
         for i in 0..child_count {
             if let Some(child) = node.named_child(i)
@@ -112,10 +148,13 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
                         && let Ok(name) = name_node.utf8_text(source)
                     {
                         names.push(name.to_string());
-                        if let Some(ty) = field.child_by_field_name("type")
-                            && type_is_generic_param_only(ty, &declared, source)
-                        {
-                            generic_param_only.insert(name.to_string());
+                        if let Some(ty) = field.child_by_field_name("type") {
+                            if type_is_generic_param_only(ty, &declared, source) {
+                                generic_param_only.insert(name.to_string());
+                            }
+                            if let Some(ptr) = smart_pointer_parts(ty, source) {
+                                smart_ptr_fields.insert(name.to_string(), ptr);
+                            }
                         }
                     }
                 }
@@ -128,6 +167,7 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
                 line: node.start_position().row + 1,
                 names,
                 generic_param_only,
+                smart_ptr_fields,
             });
         }
     }
@@ -243,6 +283,52 @@ fn type_contains_reference(node: tree_sitter::Node) -> bool {
     }
     let mut cursor = node.walk();
     node.children(&mut cursor).any(type_contains_reference)
+}
+
+/// If `ty` is a single `Arc<X>`, `Rc<X>`, or `Weak<X>` smart-pointer wrapper,
+/// return its strength and the inner type text `X` (trimmed). Only the
+/// outermost wrapper is stripped — the inner text keeps any nested generics
+/// intact (`Arc<Mutex<Option<Ticker>>>` → `(Strong, "Mutex<Option<Ticker>>")`).
+/// Qualified paths (`std::sync::Arc<X>`) and non-wrapper types return `None`.
+fn smart_pointer_parts(ty: tree_sitter::Node, source: &[u8]) -> Option<(Strength, String)> {
+    if ty.kind() != "generic_type" {
+        return None;
+    }
+    let strength = match ty.child_by_field_name("type")?.utf8_text(source).ok()? {
+        "Arc" | "Rc" => Strength::Strong,
+        "Weak" => Strength::Weak,
+        _ => return None,
+    };
+    // `type_arguments` text is exactly `<…>`; stripping its delimiters removes
+    // only the outermost wrapper (tree-sitter guarantees the matching pair).
+    let inner = ty
+        .child_by_field_name("type_arguments")?
+        .utf8_text(source)
+        .ok()?
+        .trim()
+        .strip_prefix('<')?
+        .strip_suffix('>')?
+        .trim()
+        .to_string();
+    Some((strength, inner))
+}
+
+/// True when, for every field name in `subset`, both structs type it as a
+/// smart pointer of opposite strength over the same inner type — i.e. one is
+/// `Arc`/`Rc` and the other `Weak`, wrapping identical inner type text. All
+/// subset fields must satisfy this for the pair to be a strong/weak ownership
+/// counterpart rather than a data clump.
+fn is_strong_weak_pair(
+    subset: &[String],
+    a: &FxHashMap<String, (Strength, String)>,
+    b: &FxHashMap<String, (Strength, String)>,
+) -> bool {
+    subset.iter().all(|name| match (a.get(name), b.get(name)) {
+        (Some((strength_a, inner_a)), Some((strength_b, inner_b))) => {
+            strength_a != strength_b && inner_a == inner_b
+        }
+        _ => false,
+    })
 }
 
 /// Generate all sorted subsets of size `k` from `items`.
@@ -482,6 +568,60 @@ struct Right<T, U> {
     a: T,
     b: U,
     name: String,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn allows_arc_weak_ownership_pair_issue_6365() {
+        let src = r#"
+pub struct ProgressBar {
+    state: Arc<Mutex<BarState>>,
+    pos: Arc<AtomicPosition>,
+    ticker: Arc<Mutex<Option<Ticker>>>,
+}
+
+pub struct WeakProgressBar {
+    state: Weak<Mutex<BarState>>,
+    pos: Weak<AtomicPosition>,
+    ticker: Weak<Mutex<Option<Ticker>>>,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_identical_primitive_clump() {
+        let src = r#"
+struct Point {
+    x: i32,
+    y: i32,
+    z: i32,
+}
+
+struct Vector {
+    x: i32,
+    y: i32,
+    z: i32,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_arc_weak_with_different_inner_types() {
+        let src = r#"
+struct Strong {
+    a: Arc<Foo>,
+    b: Arc<Bar>,
+    c: Arc<Baz>,
+}
+
+struct Weakish {
+    a: Weak<Foo>,
+    b: Weak<Other>,
+    c: Weak<Baz>,
 }
 "#;
         assert_eq!(run_on(src).len(), 2);
