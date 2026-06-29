@@ -70,6 +70,10 @@ pub(crate) fn find_banned_word(text: &str) -> Option<&'static str> {
                 let next_ok = i + needle.len() == bytes.len()
                     || !bytes[i + needle.len()].is_ascii_alphabetic();
                 if prev_ok && next_ok {
+                    if ends_with_negation(&lower[..i]) {
+                        i += 1;
+                        continue;
+                    }
                     return Some(word);
                 }
             }
@@ -77,6 +81,59 @@ pub(crate) fn find_banned_word(text: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// True when `prefix` (the lowercased comment text immediately preceding a
+/// banned-word match) ends with an English negation — `not`, `cannot`, or a
+/// `…n't` contraction. A negated filler word reverses the dismissive import the
+/// rule targets: `not simply` means "does more than merely", which explains
+/// complexity rather than papering over it.
+pub(crate) fn ends_with_negation(prefix: &str) -> bool {
+    let token = prefix
+        .trim_end()
+        .rsplit(char::is_whitespace)
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_ascii_alphabetic() && c != '\'');
+    token == "not" || token == "cannot" || token.ends_with("n't")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_banned_word;
+
+    #[test]
+    fn allows_negated_banned_word_issue_6460() {
+        assert_eq!(
+            find_banned_word("note that this will not simply filter the entries"),
+            None
+        );
+    }
+
+    #[test]
+    fn flags_unnegated_banned_word_still() {
+        assert_eq!(find_banned_word("this simply works"), Some("simply"));
+        assert_eq!(find_banned_word("just call foo"), Some("just"));
+    }
+
+    #[test]
+    fn allows_cannot_and_contraction_negation() {
+        assert_eq!(find_banned_word("you cannot simply do x"), None);
+        assert_eq!(find_banned_word("it doesn't just return"), None);
+    }
+
+    #[test]
+    fn still_flags_dismissive_word_after_negated_one() {
+        // "simply" is negated and skipped, but the un-negated "just" later in
+        // the same comment is still caught.
+        assert_eq!(find_banned_word("not simply, just do it"), Some("just"));
+    }
+
+    #[test]
+    fn does_not_exempt_words_ending_in_not() {
+        // Token-exact: `knot` must not count as the negation "not".
+        assert_eq!(find_banned_word("a knot simply tied"), Some("simply"));
+    }
 }
 
 pub fn register() -> RuleDef {
