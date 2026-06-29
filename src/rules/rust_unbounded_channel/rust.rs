@@ -15,7 +15,9 @@
 //!   has no bounded `channel()` (the bounded one is `sync_channel(N)`),
 //!   so a zero-arg `mpsc::channel()` is always unbounded. Tokio's
 //!   `mpsc::channel(N)` takes a capacity, so calls with arguments are
-//!   left alone.
+//!   left alone. A `oneshot::channel()` path is excluded: a oneshot
+//!   carries at most one message by construction (the sender is consumed
+//!   by a single `send`), so it can never grow unbounded.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -51,7 +53,9 @@ impl AstCheck for Check {
         let last_segment = text.rsplit("::").next().unwrap_or(text);
         let is_unbounded = last_segment == "unbounded_channel"
             || last_segment == "unbounded" && is_channel_unbounded_path(text)
-            || last_segment == "channel" && is_inside_mpsc_use(node, source_bytes);
+            || last_segment == "channel"
+                && is_inside_mpsc_use(node, source_bytes)
+                && !text.contains("oneshot");
         if !is_unbounded {
             return;
         }
@@ -480,6 +484,22 @@ mod tests {
     #[test]
     fn flags_std_mpsc_channel() {
         let source = "use std::sync::mpsc;\nfn f() { let (tx, rx) = mpsc::channel(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_tokio_oneshot_channel_issue_6706() {
+        // Issue #6706: a file that uses std::sync::mpsc elsewhere makes
+        // `is_inside_mpsc_use` true file-wide, but a tokio oneshot carries at
+        // most one message by construction and must not be flagged.
+        let source =
+            "use std::sync::mpsc;\nfn f() { let (tx, rx) = tokio::sync::oneshot::channel(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_std_mpsc_but_not_oneshot_in_same_file() {
+        let source = "use std::sync::mpsc;\nfn f() {\n    let (tx, rx) = mpsc::channel();\n    let (otx, orx) = tokio::sync::oneshot::channel();\n}";
         assert_eq!(run_on(source).len(), 1);
     }
 
