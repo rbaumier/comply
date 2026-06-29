@@ -12,6 +12,21 @@ pub struct Check;
 
 const TEST_BASES: &[&str] = &["describe", "test", "it"];
 
+/// Chained modifiers the test frameworks (jest/vitest/node:test) define on the
+/// base constructs, e.g. `test.only`, `describe.each`. A member call whose
+/// property is not one of these is an ordinary method on an unrelated object.
+const TEST_MODIFIERS: &[&str] = &[
+    "only",
+    "skip",
+    "each",
+    "todo",
+    "failing",
+    "fails",
+    "concurrent",
+    "sequential",
+    "shuffle",
+];
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -33,18 +48,22 @@ impl OxcCheck for Check {
 }
 
 /// Extract the base test construct name from a call expression callee.
-/// Returns the base kind for `describe`, `test`, `it` (including `.only`/`.skip` variants).
+/// Returns the base kind for `describe`, `test`, `it`, including member calls
+/// through a recognized modifier (`test.only`, `describe.each`, …). A member
+/// call whose property is not a `TEST_MODIFIERS` entry is not a test construct.
 fn classify_callee(expr: &Expression) -> Option<&'static str> {
     match expr {
         Expression::Identifier(id) => {
             TEST_BASES.iter().copied().find(|b| *b == id.name.as_str())
         }
         Expression::StaticMemberExpression(member) => {
-            if let Expression::Identifier(obj) = &member.object {
-                TEST_BASES.iter().copied().find(|b| *b == obj.name.as_str())
-            } else {
-                None
+            let Expression::Identifier(obj) = &member.object else {
+                return None;
+            };
+            if !TEST_MODIFIERS.contains(&member.property.name.as_str()) {
+                return None;
             }
+            TEST_BASES.iter().copied().find(|b| *b == obj.name.as_str())
         }
         _ => None,
     }
@@ -121,5 +140,94 @@ fn check_statements(
                     check_statements(&body.statements, ctx, diagnostics);
                 }
             }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "/tmp/foo.test.ts",
+            &crate::project::ProjectCtx::for_test_with_framework(""),
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn ignores_arbitrary_method_on_test_named_variable() {
+        // `test` here is a store instance; `setKey`'s first arg is a key-path,
+        // not a test title. Regression for #6386.
+        let src = r#"
+            let test = deepMap();
+            test.setKey('a.c[3]', '123');
+            test.setKey('a.c[3]', 123);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_subscribe_method_on_test_named_variable() {
+        let src = r#"
+            let test = deepMap();
+            test.subscribe('z', () => {});
+            test.subscribe('z', () => {});
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_duplicate_plain_test_titles() {
+        let src = r#"
+            test('dup', () => {});
+            test('dup', () => {});
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_duplicate_titles_via_modifier() {
+        let src = r#"
+            test.only('dup', () => {});
+            test.only('dup', () => {});
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_duplicate_describe_titles() {
+        let src = r#"
+            describe('auth', () => {});
+            describe('auth', () => {});
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_distinct_titles() {
+        let src = r#"
+            test('returns 200', () => {});
+            test('returns 401', () => {});
+        "#;
+        assert!(run(src).is_empty());
     }
 }
