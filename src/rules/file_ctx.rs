@@ -706,6 +706,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || crate::rules::path_utils::has_type_probe_infix(path)
             || crate::rules::path_utils::has_codemod_snapshot_infix(path)
             || crate::rules::path_utils::has_test_suite_factory_suffix(path)
+            || crate::rules::path_utils::is_test_support_module_file(path)
             || lower.contains("/dtslint/")
             || lower.starts_with("dtslint/")
             || lower.contains("/spec-dtslint/")
@@ -1047,6 +1048,12 @@ mod tests {
         assert!(!scan_path(&PathBuf::from("packages/foo/src/integration/client.ts")).in_test_dir);
         // A normal source file is not a test dir.
         assert!(!scan_path(&PathBuf::from("src/server.ts")).in_test_dir);
+        // Snake_case test-support module files — the single-file form of the
+        // `test-helpers/` directory convention (issue #6713).
+        assert!(scan_path(&PathBuf::from("crates/dprint/src/test_helpers.rs")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/test_utils.rs")).in_test_dir);
+        // stem-exact: a longer compound stem is NOT a test-support module
+        assert!(!scan_path(&PathBuf::from("src/test_helper_widget.rs")).in_test_dir);
     }
 
     #[test]

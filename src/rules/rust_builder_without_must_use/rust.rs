@@ -15,6 +15,11 @@
 //! forgotten-`.build()` case, and demanding it is a false positive.
 //! Such builders are detected from their inherent `impl` blocks and
 //! skipped.
+//!
+//! Builders in test directories and test-support module files (e.g. a
+//! `#[cfg(test)]`-gated `test_helpers.rs`) are not flagged: they ship
+//! nothing, so `#[must_use]` has no production API boundary there. The
+//! engine enforces this via `skip_in_test_dir` on the rule's META.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -355,6 +360,31 @@ impl MBuilder {
     pub fn b(self, x: u32) -> MBuilder { MBuilder { a: self.a, b: x } }
 }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_builder_in_test_support_file_issue_6713() {
+        // test_helpers.rs is #[cfg(test)]-gated scaffold; #[must_use] has no
+        // production API boundary there.
+        let src = "pub struct TestProcessPluginFileBuilder { name: Option<String> }";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "crates/dprint/src/test_helpers.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_builder_in_production_file_via_gate() {
+        // A normal source file still applies the gate and flags.
+        let src = "pub struct RequestBuilder { headers: Vec<String> }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/client.rs").len(),
+            1
+        );
     }
 
     #[test]
