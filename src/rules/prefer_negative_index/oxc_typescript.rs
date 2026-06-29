@@ -24,10 +24,19 @@ fn is_index_position(method: &str, i: usize) -> bool {
     }
 }
 
-/// Check if an expression is `<receiver>.length - <expr>`.
+/// Check if an expression is `<receiver>.length - <positive numeric literal>`.
+///
+/// The subtracted operand must be a positive numeric literal. Any other RHS
+/// (variable, member access, call) could evaluate to `0`, and rewriting
+/// `slice(start, len - x)` to `slice(start, -x)` is unsafe when `x` is `0`:
+/// `-0 === 0`, so `slice(start, 0)` returns `""` instead of the rest of the
+/// string. A positive literal is the only cheap static proof of positivity.
 fn is_length_minus<'a>(expr: &Expression<'a>, source: &str, receiver_text: &str) -> bool {
     let Expression::BinaryExpression(bin) = expr else { return false };
     if bin.operator != BinaryOperator::Subtraction {
+        return false;
+    }
+    if !matches!(&bin.right, Expression::NumericLiteral(n) if n.value > 0.0) {
         return false;
     }
     let Expression::StaticMemberExpression(member) = &bin.left else { return false };
@@ -176,5 +185,26 @@ mod tests {
     #[test]
     fn allows_normal_slice() {
         assert!(run("const x = str.slice(0, 5);").is_empty());
+    }
+
+    // Subtracted operand must be a positive numeric literal (#6694): any other
+    // RHS could be `0`, and `slice(start, -0)` returns `""` not the rest.
+
+    #[test]
+    fn allows_length_minus_member_access_issue_6694() {
+        // The issue's real case: `suffix.length` can be 0 for a `"foo*"` glob.
+        assert!(
+            run("const x = specifier.slice(start, specifier.length - suffix.length);").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_length_minus_variable() {
+        assert!(run("const x = arr.slice(0, arr.length - n);").is_empty());
+    }
+
+    #[test]
+    fn allows_length_minus_zero_literal() {
+        assert!(run("const x = arr.slice(0, arr.length - 0);").is_empty());
     }
 }
