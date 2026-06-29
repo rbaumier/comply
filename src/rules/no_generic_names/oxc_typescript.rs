@@ -165,6 +165,30 @@ fn is_grafana_datasource_class_name<'a>(
     GRAFANA_DATASOURCE_BASES.contains(&base)
 }
 
+/// True when `node` is the declared NAME of a type-level declaration — a class,
+/// type alias, interface, or enum. Such a name is a PascalCase noun phrase whose
+/// leading token is a domain noun, so a `BANNED_PREFIXES` verb at its head does
+/// not make it generic. Verifies the node IS the declaration's own name, not a
+/// member inside its body.
+fn is_type_declaration_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    let node_span = node.kind().span();
+    match nodes.kind(parent_id) {
+        AstKind::Class(class) => class.id.as_ref().is_some_and(|id| id.span == node_span),
+        AstKind::TSTypeAliasDeclaration(decl) => decl.id.span == node_span,
+        AstKind::TSInterfaceDeclaration(decl) => decl.id.span == node_span,
+        AstKind::TSEnumDeclaration(decl) => decl.id.span == node_span,
+        _ => false,
+    }
+}
+
 /// Return the banned prefix matching `name` on a word boundary, or None.
 /// Visits each camelCase/snake_case word segment of `name`, calling `f` once
 /// per segment. Segments are delimited by `_` and by camelCase boundaries — an
@@ -1530,6 +1554,14 @@ impl OxcCheck for Check {
         }
 
         if let Some(word) = matched_banned_segment(name).or_else(|| matched_banned_prefix(name)) {
+            // A type-level declaration name (class / type alias / interface / enum)
+            // is a PascalCase noun phrase; a BANNED_PREFIXES verb at its head is a
+            // domain noun, not an action, so it does not make the name generic. The
+            // "data" BANNED_SEGMENT path and value-level prefix flagging are
+            // unaffected: scoping to BANNED_PREFIXES leaves segment matches flagged.
+            if BANNED_PREFIXES.contains(&word) && is_type_declaration_name(node, semantic) {
+                return;
+            }
             // A type-alias/interface declared inside a `namespace`/`module`
             // (`namespace Prices { export interface ProductData { … } }`) is
             // always referenced qualified (`Prices.ProductData`), so the
@@ -1720,6 +1752,41 @@ mod tests {
         assert_eq!(run("const data = fetchData();").len(), 1);
         assert_eq!(run("class DataSource {}").len(), 1);
         assert_eq!(run_tsx("export const Result = 5;").len(), 1);
+    }
+
+    #[test]
+    fn allows_process_prefix_in_type_declaration_names_issue_6709() {
+        // Regression for #6709 — a `BANNED_PREFIXES` verb (`process`) leading a
+        // PascalCase type-level declaration name is a domain noun ("a Promise for
+        // a Process"), not an action verb, so the name is not generic.
+        assert!(run("type ProcessStage = 'a' | 'b';").is_empty());
+        assert!(run("class ProcessPromise extends Promise<number> {}").is_empty());
+        assert!(run("type ProcessDto = { code: number };").is_empty());
+        assert!(run("class ProcessOutput extends Error {}").is_empty());
+        // The exemption covers interfaces and enums alike.
+        assert!(run("interface ProcessConfig { code: number }").is_empty());
+        assert!(run("enum ProcessState { Idle, Running }").is_empty());
+    }
+
+    #[test]
+    fn flags_process_prefix_in_value_level_names() {
+        // Negative space: the exemption is scoped to type-level declaration names.
+        // A value-level verb-prefixed name (function / arrow const) still flags.
+        assert_eq!(run("function processOrder() {}").len(), 1);
+        assert_eq!(run("const runJob = () => {};").len(), 1);
+    }
+
+    #[test]
+    fn flags_data_segment_in_type_name_still() {
+        // The new exemption is scoped to `BANNED_PREFIXES` verbs, so a type-level
+        // declaration name flagged via the `data` BANNED_SEGMENT (not a prefix
+        // verb) keeps firing — `class UserData {}` is a declaration name yet still
+        // flags because `data` is a segment match, not a leading verb.
+        assert_eq!(run("class UserData {}").len(), 1);
+        // A type-decl name carrying BOTH a banned prefix and a `data` segment
+        // still flags: segment matching runs first, so `word` is `data` (not a
+        // prefix), and the prefix-scoped exemption never applies.
+        assert_eq!(run("class ProcessData {}").len(), 1);
     }
 
     #[test]
