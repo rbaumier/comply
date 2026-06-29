@@ -72,6 +72,14 @@ impl OxcCheck for Check {
                         if class_emits(class.span, nodes) {
                             continue;
                         }
+                        // A class implementing a Node.js builtin interface (e.g.
+                        // `nodeStream.Readable`) is required to extend
+                        // `EventEmitter` to satisfy that interface's contract;
+                        // `EventTarget` lacks the emitter API the interface
+                        // mandates, so the inheritance is not interchangeable.
+                        if implements_node_builtin_interface(class, program) {
+                            continue;
+                        }
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, id.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -207,6 +215,53 @@ fn imports_event_emitter_from_ignored(program: &oxc_ast::ast::Program) -> bool {
     false
 }
 
+/// `true` when the class implements an interface whose name resolves to a
+/// binding imported from a `node:*` builtin module. Node's stream/net/http/…
+/// interfaces extend `EventEmitter`, so a class implementing one must extend
+/// `EventEmitter` to satisfy the contract — `EventTarget` cannot.
+fn implements_node_builtin_interface(class: &Class, program: &Program) -> bool {
+    class.implements.iter().any(|imp| {
+        let local_name = match &imp.expression {
+            // `nodeStream.Readable` → the namespace local is `nodeStream`.
+            TSTypeName::QualifiedName(qualified) => match &qualified.left {
+                TSTypeName::IdentifierReference(id) => id.name.as_str(),
+                _ => return false,
+            },
+            // Bare `Readable` → the name itself (a named import from `node:*`).
+            TSTypeName::IdentifierReference(id) => id.name.as_str(),
+            _ => return false,
+        };
+        imports_local_from_node_builtin(program, local_name)
+    })
+}
+
+/// `true` when `program` has an `import … from "node:*"` declaration binding the
+/// local name `local_name` (default, namespace, or named specifier).
+fn imports_local_from_node_builtin(program: &Program, local_name: &str) -> bool {
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else {
+            continue;
+        };
+        if !import.source.value.as_str().starts_with("node:") {
+            continue;
+        }
+        let Some(ref specifiers) = import.specifiers else {
+            continue;
+        };
+        for s in specifiers {
+            let local = match s {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => named.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => def.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => ns.local.name.as_str(),
+            };
+            if local == local_name {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -322,5 +377,67 @@ mod tests {
     fn still_flags_new_event_emitter_cast_to_web_readable_stream() {
         // WHATWG `ReadableStream` is a Web Stream, not an EventEmitter.
         assert_eq!(run("const s = new EventEmitter() as ReadableStream;").len(), 1);
+    }
+
+    #[test]
+    fn _issue_6700() {
+        // unjs/unenv: a stub polyfill implementing a Node.js builtin interface
+        // (`nodeStream.Readable`, default type import) must extend `EventEmitter`
+        // to satisfy the contract; `EventTarget` cannot.
+        assert!(
+            run(
+                "import type nodeStream from \"node:stream\";\nclass _Readable extends EventEmitter implements nodeStream.Readable {}"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_class_implementing_node_builtin_default_import() {
+        assert!(
+            run(
+                "import nodeNet from \"node:net\";\nclass Server extends EventEmitter implements nodeNet.Server {}"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_class_implementing_node_builtin_namespace_import() {
+        assert!(
+            run(
+                "import * as nodeHttp from \"node:http\";\nclass Agent extends EventEmitter implements nodeHttp.Agent {}"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_class_implementing_node_builtin_named_import() {
+        assert!(
+            run(
+                "import { Readable } from \"node:stream\";\nclass _R extends EventEmitter implements Readable {}"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_class_implementing_non_node_import() {
+        assert_eq!(
+            run(
+                "import foo from \"./local\";\nclass Bus extends EventEmitter implements foo.Bar {}"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_class_implementing_local_interface() {
+        assert_eq!(
+            run("interface Local {}\nclass Bus extends EventEmitter implements Local {}").len(),
+            1
+        );
     }
 }
