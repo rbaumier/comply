@@ -762,6 +762,15 @@ pub fn is_storybook_story(path: &Path) -> bool {
         .is_some_and(|name| name.contains(".stories.") || name.contains(".story."))
 }
 
+/// True when any path segment equals exactly `.storybook` — the Storybook
+/// configuration directory. Storybook loads `.storybook/main.*`,
+/// `.storybook/preview.*`, and `.storybook/manager.*` by convention from this
+/// directory at builder startup; nothing `import`s them, so the import-graph
+/// BFS cannot reach them, yet they are real entry points, not dead code.
+pub fn is_storybook_config_dir(path: &Path) -> bool {
+    has_path_segment(path, &[".storybook"])
+}
+
 /// True when the file name carries a `.test-d.` infix (e.g.
 /// `Component.test-d.tsx`), the tsd type-testing convention for files that
 /// live beside their source rather than in a `test-d/` directory.
@@ -2250,6 +2259,17 @@ mod aux_path_tests {
         // `stories`/`story` must be a `.`-delimited infix, not a stem substring.
         assert!(!is_storybook_story(&PathBuf::from("src/stories.ts")));
         assert!(!is_storybook_story(&PathBuf::from("src/storyboard.ts")));
+    }
+
+    #[test]
+    fn storybook_config_dir_segment() {
+        // Issue #6692: files under the `.storybook/` config directory.
+        assert!(is_storybook_config_dir(&PathBuf::from(".storybook/preview.ts")));
+        assert!(is_storybook_config_dir(&PathBuf::from(".storybook/main.ts")));
+        assert!(is_storybook_config_dir(&PathBuf::from("packages/ui/.storybook/manager.ts")));
+        // `.storybook` must be a directory segment, not a filename substring.
+        assert!(!is_storybook_config_dir(&PathBuf::from("src/storybook-helper.ts")));
+        assert!(!is_storybook_config_dir(&PathBuf::from("src/foo.ts")));
     }
 
     #[test]

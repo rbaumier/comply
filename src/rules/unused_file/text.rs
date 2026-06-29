@@ -10,7 +10,8 @@ use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
     is_angular_schematic_or_migration_entry, is_auto_mock_dir_path, is_config_file,
-    is_framework_entry_point, is_sample_dir_path, is_storybook_story, is_top_level_script_dir_path,
+    is_framework_entry_point, is_sample_dir_path, is_storybook_config_dir, is_storybook_story,
+    is_top_level_script_dir_path,
 };
 use std::path::Path;
 
@@ -329,6 +330,14 @@ fn is_entry_point(
         return true;
     }
 
+    // Files under a `.storybook/` directory (`main.*`, `preview.*`, `manager.*`)
+    // are Storybook's tool-config entry points: the builder loads them by
+    // convention at startup, never via `import`, so the import-graph BFS cannot
+    // reach them, yet they are real entry points, not dead code.
+    if is_storybook_config_dir(path) {
+        return true;
+    }
+
     if is_angular_schematic_or_migration_factory(path, project) {
         return true;
     }
@@ -603,6 +612,34 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "diagnostic should target orphan.ts"
+        );
+    }
+
+    // Regression for #6692 (epicmaxco/vuestic-admin): files under a `.storybook/`
+    // config directory are Storybook tool-config entry points loaded by
+    // convention at builder startup, never `import`ed, so the import-graph BFS
+    // cannot reach them. They must not be flagged unused; a genuinely
+    // unreachable file outside `.storybook/` still is.
+    #[test]
+    fn storybook_config_dir_files_are_not_flagged_issue_6692() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (".storybook/preview.ts", "export default { parameters: {} };\n"),
+            (".storybook/main.ts", "export default { stories: [] };\n"),
+            (".storybook/manager.ts", "export const theme = 1;\n"),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            !flagged.iter().any(|p| p.contains(".storybook")),
+            "files under `.storybook/` are Storybook config entry points and must \
+             not be flagged unused: {flagged:?}"
+        );
+        assert!(
+            flagged.iter().any(|p| p.contains("orphan")),
+            "a genuinely unreachable module outside `.storybook/` must still be \
+             flagged: {flagged:?}"
         );
     }
 
