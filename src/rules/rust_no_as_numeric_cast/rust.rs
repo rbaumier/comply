@@ -86,7 +86,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_feeds_sized_pointer_write,
-    cast_in_const_context, cast_operand_bit_count_max, cast_operand_bit_width,
+    cast_in_const_context, cast_is_simd_result, cast_operand_bit_count_max, cast_operand_bit_width,
     cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
@@ -244,6 +244,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_feeds_simd_intrinsic(node, source_bytes) {
+        return false;
+    }
+    // `simd_intrinsic(...) as uT` — the ISA-typed result of a SIMD intrinsic has
+    // no `From`/`TryFrom`, so `as` is the only valid extraction (#6324).
+    if cast_is_simd_result(node, source_bytes) {
         return false;
     }
     if cast_feeds_sized_pointer_write(node, source_bytes) {
@@ -2413,6 +2418,45 @@ name = "normal_lib"
         // signed↔unsigned cast feeding an ordinary call stays flagged when the
         // source is unresolved (no non-negativity proof).
         assert_eq!(run_on("fn f() -> u64 { consume(load() as u64) }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6324_movemask_result_as_u16_not_flagged() {
+        // Issue #6324 (hashbrown sse2.rs): `_mm_movemask_epi8` returns a 16-bit
+        // mask packed into an `i32` (upper bits zero); `as u16` is the only
+        // correct extraction — `u16::try_from` would reject sign-bit-set masks.
+        let src = "fn f(cmp: __m128i) -> u16 { _mm_movemask_epi8(cmp) as u16 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6324_path_qualified_movemask_result_as_u16_not_flagged() {
+        // The path-qualified callee form: `x86::_mm_movemask_epi8(self.0) as u16`.
+        let src = "fn f() -> u16 { x86::_mm_movemask_epi8(self.0) as u16 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6324_loongarch_lsx_turbofish_result_as_u16_not_flagged() {
+        // The LoongArch LSX form with a turbofish callee:
+        // `lsx_vpickve2gr_hu::<0>(lsx_vmskltz_b(cmp)) as u16` extracts a lane from
+        // a `u32`-typed intrinsic result. `lsx_*` is a SIMD intrinsic name.
+        let src = "fn f(cmp: v16i8) -> u16 { lsx_vpickve2gr_hu::<0>(lsx_vmskltz_b(cmp)) as u16 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6324_non_intrinsic_call_result_still_flagged() {
+        // A narrowing cast of an ordinary (non-intrinsic) call result stays
+        // flagged — the exemption is scoped to SIMD-intrinsic names.
+        assert_eq!(run_on("fn f() -> u16 { compute() as u16 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_6324_plain_variable_narrowing_still_flagged() {
+        // A plain narrowing of a variable is unaffected by the SIMD-result
+        // exemption.
+        assert_eq!(run_on("fn f(x: u32) -> u16 { x as u16 }").len(), 1);
     }
 
     #[test]
