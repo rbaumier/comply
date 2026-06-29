@@ -2,8 +2,9 @@
 //! `.find()`/`.findIndex()`/`.filter()`/`.includes()`/`.indexOf()` inside a loop
 //! as a possible O(n*m) array scan. EXCEPTIONS: `.includes()`/`.indexOf()` whose
 //! sole argument is a string literal, or whose receiver is statically a string
-//! (a string literal/template, or a string-returning call like
-//! `s.toLowerCase()`), is a `String.prototype` substring search, not array
+//! (a string literal/template, a string-returning call like `s.toLowerCase()`,
+//! or an identifier narrowed to `string` by a `typeof x === "string"` guard in
+//! an enclosing `&&` chain), is a `String.prototype` substring search, not array
 //! membership — there is no collection to index, so it is not flagged;
 //! a two-argument `.indexOf(value, fromIndex)` is a forward-scan cursor (a
 //! positional string/array walk), never a membership lookup, so it is not flagged;
@@ -24,8 +25,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, CallExpression, Expression, NewExpression, Statement, UnaryOperator,
-    VariableDeclarationKind,
+    Argument, BinaryExpression, BinaryOperator, CallExpression, Expression, LogicalOperator,
+    NewExpression, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use oxc_semantic::ReferenceFlags;
 use oxc_span::GetSpan;
@@ -93,8 +94,13 @@ impl OxcCheck for Check {
         // membership — `"abc".includes(x)` or `s.toLowerCase().includes(query)`
         // has no collection to hash into a Map/Set, so the O(1)-lookup advice is a
         // category error. Skip when the receiver is statically a string: a string
-        // literal/template, or a call to a string-returning method.
-        if matches!(method, "includes" | "indexOf") && receiver_is_string(&member.object) {
+        // literal/template, a call to a string-returning method, or an identifier
+        // narrowed to `string` by a `typeof x === "string"` guard in an enclosing
+        // `&&` chain (`typeof preset === "string" && preset.includes(word)`).
+        if matches!(method, "includes" | "indexOf")
+            && (receiver_is_string(&member.object)
+                || receiver_is_typeof_narrowed_string(&member.object, node, semantic))
+        {
             return;
         }
 
@@ -316,6 +322,86 @@ fn receiver_is_string(expr: &Expression<'_>) -> bool {
         ),
         _ => false,
     }
+}
+
+/// True when the `.includes()`/`.indexOf()` receiver is an identifier proven to
+/// be a `string` by a `typeof <ident> === "string"` guard in an enclosing `&&`
+/// chain that lexically precedes the use
+/// (`typeof preset === "string" && preset.includes(word)`). The `&&` short-circuit
+/// guarantees the guard held when the call ran, so the call is a substring search,
+/// not array membership. The walk stops at a function boundary: beyond it the
+/// short-circuit no longer dominates the use (a nested closure runs later).
+fn receiver_is_typeof_narrowed_string<'a>(
+    receiver: &Expression<'_>,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(recv) = receiver else {
+        return false;
+    };
+    let name = recv.name.as_str();
+
+    let nodes = semantic.nodes();
+    let mut child_span = node.kind().span();
+    for ancestor in nodes.ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            AstKind::LogicalExpression(logical)
+                if logical.operator == LogicalOperator::And
+                    && logical.right.span().contains_inclusive(child_span)
+                    && conjunction_narrows_to_string(&logical.left, name) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        child_span = ancestor.kind().span();
+    }
+    false
+}
+
+/// True when `expr`, read as a conjunction (a nested `&&` chain, a parenthesised
+/// sub-expression, or a single comparison), contains a `typeof <name> ===
+/// "string"` guard. Recurses only through `&&` and parentheses — positions where
+/// every conjunct must hold, preserving the narrowing.
+fn conjunction_narrows_to_string(expr: &Expression<'_>, name: &str) -> bool {
+    match expr {
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+            conjunction_narrows_to_string(&logical.left, name)
+                || conjunction_narrows_to_string(&logical.right, name)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            conjunction_narrows_to_string(&paren.expression, name)
+        }
+        Expression::BinaryExpression(bin) => is_typeof_string_eq(bin, name),
+        _ => false,
+    }
+}
+
+/// True when `bin` is `typeof <name> === "string"`, accepting either operand
+/// order (`typeof x === "string"` and `"string" === typeof x`).
+fn is_typeof_string_eq(bin: &BinaryExpression<'_>, name: &str) -> bool {
+    if bin.operator != BinaryOperator::StrictEquality {
+        return false;
+    }
+    (is_typeof_of_name(&bin.left, name) && is_string_type_tag(&bin.right))
+        || (is_typeof_of_name(&bin.right, name) && is_string_type_tag(&bin.left))
+}
+
+/// True when `expr` is `typeof <name>` for the given identifier name.
+fn is_typeof_of_name(expr: &Expression<'_>, name: &str) -> bool {
+    matches!(
+        expr,
+        Expression::UnaryExpression(unary)
+            if unary.operator == UnaryOperator::Typeof
+                && matches!(&unary.argument, Expression::Identifier(id) if id.name.as_str() == name)
+    )
+}
+
+/// True when `expr` is the string literal `"string"` (the `typeof` tag a string
+/// value produces).
+fn is_string_type_tag(expr: &Expression<'_>) -> bool {
+    matches!(expr, Expression::StringLiteral(lit) if lit.value.as_str() == "string")
 }
 
 /// True when `call`'s callback is invoked once per element of the receiver
@@ -1075,6 +1161,61 @@ function check(validValues) {
     for (const item of items) {
         if (validValues.includes(item.flag)) { keep(item); }
     }
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_typeof_string_narrowed_receiver_includes() {
+        // Regression for #6357: `preset` is narrowed to `string` by the
+        // `typeof preset === 'string'` guard in the same `&&`, so
+        // `preset.includes(word)` is a substring search, not array membership.
+        assert!(
+            run(r#"
+const matched = KEYWORDS_EDGE_TARGETS.some(
+    word =>
+        (typeof preset === "string" && preset.includes(word))
+        || process.env.NITRO_PRESET?.includes(word),
+);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_typeof_string_narrowed_receiver_reversed_operand_order() {
+        // The `===` operands may appear in either order.
+        assert!(
+            run(r#"
+const matched = words.some(
+    word => "string" === typeof preset && preset.includes(word),
+);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_genuine_array_includes_without_typeof_guard() {
+        // No `typeof x === "string"` guard — a genuine array-membership scan in a
+        // loop is still the O(n*m) pattern the rule targets.
+        let diags = run(r#"
+const seen = getSeen();
+for (const x of xs) {
+    if (seen.includes(x)) {}
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_includes_when_typeof_guard_is_for_different_identifier() {
+        // The `typeof other === 'string'` guard narrows `other`, not the receiver
+        // `x`, so `x.includes(y)` is unaffected and still flagged.
+        let diags = run(r#"
+for (const y of ys) {
+    if (typeof other === "string" && x.includes(y)) {}
 }
 "#);
         assert_eq!(diags.len(), 1);
