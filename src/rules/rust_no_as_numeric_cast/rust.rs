@@ -338,6 +338,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
 /// semantically-impossible error path. A narrowing (`usize as u32`), a
 /// sign-changing (`usize as i64`), or a `From`-available cast resolves a
 /// non-`usize`/`isize` source here and stays governed by `is_dangerous_cast`.
+///
+/// The operand resolves to `usize`/`isize` either by an explicit annotation
+/// (`let n: usize = …`) — via [`find_identifier_type`] — or, when no annotation
+/// exists, by [`inferred_binding_pins_pointer_width`] for an inferred `?`-bound
+/// value that flows into the enclosing function's `usize`/`isize` success slot.
 fn cast_is_pointer_sized_widening(node: tree_sitter::Node, source: &[u8], target: &str) -> bool {
     let Some(value) = node.child_by_field_name("value") else {
         return false;
@@ -348,12 +353,237 @@ fn cast_is_pointer_sized_widening(node: tree_sitter::Node, source: &[u8], target
     let Ok(name) = value.utf8_text(source) else {
         return false;
     };
-    let Some(source_text) = find_identifier_type(node, name, source) else {
+    if let Some(source_text) = find_identifier_type(node, name, source) {
+        return matches!(
+            (source_text.trim(), target),
+            ("usize", "u64" | "u128") | ("isize", "i64" | "i128")
+        );
+    }
+    inferred_binding_pins_pointer_width(node, name, source, target)
+}
+
+/// Structural fallback for an inferred (un-annotated) operand binding that
+/// [`find_identifier_type`] cannot resolve. Returns `true` only when `name`'s
+/// type is provably `usize` (for a `u64`/`u128` target) or `isize` (for an
+/// `i64`/`i128` target).
+///
+/// For an inferred `let name = <expr>?;`, `name`'s type is the `Ok`-type of
+/// `<expr>`, which is *not* the enclosing function's declared success type in
+/// general: `let x = parse_i64()?;` in a `-> io::Result<usize>` fn makes
+/// `x: i64`, so `x as u64` is a genuine sign/width hazard that must stay flagged.
+/// The type is pinned to the pointer-width integer only when all three hold:
+///
+/// 1. `name` has exactly one binder of any kind in the function (`let`,
+///    parameter, `for`/`if let`/`while let`/`match` pattern) and that binder is a
+///    `let` whose initializer is a `?` (`try_expression`) — [`unique_try_binding`].
+///    Counting every binder rules out shadowing, so the cast operand and the
+///    success return denote one value.
+/// 2. the enclosing function's success type is exactly `usize`/`isize`, paired
+///    with the cast target (`usize`→`u64`/`u128`, `isize`→`i64`/`i128`).
+/// 3. `name` is returned as `Ok(name)` *in return position* — the function
+///    body's tail expression or a `return Ok(name);` ([`function_returns_ok_of`]).
+///    An `Ok(name)` that is not a return (e.g. `vec.push(Ok(name))`) does not
+///    pin `name` to the function's success type.
+///
+/// Conditions 2 and 3 unify `name`'s type with the success type: in any
+/// compiling program, a value returned through `Ok(name)` of a `Result<usize, _>`
+/// function is `usize`.
+fn inferred_binding_pins_pointer_width(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+    target: &str,
+) -> bool {
+    let Some(func) = enclosing_function_item(node) else {
         return false;
     };
-    matches!(
-        (source_text.trim(), target),
+    let Some(ok_type) = function_result_ok_type(func, source) else {
+        return false;
+    };
+    if !matches!(
+        (ok_type.as_str(), target),
         ("usize", "u64" | "u128") | ("isize", "i64" | "i128")
+    ) {
+        return false;
+    }
+    unique_try_binding(func, name, source) && function_returns_ok_of(func, name, source)
+}
+
+/// The nearest enclosing `function_item` of `node`. Returns `None` when a
+/// `closure_expression` is encountered first — a `?` inside a closure targets the
+/// closure's (un-annotated) return type, not the function's, so the function's
+/// success type cannot be used to reason about it.
+fn enclosing_function_item(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        match n.kind() {
+            "function_item" => return Some(n),
+            "closure_expression" => return None,
+            _ => {}
+        }
+        current = n.parent();
+    }
+    None
+}
+
+/// The `Ok`-type of a `-> …Result<Ok, …>` return, trimmed — `"usize"` for
+/// `-> io::Result<usize>` / `-> Result<usize, E>` / `-> Result<usize>`. The base
+/// type's final path segment must be `Result`; the first type argument is its
+/// `Ok` type. Returns `None` for any other return-type shape.
+fn function_result_ok_type(func: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let ret = func.child_by_field_name("return_type")?;
+    if ret.kind() != "generic_type" {
+        return None;
+    }
+    let base = ret.child_by_field_name("type")?;
+    let base_last = base.utf8_text(source).ok()?.trim().rsplit("::").next()?;
+    if base_last != "Result" {
+        return None;
+    }
+    let ok_arg = ret.child_by_field_name("type_arguments")?.named_child(0)?;
+    Some(ok_arg.utf8_text(source).ok()?.trim().to_string())
+}
+
+/// True when `name` has exactly one binder in `func` (not descending into nested
+/// functions/closures) and that binder is a `let` declaration whose initializer
+/// is a `try_expression` (`let name = <expr>?;`).
+///
+/// A *binder* is any construct that introduces `name` into scope: a
+/// `let_declaration`, a `parameter`, a `for_expression`/`let_condition`/
+/// `match_arm` pattern. Counting every binder — not just `let` — is what rules
+/// out shadowing: a `for name in …` / `if let Some(name)` / `match … { Some(name)
+/// => … }` binding of the same name elsewhere in the function makes the cast
+/// operand and the `Ok(name)` return potentially denote different values, so the
+/// success return no longer pins the cast operand's type and the exemption must
+/// not apply.
+fn unique_try_binding(func: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut count = 0usize;
+    let mut single_is_try_let = false;
+    count_name_binders(func, name, source, &mut count, &mut single_is_try_let);
+    count == 1 && single_is_try_let
+}
+
+/// The node kinds that bind a pattern via a `pattern` field: a `let` declaration,
+/// a function parameter, a `for` loop, an `if let`/`while let` condition, and a
+/// `match` arm. Sub-pattern nodes (`mut_pattern`, `tuple_pattern`, …) are not
+/// listed, so a single `let mut name` is counted once, not twice.
+const NAME_BINDER_KINDS: &[&str] = &[
+    "let_declaration",
+    "parameter",
+    "for_expression",
+    "let_condition",
+    "match_arm",
+];
+
+fn count_name_binders(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+    count: &mut usize,
+    single_is_try_let: &mut bool,
+) {
+    if NAME_BINDER_KINDS.contains(&node.kind())
+        && node
+            .child_by_field_name("pattern")
+            .is_some_and(|pattern| pattern_binds_name(pattern, name, source))
+    {
+        *count += 1;
+        *single_is_try_let = node.kind() == "let_declaration"
+            && node
+                .child_by_field_name("value")
+                .is_some_and(|value| value.kind() == "try_expression");
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(child.kind(), "function_item" | "closure_expression") {
+            continue;
+        }
+        count_name_binders(child, name, source, count, single_is_try_let);
+    }
+}
+
+/// True when `pattern` binds the identifier `name` (covers `let name`,
+/// `let mut name`, and any pattern with an `identifier` descendant equal to it).
+fn pattern_binds_name(pattern: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if pattern.kind() == "identifier" {
+        return pattern.utf8_text(source).is_ok_and(|text| text == name);
+    }
+    let mut cursor = pattern.walk();
+    pattern
+        .children(&mut cursor)
+        .any(|child| pattern_binds_name(child, name, source))
+}
+
+/// True when `func` returns `Ok(name)` *in return position* — as the function
+/// body's tail expression or the value of a `return Ok(name);`. An `Ok(name)`
+/// that is not a return (a nested `vec.push(Ok(name))`, a `let x = Ok(name);`)
+/// does not pin `name` to the function's success type and is not matched. `name`
+/// must be the single bare-identifier argument of `Ok`.
+fn function_returns_ok_of(func: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    if block_tail_expression(body).is_some_and(|tail| ok_call_arg_is(tail, name, source)) {
+        return true;
+    }
+    returns_ok_via_return(body, name, source)
+}
+
+/// The tail expression of `block` (`{ stmts…; <tail> }`), or `None` when the
+/// block ends in a statement (`{ stmts…; }`). The tail is the last named child —
+/// trailing comments aside — when it is a bare expression rather than a
+/// `*_statement`/`*_declaration`.
+fn block_tail_expression(block: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut cursor = block.walk();
+    let last = block
+        .named_children(&mut cursor)
+        .filter(|child| !matches!(child.kind(), "line_comment" | "block_comment"))
+        .last()?;
+    let kind = last.kind();
+    (!kind.ends_with("_statement") && !kind.ends_with("_declaration")).then_some(last)
+}
+
+/// True when `node`'s subtree contains a `return Ok(name);` (not descending into
+/// nested `function_item`/`closure_expression`, whose returns belong to another
+/// signature).
+fn returns_ok_via_return(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if node.kind() == "return_expression"
+        && node
+            .named_child(0)
+            .is_some_and(|value| ok_call_arg_is(value, name, source))
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(|child| {
+        !matches!(child.kind(), "function_item" | "closure_expression")
+            && returns_ok_via_return(child, name, source)
+    })
+}
+
+/// True when `node` is a call `Ok(<name>)` with a single bare-identifier argument
+/// equal to `name`.
+fn ok_call_arg_is(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let is_ok = node
+        .child_by_field_name("function")
+        .and_then(|function| function.utf8_text(source).ok())
+        .map(str::trim)
+        == Some("Ok");
+    if !is_ok {
+        return false;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let positional: Vec<_> = args.named_children(&mut cursor).collect();
+    matches!(
+        positional.as_slice(),
+        [only] if only.kind() == "identifier"
+            && only.utf8_text(source).is_ok_and(|text| text == name)
     )
 }
 
@@ -1900,6 +2130,115 @@ name = "normal_lib"
     fn repro_5357_let_binding_usize_as_u64_not_flagged() {
         // The exemption resolves the source type from a `let` annotation too.
         let src = "fn f() -> u64 { let n: usize = g(); n as u64 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6366_inferred_try_bound_usize_as_u64_not_flagged() {
+        // Issue #6366 (indicatif src/iter.rs): `let inc = self.it.read(buf)?;`
+        // is an inferred `usize` (no annotation). It is `?`-bound and returned as
+        // the function's `io::Result<usize>` success value (`Ok(inc)`), so `inc`
+        // is provably `usize` and `inc as u64` is a lossless pointer-width
+        // widening — `u64::from(usize)` is not in stable Rust.
+        let src = "fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> { \
+                   let inc = self.it.read(buf)?; let _ = inc as u64; Ok(inc) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6366_inferred_try_bound_isize_as_i64_not_flagged() {
+        // Symmetric signed case: `isize` success type pins the `?`-bound value.
+        let src = "fn f() -> std::io::Result<isize> { \
+                   let n = probe()?; let _ = n as i64; Ok(n) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_6366_try_bound_value_not_returned_still_flagged() {
+        // Soundness guard: the `?`-bound value's type is the `Ok`-type of its
+        // initializer, NOT the function's success type. Here `x` is never returned
+        // as the `usize` success value (`Ok(0)`), so it cannot be proven `usize`
+        // — `x as u64` could be a sign/width hazard and stays flagged.
+        let src = "fn f() -> io::Result<usize> { \
+                   let x = parse_i64()?; let y = x as u64; Ok(0) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6366_shadowed_try_binding_still_flagged() {
+        // Soundness guard: `x` is bound twice. The cast reads the first binding
+        // while `Ok(x)` returns the second, so the success return does not pin the
+        // cast operand — the non-unique binding keeps `x as u64` flagged.
+        let src = "fn f() -> io::Result<usize> { \
+                   let x = parse_i64()?; let y = x as u64; let x = read()?; Ok(x) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6366_non_try_bound_returned_still_flagged() {
+        // The exemption is scoped to `?`-bound values (the reported pattern): a
+        // plain `let inc = compute();` initializer is not a `try_expression`, so
+        // the inferred fallback does not apply and the cast stays flagged.
+        let src = "fn f() -> io::Result<usize> { \
+                   let inc = compute(); let _ = inc as u64; Ok(inc) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6366_plain_narrowing_not_gutted() {
+        // The inferred fallback must not weaken genuine narrowing: an annotated
+        // `u64` narrowed to `u32` is still a lossy cast.
+        let src = "fn f() { let a: u64 = 1; let b = a as u32; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6366_for_loop_shadow_still_flagged() {
+        // Soundness guard: the cast reads the `i64` for-loop binding of `name`,
+        // while the unique `let name = …?` is returned as `Ok(name)`. A non-`let`
+        // binder of the same name means the cast operand and the success return
+        // can denote different values, so the cast (`i64 as u64`, a sign change)
+        // stays flagged.
+        let src = "fn f(items: &[i64]) -> std::io::Result<usize> { \
+                   for name in items.iter().copied() { let _ = name as u64; } \
+                   let name = compute()?; Ok(name) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6366_if_let_shadow_still_flagged() {
+        let src = "fn f(opt: Option<i64>) -> std::io::Result<usize> { \
+                   if let Some(name) = opt { let _ = name as u64; } \
+                   let name = compute()?; Ok(name) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6366_match_arm_shadow_still_flagged() {
+        let src = "fn f(opt: Option<i64>) -> std::io::Result<usize> { \
+                   match opt { Some(name) => { let _ = name as u64; } None => {} } \
+                   let name = compute()?; Ok(name) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6366_nested_ok_not_in_return_position_still_flagged() {
+        // Soundness guard: `Ok(val)` here is an argument to `push`, not a return,
+        // so it does not pin `val` to the function's `usize` success type. `val`
+        // is the `Ok`-type of `read_i64()` (an `i64`), so `val as u64` is a
+        // sign/width hazard and stays flagged. The actual return is `Ok(0)`.
+        let src = "fn f(&mut self) -> io::Result<usize> { \
+                   let val = self.read_i64()?; let scaled = val as u64; \
+                   self.cache.push(Ok(val)); Ok(0) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_6366_return_ok_in_return_position_not_flagged() {
+        // An early `return Ok(inc);` is a genuine return position, so it pins the
+        // `?`-bound `inc` to the `usize` success type — `inc as u64` is exempt.
+        let src = "fn f() -> io::Result<usize> { \
+                   let inc = read()?; if done() { let _ = inc as u64; return Ok(inc); } Ok(0) }";
         assert!(run_on(src).is_empty());
     }
 
