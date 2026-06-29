@@ -40,6 +40,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `String#replaceAll(string)` can only replace a fixed literal substring.
+        // A regex with anchors, alternation, quantifiers, classes, or assertions
+        // is not equivalent to any constant string, so suggesting `.replaceAll`
+        // would silently change behavior. Only flag fixed-literal patterns.
+        if !regex_pattern_is_fixed_literal(regex.regex.pattern.text.as_str()) {
+            return;
+        }
+
         // Anchor at the `replace` property identifier. For a chained member call
         // (`s.replace(/a/g).replace(/b/g)`), oxc spans every `CallExpression` from
         // the chain root, so `call.span.start` would stack all diagnostics on the
@@ -57,6 +65,40 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// Whether a regex source pattern matches exactly one constant substring, so
+/// `String#replace(/p/g, r)` can be rewritten as `String#replaceAll("p", r)`
+/// without changing behavior.
+///
+/// Walks the source char-by-char. An unescaped regex metacharacter (anchor,
+/// alternation, quantifier, group, or class delimiter) means the pattern is not
+/// a fixed string. A backslash escapes the next char: escaping an ASCII
+/// punctuation metacharacter (`\.`, `\+`, `\\`, `\/`, ...) yields that literal
+/// punctuation char, but a backslash before a letter or digit introduces a class
+/// shorthand (`\d`, `\w`, `\b`), an assertion, or a numeric/unicode escape
+/// (`\0`, `\n`, `\xNN`, `\uNNNN`), none of which denote a fixed substring. A
+/// dangling trailing backslash is treated as non-literal. When in doubt, return
+/// false so the rule stays silent rather than risk a behavior-changing rewrite.
+fn regex_pattern_is_fixed_literal(pattern: &str) -> bool {
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                // Escaped ASCII punctuation denotes the literal punctuation char.
+                Some(next) if next.is_ascii_punctuation() => {}
+                // Class shorthand, assertion, numeric/unicode escape, or a
+                // dangling backslash — not a fixed substring.
+                _ => return false,
+            }
+        } else if matches!(
+            c,
+            '^' | '$' | '.' | '[' | ']' | '(' | ')' | '|' | '+' | '*' | '?' | '{' | '}'
+        ) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -116,5 +158,44 @@ mod tests {
 
         // Neither diagnostic is anchored at the chain-root token `s` (column 10).
         assert!(columns.iter().all(|&c| c != 10));
+    }
+
+    // Regression for #6662: a global regex whose pattern is not equivalent to a
+    // fixed literal must not be flagged — `.replaceAll(string)` would silently
+    // change behavior.
+    #[test]
+    fn allows_anchors_and_alternation() {
+        // `/^"|"$/g` — anchors (`^`, `$`) plus alternation (`|`).
+        assert!(run(r#"str.replace(/^"|"$/g, "")"#).is_empty());
+    }
+
+    #[test]
+    fn allows_quantifier() {
+        // `/\\+/g` — one-or-more backslashes (`+` quantifier), not a fixed string.
+        assert!(run(r"str.replace(/\\+/g, 'x')").is_empty());
+    }
+
+    #[test]
+    fn allows_character_class() {
+        assert!(run(r"str.replace(/[ab]/g, 'x')").is_empty());
+    }
+
+    #[test]
+    fn allows_class_shorthand() {
+        assert!(run(r"str.replace(/\d/g, 'x')").is_empty());
+    }
+
+    #[test]
+    fn flags_escaped_punctuation_literal() {
+        // `/\./g` matches a literal dot — a fixed substring, still convertible.
+        let d = run(r"str.replace(/\./g, 'x')");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_escaped_quote_literal() {
+        // `/\\"/g` matches the fixed two-char string `\"` — still convertible.
+        let d = run(r#"str.replace(/\\"/g, '"')"#);
+        assert_eq!(d.len(), 1);
     }
 }
