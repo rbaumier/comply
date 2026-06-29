@@ -7,6 +7,10 @@
 //! `for x in src { v.push(transform(x)); }` is still better written as
 //! `v.extend(src.into_iter().map(transform))`.
 //!
+//! A wildcard loop pattern (`for _ in 0..n`) has no binding to map over, so the
+//! push value cannot be a transformation of the loop variable; such loops are a
+//! repeat-N-times side effect (`v.push(self.pop())`), not a map, and not flagged.
+//!
 //! A push value that reads the receiver (`v.push(... v[i] ...)`) is a scan over
 //! a self-referential accumulator, not a `map`. A closure passed to `extend`
 //! cannot borrow the receiver while `extend` holds `&mut` it, so that rewrite
@@ -48,6 +52,16 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source = ctx.source.as_bytes();
+        // A wildcard loop pattern (`for _ in 0..n`) has no binding to map over:
+        // the push value cannot be a transformation of the loop variable, so the
+        // loop is a repeat-N-times side effect (e.g. `v.push(self.pop())`), not a
+        // map over a source collection. The `extend(...map(...))` rewrite does not
+        // apply, so leave it untouched.
+        if let Some(pattern) = node.child_by_field_name("pattern")
+            && pattern.utf8_text(source) == Ok("_")
+        {
+            return;
+        }
         let Some(body) = node.child_by_field_name("body") else {
             return;
         };
@@ -371,5 +385,21 @@ mod tests {
     fn allows_self_referential_index_read_issue_3739() {
         let src = "fn f(prev: &[usize], b: &[u8], n: usize) -> Vec<usize> { let mut curr: Vec<usize> = Vec::with_capacity(n + 1); for (j, &cb) in b.iter().enumerate() { curr.push((prev[j]).min(curr[j] + 1)); } curr }";
         assert!(run_on(src).is_empty());
+    }
+
+    // A wildcard loop pattern (`for _ in 0..n`) has no binding to map over: this
+    // is a pop-N-from-stack idiom, not a map over a source collection.
+    #[test]
+    fn allows_wildcard_loop_pattern_issue_6671() {
+        let src = "fn f(&mut self, num_args: u32) -> Vec<u32> { let mut content = Vec::with_capacity(num_args as usize); for _ in 0..num_args { content.push(self.pop()); } content }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // An underscore-prefixed binding (`_x`) is still a usable binding, distinct
+    // from the bare wildcard `_`, so a map-over-source loop stays flagged.
+    #[test]
+    fn flags_underscore_prefixed_binding_issue_6671() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for _x in src { dst.push(g(_x)); } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
