@@ -280,7 +280,7 @@ fn merge_and_emit(
     }
 
     // Phase 2 — suppress symmetric sibling pairs.
-    // Six suppression criteria, any one is sufficient:
+    // Nine suppression criteria, any one is sufficient:
     //
     // A) Small-gap: the tokens NOT covered by any matching window in the
     //    reporter file are few (> 0, ≤ SYMMETRIC_SIBLING_GAP_THRESHOLD).  A
@@ -341,12 +341,25 @@ fn merge_and_emit(
     //    bodies are intentional. Keyed on the `arch` directory-convention token
     //    and the differing immediate child — never on ISA names — so two files
     //    under the SAME `arch/<isa>/` child stay flagged.
+    //
+    // I) Cross-Cargo-crate copy: the two files belong to DIFFERENT Cargo crate
+    //    roots — each resolves to a distinct nearest-ancestor `Cargo.toml`. A
+    //    standalone/"lite" workspace member deliberately copies code from another
+    //    member to stay dependency-free (e.g. `regex-lite` copying
+    //    `regex-automata`'s interpolation, or `regex-automata` mirroring
+    //    `regex-syntax`'s `Look` types). The only `no-clones` remedy — extracting
+    //    a shared module — would force the cross-crate dependency the author
+    //    avoided. Files with no enclosing `Cargo.toml` (non-Rust trees, or
+    //    sources outside any crate) resolve to `None` and are never suppressed
+    //    here, so same-crate duplication and all non-Rust behavior are unchanged.
     let mut suppressed = FxHashSet::<usize>::default();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
         for (idx, s) in spans.iter().enumerate() {
             by_pair.entry((s.rfi, s.cfi)).or_default().push(idx);
         }
+        let mut crate_root_memo: FxHashMap<usize, Option<std::path::PathBuf>> =
+            FxHashMap::default();
         for ((rfi, cfi), idxs) in &by_pair {
             let total = file_data[*rfi].as_ref().map_or(0, |ft| ft.tokens.len());
             let covered: usize = idxs
@@ -369,6 +382,8 @@ fn merge_and_emit(
                 are_complete_streaming_pair(&files[*rfi].path, &files[*cfi].path);
             let arch_siblings =
                 are_arch_sibling_pair(&files[*rfi].path, &files[*cfi].path);
+            let cross_crate =
+                is_cross_cargo_crate_pair(*rfi, *cfi, files, &mut crate_root_memo);
             if small_gap
                 || name_siblings
                 || locale_variants
@@ -377,6 +392,7 @@ fn merge_and_emit(
                 || theme_variants
                 || complete_streaming_variants
                 || arch_siblings
+                || cross_crate
             {
                 suppressed.extend(idxs);
             }
@@ -819,6 +835,46 @@ fn are_arch_sibling_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
     // that difference is the ISA-sibling signal.
     match (segs_a.get(pos_a + 1), segs_b.get(pos_b + 1)) {
         (Some(child_a), Some(child_b)) => child_a != child_b,
+        _ => false,
+    }
+}
+
+// --- Cross-Cargo-crate detection ---
+
+/// Nearest ancestor directory of `path` that holds a `Cargo.toml` — the crate
+/// root that owns the file — or `None` when no enclosing manifest exists. Reuses
+/// the same crate-root walk (`walk_up_finding` over `Cargo.toml`) that
+/// `ProjectCtx::nearest_cargo_manifest` derives crate identity from, without
+/// parsing the manifest: the gate only needs the crate-root directory to compare.
+fn nearest_crate_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    crate::project::walk_up_finding(path.parent()?, "Cargo.toml")
+}
+
+/// True when `rfi` and `cfi` belong to DIFFERENT Cargo crate roots — each
+/// resolves to a distinct nearest-ancestor `Cargo.toml` directory. Cross-crate
+/// duplication is an intentional Rust workspace pattern: a standalone/"lite"
+/// member copies code from another member to avoid depending on it, and the only
+/// `no-clones` remedy (extracting a shared module) would force the very
+/// cross-crate dependency the author avoided. Crate roots are memoized per file
+/// index in `memo` so each file is walked at most once. Returns `false` unless
+/// BOTH files resolve to a crate root, so same-crate duplication stays flagged
+/// and files outside any crate (non-Rust trees) are untouched.
+fn is_cross_cargo_crate_pair(
+    rfi: usize,
+    cfi: usize,
+    files: &[&SourceFile],
+    memo: &mut FxHashMap<usize, Option<std::path::PathBuf>>,
+) -> bool {
+    let mut root = |fi: usize| -> Option<std::path::PathBuf> {
+        if let Some(hit) = memo.get(&fi) {
+            return hit.clone();
+        }
+        let resolved = nearest_crate_root(&files[fi].path);
+        memo.insert(fi, resolved.clone());
+        resolved
+    };
+    match (root(rfi), root(cfi)) {
+        (Some(a), Some(b)) => a != b,
         _ => false,
     }
 }
@@ -2292,6 +2348,62 @@ mod tests {
             lint_files(&[&fa, &fb]).len(),
             1,
             "structurally-cloned files not under an arch/ ancestor must still be flagged"
+        );
+    }
+
+    /// Writes a Rust crate at `<dir>/<crate_name>/` with a minimal `Cargo.toml`
+    /// and `src/<file>` carrying `content`, returning the source file.
+    fn write_crate_file(
+        dir: &tempfile::TempDir,
+        crate_name: &str,
+        file: &str,
+        content: &str,
+    ) -> SourceFile {
+        let crate_dir = dir.path().join(crate_name);
+        let src = crate_dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            format!("[package]\nname = \"{crate_name}\"\nversion = \"0.0.0\"\n"),
+        )
+        .unwrap();
+        let path = src.join(file);
+        std::fs::write(&path, content).unwrap();
+        SourceFile { path, language: Language::Rust }
+    }
+
+    #[test]
+    fn no_false_positive_on_cross_cargo_crate_duplication() {
+        // Regression test for issue #6208.
+        // A standalone/"lite" workspace member (regex-lite) deliberately copies
+        // code from another member (regex-automata) to stay dependency-free. The
+        // files live in separate Cargo crates, each with its own Cargo.toml; the
+        // only no-clones remedy — extracting a shared module — would force the
+        // cross-crate dependency the lite crate is designed to avoid, so the
+        // duplication must not be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = format!("fn interpolate() {{\n{}\n}}", large_rust_block(20));
+        let fa = write_crate_file(&dir, "regex-automata", "interpolate.rs", &block);
+        let fb = write_crate_file(&dir, "regex-lite", "interpolate.rs", &block);
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "cross-Cargo-crate duplication (regex-lite copies regex-automata) must not be flagged"
+        );
+    }
+
+    #[test]
+    fn intra_cargo_crate_duplication_still_flagged() {
+        // Precision guard for the cross-crate gate (issue #6208): two near-identical
+        // files within the SAME Cargo crate are trivially refactorable into a
+        // shared module, so intra-crate duplication is still flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = format!("fn interpolate() {{\n{}\n}}", large_rust_block(20));
+        let fa = write_crate_file(&dir, "regex", "a.rs", &block);
+        let fb = write_crate_file(&dir, "regex", "b.rs", &block);
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "intra-crate duplication must still be flagged"
         );
     }
 }
