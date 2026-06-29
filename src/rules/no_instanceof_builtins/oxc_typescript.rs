@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, TSType, TSTypeName};
 use std::sync::Arc;
 
 pub struct Check;
@@ -38,6 +38,42 @@ const BUILTINS: &[&str] = &[
     "WeakSet",
 ];
 
+/// Returns `true` when `ty` is a type-predicate (`val is X`) whose asserted type
+/// is a bare reference to `builtin`. Type arguments are ignored, so
+/// `val is WeakMap<K, V>` matches `builtin == "WeakMap"`.
+fn predicate_asserts_builtin(ty: &TSType, builtin: &str) -> bool {
+    let TSType::TSTypePredicate(pred) = ty else { return false };
+    let Some(asserted) = pred.type_annotation.as_ref() else { return false };
+    let TSType::TSTypeReference(type_ref) = &asserted.type_annotation else { return false };
+    let TSTypeName::IdentifierReference(id) = &type_ref.type_name else { return false };
+    id.name.as_str() == builtin
+}
+
+/// Returns `true` when the `instanceof builtin` check at `node_id` is the body of
+/// the nearest enclosing function whose declared return type is a type-predicate
+/// asserting the same `builtin` (`(val): val is RegExp => val instanceof RegExp`).
+/// Such a function is the canonical type guard for that builtin: its signature
+/// already commits to exactly this check, so the `instanceof` is the intended
+/// implementation, not a cross-realm footgun. The walk stops at the first function
+/// boundary, so an outer guard never exempts an inner check and a predicate naming
+/// a different builtin never exempts a mismatched `instanceof`.
+fn in_matching_type_predicate_guard(
+    node_id: oxc_semantic::NodeId,
+    builtin: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    for kind in semantic.nodes().ancestor_kinds(node_id) {
+        let return_type = match kind {
+            AstKind::ArrowFunctionExpression(arrow) => arrow.return_type.as_ref(),
+            AstKind::Function(func) => func.return_type.as_ref(),
+            _ => continue,
+        };
+        return return_type
+            .is_some_and(|ann| predicate_asserts_builtin(&ann.type_annotation, builtin));
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::BinaryExpression]
@@ -51,7 +87,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::BinaryExpression(bin) = node.kind() else { return };
@@ -62,6 +98,13 @@ impl OxcCheck for Check {
         let Expression::Identifier(id) = &bin.right else { return };
         let name = id.name.as_str();
         if !BUILTINS.contains(&name) {
+            return;
+        }
+
+        // The body of a TS type-predicate guard (`(val): val is Map => val
+        // instanceof Map`) is the canonical, declared implementation of that
+        // check — flagging it is noise, not an actionable cross-realm warning.
+        if in_matching_type_predicate_guard(node.id(), name, semantic) {
             return;
         }
 
@@ -160,6 +203,70 @@ mod tests {
         // Negative-space guard for #1672: removing `Promise` must not stop
         // `Array` (which has `Array.isArray`) from firing.
         let src = "const r = x instanceof Array;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_instanceof_in_type_predicate_guard_issue_6699() {
+        // Regression for rbaumier/comply#6699 (unjs/unenv reimplementing
+        // `node:util/types`): the body of a `val is X` type-predicate function
+        // is the canonical implementation of that guard, not a footgun.
+        let src = "const isRegExp = (val): val is RegExp => val instanceof RegExp;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_instanceof_map_in_type_predicate_guard() {
+        let src =
+            "const isMap = (val): val is Map<unknown, unknown> => val instanceof Map;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_instanceof_weakmap_predicate_with_type_args() {
+        // `val is WeakMap<K, V>` matches `instanceof WeakMap` on the bare name.
+        let src = "const isWeakMap = <K extends WeakKey, V>(val: unknown): val is WeakMap<K, V> => val instanceof WeakMap;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_instanceof_in_type_predicate_function_declaration() {
+        let src = r#"
+            function isSet(val: unknown): val is Set<unknown> {
+                return val instanceof Set;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_instanceof_map_outside_guard() {
+        // Negative space for #6699: a bare check with no type-predicate return
+        // type must still fire.
+        let src = "const r = x instanceof Map;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_predicate_names_different_builtin() {
+        // Negative space for #6699: the predicate asserts `Set` but the body
+        // checks `Map` — not the same builtin, so the guard must not exempt it.
+        let src = "const f = (val): val is Set<unknown> => val instanceof Map;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_instanceof_in_nested_function_inside_matching_guard() {
+        // Negative space for #6699: the walk stops at the FIRST enclosing
+        // function. The inner arrow has no type-predicate return type, so its
+        // `instanceof Map` must fire even though the OUTER guard asserts the
+        // same builtin (`val is Map`).
+        let src = r#"
+            const outer = (val): val is Map<unknown, unknown> => {
+                const inner = () => val instanceof Map;
+                return inner();
+            };
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 }
