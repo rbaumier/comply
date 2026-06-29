@@ -43,12 +43,15 @@ impl OxcCheck for Check {
         if matches!(parent.kind(), AstKind::TaggedTemplateExpression(_)) {
             return;
         }
-        // Angular `@Component({ template: `...` })` and Vue
-        // `defineComponent({ template: `...` })` inline templates inherit the
-        // surrounding indentation by construction; the template compiler strips
-        // it, so it is not excess whitespace the author can remove.
+        // Angular `@Component({ template: `...` })`, Vue
+        // `defineComponent({ template: `...` })`, and a Vue component options
+        // object that declares both `template` and a `components` sibling (e.g. a
+        // Storybook CSF arrow function returning plain component options) inherit
+        // the surrounding indentation by construction; the template compiler
+        // strips it, so it is not excess whitespace the author can remove.
         if is_angular_component_template(parent, semantic, ctx.source)
             || is_vue_define_component_template(parent, semantic, ctx.source)
+            || is_vue_component_options_template(parent, semantic)
         {
             return;
         }
@@ -211,6 +214,32 @@ fn is_vue_define_component_template<'a>(
         return false;
     };
     matches!(&call_expr.callee, Expression::Identifier(id) if id.name.as_str() == "defineComponent")
+}
+
+/// Whether the template literal is the `template` value of a Vue component
+/// options object — an `ObjectExpression` that also declares a `components`
+/// sibling property. Vue's runtime compiler strips such a `template`'s leading
+/// indentation whether the object is passed to `defineComponent()`, returned
+/// from a Storybook CSF arrow function, or used as plain component options, so
+/// the indentation is not excess whitespace the author can remove.
+fn is_vue_component_options_template<'a>(
+    parent: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let AstKind::ObjectProperty(prop) = parent.kind() else {
+        return false;
+    };
+    if object_property_key(&prop.key) != Some("template") {
+        return false;
+    }
+    let object = semantic.nodes().parent_node(parent.id());
+    let AstKind::ObjectExpression(obj) = object.kind() else {
+        return false;
+    };
+    obj.properties.iter().any(|p| {
+        matches!(p, oxc_ast::ast::ObjectPropertyKind::ObjectProperty(op)
+            if object_property_key(&op.key) == Some("components"))
+    })
 }
 
 /// Whether a method call on the template literal removes its leading
@@ -517,6 +546,65 @@ const config = Component({
         </div>
     `,
 });
+"#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("common leading indentation"));
+    }
+
+    #[test]
+    fn allows_storybook_csf_component_options_template() {
+        // https://github.com/rbaumier/comply/issues/6691 — a Storybook CSF arrow
+        // function returns a Vue component options object whose `template` sits
+        // beside a `components` sibling; Vue's runtime compiler strips the
+        // inherited indentation, so it must not fire.
+        let src = r#"
+export const Default = () => ({
+    components: { BillingAddressEdit },
+    data() {
+        return {};
+    },
+    template: `
+        <BillingAddressEdit
+            :billingAddress="billingAddress"
+            submitText="Update"
+        />`,
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_plain_component_options_with_components_sibling() {
+        let src = r#"
+const opts = {
+    components: { Foo },
+    template: `
+        <div>
+            <Foo />
+        </div>
+    `,
+};
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_template_with_non_components_sibling() {
+        // A `template` beside a sibling that is not `components` is not a Vue
+        // component options object — the `components` sibling specifically gates
+        // the exemption, so the indented template literal still fires.
+        let src = r#"
+const config = {
+    data() {
+        return {};
+    },
+    template: `
+        <div>
+            <p>Hello</p>
+        </div>
+    `,
+};
 "#;
         let diags = run(src);
         assert_eq!(diags.len(), 1);
