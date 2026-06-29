@@ -11,7 +11,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::FunctionBody;
+use oxc_ast::ast::{Argument, Expression, FunctionBody, ObjectPropertyKind, PropertyKey};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -55,6 +55,61 @@ fn is_placeholder_callback_position(
             )
         }
         _ => false,
+    }
+}
+
+/// Returns true when the empty function is the callable target of `new
+/// Proxy(target, handler)`. `Proxy`'s first argument is required by the language
+/// to be callable when the proxy intercepts calls; its body is intentionally
+/// empty because all call behavior is delegated to the handler's `apply` /
+/// `construct` trap. The body is structurally mandated, not a forgotten no-op.
+///
+/// Gated on: the function is the FIRST argument of a `NewExpression` whose callee
+/// is the bare `Proxy` global-constructor identifier (not a member expression
+/// such as `foo.Proxy`). When the handler (second argument) is an object literal,
+/// it must define an `apply` or `construct` trap — the reason the target body is
+/// empty. When the handler is absent or not an inspectable object literal (a
+/// variable reference, say), the first-argument-of-`Proxy` shape alone suffices,
+/// since the target is required to be callable regardless.
+fn is_callable_proxy_target(
+    nodes: &oxc_semantic::AstNodes,
+    node_id: oxc_semantic::NodeId,
+) -> bool {
+    let parent_id = nodes.parent_id(node_id);
+    if parent_id == node_id {
+        return false;
+    }
+    let AstKind::NewExpression(new_expr) = nodes.kind(parent_id) else {
+        return false;
+    };
+    if !matches!(&new_expr.callee, Expression::Identifier(id) if id.name.as_str() == "Proxy") {
+        return false;
+    }
+    // The function must be the FIRST argument (the proxy target), not any argument.
+    let node_span = nodes.kind(node_id).span();
+    let Some(first_arg) = new_expr.arguments.first() else {
+        return false;
+    };
+    if first_arg.span() != node_span {
+        return false;
+    }
+    // When the handler is an object literal, require an `apply` / `construct`
+    // trap (the reason the target body is empty). When it is absent or a
+    // non-literal expression whose traps cannot be inspected, accept the
+    // first-argument-of-`Proxy` shape on its own.
+    match new_expr.arguments.get(1) {
+        Some(Argument::ObjectExpression(handler)) => handler.properties.iter().any(|prop| {
+            let ObjectPropertyKind::ObjectProperty(p) = prop else {
+                return false;
+            };
+            let key = match &p.key {
+                PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                PropertyKey::StringLiteral(s) => s.value.as_str(),
+                _ => return false,
+            };
+            key == "apply" || key == "construct"
+        }),
+        _ => true,
     }
 }
 
@@ -176,6 +231,14 @@ impl OxcCheck for Check {
         // no-op implementations of the constraining interface's methods (Null
         // Object pattern), not dead code.
         if is_typed_object_literal_method_stub(semantic.nodes(), node.id()) {
+            return;
+        }
+
+        // The callable target of `new Proxy(() => {}, handler)` must be callable
+        // and its body is intentionally empty — all call behavior is delegated to
+        // the handler's `apply` / `construct` trap. Structurally mandated, so it
+        // is exempt in production code as well as tests.
+        if is_callable_proxy_target(semantic.nodes(), node.id()) {
             return;
         }
 
@@ -472,6 +535,64 @@ mod tests {
             const f = () => {};
         "#;
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_arrow_callable_proxy_target_in_production() {
+        // Repro #6664 (unjs/magicast): the proxy target must be callable; its body
+        // is empty because the handler's `apply` trap owns all call behavior. The
+        // `get` / `apply` traps are non-empty so the arrow is the only candidate.
+        let src = r#"
+            const p = new Proxy(() => {}, {
+                get(target, key) { return target[key]; },
+                apply() { throw new Error("x"); },
+            });
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "proxy.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_function_expression_callable_proxy_target_in_production() {
+        // Function-expression target form, handler with an `apply` trap.
+        let src = r#"
+            const p = new Proxy(function () {}, {
+                apply() { return 1; },
+            });
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "proxy.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_arrow_proxy_target_with_non_literal_handler_in_production() {
+        // Fallback: the handler is a variable reference, so its traps cannot be
+        // inspected. `Proxy`'s first argument is required to be callable, so the
+        // empty callable target is legitimate on the shape alone.
+        let src = r#"
+            const p = new Proxy(() => {}, handler);
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "proxy.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_empty_arrow_proxy_target_when_handler_lacks_call_trap_in_production() {
+        // Negative space: an object-literal handler with no `apply` / `construct`
+        // trap does not delegate the call, so the empty target body is still dead.
+        let src = r#"
+            const p = new Proxy(() => {}, { get() { return 1; } });
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "proxy.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_arrow_non_proxy_new_expression_in_production() {
+        // Negative space: the exemption is specific to the `Proxy` global; an
+        // empty target of any other constructor is still flagged.
+        let src = r#"
+            const p = new NotProxy(() => {}, {});
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "proxy.ts");
         assert_eq!(diags.len(), 1);
     }
 }
