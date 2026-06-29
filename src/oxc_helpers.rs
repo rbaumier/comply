@@ -4371,14 +4371,16 @@ pub fn type_annotation_is_type_predicate(
 }
 
 /// True when `annotation` is a return-type that admits both `return;` (yields
-/// `undefined`) and `return expr;`: a bare `void`/`undefined` keyword, a union
-/// that includes either, or a `Promise<T>` whose single awaited type argument
-/// does. In an `async` function a bare `return` resolves the promise to
-/// `Promise.resolve(undefined)`, i.e. the `undefined`/`void` arm of a declared
-/// `Promise<T | undefined>` / `Promise<T | void>`. Mixing bare and value returns
-/// under such a contract is the canonical TypeScript idiom
-/// (e.g. `: T | undefined`, `: Promise<T | undefined>`, void tail-calls), not an
-/// inconsistency.
+/// `undefined`) and `return expr;`: a bare `void`/`undefined`/`any` keyword, a
+/// union that includes any of them, or a `Promise<T>` whose single awaited type
+/// argument does. `any` is a superset of every type including `undefined`, so a
+/// bare `return;` is a valid `any` value (the canonical `JSON.parse` reviver
+/// idiom returns `undefined` to drop a key). In an `async` function a bare
+/// `return` resolves the promise to `Promise.resolve(undefined)`, i.e. the
+/// `undefined`/`void` arm of a declared `Promise<T | undefined>` /
+/// `Promise<T | void>`. Mixing bare and value returns under such a contract is
+/// the canonical TypeScript idiom (e.g. `: any`, `: T | undefined`,
+/// `: Promise<T | undefined>`, void tail-calls), not an inconsistency.
 #[must_use]
 pub fn return_type_admits_void_or_undefined(
     annotation: Option<&oxc_ast::ast::TSTypeAnnotation>,
@@ -4386,7 +4388,9 @@ pub fn return_type_admits_void_or_undefined(
     use oxc_ast::ast::{TSType, TSTypeName};
     fn ty_admits(ty: &TSType) -> bool {
         match ty {
-            TSType::TSVoidKeyword(_) | TSType::TSUndefinedKeyword(_) => true,
+            TSType::TSVoidKeyword(_)
+            | TSType::TSUndefinedKeyword(_)
+            | TSType::TSAnyKeyword(_) => true,
             TSType::TSUnionType(union) => union.types.iter().any(ty_admits),
             // `Promise<T>`: an async bare `return` resolves to
             // `Promise.resolve(undefined)`, so admit when the single awaited
