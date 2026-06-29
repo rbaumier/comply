@@ -92,9 +92,14 @@ fn is_boolean_named(name: &str) -> bool {
     SUFFIXES.iter().any(|s| name.ends_with(s))
 }
 
-/// Syntactic heuristic: is `expr` very likely to evaluate to a boolean?
-/// Conservative — only patterns whose result is *always* boolean qualify,
-/// so that we never silence a legitimate `x || "default"` warning.
+/// Syntactic heuristic: is `expr` very likely to evaluate to a boolean (or a
+/// bitwise flag test used as a boolean condition)? Conservative — only patterns
+/// whose result is intended as a condition qualify, so that we never silence a
+/// legitimate `x || "default"` warning. Recognises comparison/`in`/`instanceof`
+/// expressions, logical-not, boolean-named identifiers and member-call methods
+/// (`is*`/`has*`/`can*` …), known boolean methods, and bitwise/shift operands
+/// (`flags & MASK`) — the latter are flag tests whose value is a number, never
+/// nullish, so a `||` disjunction over them is a logical-OR, not a `??` fallback.
 fn looks_boolean(expr: &Expression) -> bool {
     match expr.without_parentheses() {
         Expression::BooleanLiteral(_) => true,
@@ -113,6 +118,12 @@ fn looks_boolean(expr: &Expression) -> bool {
                 | BinaryOperator::GreaterEqualThan
                 | BinaryOperator::In
                 | BinaryOperator::Instanceof
+                | BinaryOperator::BitwiseAnd
+                | BinaryOperator::BitwiseOR
+                | BinaryOperator::BitwiseXOR
+                | BinaryOperator::ShiftLeft
+                | BinaryOperator::ShiftRight
+                | BinaryOperator::ShiftRightZeroFill
         ),
         Expression::LogicalExpression(log) => {
             matches!(log.operator, LogicalOperator::And | LogicalOperator::Or)
@@ -122,6 +133,7 @@ fn looks_boolean(expr: &Expression) -> bool {
         Expression::CallExpression(call) => {
             if let Expression::StaticMemberExpression(member) = &call.callee {
                 BOOLEAN_METHODS.contains(&member.property.name.as_str())
+                    || is_boolean_named(member.property.name.as_str())
             } else if let Expression::Identifier(id) = &call.callee {
                 is_boolean_named(id.name.as_str())
             } else {
@@ -456,6 +468,56 @@ mod tests {
     fn allows_boolean_named_member_or_chain() {
         let src = r#"const isDirty = form.formState.isDirty || networksChanged || speciesChanged;"#;
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #6339: the reported FP is a disjunction mixing boolean-named
+    // member-call type-guards (`type.isAny()`, `type.isBoolean()`) with bitwise
+    // flag tests (`type.getFlags() & TypeFlags.BigInt`) — an intentional logical
+    // OR, never a `??` fallback (a bitwise `&` can yield `0`, a non-nullish
+    // falsy). The issue's literal code is an `if (...)` test, already exempt via
+    // `is_in_boolean_test_position`; the same chain in value position (`return`,
+    // assignment) is the form `looks_boolean` must recognise.
+    #[test]
+    fn allows_boolean_method_and_bitwise_flag_chain() {
+        let src = r#"
+            function f(type: any) {
+                return type.isAny() ||
+                    type.isUnknown() ||
+                    type.isBoolean() ||
+                    type.isBooleanLiteral() ||
+                    type.isNumber() ||
+                    type.isNumberLiteral() ||
+                    type.getFlags() & TypeFlags.BigInt ||
+                    type.getFlags() & TypeFlags.ESSymbol ||
+                    type.isString() ||
+                    type.isUndefined();
+            }
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Gap 1 in isolation: a boolean-named member-call chain in value position.
+    #[test]
+    fn allows_boolean_method_chain() {
+        let src = r#"const ok = type.isAny() || type.isBoolean();"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Gap 2 in isolation: a bitwise flag test (`flags & 1`, number-valued, never
+    // nullish) disjoined with a boolean call, in value position.
+    #[test]
+    fn allows_bitwise_flag_test_chain() {
+        let src = r#"const ok = flags & 1 || isReady();"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The member-call extension is naming-gated, not "any method call is
+    // boolean": even with a boolean-named LHS, a non-boolean-named method call
+    // (`obj.getValue()`) on the RHS keeps the chain flagged.
+    #[test]
+    fn still_flags_boolean_lhs_non_boolean_method_rhs() {
+        let src = r#"const x = type.isAny() || obj.getValue();"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 
     #[test]
