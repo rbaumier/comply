@@ -130,6 +130,18 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip if a preceding "ensure non-empty" guard makes the array non-empty:
+        // an `if` whose test detects the same base being nullish/empty
+        // (`!arr`, `arr === null/undefined`, `arr.length === 0`, or a `||` of
+        // these) and whose consequent assigns a non-empty array literal to that
+        // same base — `if (!arr || arr.length === 0) { arr = [d]; }`.
+        // After the block the base has at least one element in both branches
+        // (guard false ⇒ already non-empty; guard true ⇒ assigned a non-empty
+        // literal), so the subsequent first/last read is in-bounds.
+        if has_preceding_ensure_nonempty_guard(node, obj_text, source, semantic) {
+            return;
+        }
+
         // `arr[0]` where `arr` is a same-scope `const` bound to a non-empty array
         // literal is provably in-bounds — the literal's element count is known.
         if is_first
@@ -2436,6 +2448,151 @@ fn binary_compares_identifier_to_nullish(
             || matches!(e, Expression::Identifier(id) if id.name.as_str() == "undefined")
     };
     (is_name(left) && is_nullish(right)) || (is_nullish(left) && is_name(right))
+}
+
+/// Returns true when a preceding `if`-statement in the same block (or an
+/// enclosing block/function/program, stopping at function boundaries) ensures
+/// `obj_text` is a non-empty array: its test detects `obj_text` being
+/// nullish/empty (see [`condition_is_nullish_or_empty_check`]) AND its consequent
+/// assigns a non-empty array literal to that same `obj_text` (see
+/// [`consequent_assigns_nonempty_array`]). After such a guard the array has at
+/// least one element regardless of which branch ran — guard false ⇒ already
+/// non-empty, guard true ⇒ assigned a non-empty literal — so a following
+/// first/last read on `obj_text` is in-bounds.
+///
+/// Mirrors [`has_preceding_nullish_exit_guard`]'s block walk: anchors on the
+/// statement containing the access in the innermost enclosing block/body/program
+/// and scans its preceding siblings. The "same base" identity is the text of the
+/// receiver of the `[0]` access (`obj_text`), matched against the test and the
+/// assignment target by source text — the convention the other text-based
+/// preceding-guard helpers (`scan_preceding_stmts`, `stmt_is_push_on`) use, so a
+/// member-expression base like `options.domains` is matched exactly and a
+/// different base (`options.commonName`) does not.
+fn has_preceding_ensure_nonempty_guard(
+    node: &oxc_semantic::AstNode,
+    obj_text: &str,
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node.id();
+    let node_span_start = node.kind().span().start;
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        let stmts: &[Statement] = match parent.kind() {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            AstKind::BlockStatement(block) => &block.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::Program(prog) => &prog.body,
+            _ => {
+                current_id = parent_id;
+                continue;
+            }
+        };
+        let our_idx = stmts
+            .iter()
+            .position(|s| s.span().start <= node_span_start && node_span_start < s.span().end);
+        let Some(our_idx) = our_idx else { return false };
+        return stmts[..our_idx].iter().any(|stmt| {
+            matches!(stmt, Statement::IfStatement(if_stmt)
+                if condition_is_nullish_or_empty_check(&if_stmt.test, obj_text, source)
+                    && consequent_assigns_nonempty_array(&if_stmt.consequent, obj_text, source))
+        });
+    }
+}
+
+/// Returns true when `expr` (an `if` test) detects `obj_text` being nullish or
+/// empty: `!obj_text`, `obj_text === null/undefined` / `== null/undefined`,
+/// `obj_text.length === 0` / `== 0` (order-insensitive), or a `||` whose left or
+/// right arm is itself such a check.
+///
+/// The caller only reaches the index access on fall-through — the guard is
+/// `if (test) { obj_text = [literal] }`, so the access runs when `test` is
+/// *false*. For `test = A || B`, fall-through means `!A && !B`: if either arm is
+/// a nullish/empty check of the base, that arm being false proves the base is
+/// non-nullish/non-empty, so the read is in-bounds. This soundness holds for
+/// `||` only — under `&&`, fall-through is `!A || !B`, which does not prove the
+/// base non-empty even when one arm is an empty check — so `&&` is not
+/// recognized (mirrors [`condition_is_nullish_check`]).
+fn condition_is_nullish_or_empty_check(expr: &Expression, obj_text: &str, source: &str) -> bool {
+    match expr {
+        Expression::ParenthesizedExpression(paren) => {
+            condition_is_nullish_or_empty_check(&paren.expression, obj_text, source)
+        }
+        Expression::UnaryExpression(unary) => {
+            matches!(unary.operator, UnaryOperator::LogicalNot)
+                && expr_text(&unary.argument, source) == obj_text
+        }
+        Expression::BinaryExpression(bin) => {
+            matches!(
+                bin.operator,
+                BinaryOperator::StrictEquality | BinaryOperator::Equality
+            ) && binary_is_base_nullish_or_empty(&bin.left, &bin.right, obj_text, source)
+        }
+        Expression::LogicalExpression(logical)
+            if logical.operator == LogicalOperator::Or =>
+        {
+            condition_is_nullish_or_empty_check(&logical.left, obj_text, source)
+                || condition_is_nullish_or_empty_check(&logical.right, obj_text, source)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when a strict/loose equality compares `obj_text` to a nullish
+/// literal (`obj_text === null`, `obj_text == undefined`) or `obj_text.length`
+/// to `0` (`obj_text.length === 0`). Order-insensitive. The `.length` receiver
+/// must be the same `obj_text`, so `other.length === 0` does not qualify.
+fn binary_is_base_nullish_or_empty(
+    left: &Expression,
+    right: &Expression,
+    obj_text: &str,
+    source: &str,
+) -> bool {
+    let is_base = |e: &Expression| expr_text(e, source) == obj_text;
+    let is_nullish = |e: &Expression| {
+        matches!(e, Expression::NullLiteral(_))
+            || matches!(e, Expression::Identifier(id) if id.name.as_str() == "undefined")
+    };
+    let is_base_length = |e: &Expression| is_length_of(e, obj_text, source);
+    let is_zero = |e: &Expression| is_numeric_literal(e, 0, source);
+    (is_base(left) && is_nullish(right))
+        || (is_nullish(left) && is_base(right))
+        || (is_base_length(left) && is_zero(right))
+        || (is_zero(left) && is_base_length(right))
+}
+
+/// Returns true when `stmt` (an `if` consequent — a `BlockStatement` or a bare
+/// statement) contains an assignment `obj_text = [<>= 1 static element>]` to the
+/// same base. Only a plain `=` to a non-empty array literal qualifies: an empty
+/// literal (`= []`), a literal whose only elements are spreads (length unknown),
+/// a non-array value, a compound assignment, or an assignment to a different
+/// base does not — so the array cannot be proven non-empty and the read stays
+/// flagged.
+fn consequent_assigns_nonempty_array(stmt: &Statement, obj_text: &str, source: &str) -> bool {
+    match stmt {
+        Statement::BlockStatement(block) => block
+            .body
+            .iter()
+            .any(|s| consequent_assigns_nonempty_array(s, obj_text, source)),
+        Statement::ExpressionStatement(expr_stmt) => {
+            let Expression::AssignmentExpression(assign) = &expr_stmt.expression else {
+                return false;
+            };
+            if assign.operator != AssignmentOperator::Assign {
+                return false;
+            }
+            let left_text =
+                &source[assign.left.span().start as usize..assign.left.span().end as usize];
+            left_text == obj_text
+                && matches!(&assign.right, Expression::ArrayExpression(arr) if is_static_nonempty_array(arr))
+        }
+        _ => false,
+    }
 }
 
 /// Returns true when the flagged index access is the initializer of a `const`/`let`
@@ -4851,6 +5008,68 @@ mod tests {
         // No `&&` guard at all: a bare `arr[0].foo` dereferences the first element and
         // stays flagged.
         let src = "function f(arr: number[]) { const x = arr[0].foo; return x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_ensure_nonempty_assignment_guard_issue_6648() {
+        // The issue's exact shape: a `!base || base.length === 0` guard whose
+        // consequent assigns a non-empty array literal makes `base[0]` in-bounds.
+        let src = "function f(options) { if (!options.domains || options.domains.length === 0) { options.domains = [\"localhost.local\"]; } const x = options.domains[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_ensure_nonempty_bang_identifier_guard_issue_6648() {
+        // Bare `!arr` test on an identifier base with a non-empty literal assignment.
+        let src = "function f(arr) { if (!arr) { arr = [1]; } const x = arr[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_ensure_nonempty_length_only_guard_issue_6648() {
+        // A `length === 0` test alone (no nullish disjunct) plus a non-empty literal.
+        let src = "function f(arr) { if (arr.length === 0) arr = [1, 2]; const x = arr[arr.length - 1]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_ensure_guard_assigns_empty_literal_issue_6648() {
+        // The consequent assigns an EMPTY array literal, so the array is not
+        // proven non-empty and the read stays flagged.
+        let src = "function f(arr) { if (!arr || arr.length === 0) { arr = []; } const x = arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ensure_guard_different_base_issue_6648() {
+        // The guard ensures `options.domains` is non-empty, but the read is on a
+        // DIFFERENT base (`options.commonName`), so it stays flagged.
+        let src = "function f(options) { if (!options.domains || options.domains.length === 0) { options.domains = [\"d\"]; } const x = options.commonName[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ensure_guard_assigns_non_literal_issue_6648() {
+        // The consequent assigns an unknown non-literal value (a call result),
+        // which cannot be proven non-empty, so the read stays flagged.
+        let src = "function f(arr) { if (!arr || arr.length === 0) { arr = getDefaults(); } const x = arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_with_no_ensure_guard_issue_6648() {
+        // No preceding ensure-non-empty guard at all.
+        let src = "function f(options) { const x = options.domains[0]; return x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ensure_guard_with_and_test_issue_6648() {
+        // An `&&` test is not a sound ensure-non-empty guard: on fall-through
+        // (`!A || !B`) the empty-check arm may still be false (`cond` false,
+        // `arr` empty), so the body did not run and `arr[0]` is out-of-bounds.
+        let src = "function f(arr, cond) { if (cond && arr.length === 0) { arr = [1]; } const x = arr[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
