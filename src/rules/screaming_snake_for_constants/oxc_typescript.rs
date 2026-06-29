@@ -81,6 +81,18 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // A `typeof X.Y` (`TSTypeQuery`) annotation whose root identifier is
+            // bound by a `node:*` built-in-module import means the constant
+            // mirrors a member of that module's public API (e.g. unenv's
+            // `export const isMaster: typeof nodeCluster.isMaster = true`). The
+            // exported name is prescribed by the Node.js module shape — renaming
+            // it to SCREAMING_SNAKE_CASE would break the polyfill — so the
+            // convention does not apply (issue #6704). The `typeof`-of-a-`node:*`
+            // -import pattern is the structural proof, not a name allowlist.
+            if type_query_targets_node_import(declarator, semantic.nodes().program()) {
+                continue;
+            }
+
             if is_dom_dimension_name(name) {
                 continue;
             }
@@ -153,6 +165,78 @@ fn is_dom_dimension_name(name: &str) -> bool {
     )
 }
 
+/// `true` when `declarator` is typed `typeof <root>.…` (a `TSTypeQuery`) whose
+/// root identifier is bound by a `node:*` built-in-module import — the constant
+/// mirrors a member of that module's public API, so its name is prescribed by
+/// the imported API shape and cannot be SCREAMING_SNAKE_CASE.
+fn type_query_targets_node_import(
+    declarator: &oxc_ast::ast::VariableDeclarator,
+    program: &oxc_ast::ast::Program,
+) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeQueryExprName};
+
+    let Some(ann) = &declarator.type_annotation else {
+        return false;
+    };
+    let TSType::TSTypeQuery(query) = &ann.type_annotation else {
+        return false;
+    };
+    let root = match &query.expr_name {
+        TSTypeQueryExprName::IdentifierReference(id) => id.name.as_str(),
+        TSTypeQueryExprName::QualifiedName(qualified) => {
+            match leftmost_typename_ident(&qualified.left) {
+                Some(name) => name,
+                None => return false,
+            }
+        }
+        // `typeof import("…").x` (TSImportType) and `typeof this.x` are not
+        // member references to an imported binding.
+        _ => return false,
+    };
+    imports_local_from_node_builtin(program, root)
+}
+
+/// The leftmost identifier of a (possibly qualified) `TSTypeName` — `a` in
+/// `a.b.c`. `None` when the chain bottoms out in `this`.
+fn leftmost_typename_ident<'a>(name: &oxc_ast::ast::TSTypeName<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::TSTypeName;
+
+    match name {
+        TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
+        TSTypeName::QualifiedName(qualified) => leftmost_typename_ident(&qualified.left),
+        TSTypeName::ThisExpression(_) => None,
+    }
+}
+
+/// `true` when `program` has an `import … from "node:*"` declaration binding the
+/// local name `local_name` (default, namespace, or named specifier).
+fn imports_local_from_node_builtin(program: &oxc_ast::ast::Program, local_name: &str) -> bool {
+    use oxc_ast::ast::{ImportDeclarationSpecifier, Statement};
+
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else {
+            continue;
+        };
+        if !import.source.value.as_str().starts_with("node:") {
+            continue;
+        }
+        let Some(ref specifiers) = import.specifiers else {
+            continue;
+        };
+        for specifier in specifiers {
+            let local = match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => named.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => def.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => ns.local.name.as_str(),
+            };
+            if local == local_name {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn is_primitive_init(declarator: &oxc_ast::ast::VariableDeclarator) -> bool {
     let Some(init) = &declarator.init else {
         return false;
@@ -214,6 +298,93 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "sketch.js")
+    }
+
+    // A `.ts` path so `typeof X.Y` type annotations parse (JS cannot carry them).
+    fn run_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn _issue_6704() {
+        // `typeof nodeCluster.isMaster` ties the const's name to the public API
+        // of a `node:*` import, so it cannot be SCREAMING_SNAKE_CASE.
+        assert!(
+            run_ts(
+                "import type nodeCluster from \"node:cluster\";\n\
+                 export const isMaster: typeof nodeCluster.isMaster = true;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_typeof_node_import_default_specifier() {
+        assert!(
+            run_ts(
+                "import type nodeWorkerThreads from \"node:worker_threads\";\n\
+                 export const threadId: typeof nodeWorkerThreads.threadId = 0;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_typeof_node_import_named_specifier() {
+        // A named specifier (`import { X }`) binds the typeof root just like a
+        // default/namespace import, so the const is exempt.
+        assert!(
+            run_ts(
+                "import { threadId } from \"node:worker_threads\";\n\
+                 export const currentThread: typeof threadId.valueOf = 0;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_typeof_node_import_namespace() {
+        assert!(
+            run_ts(
+                "import * as nodeCluster from \"node:cluster\";\n\
+                 export const isWorker: typeof nodeCluster.isWorker = false;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_typeof_node_import_deeply_qualified() {
+        // The typeof root is the leftmost identifier of `a.b.c`; the recursion
+        // must resolve it back to the `node:*` import.
+        assert!(
+            run_ts(
+                "import * as nodeCluster from \"node:cluster\";\n\
+                 export const workerPid: typeof nodeCluster.worker.process.pid = 0;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_annotationless_camelcase_const() {
+        // No `typeof` annotation: a bare camelCase boolean still requires
+        // SCREAMING_SNAKE_CASE.
+        assert_eq!(run_ts("export const isMaster = true;").len(), 1);
+    }
+
+    #[test]
+    fn flags_typeof_of_non_node_import() {
+        // `typeof` of a non-`node:` import is not API-prescribed, so it is still
+        // flagged — proves the `node:*` gate.
+        assert_eq!(
+            run_ts(
+                "import foo from \"./local\";\n\
+                 export const bar: typeof foo.baz = 1;"
+            )
+            .len(),
+            1
+        );
     }
 
     #[test]
