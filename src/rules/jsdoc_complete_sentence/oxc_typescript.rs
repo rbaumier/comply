@@ -7,14 +7,15 @@
 //!
 //! A `/** … */` comment whose description (the prose before the first `@tag`)
 //! is a single line and that documents a property/field signature — a
-//! `TSPropertySignature` in an interface or type literal, or a class
-//! `PropertyDefinition` — is a field label, not prose, so the terminal-
-//! punctuation requirement is not applied to it: idiomatic TypeScript writes
-//! such labels as noun phrases without a closing period
-//! (`/** Timeout in milliseconds */`). This holds even when `@default`/`@type`/
-//! `@example`/`@docs` tags push the raw comment onto multiple lines. The
-//! capital-letter check still applies, and a multi-line prose property
-//! description, or any function/method doc, still requires a complete sentence.
+//! `TSPropertySignature` in an interface or type literal, an interface method
+//! signature (`TSMethodSignature`), or a class `PropertyDefinition` — is a
+//! field label, not prose, so the terminal-punctuation requirement is not
+//! applied to it: idiomatic TypeScript writes such labels as noun phrases
+//! without a closing period (`/** Timeout in milliseconds */`). This holds even
+//! when `@default`/`@type`/`@example`/`@docs` tags push the raw comment onto
+//! multiple lines. The capital-letter check still applies, and a multi-line
+//! prose property description, or any free-standing function or class-method
+//! doc, still requires a complete sentence.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -182,10 +183,11 @@ fn drop_trailing_code_block_label(description_lines: &mut Vec<(String, usize)>) 
 }
 
 /// Collect the byte-offset start of every property/field-signature node: a
-/// `TSPropertySignature` (interface or type-literal member) or a class
-/// `PropertyDefinition`. A JSDoc comment with a single-line description
-/// immediately preceding one of these documents a field label, not prose, so
-/// its terminal-punctuation requirement is waived.
+/// `TSPropertySignature` (interface or type-literal member), an interface
+/// method signature (`TSMethodSignature`), or a class `PropertyDefinition`. A
+/// JSDoc comment with a single-line description immediately preceding one of
+/// these documents a field label, not prose, so its terminal-punctuation
+/// requirement is waived.
 fn property_node_starts(semantic: &oxc_semantic::Semantic) -> Vec<usize> {
     semantic
         .nodes()
@@ -193,15 +195,17 @@ fn property_node_starts(semantic: &oxc_semantic::Semantic) -> Vec<usize> {
         .filter_map(|node| match node.kind() {
             AstKind::TSPropertySignature(p) => Some(p.span.start as usize),
             AstKind::PropertyDefinition(p) => Some(p.span.start as usize),
+            AstKind::TSMethodSignature(m) => Some(m.span.start as usize),
             _ => None,
         })
         .collect()
 }
 
 /// Whether a JSDoc comment ending at `comment_end` immediately precedes a
-/// property/field-signature node — only whitespace separates the comment's end
-/// from the node's start. Combined with a single-line description, such a
-/// comment is a field label, so the terminal-punctuation check is waived for it.
+/// property/field-signature or interface-method-signature node — only
+/// whitespace separates the comment's end from the node's start. Combined with
+/// a single-line description, such a comment is a field label, so the
+/// terminal-punctuation check is waived for it.
 fn precedes_property(
     comment_end: usize,
     property_starts: &[usize],
@@ -272,11 +276,12 @@ impl OxcCheck for Check {
             //
             // A `/** … */` comment whose description (the prose before the
             // first `@tag`) is a single line and that documents a property/field
-            // signature is a field label, not prose, so the noun-phrase style
-            // without a closing period is idiomatic and exempt — even when
-            // `@default`/`@type`/`@example`/`@docs` tags make the raw comment
-            // span multiple lines. A multi-line prose description on a property,
-            // or any non-property doc, still requires terminal punctuation.
+            // signature or an interface method signature is a field label, not
+            // prose, so the noun-phrase style without a closing period is
+            // idiomatic and exempt — even when `@default`/`@type`/`@example`/
+            // `@docs` tags make the raw comment span multiple lines. A
+            // multi-line prose description, or any non-label doc, still requires
+            // terminal punctuation.
             let is_property_label = description_lines.len() == 1
                 && precedes_property(comment.span.end as usize, &property_starts, ctx.source);
             let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
@@ -933,5 +938,56 @@ function subscribe(): void {}
         assert!(!is_footnote_anchor("[]"));
         assert!(!is_footnote_anchor("[note]"));
         assert!(!is_footnote_anchor("[1] text"));
+    }
+
+    #[test]
+    fn allows_single_line_interface_method_signature_label() {
+        // Regression for rbaumier/comply#6352 — a single-line `/** … */` noun-
+        // phrase label on an interface method signature is a field label, not
+        // prose, so it must not be flagged for missing terminal punctuation,
+        // exactly like a label on a property signature.
+        let source = r#"
+interface EffectStore {
+    readonly effect: number;
+    /** Begin tracking signals used in this component */
+    _start(): void;
+    /** Stop tracking the signals used in this component */
+    f(): void;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_lowercase_single_line_method_signature_label() {
+        // The label exemption waives only terminal punctuation — a lowercase
+        // start on a method-signature label is still flagged.
+        let source = r#"
+interface EffectStore {
+    /** begin tracking signals used in this component */
+    _start(): void;
+}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("capital")));
+        assert!(!d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_multi_line_interface_method_doc_missing_punctuation() {
+        // A multi-line JSDoc block on an interface method signature is prose
+        // (two description lines), not a single-line label, so it still
+        // requires terminal punctuation.
+        let source = r#"
+interface EffectStore {
+    /**
+     * Begins tracking the signals used in this component and keeps
+     * accumulating them until the effect store is finished
+     */
+    _start(): void;
+}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
     }
 }
