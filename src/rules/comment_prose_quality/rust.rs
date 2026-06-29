@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn flags_weasel_word_in_line_comment() {
-        let diags = run("// This is basically a wrapper.\nfn f() {}");
+        let diags = run("// This is somewhat hacky.\nfn f() {}");
         assert_eq!(diags.len(), 1);
     }
 
@@ -70,8 +70,27 @@ mod tests {
 
     #[test]
     fn flags_weasel_in_inline_comment() {
-        let src = "// This is basically a wrapper.\nfn f() {}";
+        let src = "// This is somewhat hacky.\nfn f() {}";
         assert!(run(src).iter().any(|d| d.message.contains("Weasel")));
+    }
+
+    // Regression for #6463: `basically`, `really`, and `literally` were removed
+    // from WEASEL_WORDS because `banned-comment-words` already flags them at
+    // Error severity; keeping them here double-reported the same word. An inline
+    // comment containing one must now produce no comment-prose-quality warning.
+    #[test]
+    fn does_not_double_report_deduped_words_issue_6463() {
+        assert!(run("// basically: repr as i64 == -1\nfn f() {}").is_empty());
+        assert!(run("// really just a thin shim\nfn f() {}").is_empty());
+        assert!(run("// literally the same layout\nfn f() {}").is_empty());
+    }
+
+    // A weasel word that remains in WEASEL_WORDS still fires, proving the list
+    // itself is intact after the #6463 dedup.
+    #[test]
+    fn still_flags_other_weasel_word() {
+        let diags = run("// Handles various edge cases here.\nfn f() {}");
+        assert!(diags.iter().any(|d| d.message.contains("various")));
     }
 
     #[test]
