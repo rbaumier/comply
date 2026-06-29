@@ -6383,7 +6383,7 @@ fn let_binds_string(let_node: Node, var: &str, source: &[u8]) -> bool {
 }
 
 /// Whether a `let` pattern (`x` or `mut x`) binds the name `var`.
-fn let_pattern_binds(pattern: Node, var: &str, source: &[u8]) -> bool {
+pub fn let_pattern_binds(pattern: Node, var: &str, source: &[u8]) -> bool {
     let name = match pattern.kind() {
         "identifier" => pattern.utf8_text(source).ok(),
         "mut_pattern" => {
