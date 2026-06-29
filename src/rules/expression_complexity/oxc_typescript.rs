@@ -1,81 +1,55 @@
 //! expression-complexity oxc backend — flag lines with 4+ logical/conditional operators.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, OxcCheck};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use std::collections::BTreeMap;
 use std::sync::Arc;
-
-/// Count logical/conditional operators on a line: `&&`, `||`, `??`, `?` (ternary).
-#[allow(clippy::if_same_then_else)]
-fn count_operators(line: &str) -> usize {
-    let mut count = 0;
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    let trimmed = line.trim();
-    if trimmed.starts_with("//") || trimmed.starts_with('*') || trimmed.starts_with("/*") {
-        return 0;
-    }
-
-    while i < len {
-        if i + 1 < len && bytes[i] == b'&' && bytes[i + 1] == b'&' {
-            count += 1;
-            i += 2;
-        } else if i + 1 < len && bytes[i] == b'|' && bytes[i + 1] == b'|' {
-            count += 1;
-            i += 2;
-        } else if i + 1 < len && bytes[i] == b'?' && bytes[i + 1] == b'?' {
-            count += 1;
-            i += 2;
-        } else if bytes[i] == b'?' {
-            if i + 1 < len && bytes[i + 1] == b'.' {
-                i += 2;
-            } else if i + 1 < len && bytes[i + 1] == b':' {
-                // TypeScript optional property marker (e.g. `key?: T`), not a ternary.
-                i += 2;
-            } else if i + 1 < len && matches!(bytes[i + 1], b']' | b',' | b')' | b'>') {
-                // TypeScript optional tuple/type element marker (e.g. `'c'?`, `T?>`),
-                // not a ternary — a real ternary's `?` is followed by a consequent.
-                i += 2;
-            } else {
-                count += 1;
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    count
-}
 
 pub struct Check;
 
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let max_ops = ctx.config.threshold(super::META.id, "max_ops", ctx.lang);
-        let mut diagnostics = Vec::new();
-        for (idx, line) in ctx.source.lines().enumerate() {
-            if count_operators(line) >= max_ops {
-                diagnostics.push(Diagnostic {
-                    path: Arc::clone(&ctx.path_arc),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: format!(
-                        "Expression has {max_ops}+ logical/conditional operators — \
-                         extract to named variables."
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
+
+        // Count logical (`&&`/`||`/`??`) and conditional (ternary `?`) operators
+        // per source line from the AST. Each `LogicalExpression` node is one
+        // operator — a chained `a && b && c` nests into two nodes, i.e. two
+        // operators — and each `ConditionalExpression` node is one ternary.
+        // Counting nodes rather than raw bytes means `?`/`&`/`|` characters
+        // inside regex, string, and template literals never count: literal
+        // content carries no operator nodes.
+        let mut ops_per_line: BTreeMap<usize, usize> = BTreeMap::new();
+        for node in semantic.nodes().iter() {
+            let start = match node.kind() {
+                AstKind::LogicalExpression(expr) => expr.span.start,
+                AstKind::ConditionalExpression(expr) => expr.span.start,
+                _ => continue,
+            };
+            let (line, _) = byte_offset_to_line_col(ctx.source, start as usize);
+            *ops_per_line.entry(line).or_insert(0) += 1;
         }
-        diagnostics
+
+        ops_per_line
+            .into_iter()
+            .filter(|&(_, count)| count >= max_ops)
+            .map(|(line, _)| Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line,
+                column: 1,
+                rule_id: super::META.id.into(),
+                message: format!(
+                    "Expression has {max_ops}+ logical/conditional operators — \
+                     extract to named variables."
+                ),
+                severity: Severity::Warning,
+                span: None,
+            })
+            .collect()
     }
 }
 
@@ -135,10 +109,13 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_conditional_type_with_three_extra_operators() {
-        // Conditional type `?` counts as ternary; adding `&&`, `||`, `??` gives 4 total.
+    fn ignores_type_level_conditional_operators() {
+        // A conditional *type* (`X extends string ? ... : ...`) and type-level
+        // `&&`/`||`/`??` are not runtime `ConditionalExpression`/`LogicalExpression`
+        // nodes, so they carry no operators to count. Counting via the AST (#6439)
+        // — not raw bytes — correctly leaves this unflagged.
         let src = "type T<X> = X extends string ? A && B || C ?? D : E;";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -166,6 +143,52 @@ mod tests {
     fn still_flags_real_operators_mixed_with_tuple_optional() {
         // One `T?` tuple marker is exempt, but the real operators alone still cross 4.
         let src = "const x = (y as [number?]) ? a && b || c ?? d : e;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_regex_quantifiers() {
+        // Issue #6439: the `?` quantifiers in this regex (`-?`, `)?`, `[+-]?`) are
+        // regex syntax, not ternaries — a regex literal carries no operator nodes.
+        let src = r#"const JsonSigRx = /^\s*["[{]|^\s*-?\d{1,16}(\.\d{1,17})?([Ee][+-]?\d+)?\s*$/;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_string_literal_operators() {
+        // `?`/`:`/`&&`/`||`/`??` inside a string literal are text, not operators.
+        let src = r#"const s = "a ? b : c && d || e ?? f";"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_template_literal_operators() {
+        // Operator characters in a template literal's static text are not operators.
+        let src = "const s = `a ? b : c && d || e ?? f`;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_four_real_operators_with_valid_syntax() {
+        // `a && b`, `c && d`, `||`, and the ternary `? :` — four operator nodes.
+        let src = "const x = a && b || c && d ? e : f;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_three_real_operators_just_below_threshold() {
+        // `a && b`, `(a && b) && c`, and the ternary `? :` — three operator nodes.
+        let src = "const x = a && b && c ? d : e;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wrapped_multiline_operator_chain() {
+        // A 4-operator chain split across lines is still one over-complex
+        // expression: each `&&` is a `LogicalExpression` node attributed to the
+        // expression's start line, so the line-wrapped form is flagged like the
+        // single-line one.
+        let src = "const ok =\n  a &&\n  b &&\n  c &&\n  d &&\n  e;";
         assert_eq!(run_on(src).len(), 1);
     }
 }
