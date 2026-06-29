@@ -37,6 +37,12 @@ impl OxcCheck for Check {
         if is_react_component_param(semantic, node) {
             return;
         }
+        // Ambient/bodyless declarations (`declare function`, overload
+        // signatures): the annotation IS the signature, no body to reuse a
+        // named type across, so extracting it only adds boilerplate.
+        if is_ambient_function_param(semantic, node) {
+            return;
+        }
         // A parameter of a type-level function signature (`(ctx: {...}) => R`)
         // is part of a type declaration, not a function implementation. The
         // inline shape IS the type contract — there is no body to drift from
@@ -79,6 +85,25 @@ fn type_has_children_member(type_literal: &oxc_ast::ast::TSTypeLiteral) -> bool 
         };
         matches!(&prop.key, PropertyKey::StaticIdentifier(id) if id.name == "children")
     })
+}
+
+/// True when `node` is a parameter of an ambient or bodyless function — an
+/// explicit `declare function` or an overload signature. Both have no body,
+/// so there is no implementation to factor a named type out of.
+fn is_ambient_function_param<'a>(
+    semantic: &'a Semantic<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()).skip(1) {
+        match ancestor.kind() {
+            // The enclosing function: ambient when declared or bodyless.
+            AstKind::Function(func) => return func.declare || func.body.is_none(),
+            // An arrow always has a body and is never ambient.
+            AstKind::ArrowFunctionExpression(_) => return false,
+            _ => continue,
+        }
+    }
+    false
 }
 
 /// True when `node` is the first parameter of a function whose name starts
@@ -241,5 +266,18 @@ mod tests {
     #[test]
     fn still_flags_implementation_arrow_param() {
         assert_eq!(run_on("const g = (ctx: { a: number }) => {};").len(), 1);
+    }
+
+    #[test]
+    fn allows_ambient_declare_function() {
+        assert!(
+            run_on("declare function testArraySimplification(arg: {foo: Array<{[x: string]: string}>}): void;")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_overload_signature_without_body() {
+        assert!(run_on("function f(arg: { x: string }): void;").is_empty());
     }
 }
