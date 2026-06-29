@@ -31,10 +31,7 @@ const WEASEL_WORDS: &[&str] = &[
     "practically",
     "relatively",
     "extremely",
-    "basically",
     "actually",
-    "really",
-    "literally",
     "quite",
     "fairly",
 ];

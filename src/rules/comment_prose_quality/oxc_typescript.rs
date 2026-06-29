@@ -52,9 +52,9 @@ mod tests {
 
     #[test]
     fn flags_weasel_word() {
-        let diags = run("// This is basically a wrapper.");
+        let diags = run("// This is somewhat hacky.");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("basically"));
+        assert!(diags[0].message.contains("somewhat"));
     }
 
     #[test]
@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn skips_doc_comments_weasel() {
-        assert!(run("/// This is basically a wrapper.").is_empty());
+        assert!(run("/// This is somewhat hacky.").is_empty());
     }
 
     // Regression for #266: a weasel word inside a rule id cited by a

@@ -15,10 +15,7 @@ const WEASEL_WORDS: &[&str] = &[
     "practically",
     "relatively",
     "extremely",
-    "basically",
     "actually",
-    "really",
-    "literally",
     "quite",
     "fairly",
 ];
@@ -168,9 +165,9 @@ mod tests {
 
     #[test]
     fn flags_weasel_word() {
-        let diags = run("// This is basically a wrapper.");
+        let diags = run("// This is somewhat hacky.");
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("basically"));
+        assert!(diags[0].message.contains("somewhat"));
     }
 
     #[test]
