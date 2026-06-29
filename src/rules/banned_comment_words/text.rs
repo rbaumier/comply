@@ -83,6 +83,10 @@ fn contains_word_boundary(haystack: &str, word: &str) -> bool {
             let next_ok =
                 i + needle.len() == bytes.len() || !bytes[i + needle.len()].is_ascii_alphabetic();
             if prev_ok && next_ok {
+                if super::ends_with_negation(&h_lower[..i]) {
+                    i += 1;
+                    continue;
+                }
                 return true;
             }
         }
@@ -164,5 +168,18 @@ mod tests {
     #[test]
     fn allows_actually() {
         assert!(run("// actually resolved at build time").is_empty());
+    }
+
+    #[test]
+    fn allows_negated_simply() {
+        // "not simply" reverses the dismissive import — explanatory, not filler.
+        assert!(run("// this will not simply filter the entries").is_empty());
+    }
+
+    #[test]
+    fn flags_dismissive_word_after_negated_one() {
+        // The negated "simply" is skipped, but the later un-negated "just"
+        // is still caught.
+        assert_eq!(run("// not simply, just call foo").len(), 1);
     }
 }
