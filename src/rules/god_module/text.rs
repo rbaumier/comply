@@ -42,6 +42,16 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
+        // A types-only module declares only TypeScript type surface (interfaces,
+        // type aliases, type-only re-exports) and carries no runtime behaviour.
+        // Like a constants-only module it has exactly one responsibility —
+        // declaring the module's type surface — so its high fan-in reflects
+        // widespread *use* of those types, not centralised logic. There is no
+        // behaviour to extract, so "split into smaller modules" does not apply.
+        if is_types_only_module(ctx.source) {
+            return Vec::new();
+        }
+
         let index = ctx.project.import_index();
 
         // Total indexed files = every file that made it through
@@ -110,14 +120,7 @@ fn is_constants_only_module(source: &str) -> bool {
     // barrel (`export * from`, `export { … } from`) is handled by the
     // `is_pure_reexport_index` exemption and is not a constants-only module —
     // disqualify it so a non-`index` barrel still flags.
-    let has_value_export = code.contains("export const")
-        || code.contains("export let")
-        || code.contains("export var")
-        || code.contains("export default")
-        || code.contains("export enum")
-        || code.contains("module.exports")
-        || code.contains("exports.");
-    if !has_value_export {
+    if !has_value_export(&code) {
         return false;
     }
 
@@ -128,16 +131,77 @@ fn is_constants_only_module(source: &str) -> bool {
         return false;
     }
 
-    // Any of these markers means the module carries behaviour to extract:
-    //   - `function` / `class`  : declared or expression function/class
-    //   - `=>`                  : arrow function value
-    //   - `) {` / `){`          : a function/method/getter body (object and
-    //                             array literals never contain a `)`-then-`{`)
-    !has_word(&code, "function")
-        && !has_word(&code, "class")
-        && !code.contains("=>")
-        && !code.contains(") {")
-        && !code.contains("){")
+    !has_behaviour_marker(&code)
+}
+
+/// True when `source` is a module that declares only TypeScript type surface —
+/// `interface` declarations, `type` aliases, and type-only re-exports — and
+/// carries no runtime behaviour. Such a module has a single responsibility
+/// (declaring the module's type surface) regardless of how many files import
+/// it, so its fan-in is never a centralisation smell.
+///
+/// The discriminator is structural, not name/path based. On the comment- and
+/// string-stripped source (same input as `is_constants_only_module`):
+///   1. no runtime value export is present (`export const/let/var/default/enum`,
+///      `module.exports`, `exports.`);
+///   2. no behaviour marker is present (`has_behaviour_marker`);
+///   3. at least one type-level export is present.
+///
+/// Condition 2 guarantees the safety property: a module carrying any behaviour
+/// can never match, so a genuine behavioural god-module is never exempted. A
+/// types file that uses arrow-function *type* syntax (`=>`) therefore stays
+/// flagged — the conservative trade-off, identical to `is_constants_only_module`.
+fn is_types_only_module(source: &str) -> bool {
+    let code = strip_strings(&strip_comments(source));
+
+    // Any runtime value export means the module is not purely types.
+    if has_value_export(&code) {
+        return false;
+    }
+
+    if has_behaviour_marker(&code) {
+        return false;
+    }
+
+    // At least one actual type declaration/export. `export type` covers both
+    // type aliases and type-only re-exports (`export type { … } from`);
+    // `export interface` is subsumed by the bare `interface` whole-word check.
+    // A bare `export *` is deliberately NOT accepted on its own — it re-exports
+    // runtime values too, so it is indistinguishable from a value barrel, and a
+    // non-`index` barrel must still flag (`still_flags_non_index_high_fanin_module`).
+    code.contains("export type") || has_word(&code, "interface")
+}
+
+/// True when `code` (already comment- and string-stripped) contains any marker
+/// of runtime behaviour:
+///   - `function` / `class`  : declared or expression function/class
+///   - `=>`                  : arrow function value
+///   - `) {` / `){`          : a function/method/getter body (object and
+///                             array literals never contain a `)`-then-`{`)
+///
+/// Shared by `is_constants_only_module` and `is_types_only_module` so both gate
+/// on one definition of "behaviour".
+fn has_behaviour_marker(code: &str) -> bool {
+    has_word(code, "function")
+        || has_word(code, "class")
+        || code.contains("=>")
+        || code.contains(") {")
+        || code.contains("){")
+}
+
+/// True when `code` (already comment- and string-stripped) binds at least one
+/// runtime value export or CommonJS export: `export const/let/var/default/enum`,
+/// `module.exports`, or `exports.<member>`. Type-level exports (`export type`,
+/// `export interface`) are not value exports. Shared by `is_constants_only_module`
+/// and `is_types_only_module`.
+fn has_value_export(code: &str) -> bool {
+    code.contains("export const")
+        || code.contains("export let")
+        || code.contains("export var")
+        || code.contains("export default")
+        || code.contains("export enum")
+        || code.contains("module.exports")
+        || code.contains("exports.")
 }
 
 /// True when `needle` appears in `code` as a whole word — not as a substring of
@@ -706,6 +770,59 @@ mod tests {
             diags.len(),
             1,
             "TS arrow-type annotation is conservatively kept flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn exempts_types_only_module() {
+        // unjs/magicast src/types.ts: only type declarations, type aliases and
+        // type-only re-exports — no runtime value, no behaviour. High fan-in
+        // reflects use of the type surface, not centralised logic. Closes #6666.
+        let body = "import type { Program } from \"@babel/types\";\n\
+                    import { Options as ParseOptions } from \"recast\";\n\
+                    import { CodeFormatOptions } from \"./format\";\n\
+                    \n\
+                    export type { Node as ASTNode } from \"@babel/types\";\n\
+                    export * from \"./proxy/types\";\n\
+                    \n\
+                    export interface Loc {\n\
+                      start?: { line?: number; column?: number };\n\
+                    }\n\
+                    export interface Token { type: string; value: string; loc?: Loc; }\n\
+                    export interface ParsedFileNode { program: Program; source: string; }\n\
+                    export type ProxifiedValue = ParsedFileNode | Token;\n";
+        let (_dir, diags) = run_high_fanin("types.ts", body);
+        assert!(
+            diags.is_empty(),
+            "types-only module must not be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_behavioural_module_high_fanin() {
+        // Functions and classes are behaviour: the types-only exemption cannot
+        // match (behaviour markers present), so a real hub still fires.
+        let body = "export function load() { return 1; }\n\
+                    export class Store {}\n";
+        let (_dir, diags) = run_high_fanin("store.ts", body);
+        assert_eq!(
+            diags.len(),
+            1,
+            "behavioural module must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_module_mixing_types_and_function() {
+        // Declares a type AND exports a function: a behaviour marker is present,
+        // so the types-only exemption does not match and the module stays flagged.
+        let body = "export interface Config { name: string; }\n\
+                    export function load(c: Config): Config { return c; }\n";
+        let (_dir, diags) = run_high_fanin("config.ts", body);
+        assert_eq!(
+            diags.len(),
+            1,
+            "module mixing types with a function must still be flagged, got {diags:?}"
         );
     }
 }
