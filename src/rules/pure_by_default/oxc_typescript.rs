@@ -64,6 +64,9 @@ impl OxcCheck for Check {
             if is_write_once_lazy_init(nodes, scoping, symbol_id) {
                 continue;
             }
+            if is_scoped_context_bracket(nodes, scoping, symbol_id) {
+                continue;
+            }
             let var_name = scoping.symbol_name(symbol_id).to_string();
 
             for reference in scoping.get_resolved_references(symbol_id) {
@@ -412,6 +415,207 @@ fn typeof_targets_binding(expr: &Expression, name: &str) -> bool {
 /// True when `expr` is the string literal `'undefined'`.
 fn operand_is_undefined_string(expr: &Expression) -> bool {
     matches!(expr, Expression::StringLiteral(lit) if lit.value == "undefined")
+}
+
+/// True when the binding is a scoped-context bracket: a value that is saved,
+/// temporarily swapped, and restored in a `finally` block (or popped back from a
+/// caller-supplied parameter). This is the push/pop "current observer" pointer
+/// of reactive libraries — temporarily impure by contract, since threading it
+/// through every call as a parameter would defeat the implicit dependency
+/// tracking the binding exists to provide.
+///
+/// The binding qualifies iff at least one write restores it inside a `finally`
+/// block AND every write is accounted for by the bracket shape:
+/// - a RESTORE write — a plain `=` whose RHS is a parameter of the enclosing
+///   function or a `const saved = binding` local of it — is always accounted; a
+///   RESTORE inside a `finally` additionally proves the bracket;
+/// - a MODIFY write — any other plain `=` RHS — is accounted only when its own
+///   enclosing function restores the binding in a `finally` block.
+///
+/// A single unaccounted write (a compound op, a non-identifier target, a plain
+/// reassignment with no bracketing `finally`) disqualifies the whole binding, so
+/// genuine shared mutable state stays flagged.
+fn is_scoped_context_bracket(
+    nodes: &oxc_semantic::AstNodes,
+    scoping: &oxc_semantic::Scoping,
+    symbol_id: oxc_semantic::SymbolId,
+) -> bool {
+    let var_name = scoping.symbol_name(symbol_id);
+    let mut saw_finally_restore = false;
+    for reference in scoping.get_resolved_references(symbol_id) {
+        if !reference.flags().contains(ReferenceFlags::Write) {
+            continue;
+        }
+        let ref_node_id = reference.node_id();
+        let Some(AstKind::AssignmentExpression(assign)) =
+            nodes.ancestor_kinds(ref_node_id).next()
+        else {
+            return false;
+        };
+        if assign.operator != AssignmentOperator::Assign {
+            return false;
+        }
+        let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+            return false;
+        };
+        if target.name.as_str() != var_name {
+            return false;
+        }
+        let Some((func_id, _)) = enclosing_top_level_function(nodes, ref_node_id) else {
+            return false;
+        };
+        if write_rhs_is_restore(nodes, &assign.right, func_id, var_name) {
+            saw_finally_restore |= write_is_in_finally(nodes, ref_node_id, func_id);
+        } else if !function_has_finally_restore(nodes, func_id, var_name) {
+            return false;
+        }
+    }
+    saw_finally_restore
+}
+
+/// True when the assignment RHS restores a previously-saved context value: it
+/// names a parameter of the enclosing function (the popped value) or a `const
+/// saved = var_name` local declared in that function.
+fn write_rhs_is_restore(
+    nodes: &oxc_semantic::AstNodes,
+    rhs: &Expression,
+    func_id: NodeId,
+    var_name: &str,
+) -> bool {
+    let Expression::Identifier(id) = rhs else {
+        return false;
+    };
+    let candidate = id.name.as_str();
+    function_param_named(nodes, func_id, candidate)
+        || function_has_saved_local(nodes, func_id, candidate, var_name)
+}
+
+/// True when the function `func_id` has a simple parameter named `name`.
+fn function_param_named(
+    nodes: &oxc_semantic::AstNodes,
+    func_id: NodeId,
+    name: &str,
+) -> bool {
+    let AstKind::Function(func) = nodes.kind(func_id) else {
+        return false;
+    };
+    func.params.items.iter().any(|param| {
+        param
+            .pattern
+            .get_binding_identifier()
+            .is_some_and(|id| id.name.as_str() == name)
+    })
+}
+
+/// True when the function `func_id` declares `const <local_name> = <var_name>`
+/// directly in its body — the saved copy of the context value the bracket later
+/// restores.
+fn function_has_saved_local(
+    nodes: &oxc_semantic::AstNodes,
+    func_id: NodeId,
+    local_name: &str,
+    var_name: &str,
+) -> bool {
+    let AstKind::Function(func) = nodes.kind(func_id) else {
+        return false;
+    };
+    let Some(body) = func.body.as_ref() else {
+        return false;
+    };
+    body.statements.iter().any(|stmt| {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            return false;
+        };
+        decl.kind == VariableDeclarationKind::Const
+            && decl.declarations.iter().any(|declarator| {
+                declarator
+                    .id
+                    .get_binding_identifier()
+                    .is_some_and(|id| id.name.as_str() == local_name)
+                    && matches!(
+                        &declarator.init,
+                        Some(Expression::Identifier(init))
+                            if init.name.as_str() == var_name
+                    )
+            })
+    })
+}
+
+/// True when the function `func_id` has a direct `try` statement whose
+/// `finalizer` block restores `var_name` with a plain `var_name = <identifier>;`
+/// assignment.
+fn function_has_finally_restore(
+    nodes: &oxc_semantic::AstNodes,
+    func_id: NodeId,
+    var_name: &str,
+) -> bool {
+    let AstKind::Function(func) = nodes.kind(func_id) else {
+        return false;
+    };
+    let Some(body) = func.body.as_ref() else {
+        return false;
+    };
+    body.statements.iter().any(|stmt| {
+        let Statement::TryStatement(try_stmt) = stmt else {
+            return false;
+        };
+        try_stmt.finalizer.as_ref().is_some_and(|finalizer| {
+            finalizer
+                .body
+                .iter()
+                .any(|s| stmt_is_identifier_restore_to(s, var_name))
+        })
+    })
+}
+
+/// True if `stmt` is a plain `var_name = <identifier>;` assignment — the shape
+/// of restoring a saved context value.
+fn stmt_is_identifier_restore_to(stmt: &Statement, var_name: &str) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+    let Expression::AssignmentExpression(assign) = &expr_stmt.expression else {
+        return false;
+    };
+    if assign.operator != AssignmentOperator::Assign {
+        return false;
+    }
+    let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+        return false;
+    };
+    target.name.as_str() == var_name && matches!(assign.right, Expression::Identifier(_))
+}
+
+/// True when the write at `ref_node_id` lies inside the `finalizer` block of a
+/// `try` statement within the enclosing function `func_id`. The finalizer is
+/// matched by identity: its span must equal that of one of the write's
+/// block-statement ancestors below the function.
+fn write_is_in_finally(
+    nodes: &oxc_semantic::AstNodes,
+    ref_node_id: NodeId,
+    func_id: NodeId,
+) -> bool {
+    let mut block_spans = Vec::new();
+    for (kind, node_id) in nodes
+        .ancestor_kinds(ref_node_id)
+        .zip(nodes.ancestor_ids(ref_node_id))
+    {
+        if node_id == func_id {
+            break;
+        }
+        match kind {
+            AstKind::BlockStatement(block) => block_spans.push(block.span),
+            AstKind::TryStatement(try_stmt) => {
+                if let Some(finalizer) = try_stmt.finalizer.as_ref()
+                    && block_spans.contains(&finalizer.span)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// True if the symbol's declaration sits inside a `let` or `var`
@@ -1161,5 +1365,97 @@ export function increment() {
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("increment"));
         assert!(d[0].message.contains("counter"));
+    }
+
+    // Regression for #6351 — the scoped-context-bracket (push/pop) pattern of a
+    // reactive library's "current observer" pointer. `evalContext` is saved,
+    // swapped, and restored in a `finally`; `endEffect` pops it back from a
+    // parameter. The binding is impure by contract, so its functions must not be
+    // flagged.
+    #[test]
+    fn no_fp_on_scoped_context_bracket_full_repro() {
+        let src = r#"
+let evalContext: Computed | Effect | undefined = undefined;
+
+function untracked<T>(fn: () => T): T {
+    const prevContext = evalContext;
+    evalContext = undefined;
+    try {
+        return fn();
+    } finally {
+        evalContext = prevContext;
+    }
+}
+
+function cleanupEffect(effect: Effect) {
+    const prevContext = evalContext;
+    evalContext = undefined;
+    try {
+        cleanup();
+    } finally {
+        evalContext = prevContext;
+    }
+}
+
+function endEffect(this: Effect, prevContext?: Computed | Effect) {
+    if (evalContext !== this) throw new Error("Out-of-order effect");
+    evalContext = prevContext;
+}
+"#;
+        assert!(
+            run(src).is_empty(),
+            "scoped-context-bracket functions must not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_minimal_save_modify_finally_restore() {
+        // Save, modify, restore-in-finally — the minimal bracket shape.
+        let src = r#"
+let ctx;
+function scope<T>(fn: () => T) {
+    const prev = ctx;
+    ctx = undefined;
+    try {
+        return fn();
+    } finally {
+        ctx = prev;
+    }
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_shared_mutable_counter_without_bracket() {
+        // A genuine shared mutable counter has no save/restore-in-finally, so it
+        // stays flagged — not every module `let` is exempt.
+        let src = r#"
+let count = 0;
+function inc() {
+    count = count + 1;
+}
+"#;
+        let d = run(src);
+        assert!(!d.is_empty());
+        assert!(d.iter().any(|x| x.message.contains("inc")));
+    }
+
+    #[test]
+    fn still_flags_save_modify_restore_without_finally() {
+        // Save, modify, and restore but WITHOUT a `finally`: the unbracketed
+        // modify is genuine mutable state and stays flagged.
+        let src = r#"
+let ctx;
+function bad() {
+    const p = ctx;
+    ctx = 1;
+    sideEffect();
+    ctx = p;
+}
+"#;
+        let d = run(src);
+        assert!(!d.is_empty());
+        assert!(d.iter().any(|x| x.message.contains("bad")));
     }
 }
