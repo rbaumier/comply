@@ -98,6 +98,15 @@
 //!
 //! Negated, compared, or compound conditions stay flagged.
 //!
+//! The same opt-in covers the inverted early-return form
+//! `if !self.debug { return; }` written at a function's entry: when the
+//! first statement of a function body is an `if` whose condition is a
+//! negated *simple* flag reference (`!verbose`, `!self.debug`) and whose
+//! body is a single `return`, the function bails out unless the flag is on,
+//! so every `eprintln!` in the rest of that function only runs when the flag
+//! is set — exactly the positive `if self.debug { … }` case, control-flow
+//! inverted. Only the first statement counts as the entry guard.
+//!
 //! An `eprintln!` / `eprint!` covered by an explicit
 //! `#[allow(clippy::disallowed_macros)]` / `#[expect(clippy::disallowed_macros)]`
 //! is exempt. `eprintln!` is a canonical entry in clippy's `disallowed_macros`
@@ -208,7 +217,9 @@ impl AstCheck for Check {
         {
             return;
         }
-        if is_under_verbose_flag_guard(node, source_bytes) {
+        if is_under_verbose_flag_guard(node, source_bytes)
+            || is_after_inverted_early_return_guard(node, source_bytes)
+        {
             return;
         }
         if is_in_panic_hook_closure(node, source_bytes) {
@@ -262,6 +273,126 @@ fn is_under_verbose_flag_guard(node: tree_sitter::Node, source: &[u8]) -> bool {
         current = parent;
     }
     false
+}
+
+/// True when `node` sits in a function whose body opens with an inverted
+/// early-return verbose guard — `fn f() { if !self.debug { return; } … }`.
+/// Such a guard bails the function out unless the flag is on, so every
+/// statement after it (including this `eprintln!`) runs only in the opt-in
+/// case: the control-flow-inverted twin of `if self.debug { eprintln!(…) }`.
+/// Conservative: only the *first* statement of the nearest enclosing
+/// function body is treated as the entry guard.
+fn is_after_inverted_early_return_guard(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(body) = enclosing_function_body(node) else {
+        return false;
+    };
+    let Some(first) = first_statement(body) else {
+        return false;
+    };
+    is_inverted_verbose_return_guard(first, source)
+}
+
+/// The `body` block of the nearest enclosing `function_item`, or `None` if
+/// `node` is not inside one.
+fn enclosing_function_body(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "function_item" {
+            return parent.child_by_field_name("body");
+        }
+        current = parent;
+    }
+    None
+}
+
+/// The first non-comment statement of a `block`, or `None` if empty.
+fn first_statement(block: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    (0..block.named_child_count())
+        .filter_map(|i| block.named_child(i))
+        .find(|n| n.kind() != "line_comment" && n.kind() != "block_comment")
+}
+
+/// True when `stmt` is an inverted verbose-flag early-return guard:
+/// `if !<verbose-flag> { return; }`. The condition must be a `!`-negated
+/// simple flag reference whose final segment is in `VERBOSE_FLAG_NAMES`
+/// (reusing the positive form's `flag_segment` extraction), and the
+/// consequence must be a block whose only statement is a `return`.
+fn is_inverted_verbose_return_guard(stmt: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(if_expr) = unwrap_if_expression(stmt) else {
+        return false;
+    };
+    let condition_negates_flag = if_expr
+        .child_by_field_name("condition")
+        .is_some_and(|cond| is_negated_verbose_flag(cond, source));
+    if !condition_negates_flag {
+        return false;
+    }
+    if_expr
+        .child_by_field_name("consequence")
+        .is_some_and(is_single_return_block)
+}
+
+/// Unwrap a statement to its `if_expression`: an `if` used as a statement is
+/// wrapped in an `expression_statement`, but may also appear bare.
+fn unwrap_if_expression(stmt: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    match stmt.kind() {
+        "if_expression" => Some(stmt),
+        "expression_statement" => stmt
+            .named_child(0)
+            .filter(|inner| inner.kind() == "if_expression"),
+        _ => None,
+    }
+}
+
+/// True when `cond` is `!<flag>` — a `unary_expression` with the `!` operator
+/// applied to a simple flag reference whose final segment is a known
+/// verbose/debug flag name. Reuses `flag_segment` so the negated operand
+/// (`!self.debug`, `!verbose`, `!self.verbose()`) resolves its flag name
+/// identically to the positive `if self.debug { … }` form.
+fn is_negated_verbose_flag(cond: tree_sitter::Node, source: &[u8]) -> bool {
+    if cond.kind() != "unary_expression" {
+        return false;
+    }
+    let is_not = cond
+        .child(0)
+        .and_then(|op| op.utf8_text(source).ok())
+        .is_some_and(|op| op == "!");
+    if !is_not {
+        return false;
+    }
+    cond.named_child(0)
+        .and_then(|operand| flag_segment(operand, source))
+        .is_some_and(|seg| VERBOSE_FLAG_NAMES.contains(&seg))
+}
+
+/// True when `block` is a `{ … }` whose single non-comment statement is a
+/// `return` (with or without a value, `;`-terminated or trailing).
+fn is_single_return_block(block: tree_sitter::Node) -> bool {
+    if block.kind() != "block" {
+        return false;
+    }
+    let mut stmts = (0..block.named_child_count())
+        .filter_map(|i| block.named_child(i))
+        .filter(|n| n.kind() != "line_comment" && n.kind() != "block_comment");
+    let Some(only) = stmts.next() else {
+        return false;
+    };
+    if stmts.next().is_some() {
+        return false;
+    }
+    is_return_statement(only)
+}
+
+/// True when `node` is a `return` — a bare/trailing `return_expression` or an
+/// `expression_statement` wrapping one (`return;`).
+fn is_return_statement(node: tree_sitter::Node) -> bool {
+    match node.kind() {
+        "return_expression" => true,
+        "expression_statement" => node
+            .named_child(0)
+            .is_some_and(|inner| inner.kind() == "return_expression"),
+        _ => false,
+    }
 }
 
 /// True if `node` is `ancestor` or nested anywhere inside it.
@@ -950,6 +1081,50 @@ required-features = ["std"]
     fn flags_eprintln_in_else_of_verbose_guard() {
         let source =
             "fn f(&self) { if self.verbose() { let _ = 1; } else { eprintln!(\"oops\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #6668 (sharkdp/numbat `numbat/src/vm.rs:555`): a function
+    /// that opens with the inverted early-return guard `if !self.debug { return; }`
+    /// bails out unless debug is on, so every `eprintln!` after it is opt-in
+    /// diagnostics — the control-flow-inverted twin of `if self.debug { … }`.
+    #[test]
+    fn allows_eprintln_after_inverted_self_debug_return_guard() {
+        let source = "fn disassemble(&self) { if !self.debug { return; } eprintln!(); eprintln!(\".CONSTANTS\"); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/vm.rs", source).is_empty());
+    }
+
+    /// The bare-identifier flag form `if !verbose { return; }` is the same
+    /// entry guard and exempts the following `eprintln!`.
+    #[test]
+    fn allows_eprintln_after_inverted_bare_verbose_return_guard() {
+        let source = "fn f() { if !verbose { return; } eprintln!(\"trace\"); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The inverted guard is recognised only on the *first* statement: an
+    /// `eprintln!` preceded by ordinary code (no entry guard) stays flagged.
+    #[test]
+    fn flags_eprintln_without_inverted_guard() {
+        let source = "fn f(&self) { let x = 1; eprintln!(\"oops\"); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// The flag-name gate applies to the inverted guard too: a negated
+    /// non-verbose flag (`!self.ready`) is not a diagnostics opt-in, so the
+    /// following `eprintln!` stays flagged.
+    #[test]
+    fn flags_eprintln_after_inverted_non_verbose_return_guard() {
+        let source = "fn f(&self) { if !self.ready { return; } eprintln!(\"oops\"); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// The inverted guard must early-*return*: a first-statement `if !self.debug`
+    /// whose body does something other than `return` does not divert control
+    /// flow, so the following unconditional `eprintln!` stays flagged.
+    #[test]
+    fn flags_eprintln_after_inverted_guard_without_return() {
+        let source = "fn f(&self) { if !self.debug { do_thing(); } eprintln!(\"oops\"); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
