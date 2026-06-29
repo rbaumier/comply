@@ -3,6 +3,10 @@
 //! Walks `macro_invocation` nodes for `eprintln!` / `eprint!` and
 //! flags any invocation that:
 //!
+//! - is a bare `eprintln!`/`eprint!` (which the prelude may resolve to
+//!   std's) or an explicit `std::`/`core::` qualification — a path-qualified
+//!   macro from any other crate (`anstream::eprintln!`) is a different,
+//!   redirectable macro and is exempt, and
 //! - is **not** in test context (`#[test]` / `#[cfg(test)]` /
 //!   `tests/` integration directory / an inline-test-module file named
 //!   `tests.rs` or `test.rs`), and
@@ -163,6 +167,19 @@ impl AstCheck for Check {
         let name = macro_name.utf8_text(source_bytes).unwrap_or("");
         let bare = name.rsplit("::").next().unwrap_or(name);
         if bare != "eprintln" && bare != "eprint" {
+            return;
+        }
+        // A path-qualified macro from a third-party crate (e.g. `anstream::eprintln!`)
+        // is a different macro with its own (redirectable) output semantics — not the
+        // std macro this rule targets. Only a bare invocation (which the prelude may
+        // resolve to std's) or an explicit `std::`/`core::` qualification fires. A
+        // leading global-path `::` (`::std::eprintln!`) is normalized away first so the
+        // std/core forms still fire regardless of the global-path prefix.
+        let qualified = name.trim_start_matches("::");
+        if qualified.contains("::")
+            && !qualified.starts_with("std::")
+            && !qualified.starts_with("core::")
+        {
             return;
         }
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
@@ -1249,5 +1266,45 @@ required-features = ["std"]
     fn flags_eprintln_in_latest_rs_library_file() {
         let source = "fn f() { eprintln!(\"oops\"); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/latest.rs", source).len(), 1);
+    }
+
+    /// Regression for #6327 (toml-rs/toml `toml_parser/src/debug.rs:27`):
+    /// `anstream::eprintln!` is the `anstream` crate's library-friendly,
+    /// stream-redirectable macro — a different macro from `std::eprintln!`.
+    /// A path-qualified invocation from a non-`std`/`core` crate is exempt.
+    #[test]
+    fn allows_path_qualified_anstream_eprintln() {
+        let source = "pub(crate) fn trace() { anstream::eprintln!(\"{}\", x); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// Any other non-`std`/`core` qualifier names a different crate's macro and
+    /// is exempt as well — the test is on the path prefix, not an allowlist.
+    #[test]
+    fn allows_path_qualified_third_party_eprint() {
+        let source = "fn f() { mycrate::eprint!(\"x\"); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// Precision: an explicit `std::` qualifier is the std macro and still fires.
+    #[test]
+    fn flags_std_qualified_eprintln() {
+        let source = "fn f() { std::eprintln!(\"x\"); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Precision: a `core::` qualifier is the std macro re-export and still fires.
+    #[test]
+    fn flags_core_qualified_eprint() {
+        let source = "fn f() { core::eprint!(\"x\"); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Precision: a leading global-path `::std::` qualifier is still the std
+    /// macro and fires — the leading `::` is normalized before the prefix test.
+    #[test]
+    fn flags_global_path_std_eprintln() {
+        let source = "fn f() { ::std::eprintln!(\"x\"); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 }
