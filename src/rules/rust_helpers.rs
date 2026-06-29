@@ -5156,9 +5156,9 @@ fn pointer_cast_pointee_bits(node: Node, source: &[u8]) -> Option<u16> {
     fixed_width_int_kind(text).map(|(_, bits)| bits)
 }
 
-/// True when `cast` (a `type_cast_expression`) is a direct argument of an x86/
-/// x86-64 SIMD intrinsic call (`_mm_*`, `_mm256_*`, `_mm512_*`) and is a
-/// same-width signed↔unsigned bit reinterpretation.
+/// True when `cast` (a `type_cast_expression`) is a direct argument of a SIMD
+/// intrinsic call (see [`is_simd_intrinsic_name`]) and is a same-width
+/// signed↔unsigned bit reinterpretation.
 ///
 /// Intel's SIMD intrinsic headers type integer lanes as *signed* integers (the C
 /// ABI convention), so `core::arch` mirrors that: `_mm_set_epi64x` takes `i64`
@@ -5206,6 +5206,42 @@ pub fn cast_feeds_simd_intrinsic(cast: Node, source: &[u8]) -> bool {
     }
 }
 
+/// True when `cast` (a `type_cast_expression`) casts the RETURN VALUE of a SIMD
+/// intrinsic call to a numeric type — `_mm_movemask_epi8(cmp) as u16`,
+/// `x86::_mm_movemask_epi8(self.0) as u16`, or the turbofished LoongArch
+/// `lsx_vpickve2gr_hu::<0>(mask) as u16`.
+///
+/// A SIMD intrinsic returns an ISA-defined machine integer whose meaningful
+/// payload these mask/extract intrinsics place in a known low-bit subset:
+/// `_mm_movemask_epi8` packs a 16-bit mask into the low bits of an `i32` (upper
+/// bits zero), and the LoongArch element-extraction intrinsics return a
+/// zero-extended lane in a `u32`. The narrowing `as` extracts that payload at
+/// zero cost. `try_from` does compile here (`u16: TryFrom<i32>` exists), but its
+/// `?` error path is unreachable — the result is spec-bounded to fit the target,
+/// so the conversion can never fail — so `as` is the conventional extraction,
+/// the same rationale as the rule's `proc-macro` exemption.
+///
+/// Only a direct call operand matches, peeling a single transparent
+/// `parenthesized_expression` layer; a binary or index operand built from an
+/// intrinsic (`(simd() & m) as u16`) is not matched by this predicate.
+pub fn cast_is_simd_result(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    let operand = if value.kind() == "parenthesized_expression" {
+        value.named_child(0).unwrap_or(value)
+    } else {
+        value
+    };
+    if operand.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = operand.child_by_field_name("function") else {
+        return false;
+    };
+    call_function_last_segment(function, source).is_some_and(is_simd_intrinsic_name)
+}
+
 /// The resolution outcome for a cast operand's source type.
 enum CastSource {
     /// A fixed-width integer (`true` = signed) of the given bit width.
@@ -5217,9 +5253,8 @@ enum CastSource {
 }
 
 /// If `cast` is a direct argument (through transparent parentheses) of a
-/// `call_expression` whose callee's last path segment names an x86 SIMD
-/// intrinsic (`_mm_*`, `_mm256_*`, `_mm512_*`), return that segment; otherwise
-/// `None`.
+/// `call_expression` whose callee's last path segment is a SIMD intrinsic name
+/// (see [`is_simd_intrinsic_name`]), return that segment; otherwise `None`.
 fn simd_intrinsic_call_segment<'a>(cast: Node, source: &'a [u8]) -> Option<&'a str> {
     let mut current = cast;
     while let Some(parent) = current.parent() {
@@ -5238,10 +5273,17 @@ fn simd_intrinsic_call_segment<'a>(cast: Node, source: &'a [u8]) -> Option<&'a s
     None
 }
 
-/// True if `name` is an x86/x86-64 SIMD intrinsic identifier — one prefixed by a
-/// register-width tag (`_mm_`, `_mm256_`, `_mm512_`).
+/// True if `name` is a SIMD intrinsic identifier: an x86/x86-64 one prefixed by a
+/// register-width tag (`_mm_`, `_mm256_`, `_mm512_`), or a LoongArch LSX/LASX one
+/// (`lsx_`, `lasx_`). Any leading underscores are stripped before the LoongArch
+/// check so the `core::arch`-mangled forms (`__lsx_*`, `__lasx_*`) also match.
 fn is_simd_intrinsic_name(name: &str) -> bool {
-    name.starts_with("_mm_") || name.starts_with("_mm256_") || name.starts_with("_mm512_")
+    let loongarch = name.trim_start_matches('_');
+    name.starts_with("_mm_")
+        || name.starts_with("_mm256_")
+        || name.starts_with("_mm512_")
+        || loongarch.starts_with("lsx_")
+        || loongarch.starts_with("lasx_")
 }
 
 /// The lane bit width encoded in a SIMD intrinsic name's `epiN`/`epuN` token
@@ -5374,11 +5416,16 @@ fn fixed_width_int_kind(type_text: &str) -> Option<(bool, u16)> {
 
 /// The final path segment of a call's `function` node, used to match a call by
 /// method/associated-function name regardless of its receiver/path prefix.
-/// `f32::from_bits` and `core::f32::from_bits` both yield `from_bits`.
+/// `f32::from_bits` and `core::f32::from_bits` both yield `from_bits`. A
+/// turbofished callee (`generic_function`, e.g. `lsx_vpickve2gr_hu::<0>`) is
+/// unwrapped to its underlying callee before extracting the segment.
 fn call_function_last_segment<'a>(function: Node, source: &'a [u8]) -> Option<&'a str> {
     let name = match function.kind() {
         "scoped_identifier" => function.child_by_field_name("name")?,
         "field_expression" => function.child_by_field_name("field")?,
+        "generic_function" => {
+            return call_function_last_segment(function.child_by_field_name("function")?, source);
+        }
         "identifier" => function,
         _ => return None,
     };
