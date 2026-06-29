@@ -9,8 +9,11 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Walk up the semantic parent chain. Return `true` if a `TryStatement` body
-/// is encountered before a function boundary.
+/// Walk up the semantic parent chain, stopping at the nearest function
+/// boundary. Return `true` when the return sits where `return await` is
+/// load-bearing: inside a `try` BODY block, or inside the `catch` handler of a
+/// `try` that also has a `finally` (there the `await` decides whether the
+/// finalizer runs before or after the returned promise settles).
 fn is_inside_try_body(
     node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic<'_>,
@@ -32,6 +35,17 @@ fn is_inside_try_body(
                 let body_start = try_stmt.block.span.start;
                 let body_end = try_stmt.block.span.end;
                 if return_start >= body_start && return_end <= body_end {
+                    return true;
+                }
+                // A `return await` inside the catch handler of a try that has a
+                // `finally` is load-bearing: the await decides whether the
+                // finalizer runs before or after the returned promise settles,
+                // so removing it changes behavior.
+                if try_stmt.finalizer.is_some()
+                    && let Some(handler) = &try_stmt.handler
+                    && return_start >= handler.span.start
+                    && return_end <= handler.span.end
+                {
                     return true;
                 }
             }
@@ -88,5 +102,86 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn allows_return_await_in_catch_with_finally() {
+        // #6425: with a `finally` present, the `await` decides whether the
+        // finalizer runs before or after the returned promise settles.
+        let d = run_on(
+            "async function f() {\n\
+               try { await f(); }\n\
+               catch (e) { return await onError(e); }\n\
+               finally { cleanup(); }\n\
+             }",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_return_await_in_catch_without_finally() {
+        // No `finally` → nothing to time, so the `await` is redundant.
+        let d = run_on(
+            "async function f() {\n\
+               try { await f(); }\n\
+               catch (e) { return await onError(e); }\n\
+             }",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_plain_return_await_outside_try() {
+        let d = run_on("async function g() { return await h(); }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_return_await_in_try_body() {
+        let d = run_on(
+            "async function f() {\n\
+               try { return await h(); }\n\
+               catch (e) { handle(e); }\n\
+             }",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_return_await_in_finally_block() {
+        // The exemption keys off the catch handler span, not the finalizer
+        // span, so a return inside the `finally` itself stays flagged.
+        let d = run_on(
+            "async function f() {\n\
+               try { await f(); }\n\
+               finally { return await cleanup(); }\n\
+             }",
+        );
+        assert_eq!(d.len(), 1);
     }
 }
