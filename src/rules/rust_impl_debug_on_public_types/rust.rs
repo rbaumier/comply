@@ -1,11 +1,14 @@
 //! rust-impl-debug-on-public-types backend.
 //!
-//! For every `struct_item` and `enum_item` with a strictly `pub` visibility
-//! modifier, scan the preceding `attribute_item` siblings looking
-//! for either `#[derive(...Debug...)]` or a manual `impl Debug for
-//! ...` somewhere in the file. Flag if neither is present.
+//! For every `struct_item` and `enum_item` that is effectively public — a bare
+//! `pub` modifier with no enclosing non-public module — scan the preceding
+//! `attribute_item` siblings looking for either `#[derive(...Debug...)]` or a
+//! manual `impl Debug for ...` somewhere in the file. Flag if neither is present.
 //!
 //! Suppressed for: `pub(crate)`/`pub(super)`/`pub(in …)` visibility,
+//! items confined to a non-public enclosing module — whether an inline
+//! `mod priv { pub struct … }` or a split file declared `mod foo;` (non-`pub`)
+//! in its parent, since effective visibility never escapes the crate —
 //! files under `tests/` or `benches/`, items in a `#[cfg(test)]` module,
 //! items gated on `#[cfg(doctest)]` (the README-doctest harness — compiled only
 //! when rustdoc collects doctests, never reachable by consumers),
@@ -40,7 +43,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     has_clippy_allow, has_doc_hidden, has_outer_attribute_path, has_test_attribute,
-    is_in_test_context,
+    is_effectively_pub, is_in_test_context,
 };
 
 /// PyO3 `#[pyclass]` attribute spellings: the bare form and the fully-qualified
@@ -65,7 +68,14 @@ impl AstCheck for Check {
     ) {
         let source_bytes = ctx.source.as_bytes();
         let kind = node.kind();
-        if !is_pub(node, source_bytes) {
+        // Effective visibility is the product of the item's own `pub` modifier
+        // and every enclosing module's. A bare-`pub` item confined to a
+        // non-public module is unreachable by external consumers, so the rule's
+        // "consumers can't log it" rationale does not apply. `is_effectively_pub`
+        // walks ancestor `mod_item` nodes for the inline form
+        // (`mod priv { pub struct … }`) AND, via `path`, resolves the cross-file
+        // form where the file is pulled in by a non-`pub` `mod foo;` in its parent.
+        if !is_effectively_pub(node, source_bytes, ctx.path) {
             return;
         }
         if ctx.path.components().any(|c| {
@@ -166,19 +176,6 @@ impl AstCheck for Check {
             span: None,
         });
     }
-}
-
-fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut cursor = item.walk();
-    for child in item.children(&mut cursor) {
-        if child.kind() == "visibility_modifier"
-            && let Ok(text) = child.utf8_text(source)
-            && text == "pub"
-        {
-            return true;
-        }
-    }
-    false
 }
 
 fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
@@ -606,6 +603,29 @@ mod tests {
         let src_path = dir.path().join("src/x.rs");
         fs::write(&src_path, source).unwrap();
         crate::rules::test_helpers::run_rule(&Check, source, &src_path)
+    }
+
+    /// Write `parent_rel` and `child_rel` into a temp crate, then run the rule on
+    /// the child so `is_effectively_pub` can read the parent's `mod` declaration
+    /// off disk (the split-file private-module case).
+    fn run_split_module(
+        parent_rel: &str,
+        parent_src: &str,
+        child_rel: &str,
+        child_src: &str,
+    ) -> Vec<Diagnostic> {
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        for rel in [parent_rel, child_rel] {
+            if let Some(parent) = std::path::Path::new(rel).parent() {
+                fs::create_dir_all(dir.path().join(parent)).unwrap();
+            }
+        }
+        fs::write(dir.path().join(parent_rel), parent_src).unwrap();
+        let child_path = dir.path().join(child_rel);
+        fs::write(&child_path, child_src).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, child_src, &child_path)
     }
 
     #[test]
@@ -1215,6 +1235,76 @@ name = "anyhow_like"
         assert!(
             run_on(source).is_empty(),
             "false positive: trailing line comment after attribute should not defeat Debug detection"
+        );
+    }
+
+    /// Closes #6383: a `pub struct` inside a private (non-`pub`) inline module is
+    /// unreachable by external consumers — effective visibility is the product of
+    /// the item's modifier and every enclosing module's — so the missing-Debug
+    /// rationale does not apply (thiserror `display.rs`
+    /// `mod placeholder { pub struct Placeholder; }`).
+    #[test]
+    fn suppresses_pub_struct_in_private_inline_module() {
+        let source = "mod placeholder {\n    pub struct Placeholder;\n}";
+        assert!(
+            run_on(source).is_empty(),
+            "a pub struct inside a private inline module must not be flagged"
+        );
+    }
+
+    /// Load-bearing negative: a `pub struct` inside a `pub mod` whose chain to the
+    /// crate root is fully public IS part of the public API and must still flag —
+    /// the effective-visibility gate must not gut the rule.
+    #[test]
+    fn still_flags_pub_struct_in_public_inline_module() {
+        let source = "pub mod m {\n    pub struct S { x: u32 }\n}";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a pub struct inside a fully-public module chain must still flag"
+        );
+    }
+
+    /// Load-bearing negative: a top-level `pub struct` with no enclosing module is
+    /// public API and must still flag.
+    #[test]
+    fn still_flags_top_level_pub_struct() {
+        assert_eq!(run_on("pub struct Var { x: u32 }").len(), 1);
+    }
+
+    /// Closes #6383: thiserror declares `mod var;` (non-`pub`) in `src/lib.rs`, so
+    /// the `pub struct Var` in `src/var.rs` is unreachable by external consumers
+    /// even though the file is parsed standalone. `is_effectively_pub` resolves
+    /// the parent `mod` declaration from the path and must suppress it.
+    #[test]
+    fn suppresses_pub_struct_in_split_file_private_module() {
+        let diags = run_split_module(
+            "src/lib.rs",
+            "mod var;\n",
+            "src/var.rs",
+            "pub struct Var<'a, T: ?Sized>(pub &'a T);\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "a pub struct in a file included via a private `mod var;` must not be flagged: {diags:?}"
+        );
+    }
+
+    /// Load-bearing negative: the identical struct in a file included via
+    /// `pub mod var;` (a public chain) IS public API and must still flag — the
+    /// suppression triggers only on a proven non-public parent declaration.
+    #[test]
+    fn still_flags_pub_struct_in_split_file_public_module() {
+        let diags = run_split_module(
+            "src/lib.rs",
+            "pub mod var;\n",
+            "src/var.rs",
+            "pub struct Var<'a, T: ?Sized>(pub &'a T);\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a pub struct in a file included via `pub mod var;` must still flag: {diags:?}"
         );
     }
 }
