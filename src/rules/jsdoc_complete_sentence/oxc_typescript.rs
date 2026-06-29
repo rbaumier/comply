@@ -42,6 +42,10 @@ pub struct Check;
 /// A trailing bare URL (a reference link, e.g. `https://docs.example/`) is
 /// not prose either: it ends with a path or query, not with `.`, `!`, or
 /// `?`, so it is excluded and never gates the punctuation check.
+///
+/// A trailing Markdown table (lines starting with `|`) is structural markup,
+/// not a prose sentence: its rows are excluded, and the `:`-terminated label
+/// that introduces the table is dropped too, so neither gates the check.
 fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     let mut description_lines = Vec::new();
     let mut in_fence = false;
@@ -76,6 +80,7 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     }
 
     drop_trailing_bare_url(&mut description_lines);
+    drop_trailing_table_rows(&mut description_lines);
     description_lines
 }
 
@@ -90,6 +95,26 @@ fn drop_trailing_bare_url(description_lines: &mut Vec<(String, usize)>) {
         .is_some_and(|(text, _)| is_bare_url(text))
     {
         description_lines.pop();
+        drop_trailing_code_block_label(description_lines);
+    }
+}
+
+/// Drop a trailing Markdown table — a run of consecutive lines each starting
+/// with `|` (header, separator `| :---: |`, and data rows). Such rows are
+/// structural markup, not prose sentences, so they must not gate the terminal-
+/// punctuation check. When at least one row is popped, the `:`-terminated label
+/// that introduces the table (e.g. `The following table shows the distribution:`)
+/// is a heading, not a concluding sentence, so it is dropped too.
+fn drop_trailing_table_rows(description_lines: &mut Vec<(String, usize)>) {
+    let mut popped_any = false;
+    while description_lines
+        .last()
+        .is_some_and(|(text, _)| text.starts_with('|'))
+    {
+        description_lines.pop();
+        popped_any = true;
+    }
+    if popped_any {
         drop_trailing_code_block_label(description_lines);
     }
 }
@@ -595,6 +620,83 @@ export interface ModuleOptions {
  * @returns the sum
  */
 function add(a: number, b: number) {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn ignores_trailing_markdown_table_in_description() {
+        // Regression for rbaumier/comply#6335 — a description ending with a
+        // Markdown table (introduced by a `:`-terminated intro) must not flag
+        // the last table row as missing punctuation; table rows are structural
+        // markup, not prose, and the intro label is a heading, not a sentence.
+        let source = r#"
+/**
+ * Creates a new function that generates uniformly distributed values.
+ *
+ * The following table shows the rough distribution:
+ *
+ * |  Result   | Uniform |
+ * | :-------: | ------: |
+ * | 0.0 - 0.1 |   10.0% |
+ * | 0.9 - 1.0 |   10.0% |
+ *
+ * @returns A new uniform distributor function.
+ */
+export function uniform(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_trailing_markdown_table_as_last_content() {
+        // A table that is the very last content (no `@tag` after it) is still
+        // structural markup and must not gate the punctuation check.
+        let source = r#"
+/**
+ * Lookup table for the supported modes.
+ *
+ * |  Mode  | Value |
+ * | :----: | ----: |
+ * | fast   |     0 |
+ * | slow   |     1 |
+ */
+export function modes(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_prose_missing_punctuation_with_no_table() {
+        // A plain prose description with no terminal punctuation and no table
+        // must still be flagged.
+        let source = r#"
+/**
+ * Generates uniformly distributed values
+ */
+function uniform(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_prose_after_table_missing_punctuation() {
+        // Only a *trailing* table is dropped — a table mid-description followed
+        // by a concluding prose sentence missing terminal punctuation must still
+        // flag.
+        let source = r#"
+/**
+ * Shows the distribution:
+ *
+ * |  Result   | Uniform |
+ * | :-------: | ------: |
+ * | 0.0 - 0.1 |   10.0% |
+ *
+ * but remember to read the notes
+ */
+function uniform(): void {}
 "#;
         let d = run_on(source);
         assert!(d.iter().any(|d| d.message.contains("end with")));
