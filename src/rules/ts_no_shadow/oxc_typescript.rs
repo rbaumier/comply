@@ -170,8 +170,9 @@ fn is_class_type_param(nodes: &AstNodes, decl: NodeId) -> bool {
 /// declarator it (transitively) initializes — the self-reference display-name
 /// idiom. This covers every position a named function expression can occupy,
 /// e.g. a call argument (`const Foo = wrap(function Foo() {})`), a `return` value
-/// (`const mw = () => { return function mw() {} }`), or a concise arrow body
-/// (`const mw = () => function mw() {}`).
+/// (`const mw = () => { return function mw() {} }`), a concise arrow body
+/// (`const mw = () => function mw() {}`), or a logical-OR / nullish-coalescing
+/// fallback (`const f = native || function f() {}`, the polyfill idiom).
 fn is_named_fn_expr_self_reference(nodes: &AstNodes, decl: NodeId, symbol_name: &str) -> bool {
     // The shadowing symbol must be declared by a function *expression* whose own
     // identifier equals the symbol name. A function *declaration*'s name enters
@@ -997,6 +998,39 @@ mod tests {
         let d = run_on(
             "let f = 1;\n\
              const x = function f() { return f; };",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_logical_or_fallback_named_fn_expr_self_reference() {
+        // Issue #6329 reproduction (mobx polyfill): a named function expression
+        // used as the `||` fallback of the `const` it initializes mirrors that
+        // const name so it surfaces in stack traces. Its own name is confined to
+        // its scope (ECMA-262 §15.2.4), so it shadows nothing observable.
+        let d = run_on(
+            "const getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors || function getOwnPropertyDescriptors(target) { return target; };",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_nullish_coalescing_fallback_named_fn_expr_self_reference() {
+        // The same self-reference idiom with the `??` (nullish-coalescing)
+        // fallback.
+        let d = run_on("const foo = existing ?? function foo() { return 1; };");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_logical_fallback_named_fn_expr_colliding_with_unrelated_binding() {
+        // Negative space: the exemption keys off the inner function-expression
+        // name matching the enclosing declarator (`bar`). A named fallback whose
+        // name collides with a *different* outer binding (`foo`) is a genuine
+        // shadow and must still fire.
+        let d = run_on(
+            "const foo = 1;\n\
+             const bar = existing || function foo() { return 1; };",
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
