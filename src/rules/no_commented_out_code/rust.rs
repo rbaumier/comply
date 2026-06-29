@@ -51,6 +51,17 @@ impl AstCheck for Check {
         let Ok(text) = node.utf8_text(source_bytes) else {
             return;
         };
+        // A comment that is a direct child of a `macro_rules!` definition
+        // documents the following arm's invocation syntax
+        // (`// log!(target: ..., Level::Info, ...)`), the canonical Rust macro
+        // style — embedded usage documentation, not commented-out code. Comments
+        // nested deeper (inside an arm's expansion body) stay checked.
+        if node
+            .parent()
+            .is_some_and(|p| p.kind() == "macro_definition")
+        {
+            return;
+        }
         let pos = node.start_position();
         let end = node.end_position();
         state.comments.push(CommentSpan {
@@ -279,5 +290,55 @@ mod tests {
     #[test]
     fn allows_block_doc_comment() {
         assert!(run("/** doc */").is_empty());
+    }
+
+    #[test]
+    fn allows_arm_documenting_comments_in_macro_rules() {
+        // Issue #6344: comments preceding each `macro_rules!` arm document the
+        // arm's invocation syntax — canonical Rust macro style, not dead code.
+        let src = r#"
+macro_rules! log {
+    // log!(logger: my_logger, target: "my_target", Level::Info, "a {} event", "log");
+    (logger: $logger:expr, target: $target:expr, $lvl:expr, $($arg:tt)+) => {{ () }};
+    // log!(logger: my_logger, Level::Info, "a log event")
+    (logger: $logger:expr, $lvl:expr, $($arg:tt)+) => {{ () }};
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_commented_code_outside_macro_rules() {
+        // The macro_rules! guard must stay scoped: a commented-out statement at
+        // module scope (no `macro_definition` ancestor) is still flagged.
+        let src = r#"
+macro_rules! log {
+    () => {{ () }};
+}
+// let x = compute_value(a, b);
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_commented_code_in_function_body() {
+        let src = "fn main() {\n    // let x = compute_value(a, b);\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_commented_code_in_macro_expansion_body() {
+        // The guard exempts only comments that are direct children of the
+        // `macro_rules!` definition (arm documentation). Commented-out code
+        // nested inside an arm's expansion body is still flagged.
+        let src = r#"
+macro_rules! m {
+    () => {{
+        // let x = compute_value(a, b);
+        ()
+    }};
+}
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
