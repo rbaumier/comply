@@ -219,6 +219,35 @@ fn is_in_shorthand_axis_family(name: &str, names: &[&str]) -> bool {
         .any(|base| name.strip_prefix(*base).is_some_and(is_axis_suffix) && has_family(base))
 }
 
+/// Whether `members` contains a non-optional property signature typed as a
+/// string-literal type (`type: 'spring'`). A required literal-typed member is
+/// the structural marker of a resolved discriminated-union variant: the
+/// interface is one arm of a union keyed on this field, so its optional fields
+/// are independent per-variant configuration knobs, not an encoded sub-state
+/// machine — the discriminated-union refactor advice is nonsensical. The field
+/// name is irrelevant; any required string-literal-typed member is the signal.
+/// (Regression: #6364.)
+fn has_required_literal_discriminant(
+    members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSignature<'_>>,
+) -> bool {
+    use oxc_ast::ast::{TSLiteral, TSType};
+    members.iter().any(|member| {
+        let oxc_ast::ast::TSSignature::TSPropertySignature(prop) = member else {
+            return false;
+        };
+        if prop.optional {
+            return false;
+        }
+        let Some(annot) = &prop.type_annotation else {
+            return false;
+        };
+        matches!(
+            &annot.type_annotation,
+            TSType::TSLiteralType(lit) if matches!(&lit.literal, TSLiteral::StringLiteral(_))
+        )
+    })
+}
+
 fn collect_optional_prefixes<'b>(
     members: &'b oxc_allocator::Vec<'_, oxc_ast::ast::TSSignature<'_>>,
 ) -> FxHashMap<String, Vec<&'b str>> {
@@ -327,6 +356,12 @@ impl OxcCheck for Check {
         }
         match node.kind() {
             AstKind::TSInterfaceDeclaration(iface) => {
+                // An interface carrying a required string-literal discriminant
+                // (`type: 'spring'`) is an already-resolved discriminated-union
+                // variant, not a state-machine host. (Regression: #6364.)
+                if has_required_literal_discriminant(&iface.body.body) {
+                    return;
+                }
                 let name = iface.id.name.as_str();
                 let counts = collect_optional_prefixes(&iface.body.body);
                 check_optional_clusters(counts, name, iface.span.start, ctx, diagnostics);
@@ -752,6 +787,53 @@ mod tests {
         // end in lowercase letters, so neither is mistaken for an axis pair
         // and this genuine cluster stays flagged.
         let src = "interface S { boxShadow?: string; boxSizing?: string }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_interface_with_required_string_literal_discriminant() {
+        // Regression for #6364: `Spring` is a member of a discriminated union
+        // (`type PopmotionTransitionProps = Spring | Inertia | …`) keyed on its
+        // required `type: 'spring'` literal. The prefix-sharing optional fields
+        // (`restSpeed`/`restDelta`, bucket `rest`) are independent physics knobs,
+        // not mutually-exclusive sub-states — the required string-literal
+        // discriminant marks the interface as an already-resolved variant.
+        let src = r#"interface Spring {
+  type: 'spring'
+  stiffness?: number
+  damping?: number
+  restSpeed?: number
+  restDelta?: number
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_cluster_without_required_literal_discriminant() {
+        // Negative-space guard for #6364: the discriminant skip is structural,
+        // keyed on a required string-LITERAL-typed member. An interface with no
+        // such member but with a genuine prefix-sharing optional cluster
+        // (`restSpeed`/`restDelta`, bucket `rest`) stays flagged.
+        let src = r#"interface Spring {
+  stiffness?: number
+  restSpeed?: number
+  restDelta?: number
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_cluster_with_optional_or_plain_string_type_field() {
+        // Negative-space guard for #6364: the discriminant must be both required
+        // and typed as a string LITERAL. An optional `type?: 'spring'` is not a
+        // resolved discriminant, and a plain `kind: string` is not a literal —
+        // neither suppresses a genuine prefix cluster (`restSpeed`/`restDelta`).
+        let src = r#"interface Spring {
+  type?: 'spring'
+  kind: string
+  restSpeed?: number
+  restDelta?: number
+}"#;
         assert_eq!(run_on(src).len(), 1);
     }
 
