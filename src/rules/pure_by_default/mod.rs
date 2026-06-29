@@ -11,7 +11,6 @@
 //! false positive (issue #2240).
 
 mod oxc_typescript;
-mod rust;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -38,7 +37,6 @@ pub fn register() -> RuleDef {
             (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
             (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
             (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
-            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
         ],
     }
 }
