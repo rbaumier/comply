@@ -1,7 +1,9 @@
 //! rust-thiserror-for-lib backend.
 //!
-//! Skips `main.rs` / `src/bin/` (application crates) and any file that
-//! already uses a derive-based error-handling library. In what remains,
+//! Skips `main.rs` / `src/bin/` and any file in a binary-only crate (no
+//! `[lib]` table and no `src/lib.rs` — an application crate whose error types
+//! have no downstream library consumers), plus any file that already uses a
+//! derive-based error-handling library. In what remains,
 //! flags `enum_item` declarations that are truly `pub` (bare `pub` only —
 //! `pub(crate)`, `pub(super)`, and `pub(in …)` are crate-internal, not
 //! library API) and whose name contains `Error` — the signal that this is
@@ -63,6 +65,10 @@ crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     // `thiserror::Error` would be pointless.
     if name_text.ends_with("Kind") { return; }
 
+    // A binary-only crate (no `[lib]` table, no `src/lib.rs`) builds no library
+    // target, so its error types have no downstream consumers — they are
+    // application-internal, like `main.rs`/`src/bin/` code, and need no derive.
+    if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.is_binary_only()) { return; }
     // The error-derive library may be a crate dependency whose derive lives in a
     // sibling file; the manifest carries it crate-wide where this file's source
     // alone cannot.
@@ -119,12 +125,14 @@ mod tests {
     }
 
     /// Run on a file in `dir/src/x.rs` with the given `Cargo.toml` contents,
-    /// so the `nearest_cargo_manifest` no-std check resolves the temp crate's
-    /// manifest.
+    /// so the `nearest_cargo_manifest` checks resolve the temp crate's manifest.
+    /// An empty `src/lib.rs` is created so the crate is a genuine library target
+    /// (`is_binary_only` is false) — the rule only flags library error types.
     fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
         let src_path = dir.path().join("src/x.rs");
         fs::write(&src_path, source).unwrap();
         crate::rules::test_helpers::run_rule(&Check, source, &src_path)
@@ -251,6 +259,50 @@ serde = "1"
     fn ignores_main_rs() {
         let diags = crate::rules::test_helpers::run_rule(&Check, "pub enum MyError { Fail }", "src/main.rs");
         assert!(diags.is_empty());
+    }
+
+    /// Run the rule on `dir/<rel_path>` in a binary-only crate: the given
+    /// `Cargo.toml` has no `[lib]` table and no `src/lib.rs` is created, so
+    /// `CargoManifest::is_binary_only` returns true for the resolved manifest.
+    fn run_in_binary_only_crate(
+        cargo_toml_contents: &str,
+        rel_path: &str,
+        source: &str,
+    ) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
+        let src_path = dir.path().join(rel_path);
+        fs::create_dir_all(src_path.parent().unwrap()).unwrap();
+        fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
+    }
+
+    const SHADER_ERROR_SRC: &str = "pub enum ShaderError { Compile(String), Link(String) }\n\
+         impl std::error::Error for ShaderError {}";
+
+    /// Regression for #6984 (alacritty): a binary-only application crate (no
+    /// `[lib]` table, no `src/lib.rs`) has no downstream library consumers, so
+    /// its error types are application-internal even in non-entry-point files
+    /// like `src/renderer/shader.rs` — not just `main.rs` / `src/bin/`.
+    #[test]
+    fn allows_pub_error_in_binary_only_crate() {
+        assert!(
+            run_in_binary_only_crate(STD_CARGO_TOML, "src/renderer/shader.rs", SHADER_ERROR_SRC)
+                .is_empty(),
+            "must not flag error types in a binary-only crate"
+        );
+    }
+
+    /// Negative counterpart of #6984: the same error type in a library crate
+    /// (`run_on_with_cargo` creates `src/lib.rs`, so `is_binary_only` is false)
+    /// is public library API and must still be flagged.
+    #[test]
+    fn still_flags_pub_error_in_library_crate() {
+        assert_eq!(
+            run_on_with_cargo(STD_CARGO_TOML, SHADER_ERROR_SRC).len(),
+            1,
+            "must keep flagging error types in a library crate"
+        );
     }
 
     // ── no_std / visibility regression tests (Closes #999) ──────────────
