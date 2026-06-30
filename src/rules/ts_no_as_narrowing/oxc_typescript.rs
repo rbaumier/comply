@@ -33,15 +33,73 @@ const NARROWING_UTILITY_TYPES: &[&str] = &[
     "Pick",
 ];
 
-/// Built-in DOM element interfaces (`HTMLSpanElement`, `SVGPathElement`, the
-/// bare `HTMLElement`/`Element`, …). DOM query APIs return the broad
-/// `HTMLElement | null` / `Element | null`, so casting their result to a
-/// specific element interface is the idiomatic way to access element-specific
-/// members — `instanceof` narrowing is equivalent but verbose, not a smell.
-fn is_dom_element_type(name: &str) -> bool {
+/// The standardized DOM event interfaces. Listed explicitly rather than matched
+/// by a bare `*Event` suffix: a suffix would also exempt user-defined domain
+/// events (`OrderCreatedEvent`, `DomainEvent`), whose `as`-cast IS the narrowing
+/// this rule should catch. The set grows only as new event interfaces are
+/// standardized; keeping it explicit is the deliberate trade — a not-yet-listed
+/// interface flags until added, but no user-defined `*Event` is ever masked.
+const DOM_EVENT_INTERFACES: &[&str] = &[
+    "Event",
+    "UIEvent",
+    "CustomEvent",
+    "MouseEvent",
+    "PointerEvent",
+    "WheelEvent",
+    "DragEvent",
+    "KeyboardEvent",
+    "InputEvent",
+    "CompositionEvent",
+    "TouchEvent",
+    "FocusEvent",
+    "ClipboardEvent",
+    "SubmitEvent",
+    "FormDataEvent",
+    "BeforeUnloadEvent",
+    "AnimationEvent",
+    "TransitionEvent",
+    "ToggleEvent",
+    "PopStateEvent",
+    "HashChangeEvent",
+    "PageTransitionEvent",
+    "StorageEvent",
+    "MessageEvent",
+    "CloseEvent",
+    "ErrorEvent",
+    "PromiseRejectionEvent",
+    "ProgressEvent",
+    "SecurityPolicyViolationEvent",
+    "DeviceMotionEvent",
+    "DeviceOrientationEvent",
+    "MediaQueryListEvent",
+    "GamepadEvent",
+];
+
+/// Built-in web-platform interface types whose `as` cast is an idiomatic DOM
+/// narrowing, not a smell. The DOM and File System APIs hand back a broad
+/// supertype — DOM queries return `HTMLElement | null` / `Element | null`,
+/// `EventTarget.target` is `EventTarget | null`, a listener's argument is the
+/// base `Event`, a directory reader yields `FileSystemEntry` — so casting to the
+/// concrete platform interface to reach interface-specific members is the
+/// standard pattern (`instanceof` is equivalent but verbose). Covers:
+/// - DOM element interfaces: bare `Element`, and `HTML*Element` / `SVG*Element` /
+///   `MathML*Element`.
+/// - Base DOM tree interfaces: `Node`, `EventTarget`, `ShadowRoot`,
+///   `DocumentFragment`. (`Document` and `Window` are intentionally omitted:
+///   they are commonly shadowed by user types — e.g. a MongoDB/Prisma
+///   `Document` — so exempting them risks masking real narrowings, and the
+///   reported false positives do not need them.)
+/// - DOM event interfaces: the enumerated `DOM_EVENT_INTERFACES` (`MouseEvent`,
+///   `KeyboardEvent`, `DragEvent`, `ClipboardEvent`, …).
+/// - File System API entries: `FileSystem*Entry` (`FileSystemFileEntry`,
+///   `FileSystemDirectoryEntry`, the base `FileSystemEntry`).
+fn is_dom_interface_type(name: &str) -> bool {
     name == "Element"
         || ((name.starts_with("HTML") || name.starts_with("SVG") || name.starts_with("MathML"))
             && name.ends_with("Element"))
+        || matches!(name, "Node" | "EventTarget" | "ShadowRoot" | "DocumentFragment")
+        || DOM_EVENT_INTERFACES.contains(&name)
+        || (name.starts_with("FileSystem") && name.ends_with("Entry"))
 }
 
 /// Whether the cast operand is a freshly-constructed literal value: an object
@@ -90,7 +148,7 @@ fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
             if r.type_arguments.is_some() {
                 // Generic utility type like `NonNullable<T>`.
                 NARROWING_UTILITY_TYPES.contains(&name)
-            } else if is_dom_element_type(name) {
+            } else if is_dom_interface_type(name) {
                 false
             } else {
                 // PascalCase identifier — likely a user-defined narrowing type.
@@ -343,6 +401,49 @@ mod tests {
         // even though it superficially resembles a DOM type name.
         let diags = run_on("const x = value as AdminElement;");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_dom_base_interface_event_and_filesystem_casts() {
+        // Regression for #6897: DOM/File System APIs hand back a broad supertype
+        // (`EventTarget | null`, base `Event`, `FileSystemEntry`), so casting to
+        // the concrete platform interface is the idiomatic narrowing, not a smell.
+        let src = "const ok = el?.contains(e.target as Node);\n\
+                   directive(e as MouseEvent, el, binding);\n\
+                   const ev = e as Event;\n\
+                   const t = (e as DragEvent).dataTransfer ?? (e as ClipboardEvent).clipboardData ?? null;\n\
+                   const fileEntry = item as FileSystemFileEntry;\n\
+                   const dirEntry = item as FileSystemDirectoryEntry;\n\
+                   const baseEntry = item as FileSystemEntry;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_document_and_window_cast() {
+        // Control for #6897: `Document`/`Window` are deliberately NOT recognized
+        // as DOM interfaces (they are commonly shadowed by user types — e.g. a
+        // MongoDB/Prisma `Document`), so casting to them still flags.
+        assert_eq!(run_on("const d = x as Document;").len(), 1);
+        assert_eq!(run_on("const w = x as Window;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_dom_app_type_narrowing() {
+        // Control for #6897: an arbitrary app type with no DOM lineage is still a
+        // genuine narrowing the rule must catch — the broadened DOM recognizer
+        // must not suppress it.
+        assert_eq!(run_on("const c = data as UserConfig;").len(), 1);
+        assert_eq!(run_on("const v = value as SomeAppType;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_dom_event_type() {
+        // Control for #6897: DOM event interfaces are enumerated, not matched by a
+        // bare `*Event` suffix, so a user-defined domain event still flags as a
+        // narrowing — `as`-casting it is exactly what the rule should catch.
+        assert_eq!(run_on("const p = msg as PurchaseEvent;").len(), 1);
+        assert_eq!(run_on("const d = raw as DomainEvent;").len(), 1);
     }
 
     #[test]
