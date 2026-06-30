@@ -386,6 +386,12 @@ struct CommentEntry {
     /// their identical docs are intentional per-item documentation, not a
     /// copy-paste smell.
     decl_owner: Option<String>,
+    /// Name of the function/method whose body encloses this comment, if any. An
+    /// inline body comment inside a same-named method in another file (drizzle's
+    /// `queryWithCache` mirrored across its per-dialect session classes)
+    /// documents the same step of one algorithm implemented once per package, so
+    /// its identical wording is parallel API-surface documentation, not a copy.
+    enclosing_decl_name: Option<String>,
 }
 
 /// A logical comment block: either one `/* */` node or a run of consecutive
@@ -400,6 +406,8 @@ struct CommentGroup {
     decl_name: Option<String>,
     /// Name of the type owning the variant or member this block documents, if any.
     decl_owner: Option<String>,
+    /// Name of the function/method whose body encloses this block, if any.
+    enclosing_decl_name: Option<String>,
     /// Any line of the block documents a `#[cfg(...)]`-gated item or sits in a
     /// `cfg_if!` arm (see `RawComment::cfg_conditional`).
     cfg_conditional: bool,
@@ -417,6 +425,10 @@ struct RawComment {
     decl_name: Option<String>,
     /// Name of the type owning the variant or member this comment documents, if any.
     decl_owner: Option<String>,
+    /// Name of the function/method whose body encloses this comment, captured by
+    /// walking up to the nearest `function_item` / `function_declaration` /
+    /// `method_definition` ancestor (see `enclosing_decl_name`).
+    enclosing_decl_name: Option<String>,
     /// The documented item compiles only under a `#[cfg(...)]` predicate — the
     /// comment sits inside a `cfg_if!` macro arm or directly precedes a
     /// `#[cfg(...)]`-gated item. Such doc-comments are necessarily identical
@@ -570,6 +582,23 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             {
                 continue;
             }
+            // Parallel inline body documentation: an inline comment inside the
+            // body of a same-named function/method in another file documents the
+            // same step of an algorithm implemented once per package (drizzle's
+            // `queryWithCache` mirrored across its pg/sqlite/gel dialect session
+            // classes), so the identical wording describes the same invariant,
+            // not a copy-paste smell. Keyed on the enclosing declaration name and
+            // a cross-file match, mirroring the same-named-declaration exemption
+            // above: an intra-file duplicate, or a comment with no enclosing named
+            // function, still flags.
+            if entry.file_idx != partner.file_idx
+                && enclosing_names_match(
+                    entry.enclosing_decl_name.as_deref(),
+                    partner.enclosing_decl_name.as_deref(),
+                )
+            {
+                continue;
+            }
             // Implementation twins co-located in one file: an infallible `get_u8`
             // and its fallible `try_get_u8`, or a safe `read` and its `read_ptr`
             // fast path, frequently sit side by side in one trait or module and
@@ -676,6 +705,17 @@ fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
     is_variant_suffix_of(a, b)
         || is_variant_suffix_of(b, a)
         || are_impl_qualifier_twins(a, b)
+}
+
+/// Two inline comments share an enclosing API surface when both sit inside a
+/// named function/method and the two names are identical. Same-named
+/// functions/methods in different files are parallel implementations of one API
+/// (a per-dialect session `queryWithCache`), so an inline comment restating the
+/// same step carries identical wording by necessity. A `None` enclosing name
+/// (the comment sits inside no named function) never matches, so a free-floating
+/// duplicate still flags.
+fn enclosing_names_match(a: Option<&str>, b: Option<&str>) -> bool {
+    matches!((a, b), (Some(a), Some(b)) if a == b)
 }
 
 /// Two declaration names are parallel-implementation twins when one is the
@@ -818,6 +858,7 @@ fn extract_entries(
             prefix_key,
             decl_name: group.decl_name,
             decl_owner: group.decl_owner,
+            enclosing_decl_name: group.enclosing_decl_name,
         });
     }
     entries
@@ -982,6 +1023,34 @@ fn enclosing_named_type(member: tree_sitter::Node, source: &[u8]) -> Option<Stri
     None
 }
 
+/// The name of the nearest function/method whose body encloses `comment`, found
+/// by walking up the ancestor chain to the first `function_item` (Rust),
+/// `function_declaration`, or `method_definition` (TS/JS) and reading its `name`
+/// field. `None` when no such ancestor exists — e.g. a top-level comment, or one
+/// inside a closure or class body with no named-function ancestor above it (a
+/// closure nested inside a named method still resolves to that method's name).
+///
+/// A doc-comment that *precedes* a declaration is its sibling, not its
+/// descendant, so it is never enclosed by that declaration; this captures only
+/// comments sitting *inside* a function body. Two such inline comments inside
+/// same-named methods in different files (a caching protocol implemented once
+/// per dialect package) describe the same algorithm step, so their identical
+/// wording is parallel documentation — the same parallelism the same-named
+/// declaration exemption grants doc-comments.
+fn enclosing_decl_name(comment: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut ancestor = comment.parent();
+    while let Some(n) = ancestor {
+        if matches!(n.kind(), "function_item" | "function_declaration" | "method_definition") {
+            return n
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+                .map(str::to_owned);
+        }
+        ancestor = n.parent();
+    }
+    None
+}
+
 fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComment> {
     let mut out = Vec::new();
     let mut cursor = tree.walk();
@@ -1000,6 +1069,7 @@ fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComme
                 is_line,
                 decl_name,
                 decl_owner,
+                enclosing_decl_name: enclosing_decl_name(node, source),
                 cfg_conditional: is_cfg_conditional_comment(node, source),
             });
         }
@@ -1061,6 +1131,9 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 stripped: texts.join(" "),
                 decl_name,
                 decl_owner,
+                // Every line of a contiguous `//` run shares one enclosing scope,
+                // so the first line's enclosing function names the whole block.
+                enclosing_decl_name: c.enclosing_decl_name.clone(),
                 cfg_conditional,
             });
             i = j;
@@ -1073,6 +1146,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 stripped: strip_block(&source[c.start_byte..c.end_byte]),
                 decl_name: c.decl_name.clone(),
                 decl_owner: c.decl_owner.clone(),
+                enclosing_decl_name: c.enclosing_decl_name.clone(),
                 cfg_conditional: c.cfg_conditional,
             });
             i += 1;
@@ -2217,17 +2291,34 @@ type Clock = MacClock;
         // it at every call site is idiomatic local safety documentation, not a
         // copy-paste smell. The comment is long/distinctive enough to clear the
         // word and entropy gates, so only the SAFETY-marker exclusion keeps it out.
+        // The two enclosing functions are named differently so the same-named-
+        // method exemption (#6829) cannot also produce the emptiness under test —
+        // the SAFETY-marker exclusion must be the sole reason these do not flag.
         let dir = tempfile::tempdir().unwrap();
-        let safety = "\
+        let a = write(
+            &dir,
+            "bytes_mut.rs",
+            "\
 fn split_off(&mut self, at: usize) {
     // SAFETY: `shallow_clone` increments the reference count (or promotes to
     // shared) and returns a bitwise copy of the handle. The caller immediately
     // adjusts both handles so they represent disjoint regions of one buffer.
     let other = self.shallow_clone();
 }
-";
-        let a = write(&dir, "bytes_mut.rs", safety);
-        let b = write(&dir, "bytes.rs", safety);
+",
+        );
+        let b = write(
+            &dir,
+            "bytes.rs",
+            "\
+fn split_to(&mut self, at: usize) {
+    // SAFETY: `shallow_clone` increments the reference count (or promotes to
+    // shared) and returns a bitwise copy of the handle. The caller immediately
+    // adjusts both handles so they represent disjoint regions of one buffer.
+    let other = self.shallow_clone();
+}
+",
+        );
         assert!(
             run(&[&a, &b]).is_empty(),
             "repeated // SAFETY: invariant comments must not flag"
@@ -2239,17 +2330,33 @@ fn split_off(&mut self, at: usize) {
         // Over-exclusion guard for #6264: the same shape WITHOUT a `// SAFETY:`
         // marker is ordinary duplicated prose copy-pasted across files and must
         // still flag — the exclusion is keyed on the structural safety marker.
+        // The two functions are named differently so the same-named-enclosing-
+        // method exemption (#6829) cannot mask the SAFETY-marker signal under test.
         let dir = tempfile::tempdir().unwrap();
-        let prose = "\
+        let a = write(
+            &dir,
+            "a.rs",
+            "\
 fn split_off(&mut self, at: usize) {
     // `shallow_clone` increments the reference count (or promotes to shared)
     // and returns a bitwise copy of the handle. The caller immediately adjusts
     // both handles so they represent disjoint regions of one buffer.
     let other = self.shallow_clone();
 }
-";
-        let a = write(&dir, "a.rs", prose);
-        let b = write(&dir, "b.rs", prose);
+",
+        );
+        let b = write(
+            &dir,
+            "b.rs",
+            "\
+fn split_to(&mut self, at: usize) {
+    // `shallow_clone` increments the reference count (or promotes to shared)
+    // and returns a bitwise copy of the handle. The caller immediately adjusts
+    // both handles so they represent disjoint regions of one buffer.
+    let other = self.shallow_clone();
+}
+",
+        );
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "duplicated plain prose without a SAFETY marker is still a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
@@ -2302,6 +2409,84 @@ fn split_off(&mut self, at: usize) {
         assert!(!is_all_numeric_label(&[]), "an empty word list is not all-numeric");
         assert!(!is_all_numeric_label(&nums(&["row", "0", "1"])));
         assert!(!is_all_numeric_label(&nums(&["0x1f"])), "hex is not a decimal token");
+    }
+
+    /// The drizzle inline body comment: a plain `//` describing the cache-mutate
+    /// step, long and distinctive enough to clear the word and entropy gates so
+    /// only an enclosing-name exemption can keep a cross-file pair out.
+    const CACHE_MUTATE_NOTE: &str = "    // For mutate queries, we should query the database, wait for a response, and then perform invalidation of the dependent cache entries here.";
+
+    #[test]
+    fn ignores_parallel_inline_comments_in_same_named_methods_issue_6829() {
+        // Regression (#6829): drizzle-orm implements the same caching protocol
+        // once per dialect package, so the identical inline comment sits inside
+        // the same-named `queryWithCache` method of each dialect's session class.
+        // The comment describes the same algorithm step, not a copy-paste smell.
+        let dir = tempfile::tempdir().unwrap();
+        let pg = format!(
+            "class PgSession {{\n  queryWithCache() {{\n{CACHE_MUTATE_NOTE}\n    if (this.kind === 'insert') {{ return 1; }}\n  }}\n}}\n"
+        );
+        let gel = format!(
+            "class GelSession {{\n  queryWithCache() {{\n{CACHE_MUTATE_NOTE}\n    if (this.kind === 'insert') {{ return 2; }}\n  }}\n}}\n"
+        );
+        let a = write(&dir, "pg-session.ts", &pg);
+        let b = write(&dir, "gel-session.ts", &gel);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "inline comment inside same-named methods across files must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_inline_comment_in_differently_named_methods_across_files() {
+        // The exemption is keyed on the enclosing method name: the same inline
+        // comment inside two *differently named* methods across files is ordinary
+        // copy-pasted prose and must still flag.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "a.ts",
+            &format!("class PgSession {{\n  queryWithCache() {{\n{CACHE_MUTATE_NOTE}\n    return 1;\n  }}\n}}\n"),
+        );
+        let b = write(
+            &dir,
+            "b.ts",
+            &format!("class GelSession {{\n  runWithCache() {{\n{CACHE_MUTATE_NOTE}\n    return 2;\n  }}\n}}\n"),
+        );
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "identical inline comment in differently-named methods is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_inline_comment_duplicated_within_one_file_issue_6829() {
+        // The exemption is cross-file only: the same inline comment inside two
+        // same-named methods of two classes in ONE file is a botched copy-paste
+        // and must still flag, even though the enclosing method names match.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "class PgSession {{\n  queryWithCache() {{\n{CACHE_MUTATE_NOTE}\n    return 1;\n  }}\n}}\n\
+             class GelSession {{\n  queryWithCache() {{\n{CACHE_MUTATE_NOTE}\n    return 2;\n  }}\n}}\n"
+        );
+        let a = write(&dir, "sessions.ts", &content);
+        let filler = write(&dir, "filler.ts", "export const z = 1;\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "intra-file duplicate inline comment is still a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_free_floating_duplicate_inline_comment_across_files_issue_6829() {
+        // A duplicate comment with NO enclosing named function earns no parallel
+        // exemption (its enclosing name is `None`), so a copy-pasted free-floating
+        // rationale across files still flags.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// For mutate queries, we should query the database, wait for a response, and then perform invalidation of the dependent cache entries here.\nexport const x = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "free-floating duplicate inline comment is still a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     #[test]
