@@ -15,6 +15,11 @@ use std::sync::Arc;
 /// - **Intersection identity** (`T & {}`): intersecting a non-trivial type with
 ///   `{}` forces eager type evaluation and is equivalent to `T`. Only exempt when
 ///   at least one other operand is a non-empty type, so `{} & {}` stays flagged.
+/// - **Conditional-type operand** (`{} extends X`, `T extends {}`, or either
+///   branch of `cond extends X ? {} : Y`): `{}` anywhere inside a conditional
+///   type is a pure type-level computation (the intersection-identity element
+///   when a flag is off, or a validator's "valid" sentinel), never a
+///   value-matching annotation.
 fn is_type_system_empty_object_use(parent: &AstKind) -> bool {
     match parent {
         AstKind::TSTypeParameter(_) => true,
@@ -22,6 +27,7 @@ fn is_type_system_empty_object_use(parent: &AstKind) -> bool {
             .types
             .iter()
             .any(|ty| !is_empty_object_type(ty)),
+        AstKind::TSConditionalType(_) => true,
         _ => false,
     }
 }
@@ -193,10 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn flags_only_conditional_branch_in_recursive_accumulator() {
-        // The `Acc extends {}` constraint and the `IsAny<D, {}, D>` type argument
-        // are deliberate type-system positions and exempt; only the bare `{}` in
-        // the conditional's else branch (`: {}`) is a value-shaped use and flagged.
+    fn allows_type_system_empty_objects_in_recursive_accumulator() {
+        // Every `{}` here is a type-system position: the `Acc extends {}`
+        // constraint, the `IsAny<D, {}, D>` type argument, and the `: {}`
+        // alternative of a conditional type used as an intersection operand
+        // (`Acc & (... ? ... : {})`) — the intersection-identity idiom.
         let src = r#"
             type ExtractDispatchFromMiddlewareTuple<
               MiddlewareTuple extends readonly any[],
@@ -208,7 +215,7 @@ mod tests {
                 >
               : Acc
         "#;
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -327,5 +334,38 @@ mod tests {
     #[test]
     fn still_flags_empty_object_in_generic_function_body() {
         assert_eq!(run_on("function f<T = string>() { const x: {} = foo; }").len(), 1);
+    }
+
+    // ── #6992 ─────────────────────────────────────────────────────────────
+
+    /// mikro-orm `OrderHint`: each `{}` is a branch of a conditional type used
+    /// as an intersection operand — the intersection-identity idiom, exempt.
+    #[test]
+    fn allows_empty_object_conditional_branch_intersection_identity() {
+        let src = r#"
+            type OrderHint<Entity, RootAlias extends string, Context, RawAliases extends string> =
+              | QueryOrderMap<Entity>
+              | ((IsNever<RootAlias> extends true ? {} : RootAliasOrderKeys<RootAlias, Entity>) &
+                  ([Context] extends [never] ? {} : ContextOrderKeys<Context>) &
+                  (IsNever<RawAliases> extends true ? {} : string extends RawAliases ? {} : RawOrderKeys<RawAliases>));
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// mikro-orm `IsSubset`: `{}` is the "valid" consequent of a conditional
+    /// type at a type-alias RHS (no enclosing intersection) — exempt by the
+    /// single conditional-type parent check.
+    #[test]
+    fn allows_empty_object_conditional_branch_validator_sentinel() {
+        let src = "type IsSubset<T, U> = keyof U extends keyof T ? {} \
+                   : { [K in keyof U as K extends keyof T ? never : K]: never };";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Negative space: a `{}` value annotation stays flagged even though the
+    /// conditional-type branch is now exempt.
+    #[test]
+    fn still_flags_empty_object_value_annotation() {
+        assert_eq!(run_on("const x: {} = foo;").len(), 1);
     }
 }
