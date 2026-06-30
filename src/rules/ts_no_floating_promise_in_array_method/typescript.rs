@@ -10,7 +10,10 @@
 //! the bound variable is later consumed by an awaiting sink — passed to an
 //! awaiting combinator, `await`ed, or `return`ed. That covers the conditional
 //! parallel-iteration pattern where the promise array is collected first and
-//! awaited later, which is handled, not floating.
+//! awaited later, which is handled, not floating. The bound variable is also
+//! accepted when it is spread into an accumulator array
+//! (`acc.push(...xs)` / `acc.unshift(...xs)`) whose accumulator then reaches an
+//! awaiting sink — one extra hop through the accumulator.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -159,10 +162,10 @@ fn ends_with_keyword(text: &str, kw: &str) -> bool {
     !head.as_bytes().last().is_some_and(|&b| is_ident_char(b))
 }
 
-/// True when `name` is consumed by an awaiting sink anywhere in `source`:
-/// passed to an awaiting combinator (`Promise.all(name`, …), `await`ed, or
-/// `return`ed. Word-boundary matched so `items` does not match `itemsCount`.
-fn variable_is_awaited(source: &str, name: &str) -> bool {
+/// True when `name` is consumed by a *direct* awaiting sink anywhere in
+/// `source`: passed to an awaiting combinator (`Promise.all(name`, …), `await`ed,
+/// or `return`ed. Word-boundary matched so `items` does not match `itemsCount`.
+fn directly_awaited(source: &str, name: &str) -> bool {
     let bytes = source.as_bytes();
     let mut from = 0;
     while let Some(rel) = source[from..].find(name) {
@@ -187,6 +190,82 @@ fn variable_is_awaited(source: &str, name: &str) -> bool {
         }
     }
     false
+}
+
+/// Accumulator-growing methods that take a spread of a source array.
+const SPREAD_SINK_METHODS: &[&str] = &[".push", ".unshift"];
+
+/// Collect the accumulator identifiers `B` of every `B.push(...name)` /
+/// `B.unshift(...name)` spread in `source`. Whitespace around the call
+/// punctuation is tolerated (`B.push( ...name )`). `B` is the identifier
+/// immediately to the left of the method, so a plain accumulator
+/// (`promises.push(...name)`) yields `promises`, which the awaiting-sink scan
+/// then matches inside `Promise.all(promises)`. `name` is whole-word matched so
+/// `...items` does not match a spread of `itemsCount`.
+fn spread_accumulators<'a>(source: &'a str, name: &str) -> Vec<&'a str> {
+    let bytes = source.as_bytes();
+    let mut accumulators = Vec::new();
+    for method in SPREAD_SINK_METHODS {
+        let mut from = 0;
+        while let Some(rel) = source[from..].find(method) {
+            let dot = from + rel;
+            from = dot + method.len();
+            let mut j = dot + method.len();
+            // The method must be a whole word: `.pushItem(` must not match.
+            if bytes.get(j).is_some_and(|&b| is_ident_char(b)) {
+                continue;
+            }
+            j = skip_ws(bytes, j);
+            if bytes.get(j) != Some(&b'(') {
+                continue;
+            }
+            j = skip_ws(bytes, j + 1);
+            if !source[j..].starts_with("...") {
+                continue;
+            }
+            j = skip_ws(bytes, j + 3);
+            if !source[j..].starts_with(name) {
+                continue;
+            }
+            let after = j + name.len();
+            if bytes.get(after).is_some_and(|&b| is_ident_char(b)) {
+                continue;
+            }
+            if bytes.get(skip_ws(bytes, after)) != Some(&b')') {
+                continue;
+            }
+            // Read the accumulator identifier immediately preceding the `.`.
+            let mut start = dot;
+            while start > 0 && is_ident_char(bytes[start - 1]) {
+                start -= 1;
+            }
+            if start < dot {
+                accumulators.push(&source[start..dot]);
+            }
+        }
+    }
+    accumulators
+}
+
+/// Advance past spaces, tabs and line breaks starting at `i`.
+fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    i
+}
+
+/// True when `name` reaches an awaiting sink: either directly, or after being
+/// spread into an accumulator array (`acc.push(...name)` / `acc.unshift(...name)`)
+/// that is itself directly awaited. Exactly one accumulator hop is followed, so
+/// the scan terminates regardless of how the source nests spreads.
+fn variable_is_awaited(source: &str, name: &str) -> bool {
+    if directly_awaited(source, name) {
+        return true;
+    }
+    spread_accumulators(source, name)
+        .iter()
+        .any(|acc| directly_awaited(source, acc))
 }
 
 /// True when the match at `match_offset` is a `.map`/`.flatMap` binding whose
@@ -420,6 +499,42 @@ mod tests {
     fn flags_bare_map_async_expression_statement() {
         // Negative space: result discarded, never captured/awaited/returned.
         let src = "items.map(async (x) => { await save(x); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_map_async_spread_into_awaited_accumulator() {
+        // Regression for #6991 (formkit): the `.map(async ...)` result is bound,
+        // spread into an accumulator via `push(...)`, and the accumulator is
+        // awaited with `Promise.all` — one extra hop, nothing floats.
+        let src = "const promises = [];\n\
+                   const coreInputPromises = inputList.core.map(async (schema) => {\n\
+                   \x20\x20const response = await fetchInputSchema(schema);\n\
+                   \x20\x20schemas[schema] = response;\n\
+                   });\n\
+                   promises.push(...coreInputPromises);\n\
+                   await Promise.all(promises);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_async_unshift_into_awaited_accumulator() {
+        // `unshift(...)` spread variant of the accumulator hop.
+        let src = "const promises = [];\n\
+                   const tasks = items.map(async (x) => fetchOne(x));\n\
+                   promises.unshift(...tasks);\n\
+                   await Promise.all(promises);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_map_async_spread_into_never_awaited_accumulator() {
+        // Negative control: the accumulator the result is spread into is never
+        // awaited, so the promises genuinely float and must still flag.
+        let src = "const promises = [];\n\
+                   const tasks = items.map(async (x) => fetchOne(x));\n\
+                   promises.push(...tasks);\n\
+                   console.log(promises.length);";
         assert_eq!(run(src).len(), 1);
     }
 }
