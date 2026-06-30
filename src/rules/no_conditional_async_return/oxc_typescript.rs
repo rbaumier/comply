@@ -3,7 +3,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, LogicalOperator, Statement, TSType, TSTypeAnnotation, TSTypeName};
+use oxc_ast::ast::{
+    BinaryExpression, BinaryOperator, BindingPattern, Expression, FormalParameters, IfStatement,
+    LogicalOperator, Statement, TSType, TSTypeAnnotation, TSTypeName, UnaryOperator,
+};
+use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
 
 pub struct Check;
@@ -39,7 +43,14 @@ impl OxcCheck for Check {
                         continue;
                     }
                     let kinds = collect_return_kinds(&body.statements, ctx.source);
-                    if kinds.contains(&ReturnKind::Sync) && kinds.contains(&ReturnKind::Promise) {
+                    if kinds.contains(&ReturnKind::Sync)
+                        && kinds.contains(&ReturnKind::Promise)
+                        && !is_callback_promise_dual_mode(
+                            &func.params,
+                            &body.statements,
+                            ctx.source,
+                        )
+                    {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, func.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -64,7 +75,14 @@ impl OxcCheck for Check {
                         continue;
                     }
                     let kinds = collect_return_kinds(&arrow.body.statements, ctx.source);
-                    if kinds.contains(&ReturnKind::Sync) && kinds.contains(&ReturnKind::Promise) {
+                    if kinds.contains(&ReturnKind::Sync)
+                        && kinds.contains(&ReturnKind::Promise)
+                        && !is_callback_promise_dual_mode(
+                            &arrow.params,
+                            &arrow.body.statements,
+                            ctx.source,
+                        )
+                    {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, arrow.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -202,70 +220,81 @@ fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
 fn collect_return_kinds(stmts: &[Statement], source: &str) -> Vec<ReturnKind> {
     let mut out = Vec::new();
     for stmt in stmts {
-        collect_from_stmt(stmt, source, &mut out);
+        collect_from_stmt(stmt, source, None, &mut out);
     }
     out
 }
 
-fn collect_from_stmt(stmt: &Statement, source: &str, out: &mut Vec<ReturnKind>) {
+/// Walk a statement collecting return kinds, skipping nested function bodies.
+/// When `exclude` is set, returns whose span falls inside it are ignored — used
+/// to look for a Promise return *outside* a dual-mode callback branch.
+fn collect_from_stmt(
+    stmt: &Statement,
+    source: &str,
+    exclude: Option<Span>,
+    out: &mut Vec<ReturnKind>,
+) {
     match stmt {
         Statement::ReturnStatement(ret) => {
             if let Some(arg) = &ret.argument {
-                out.push(classify_value(arg, source));
+                let skipped = exclude.is_some_and(|ex| span_contains(ex, ret.span));
+                if !skipped {
+                    out.push(classify_value(arg, source));
+                }
             }
         }
         // Don't descend into nested functions
         Statement::FunctionDeclaration(_) => {}
         Statement::BlockStatement(block) => {
             for s in &block.body {
-                collect_from_stmt(s, source, out);
+                collect_from_stmt(s, source, exclude, out);
             }
         }
         Statement::IfStatement(if_stmt) => {
-            collect_from_stmt(&if_stmt.consequent, source, out);
+            collect_from_stmt(&if_stmt.consequent, source, exclude, out);
             if let Some(alt) = &if_stmt.alternate {
-                collect_from_stmt(alt, source, out);
+                collect_from_stmt(alt, source, exclude, out);
             }
         }
         Statement::SwitchStatement(switch) => {
             for case in &switch.cases {
                 for s in &case.consequent {
-                    collect_from_stmt(s, source, out);
+                    collect_from_stmt(s, source, exclude, out);
                 }
             }
         }
         Statement::TryStatement(try_stmt) => {
             for s in &try_stmt.block.body {
-                collect_from_stmt(s, source, out);
+                collect_from_stmt(s, source, exclude, out);
             }
             if let Some(handler) = &try_stmt.handler {
                 for s in &handler.body.body {
-                    collect_from_stmt(s, source, out);
+                    collect_from_stmt(s, source, exclude, out);
                 }
             }
             if let Some(finalizer) = &try_stmt.finalizer {
                 for s in &finalizer.body {
-                    collect_from_stmt(s, source, out);
+                    collect_from_stmt(s, source, exclude, out);
                 }
             }
         }
         Statement::ForStatement(for_stmt) => {
-            collect_from_stmt(&for_stmt.body, source, out);
+            collect_from_stmt(&for_stmt.body, source, exclude, out);
         }
         Statement::ForInStatement(for_in) => {
-            collect_from_stmt(&for_in.body, source, out);
+            collect_from_stmt(&for_in.body, source, exclude, out);
         }
         Statement::ForOfStatement(for_of) => {
-            collect_from_stmt(&for_of.body, source, out);
+            collect_from_stmt(&for_of.body, source, exclude, out);
         }
         Statement::WhileStatement(while_stmt) => {
-            collect_from_stmt(&while_stmt.body, source, out);
+            collect_from_stmt(&while_stmt.body, source, exclude, out);
         }
         Statement::DoWhileStatement(do_while) => {
-            collect_from_stmt(&do_while.body, source, out);
+            collect_from_stmt(&do_while.body, source, exclude, out);
         }
         Statement::LabeledStatement(labeled) => {
-            collect_from_stmt(&labeled.body, source, out);
+            collect_from_stmt(&labeled.body, source, exclude, out);
         }
         // ExpressionStatement containing arrow/function — skip (nested fn)
         Statement::ExpressionStatement(es) => {
@@ -278,6 +307,298 @@ fn collect_from_stmt(stmt: &Statement, source: &str, out: &mut Vec<ReturnKind>) 
         }
         _ => {}
     }
+}
+
+/// True when the function is a Node.js callback/promise dual-mode API: the mixed
+/// Sync/Promise returns are gated on whether a callback parameter was supplied.
+/// When the callback is present its result is delivered by invoking it (and the
+/// call returns void/sync); when it is omitted a Promise is returned. This is
+/// recognised structurally so any `fn(opts, cb)` dual-mode shape is spared,
+/// without keying on a parameter name. All three must hold for some `if`:
+///   1. the test is a callback presence/absence check on a parameter `P`,
+///   2. the branch where `P` is present invokes `P` (`P(...)`/`P.call`/`P.apply`),
+///   3. a Promise is returned outside that present branch.
+fn is_callback_promise_dual_mode(
+    params: &FormalParameters,
+    body: &[Statement],
+    source: &str,
+) -> bool {
+    let param_names = collect_simple_param_names(params);
+    if param_names.is_empty() {
+        return false;
+    }
+    any_dual_mode_guard(body, body, &param_names, source)
+}
+
+/// Names of the function's plain identifier parameters (including a defaulted
+/// `cb = undefined`). Destructured parameters cannot be a callback binding, so
+/// they are skipped.
+fn collect_simple_param_names<'a>(params: &'a FormalParameters<'a>) -> Vec<&'a str> {
+    params
+        .items
+        .iter()
+        .filter_map(|item| simple_binding_name(&item.pattern))
+        .collect()
+}
+
+fn simple_binding_name<'a>(pattern: &'a BindingPattern<'a>) -> Option<&'a str> {
+    match pattern {
+        BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
+        BindingPattern::AssignmentPattern(assign) => simple_binding_name(&assign.left),
+        _ => None,
+    }
+}
+
+/// `root` is the whole function body (for the "Promise returned outside"
+/// condition); `stmts` is the slice currently scanned for a guard. Descends
+/// through control flow but not into nested function bodies.
+fn any_dual_mode_guard(
+    root: &[Statement],
+    stmts: &[Statement],
+    params: &[&str],
+    source: &str,
+) -> bool {
+    stmts
+        .iter()
+        .any(|stmt| stmt_has_dual_mode_guard(root, stmt, params, source))
+}
+
+fn stmt_has_dual_mode_guard(
+    root: &[Statement],
+    stmt: &Statement,
+    params: &[&str],
+    source: &str,
+) -> bool {
+    match stmt {
+        Statement::IfStatement(if_stmt) => {
+            if_is_dual_mode_guard(if_stmt, root, params, source)
+                || stmt_has_dual_mode_guard(root, &if_stmt.consequent, params, source)
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alt| stmt_has_dual_mode_guard(root, alt, params, source))
+        }
+        Statement::BlockStatement(block) => any_dual_mode_guard(root, &block.body, params, source),
+        Statement::TryStatement(try_stmt) => {
+            any_dual_mode_guard(root, &try_stmt.block.body, params, source)
+                || try_stmt.handler.as_ref().is_some_and(|h| {
+                    any_dual_mode_guard(root, &h.body.body, params, source)
+                })
+                || try_stmt
+                    .finalizer
+                    .as_ref()
+                    .is_some_and(|f| any_dual_mode_guard(root, &f.body, params, source))
+        }
+        Statement::ForStatement(f) => stmt_has_dual_mode_guard(root, &f.body, params, source),
+        Statement::ForInStatement(f) => stmt_has_dual_mode_guard(root, &f.body, params, source),
+        Statement::ForOfStatement(f) => stmt_has_dual_mode_guard(root, &f.body, params, source),
+        Statement::WhileStatement(w) => stmt_has_dual_mode_guard(root, &w.body, params, source),
+        Statement::DoWhileStatement(d) => stmt_has_dual_mode_guard(root, &d.body, params, source),
+        Statement::SwitchStatement(switch) => switch.cases.iter().any(|case| {
+            case.consequent
+                .iter()
+                .any(|s| stmt_has_dual_mode_guard(root, s, params, source))
+        }),
+        Statement::LabeledStatement(l) => stmt_has_dual_mode_guard(root, &l.body, params, source),
+        _ => false,
+    }
+}
+
+/// Does this `if` implement the dual-mode guard for one of `params`?
+fn if_is_dual_mode_guard(
+    if_stmt: &IfStatement,
+    root: &[Statement],
+    params: &[&str],
+    source: &str,
+) -> bool {
+    let Some((param, present_in_consequent)) = classify_callback_guard(&if_stmt.test, params)
+    else {
+        return false;
+    };
+    let present: Option<&Statement> = if present_in_consequent {
+        Some(&if_stmt.consequent)
+    } else {
+        if_stmt.alternate.as_ref()
+    };
+    let Some(present) = present else {
+        return false;
+    };
+    branch_invokes_param(present, param) && returns_promise_outside(root, source, present.span())
+}
+
+/// Classify an `if` test as a callback presence/absence check on one of `params`.
+/// Returns the matched parameter name and whether the parameter is *present* in
+/// the consequent branch (`true`) or the alternate branch (`false`). Recognised
+/// forms: `cb`, `cb !== undefined`/`cb != null`, `cb === undefined`/`cb == null`,
+/// `typeof cb === 'function'`, `typeof cb !== 'function'`.
+fn classify_callback_guard<'a>(test: &Expression, params: &[&'a str]) -> Option<(&'a str, bool)> {
+    match test {
+        Expression::Identifier(id) => param_name(id.name.as_str(), params).map(|p| (p, true)),
+        Expression::BinaryExpression(bin) => classify_binary_guard(bin, params),
+        _ => None,
+    }
+}
+
+fn classify_binary_guard<'a>(
+    bin: &BinaryExpression,
+    params: &[&'a str],
+) -> Option<(&'a str, bool)> {
+    let is_eq = matches!(
+        bin.operator,
+        BinaryOperator::Equality | BinaryOperator::StrictEquality
+    );
+    let is_neq = matches!(
+        bin.operator,
+        BinaryOperator::Inequality | BinaryOperator::StrictInequality
+    );
+    if !is_eq && !is_neq {
+        return None;
+    }
+
+    // `typeof cb === 'function'` → present in consequent; `!==` → in alternate.
+    let typeof_param = typeof_param_operand(&bin.left, params)
+        .filter(|_| is_function_string(&bin.right))
+        .or_else(|| {
+            typeof_param_operand(&bin.right, params).filter(|_| is_function_string(&bin.left))
+        });
+    if let Some(param) = typeof_param {
+        return Some((param, is_eq));
+    }
+
+    // `cb === undefined`/`== null` → present in alternate; `!==`/`!=` → consequent.
+    let param = param_operand(&bin.left, params)
+        .filter(|_| is_nullish_literal(&bin.right))
+        .or_else(|| param_operand(&bin.right, params).filter(|_| is_nullish_literal(&bin.left)));
+    param.map(|p| (p, is_neq))
+}
+
+fn param_name<'a>(name: &str, params: &[&'a str]) -> Option<&'a str> {
+    params.iter().copied().find(|p| *p == name)
+}
+
+fn param_operand<'a>(expr: &Expression, params: &[&'a str]) -> Option<&'a str> {
+    match expr {
+        Expression::Identifier(id) => param_name(id.name.as_str(), params),
+        _ => None,
+    }
+}
+
+fn typeof_param_operand<'a>(expr: &Expression, params: &[&'a str]) -> Option<&'a str> {
+    let Expression::UnaryExpression(unary) = expr else {
+        return None;
+    };
+    if unary.operator != UnaryOperator::Typeof {
+        return None;
+    }
+    param_operand(&unary.argument, params)
+}
+
+fn is_function_string(expr: &Expression) -> bool {
+    matches!(expr, Expression::StringLiteral(lit) if lit.value == "function")
+}
+
+fn is_nullish_literal(expr: &Expression) -> bool {
+    match expr {
+        Expression::NullLiteral(_) => true,
+        Expression::Identifier(id) => id.name.as_str() == "undefined",
+        _ => false,
+    }
+}
+
+/// Is `param` invoked as a function anywhere in this branch? Descends through
+/// control flow but not into nested function bodies (a callback merely *passed*
+/// to an inner closure does not count as invoked here).
+fn branch_invokes_param(stmt: &Statement, param: &str) -> bool {
+    match stmt {
+        Statement::ExpressionStatement(es) => expr_invokes_param(&es.expression, param),
+        Statement::ReturnStatement(ret) => ret
+            .argument
+            .as_ref()
+            .is_some_and(|arg| expr_invokes_param(arg, param)),
+        Statement::VariableDeclaration(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| d.init.as_ref().is_some_and(|e| expr_invokes_param(e, param))),
+        Statement::BlockStatement(block) => {
+            block.body.iter().any(|s| branch_invokes_param(s, param))
+        }
+        Statement::IfStatement(if_stmt) => {
+            branch_invokes_param(&if_stmt.consequent, param)
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alt| branch_invokes_param(alt, param))
+        }
+        Statement::TryStatement(try_stmt) => {
+            try_stmt
+                .block
+                .body
+                .iter()
+                .any(|s| branch_invokes_param(s, param))
+                || try_stmt
+                    .handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.body.iter().any(|s| branch_invokes_param(s, param)))
+                || try_stmt
+                    .finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.body.iter().any(|s| branch_invokes_param(s, param)))
+        }
+        Statement::ForStatement(f) => branch_invokes_param(&f.body, param),
+        Statement::ForInStatement(f) => branch_invokes_param(&f.body, param),
+        Statement::ForOfStatement(f) => branch_invokes_param(&f.body, param),
+        Statement::WhileStatement(w) => branch_invokes_param(&w.body, param),
+        Statement::DoWhileStatement(d) => branch_invokes_param(&d.body, param),
+        Statement::SwitchStatement(switch) => switch
+            .cases
+            .iter()
+            .any(|c| c.consequent.iter().any(|s| branch_invokes_param(s, param))),
+        Statement::LabeledStatement(l) => branch_invokes_param(&l.body, param),
+        _ => false,
+    }
+}
+
+fn expr_invokes_param(expr: &Expression, param: &str) -> bool {
+    match expr {
+        Expression::CallExpression(call) => {
+            callee_is_param(&call.callee, param)
+                || call.arguments.iter().any(|arg| {
+                    arg.as_expression()
+                        .is_some_and(|e| expr_invokes_param(e, param))
+                })
+        }
+        Expression::AwaitExpression(a) => expr_invokes_param(&a.argument, param),
+        Expression::ParenthesizedExpression(p) => expr_invokes_param(&p.expression, param),
+        Expression::SequenceExpression(seq) => {
+            seq.expressions.iter().any(|e| expr_invokes_param(e, param))
+        }
+        _ => false,
+    }
+}
+
+fn callee_is_param(callee: &Expression, param: &str) -> bool {
+    match callee {
+        Expression::Identifier(id) => id.name.as_str() == param,
+        Expression::StaticMemberExpression(member) => {
+            matches!(member.property.name.as_str(), "call" | "apply")
+                && matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == param)
+        }
+        _ => false,
+    }
+}
+
+/// Is a Promise returned anywhere in `stmts` outside the `exclude` span (the
+/// dual-mode present/callback branch)?
+fn returns_promise_outside(stmts: &[Statement], source: &str, exclude: Span) -> bool {
+    let mut kinds = Vec::new();
+    for stmt in stmts {
+        collect_from_stmt(stmt, source, Some(exclude), &mut kinds);
+    }
+    kinds.contains(&ReturnKind::Promise)
+}
+
+fn span_contains(outer: Span, inner: Span) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
 }
 
 #[cfg(test)]
@@ -423,6 +744,83 @@ mod tests {
             return result;
         }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_callback_promise_dual_mode_truthy_guard() {
+        // Regression for #6826: fastify's `inject(opts, cb)` is a callback/promise
+        // dual-mode API. When `cb` is supplied the result is delivered by calling
+        // it (callback mode, sync/void return); when omitted a Promise is
+        // returned. The mixed returns are gated on the callback-presence check.
+        let src = "function inject(opts, cb) {
+            if (cb) {
+                cb(error);
+                return lightMyRequest(httpHandler, opts, cb);
+            } else {
+                return Promise.reject(error);
+            }
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_callback_promise_dual_mode_typeof_guard() {
+        // Regression for #6826: fastify's `listen(listenOptions, cb)` checks the
+        // callback with `typeof cb === 'function'` (present branch invokes `cb`)
+        // and returns a Promise in the `cb === undefined` branch.
+        let src = "function listen(listenOptions, cb = undefined) {
+            if (typeof cb === 'function') {
+                cb(null, server);
+                return server;
+            }
+            if (cb === undefined) {
+                return listenPromise.then(address => address);
+            }
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_callback_dual_mode_with_inequality_guard_and_call_method() {
+        // The discriminator generalises across guard forms (`cb !== undefined`)
+        // and invocation forms (`cb.call(...)`), not just `if (cb)` and `cb(...)`.
+        let src = "function once(cb) {
+            if (cb !== undefined) {
+                cb.call(this, value);
+                return value;
+            }
+            return Promise.resolve(value);
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_callback_param_tested_but_never_invoked() {
+        // Negative control for #6826: a parameter tested for presence but never
+        // invoked is not a real callback, so the mixed return still fires.
+        let src = "function f(opts, cb) {
+            if (cb) {
+                return doSync(opts);
+            }
+            return Promise.resolve();
+        }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_mixed_gated_on_business_condition_even_when_callback_invoked() {
+        // Negative control for #6826: the gate must be the callback-presence
+        // check itself. Here the branch is selected by a business condition
+        // (`state.ready`), not by whether `cb` was supplied, so it still fires
+        // even though `cb` is invoked in the branch.
+        let src = "function f(state, cb) {
+            if (state.ready) {
+                cb(1);
+                return doSync();
+            }
+            return Promise.resolve();
+        }";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
