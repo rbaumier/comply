@@ -1110,6 +1110,19 @@ const TANSTACK_QUERY_CALLBACK_KEYS: &[&str] = &[
     "getPreviousPageParam",
 ];
 
+/// True when a parameter carries an accessibility (`public` / `private` /
+/// `protected`) or `readonly` modifier — a TypeScript *parameter property*.
+/// Such a parameter is not a free local binding: it declares an instance field,
+/// so its identifier becomes the class's property name, governed by the
+/// data-model / implemented-interface contract rather than chosen freely at the
+/// call site. Keyed on the OXC modifier fields (`accessibility`, `readonly`), so
+/// an ordinary modifier-less parameter (`constructor(flag: boolean)`) is not a
+/// parameter property.
+#[must_use]
+pub fn is_parameter_property(param: &oxc_ast::ast::FormalParameter) -> bool {
+    param.accessibility.is_some() || param.readonly
+}
+
 /// True when `node` is a function expression / arrow function being passed
 /// as a known third-party callback whose signature is dictated by the
 /// outer call's type — e.g. `useMutation({ onError: (a, b, c, d) => ... })`.
