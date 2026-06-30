@@ -145,6 +145,17 @@ impl OxcCheck for Check {
             }
         }
 
+        // `as PropType<T>` is Vue's branded prop-type marker. A runtime
+        // constructor value (`String`, or an array of them like
+        // `[String, Object]`) never structurally satisfies `PropType<T>`, so
+        // `satisfies PropType<T>` fails to compile and the `as` cast is the
+        // required idiom. The `<` immediately following the name keeps the match
+        // on the exact `PropType` reference, not a longer identifier that begins
+        // with it (`PropTypeFoo<…>`).
+        if type_text.trim().starts_with("PropType<") {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -508,6 +519,53 @@ const s = {
     fn still_flags_object_literal_spread() {
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, "const o = { ...{ a: 1 }, b: 2 } as T;", "t.ts").len(),
+            1
+        );
+    }
+
+    // Regression test for #6849: Vue's `[String, Object] as PropType<T>` is the
+    // idiomatic props pattern — runtime constructors never structurally satisfy
+    // the branded `PropType<T>`, so `satisfies` would not compile and the `as`
+    // is required. Must not be flagged.
+    #[test]
+    fn allows_array_of_constructors_as_prop_type() {
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "const x = { type: [String, Object] as PropType<AsTag | Component> };",
+                "t.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    // #6849: minimal single-constructor PropType cast.
+    #[test]
+    fn allows_array_literal_as_prop_type() {
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const p = [String] as PropType<Foo>;", "t.ts").is_empty()
+        );
+    }
+
+    // #6849 boundary: anchor on the exact `PropType` reference — a longer
+    // identifier that merely contains `PropType` as a substring is a normal
+    // concrete type that `satisfies` can validate, so it must still flag.
+    #[test]
+    fn still_flags_substring_prop_type_name() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "const x = [a, b] as MyPropType<Foo>;", "t.ts").len(),
+            1
+        );
+    }
+
+    // #6849 boundary: the trailing `<` is load-bearing — an identifier that
+    // *begins* with `PropType` (`PropTypeFoo`) is a distinct concrete type that
+    // `satisfies` can validate, so it must still flag. Guards against dropping
+    // the `<` and re-introducing the false positive on prefix-extension names.
+    #[test]
+    fn still_flags_prefix_extension_prop_type_name() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "const x = [a, b] as PropTypeFoo<X>;", "t.ts").len(),
             1
         );
     }
