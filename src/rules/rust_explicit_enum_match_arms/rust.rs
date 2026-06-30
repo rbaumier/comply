@@ -72,7 +72,9 @@
 //! paired with at least one `Variant(v) => Ok(v)` arm (the `Result` form, as in
 //! a `try_into_*` accessor). A later variant should still fall through here, so
 //! exhaustive listing adds noise without safety, and the wildcard is not
-//! flagged.
+//! flagged. Each arm body is recognized whether written bare (`=> Some(v)`) or
+//! as a braced block whose implicit-return tail is that expression
+//! (`=> { Some(v) }`).
 //!
 //! We do not descend into nested `match`es here — the walker visits
 //! every `match_expression` independently, so each match is classified
@@ -893,15 +895,51 @@ fn source_file_defines_any_variant(
     false
 }
 
+/// Unwrap a `block` arm body to its implicit-return expression so a brace-wrapped
+/// body `{ Some(v) }` is classified like the bare form `Some(v)` — the two are
+/// semantically identical (a block evaluates to its tail expression). A block's
+/// implicit return is its last named child, but only when that child is an
+/// expression: a statement tail (`foo();`, `let x = …;`, a lone `;`) leaves the
+/// block evaluating to `()`, so there is no implicit return. For a non-`block`
+/// node, an empty block, or a statement-tailed block the node is returned
+/// unchanged, and the caller's specific `call_expression` / `None`-identifier
+/// check then simply fails to match (no spurious exemption).
+fn unwrap_block_tail(node: tree_sitter::Node) -> tree_sitter::Node {
+    if node.kind() != "block" {
+        return node;
+    }
+    let mut cursor = node.walk();
+    // tree-sitter-rust surfaces comments as named children, so skip them when
+    // locating the tail: a trailing comment is not the block's value
+    // (`{ Some(v) /* note */ }` still returns `Some(v)`).
+    let last = node
+        .named_children(&mut cursor)
+        .filter(|c| !matches!(c.kind(), "line_comment" | "block_comment"))
+        .last();
+    let Some(last) = last else {
+        return node;
+    };
+    if matches!(
+        last.kind(),
+        "expression_statement" | "let_declaration" | "empty_statement"
+    ) {
+        return node;
+    }
+    last
+}
+
 /// True if the `match_arm`'s body is a constructor call whose function head is
 /// `ctor` — bare (`Some(v)`, `Ok(v)`, `Err(self)`) or path-qualified
 /// (`Option::Some`, `Result::Ok`). Used to recognize the halves of the
 /// variant-accessor idiom: the `Some(v)`/`Ok(v)` extracting arm and, in the
-/// `Result` form, the `Err(...)` wildcard.
+/// `Result` form, the `Err(...)` wildcard. A braced block body is unwrapped to
+/// its implicit-return tail first, so `Variant(v) => { Some(v) }` is recognized
+/// identically to `Variant(v) => Some(v)`.
 fn arm_body_is_ctor_call(arm: tree_sitter::Node, source: &[u8], ctor: &str) -> bool {
     let Some(value) = arm.child_by_field_name("value") else {
         return false;
     };
+    let value = unwrap_block_tail(value);
     if value.kind() != "call_expression" {
         return false;
     }
@@ -916,11 +954,13 @@ fn arm_body_is_ctor_call(arm: tree_sitter::Node, source: &[u8], ctor: &str) -> b
 
 /// True if the `match_arm`'s body is the bare `None` literal (optionally
 /// path-qualified as `Option::None`) — the "absent" half of a
-/// variant-accessor (`_ => None`).
+/// variant-accessor (`_ => None`). A braced block body is unwrapped to its
+/// implicit-return tail first, so `_ => { None }` is recognized identically.
 fn arm_body_is_none(arm: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(value) = arm.child_by_field_name("value") else {
         return false;
     };
+    let value = unwrap_block_tail(value);
     if !matches!(value.kind(), "identifier" | "scoped_identifier") {
         return false;
     }
@@ -1492,6 +1532,53 @@ mod tests {
         let src = "fn f(self) -> Result<V, Self> { match self { \
                    Object::Blob(v) => Ok(v), Object::Tree(v) => Ok(v), _ => Err(self) } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_variant_accessor_with_block_some_body() {
+        // Issue #6974: gitoxide's `commit.rs`. The `Some(...)` accessor arm has a
+        // braced block body `{ Some(...) }`, not a bare expression. A block whose
+        // implicit-return tail is `Some(...)` is the same variant-accessor idiom,
+        // so the paired `_ => None` must not be flagged.
+        let src = "fn f(expected: PreviousValue) -> Option<(Option<ObjectId>, Target)> { \
+                   match expected { \
+                   PreviousValue::ExistingMustMatch(Target::Object(oid)) => { \
+                   Some((Some(gix_hash::ObjectId::null(oid.kind())), oid)) \
+                   } \
+                   _ => None, } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_variant_accessor_with_block_bodies_both_sides() {
+        // Issue #6974: both halves brace-wrapped — `Variant(v) => { Some(v) }` and
+        // `_ => { None }` — are unwrapped to their implicit-return tails and
+        // recognized as the accessor idiom.
+        let src = "fn f(x: Foo) -> Option<i32> { match x { \
+                   Foo::A(v) => { Some(v) }, _ => { None } } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_variant_accessor_with_block_some_body_trailing_comment() {
+        // Issue #6974: tree-sitter surfaces comments as named children, so a
+        // trailing comment inside the accessor block (`{ Some(v) /* note */ }`)
+        // must not displace the implicit-return tail — the idiom is still
+        // recognized and `_ => None` is not flagged.
+        let src = "fn f(x: Foo) -> Option<i32> { match x { \
+                   Foo::A(v) => { Some(v) /* extracted */ }, _ => None } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_block_body_tail_not_some() {
+        // Issue #6974 negative space: a block body whose implicit-return tail is
+        // not `Some(...)` (here `{ foo(); 42 }`) is not the accessor idiom, so the
+        // wildcard over the enum is a real catch-all and must still flag — the
+        // block-unwrap must not spuriously exempt it.
+        let src = "fn f(x: Foo) -> i32 { match x { \
+                   Foo::A(v) => { foo(); 42 }, Foo::B => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
