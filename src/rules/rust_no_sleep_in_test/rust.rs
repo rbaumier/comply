@@ -11,7 +11,7 @@
 //! condition wait (channel, polled deadline) or with tokio's
 //! virtual-time helpers (`tokio::time::pause` + `advance`).
 //!
-//! Five legitimate sleep patterns are exempt:
+//! Six legitimate sleep patterns are exempt:
 //! - Files under Cargo's `tests/` integration-test directory:
 //!   integration tests are black-box clients of real systems, where
 //!   a wall-clock wait on external readiness (e.g. a remote consumer
@@ -33,11 +33,17 @@
 //!   preemption; Tokio's virtual clock cannot replace either role.
 //! - `thread::sleep(Duration::ZERO)`: a pure scheduling yield that
 //!   gives other threads a chance to run, never a wall-clock wait.
+//! - Sleeps inside a trait impl method (`impl Trait for Type`): the
+//!   sleep is the mock's simulated work duration — the behavior the
+//!   test observes (e.g. that a job system handles a still-running
+//!   job), not a synchronization wait inserted to fix a test's timing.
+//!   An inherent `impl Type` method is not a trait-contract mock, so a
+//!   sleep there is not exempt.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::call_expression::call_function_name;
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_in_trait_impl};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -79,6 +85,11 @@ impl AstCheck for Check {
             return;
         }
         if is_in_concurrency_test(node, source_bytes) {
+            return;
+        }
+        // A sleep inside an `impl Trait for Type` method is the mock's
+        // simulated behavior (its work duration), not a flaky test wait.
+        if is_in_trait_impl(node) {
             return;
         }
         let pos = node.start_position();
@@ -485,5 +496,28 @@ mod tests {
         let source = "#[test]\nfn polls() { \
                       while true { if done() { break; } thread::sleep(d); } }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_sleep_in_trait_impl_method_of_mock_issue_6802() {
+        // gitui asyncgit/src/asyncjob/mod.rs: `TestJob` mocks `AsyncJob`,
+        // and its `run` sleeps to simulate work duration — the behavior
+        // the overwrite/cancel tests observe, not a flaky wait.
+        let source = "#[cfg(test)]\nmod test { \
+                      impl AsyncJob for TestJob { \
+                      fn run(&mut self) -> Result<(), ()> { \
+                      while !self.finish.load(Ordering::SeqCst) { std::thread::yield_now(); } \
+                      thread::sleep(Duration::from_millis(100)); Ok(()) } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_sleep_in_inherent_impl_method_issue_6802() {
+        // An inherent `impl Type` method is not a trait-contract mock, so
+        // a fixed sleep there is still the flaky pattern the rule targets.
+        let source = "#[cfg(test)]\nmod test { \
+                      impl TestJob { \
+                      fn run(&mut self) { thread::sleep(Duration::from_millis(100)); } } }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
