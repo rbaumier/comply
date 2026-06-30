@@ -1,16 +1,17 @@
 //! ts-no-loop-func OXC backend — flag functions and arrow functions inside a
-//! loop body that capture a binding the enclosing loop introduces (a symbol
-//! declared by the loop header or in the loop body). Such a closure can read a
-//! stale value when invoked on a later iteration. A closure that references only
-//! its own params/locals or bindings declared outside the loop captures nothing
-//! loop-scoped and is left alone. The `let`/`const` initializer of a C-style
-//! `for (let i …)` is also exempt: ES2015 §14.7.4.2 re-binds it fresh each
-//! iteration, so a closure capturing it reads its own value, not a shared one.
+//! loop body that capture a `var` the enclosing loop shares across iterations:
+//! one hoisted, function-scoped binding the loop mutates, so a closure invoked on
+//! a later iteration reads a stale value. A closure that references only its own
+//! params/locals, a binding declared above the loop, or a `let`/`const` declared
+//! within the loop is left alone. A block-scoped `let`/`const` — whether in the
+//! C-style `for` init, a `for-in` header, or the loop body — is re-bound fresh each
+//! iteration (ES2015), so the closure captures its own value, not a value shared
+//! with later iterations.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{ForStatementInit, VariableDeclarationKind};
+use oxc_ast::ast::VariableDeclarationKind;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -64,41 +65,50 @@ fn span_contains(outer: oxc_span::Span, inner: oxc_span::Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
 }
 
-/// Byte span of the `let`/`const` initializer of a C-style `for (let i …)` /
-/// `for (const x …)` loop — the per-iteration binding(s). `None` for a `var`
-/// init, for an init that is not a variable declaration, and for any non-`for`
-/// loop. Per ES2015 §14.7.4.2 a `let`/`const` `for` init is re-bound fresh each
-/// iteration, so a closure capturing it reads its own value; a `var` init keeps
-/// one function-scoped binding mutated across iterations and stays a hazard.
-fn per_iteration_for_init_span(loop_kind: AstKind) -> Option<oxc_span::Span> {
-    let AstKind::ForStatement(stmt) = loop_kind else {
-        return None;
-    };
-    let Some(ForStatementInit::VariableDeclaration(decl)) = &stmt.init else {
-        return None;
-    };
-    matches!(
-        decl.kind,
-        VariableDeclarationKind::Let | VariableDeclarationKind::Const
-    )
-    .then_some(decl.span)
+/// True when `sym_id` is declared by a block-scoped `let`/`const`
+/// `VariableDeclaration`. A `let`/`const` binding is block-scoped: every execution
+/// of its enclosing block — including every loop iteration — produces a fresh
+/// binding, so a closure created in that iteration captures that iteration's own
+/// value, never one shared with later iterations. Resolves the symbol's declaration
+/// node and walks up to its nearest enclosing `VariableDeclaration` to read the
+/// kind, which also covers destructuring (`const { a } = …`), where the binding sits
+/// inside an `ObjectPattern`/`ArrayPattern` under the declarator. Returns `false` for
+/// `var` (one hoisted, function-scoped binding shared across iterations) and for
+/// non-variable declarations.
+fn is_block_scoped_declared_symbol(
+    sym_id: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let decl_node_id = semantic.scoping().symbol_declaration(sym_id);
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclaration(decl) => Some(matches!(
+                decl.kind,
+                VariableDeclarationKind::Let | VariableDeclarationKind::Const
+            )),
+            _ => None,
+        })
+        .unwrap_or(false)
 }
 
-/// True when the closure spanning `func_span` references at least one binding the
-/// enclosing loop introduces: a symbol whose declaration sits inside the loop
-/// span (its header or body) but outside the closure itself, and that the closure
-/// references. That capture is the stale-shared-binding hazard this rule targets.
-/// A symbol declared inside the closure is the closure's own param/local; a symbol
-/// declared above the loop is stable across iterations — neither contributes. The
-/// `let`/`const` initializer of a C-style `for` is also excluded: it is re-bound
-/// per iteration, so capturing it is sound.
+/// True when the closure spanning `func_span` captures at least one binding the
+/// enclosing loop shares across iterations: a `var` whose declaration sits inside
+/// the loop span (its header or body) but outside the closure itself, and that the
+/// closure references. A `var` is one hoisted, function-scoped binding the loop
+/// mutates, so a deferred closure reads its final value — the hazard this rule
+/// targets. A `let`/`const` declared anywhere within the loop (the C-style `for`
+/// init, a `for-in` header, or the loop body) is block-scoped and re-bound fresh
+/// each iteration, so the closure captures that iteration's own value and is sound.
+/// A symbol declared inside the closure is its own param/local; one declared above
+/// the loop is stable across iterations — neither contributes.
 fn captures_loop_binding<'a>(
     func_span: oxc_span::Span,
     loop_kind: AstKind<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let loop_span = loop_kind.span();
-    let per_iteration_init = per_iteration_for_init_span(loop_kind);
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
     for sym_id in scoping.symbol_ids() {
@@ -108,11 +118,13 @@ fn captures_loop_binding<'a>(
         if !is_loop_binding {
             continue;
         }
-        // The `let`/`const` loop variable of a C-style `for` is re-bound each
-        // iteration, so capturing it reads that iteration's own value — not the
-        // shared-binding hazard. `var` inits and bindings declared in the loop
-        // body remain hazards.
-        if per_iteration_init.is_some_and(|init_span| span_contains(init_span, decl_span)) {
+        // A `let`/`const` declared within the loop — the C-style `for` init, a
+        // `for-in` header, or the loop body — is block-scoped and re-bound fresh on
+        // every iteration (ES2015 per-iteration / block environments), so a closure
+        // created that iteration captures that iteration's own binding, not a value
+        // shared with later ones. Only a `var` (one hoisted, function-scoped binding
+        // mutated across iterations) stays a hazard.
+        if is_block_scoped_declared_symbol(sym_id, semantic) {
             continue;
         }
         for reference in scoping.get_resolved_references(sym_id) {
@@ -269,12 +281,30 @@ mod tests {
     }
 
     #[test]
-    fn flags_closure_capturing_let_declared_in_loop_body() {
-        // `n` is declared inside the loop body and captured by the closure — a
-        // fresh value per iteration that the deferred closure reads stale.
+    fn allows_closure_capturing_let_declared_in_loop_body() {
+        // Issue #6907: `n` is a block-scoped `let` declared in the loop body, so
+        // each iteration binds a fresh `n` and each closure captures its own
+        // value — `fns.map(f => f())` yields each iteration's `next()`, not a
+        // shared one. No stale-capture hazard.
         let src = r#"
             for (let i = 0; i < 10; i++) {
                 let n = next();
+                fns.push(() => n);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_closure_capturing_var_declared_in_loop_body() {
+        // Negative-space guard: `var n` in the loop body is one hoisted,
+        // function-scoped binding shared and mutated across iterations, so every
+        // stored closure reads the final value — the classic stale-closure bug,
+        // which must STILL be flagged.
+        let src = r#"
+            for (let i = 0; i < 10; i++) {
+                var n = next();
                 fns.push(() => n);
             }
         "#;
@@ -297,19 +327,77 @@ mod tests {
     }
 
     #[test]
-    fn flags_closure_capturing_loop_var_in_while() {
-        // A `let` declared and mutated in a `while` body, captured by a stored
-        // closure — the classic deferred-read hazard.
+    fn allows_closure_capturing_const_in_while_body() {
+        // Issue #6907 (vuejs/core compiler-core/src/transforms/vIf.ts repro):
+        // `key` is a block-scoped `const` declared in the `while` body, so each
+        // iteration binds a fresh `key` and the captured arrow reads its own
+        // iteration's value. `userKey` is the arrow's own destructured param.
         let src = r#"
-            let i = 0;
-            while (i < 10) {
-                let n = i;
-                fns.push(() => n);
-                i++;
+            while (i-- >= -1) {
+                const key = branch.userKey;
+                if (key) {
+                    sibling.branches.forEach(({ userKey }) => {
+                        if (isSameKey(userKey, key)) {
+                            context.onError();
+                        }
+                    });
+                }
+            }
+        "#;
+        let d = run(src, "src/vIf.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_closure_capturing_const_in_c_style_for_body() {
+        // Issue #6907 (vuejs/core runtime-dom/src/directives/vModel.ts repro):
+        // `optionValue` is a block-scoped `const` in the `for` body, fresh each
+        // iteration, captured by the `some` callback. `v` is the callback's param.
+        let src = r#"
+            for (let i = 0, l = el.options.length; i < l; i++) {
+                const optionValue = getValue(el.options[i]);
+                const optionType = typeof optionValue;
+                if (optionType === 'string' || optionType === 'number') {
+                    option.selected = value.some(v => String(v) === String(optionValue));
+                }
+            }
+        "#;
+        let d = run(src, "src/vModel.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_closure_capturing_for_in_header_binding() {
+        // Issue #6907 (vuejs/core runtime-dom/src/apiCustomElement.ts repro):
+        // `key` is the `for-in` header `const`, a fresh per-iteration binding, so
+        // the getter arrow captures its own iteration's `key`. `exposed` is an
+        // outer binding, stable across iterations.
+        let src = r#"
+            for (const key in exposed) {
+                Object.defineProperty(this, key, {
+                    get: () => unref(exposed[key]),
+                });
+            }
+        "#;
+        let d = run(src, "src/apiCustomElement.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_closure_capturing_destructured_const_in_loop_body() {
+        // Issue #6907: a destructured block-scoped `const` (`const { id } = …`) in
+        // the loop body is re-bound fresh each iteration, so the stored closure
+        // captures its own iteration's `id`. The binding sits inside an
+        // `ObjectPattern`, so the exemption must resolve through the pattern up to
+        // the enclosing `VariableDeclaration` to read its kind.
+        let src = r#"
+            for (let i = 0; i < items.length; i++) {
+                const { id } = items[i];
+                fns.push(() => id);
             }
         "#;
         let d = run(src, "src/app.ts");
-        assert_eq!(d.len(), 1);
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
     }
 
     #[test]
