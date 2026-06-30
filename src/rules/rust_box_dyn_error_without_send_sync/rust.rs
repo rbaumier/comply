@@ -23,6 +23,15 @@
 //! single-threaded (the binary entry point and the helpers it calls print
 //! to stderr; a build script runs synchronously at compile time), so the
 //! `Send + Sync` remediation is structurally inapplicable.
+//!
+//! A `Box<dyn Error>` that is the self type of an `impl … for Box<dyn Error>`,
+//! or that appears anywhere in such an impl's body, is also exempt:
+//! `Box<dyn Error>` and `Box<dyn Error + Send + Sync>` are distinct types, so
+//! adding the bounds would change *which* type the impl is for. A method in
+//! such an impl constructs and returns that same self type, so we exempt the
+//! whole body rather than try to tell self-typed positions apart. This keys on
+//! the enclosing impl's self type, so a `Box<dyn Error>` returned from an
+//! `impl … for ConcreteType` still flags.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -46,34 +55,14 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
-        let Some(type_node) = node.child_by_field_name("type") else {
+        let Some((has_send, has_sync)) = box_dyn_error_missing_bounds(node, source_bytes) else {
             return;
         };
-        let type_text = type_node.utf8_text(source_bytes).unwrap_or("");
-        if type_text != "Box" {
-            return;
-        }
-        let Some(args) = node.child_by_field_name("type_arguments") else {
-            return;
-        };
-        let Ok(args_text) = args.utf8_text(source_bytes) else {
-            return;
-        };
-        // We need a `dyn Error` type argument where `Error` is the primary
-        // trait of the outer `dyn` — not `Error` buried inside an inner
-        // type's generics (`dyn Future<Output = Result<_, Self::Error>>`).
-        if !dyn_primary_trait_is_error(args_text) {
-            return;
-        }
-        let has_send = args_text.contains("Send");
-        let has_sync = args_text.contains("Sync");
-        if has_send && has_sync {
-            return;
-        }
-        // A non-`'static` lifetime bound (`Box<dyn Error + 'a>`) marks a
-        // borrow-scoped error: it borrows from an input, so it cannot be
-        // `'static`. The `+ 'static` remediation is impossible here.
-        if has_non_static_lifetime(args_text) {
+        // `Box<dyn Error>` as the self type of an `impl … for Box<dyn Error>`,
+        // or in a method signature/body pinned to that self type, can't gain
+        // `Send + Sync` without changing which type the impl is for — the
+        // remediation is structurally impossible. Exempt those positions.
+        if is_in_box_dyn_error_self_type_impl(node, source_bytes) {
             return;
         }
         if is_in_test_context(node, source_bytes)
@@ -105,6 +94,66 @@ impl AstCheck for Check {
             Severity::Warning,
         ));
     }
+}
+
+/// Returns `Some((has_send, has_sync))` when `node` is a `generic_type` of the
+/// shape this rule flags — `Box<dyn Error …>` whose boxed trait object's
+/// primary trait is `Error`, which lacks at least one of `Send`/`Sync`, and
+/// which carries no non-`'static` lifetime bound (a borrow-scoped error can't
+/// be `'static`, so the `+ 'static` remediation is impossible). Returns `None`
+/// for any other type, including a fully thread-safe `Box<dyn Error + Send +
+/// Sync>`.
+fn box_dyn_error_missing_bounds(
+    node: tree_sitter::Node,
+    source_bytes: &[u8],
+) -> Option<(bool, bool)> {
+    let type_node = node.child_by_field_name("type")?;
+    if type_node.utf8_text(source_bytes).ok()? != "Box" {
+        return None;
+    }
+    let args = node.child_by_field_name("type_arguments")?;
+    let args_text = args.utf8_text(source_bytes).ok()?;
+    // We need a `dyn Error` type argument where `Error` is the primary trait of
+    // the outer `dyn` — not `Error` buried inside an inner type's generics
+    // (`dyn Future<Output = Result<_, Self::Error>>`).
+    if !dyn_primary_trait_is_error(args_text) {
+        return None;
+    }
+    let has_send = args_text.contains("Send");
+    let has_sync = args_text.contains("Sync");
+    if has_send && has_sync {
+        return None;
+    }
+    if has_non_static_lifetime(args_text) {
+        return None;
+    }
+    Some((has_send, has_sync))
+}
+
+/// True when the flagged `Box<dyn Error>` `node` is the self type of an
+/// enclosing `impl … for Box<dyn Error>`, or appears anywhere in the body of
+/// such an impl.
+///
+/// `impl Trait for Box<dyn Error>` implements the trait for one specific type;
+/// `Box<dyn Error>` and `Box<dyn Error + Send + Sync>` are distinct types, so
+/// the self type can't gain bounds. A method in that impl constructs and
+/// returns that same self type, so we exempt every `Box<dyn Error>` in the
+/// body rather than try to tell self-typed positions apart. We walk to the
+/// nearest enclosing `impl_item` and check whether its `type` (self-type) field
+/// has the same flagged `Box<dyn Error>` shape. An impl for a concrete type
+/// (`impl Sink for MyError`) does not match, so a genuine `Box<dyn Error>`
+/// returned there still flags.
+fn is_in_box_dyn_error_self_type_impl(node: tree_sitter::Node, source_bytes: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            return ancestor.child_by_field_name("type").is_some_and(|self_ty| {
+                box_dyn_error_missing_bounds(self_ty, source_bytes).is_some()
+            });
+        }
+        current = ancestor.parent();
+    }
+    false
 }
 
 /// True when the outer `dyn` trait object's primary trait is the `Error`
@@ -383,5 +432,43 @@ path = "src/lib.rs"
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_box_dyn_error_as_impl_self_type() {
+        // ripgrep crates/searcher/src/sink.rs:54: `impl SinkError for
+        // Box<dyn Error>`. The self type can't gain `+ Send + Sync` without
+        // changing which type the impl is for, and the method's return type
+        // (line 57) and body (line 58) are pinned to that self type.
+        let source = r#"
+            impl SinkError for Box<dyn std::error::Error> {
+                fn error_message<T: std::fmt::Display>(
+                    message: T,
+                ) -> Box<dyn std::error::Error> {
+                    Box::<dyn std::error::Error>::from(message.to_string())
+                }
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_box_dyn_error_return_in_impl_for_concrete_type() {
+        // Negative control: a `Box<dyn Error>` returned from an impl whose self
+        // type is a concrete type is NOT pinned to the self type — it can be
+        // made `Send + Sync`, so it still flags.
+        let source = r#"
+            impl SinkError for MyError {
+                fn boxed() -> Box<dyn std::error::Error> { todo!() }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_box_dyn_error_struct_field() {
+        // Negative control: a struct field outside any impl still flags.
+        let source = "struct S { e: Box<dyn std::error::Error> }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
