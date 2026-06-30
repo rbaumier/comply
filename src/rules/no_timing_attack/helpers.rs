@@ -8,7 +8,6 @@ const SECRET_WORDS: &[&str] = &[
     "secret",
     "apikey",
     "auth",
-    "digest",
     "hmac",
     "credential",
     "otp",
@@ -31,18 +30,26 @@ const SECRET_INDICATORS: &[&str] = &[
     "api", "oauth",
 ];
 
-/// `hash` names a cryptographic digest in auth code (`passwordHash`,
-/// `expectedHash`) but also names a *URL fragment* — the `#section` part of a
-/// location parsed straight from the address bar (`location.hash`,
-/// `route.hash`, `to.hash`). A bare `hash`, or one on a routing object, is the
-/// public URL fragment, not a credential, so a name ending in `hash` is only
-/// sensitive when it also carries a qualifier that pins it to the
-/// cryptographic sense.
+/// Substrings that pin an overloaded `hash` / `digest` name (see
+/// `OVERLOADED_HASH_WORDS`) to its cryptographic sense. A name ending in one
+/// of those words is sensitive only when it also contains one of these
+/// (`passwordHash`, `expectedHash`, `auth_digest`, `hmac_digest`), so a bare
+/// `hash` (URL fragment) or `digest` (content hash) stays unflagged.
 const HASH_CRYPTO_QUALIFIERS: &[&str] = &[
     "password", "passwd", "pwd", "secret", "credential", "token", "auth", "pin", "otp", "key",
     "salt", "digest", "hmac", "sha", "md5", "bcrypt", "scrypt", "argon", "pbkdf", "signature",
     "checksum", "expected", "computed", "stored", "actual",
 ];
+
+/// Words that name a cryptographic checksum in auth code (`passwordHash`,
+/// `auth_digest`, `hmac_digest`) yet are equally the term for a public,
+/// content-addressable value elsewhere: `hash` is the URL fragment
+/// (`location.hash`, `route.hash`), `digest` is the canonical OCI / sigstore
+/// content hash (`blob_digest`, a struct field `digest`, `digest.digest`). A
+/// name ending in either is sensitive only when it also carries a
+/// `HASH_CRYPTO_QUALIFIERS` substring; the overloaded word never qualifies
+/// itself, so `blob_digest` does not match on the `digest` qualifier.
+const OVERLOADED_HASH_WORDS: &[&str] = &["hash", "digest"];
 
 /// Substrings that mark a value as a *content-integrity* fingerprint — a
 /// checksum / digest of file or download content, verified against a known
@@ -77,9 +84,10 @@ const INTEGRITY_INDICATORS: &[&str] = &[
 /// indicator in the name to fire, so `auth_token` and `api_signature`
 /// match but a lexer's `comment_token` or an LSP `lsp_signature` does not.
 ///
-/// A name ending in `hash` requires a cryptographic qualifier
-/// (`passwordHash`, `expectedHash`, `sha256Hash`); a bare `hash` is a URL
-/// fragment (`location.hash`, `route.hash`) and does not match.
+/// A name ending in `hash` or `digest` requires a cryptographic qualifier
+/// (`passwordHash`, `expectedHash`, `auth_digest`, `hmac_digest`); a bare
+/// `hash` (URL fragment) or `digest` (OCI / sigstore content hash) does not
+/// match.
 pub fn is_sensitive_identifier(name: &str) -> bool {
     let normalized: String = name
         .chars()
@@ -89,10 +97,13 @@ pub fn is_sensitive_identifier(name: &str) -> bool {
     if SECRET_WORDS.iter().any(|word| normalized.ends_with(word)) {
         return true;
     }
-    if normalized.ends_with("hash") {
+    if let Some(&word) = OVERLOADED_HASH_WORDS
+        .iter()
+        .find(|&&word| normalized.ends_with(word))
+    {
         return HASH_CRYPTO_QUALIFIERS
             .iter()
-            .any(|qualifier| normalized.contains(qualifier));
+            .any(|&qualifier| qualifier != word && normalized.contains(qualifier));
     }
     AMBIGUOUS_ROLE_WORDS
         .iter()
@@ -144,7 +155,24 @@ mod tests {
     #[test]
     fn flat_sensitive_names() {
         assert!(is_sensitive_identifier("password"));
-        assert!(is_sensitive_identifier("digest"));
+        assert!(is_sensitive_identifier("hmac"));
+    }
+
+    /// `digest` is overloaded exactly like `hash`: a cryptographic digest in
+    /// auth code, but the canonical content-addressable SHA-256 term in
+    /// OCI / sigstore tooling (#6809). It fires only with a crypto qualifier.
+    #[test]
+    fn digest_needs_crypto_qualifier() {
+        // Credential-qualified digests still fire.
+        assert!(is_sensitive_identifier("auth_digest"));
+        assert!(is_sensitive_identifier("password_digest"));
+        assert!(is_sensitive_identifier("hmac_digest"));
+        assert!(is_sensitive_identifier("expected_digest"));
+        // A bare or content-addressed `digest` is a public fingerprint, not a
+        // credential — the overloaded word does not qualify itself.
+        assert!(!is_sensitive_identifier("digest"));
+        assert!(!is_sensitive_identifier("blob_digest"));
+        assert!(!is_sensitive_identifier("messageDigest"));
     }
 
     /// `hash` is overloaded: a cryptographic digest in auth code, a URL
