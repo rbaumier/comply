@@ -9,7 +9,11 @@
 //!
 //! - "wildcard": node kind `wildcard_pattern`, or a pattern whose full
 //!   text is exactly `_`.
-//! - "enum-like": node kind is `tuple_struct_pattern` or `struct_pattern`,
+//! - "enum-like": node kind is `tuple_struct_pattern`; a `struct_pattern`
+//!   whose `type` path is qualified (`Enum::Variant { field }`, a
+//!   `scoped_type_identifier`) — an unqualified `struct_pattern`
+//!   (`Point { column, .. }`, a bare `type_identifier`) destructures a plain
+//!   struct with no exhaustible variant set and is NOT enum-like;
 //!   or a `scoped_identifier`/`::`-containing path whose final segment is a
 //!   PascalCase variant (`Direction::North`), or a bare PascalCase
 //!   identifier (uppercase lead with at least one lowercase letter).
@@ -344,7 +348,17 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
                 None => true,
             };
         }
-        "tuple_struct_pattern" | "struct_pattern" => return true,
+        "tuple_struct_pattern" => return true,
+        // A `struct_pattern` destructures a brace type (`T { field, .. }`). It is
+        // enum-like only when `T` is a qualified path (`Enum::Variant { .. }`, a
+        // `scoped_type_identifier`): that names an enum struct-variant whose
+        // sibling variants form an exhaustible set. A bare unqualified name
+        // (`Point { column, .. }`, a `type_identifier`) destructures a plain
+        // struct, which has no variant set to enumerate, so its `_` arm is
+        // correct. Return the verdict directly — falling through would let the
+        // textual PascalCase fallback below re-read the leading `Point` as a bare
+        // variant and re-flag the plain-struct match.
+        "struct_pattern" => return struct_pattern_is_enum_variant(pattern),
         // Literal patterns match scalar/string values, never enum variants.
         // A `match key: &str { "AltLeft" => …, _ => … }` has an infinite
         // domain, so its `_` arm is compiler-mandated. Bail out before the
@@ -381,6 +395,24 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
         .find(|c| c.is_ascii_alphanumeric() || *c == '_');
     matches!(first_ident_char, Some(c) if c.is_ascii_uppercase())
         && text.chars().any(|c| c.is_ascii_lowercase())
+}
+
+/// True if a `struct_pattern` destructures an enum struct-variant rather than a
+/// plain struct. The discriminator is structural: tree-sitter-rust gives the
+/// pattern a `type` field that is either a `scoped_type_identifier` (qualified,
+/// `Enum::Variant { .. }` — an enum struct-variant whose siblings are
+/// exhaustible) or a bare `type_identifier` (`Point { .. }` — a plain struct
+/// with no variant set). Only the qualified form is enum-like.
+///
+/// Accepted limitation: an unqualified struct-variant of a glob-imported local
+/// enum (`use Shape::*; match s { Circle { r } => .., _ => .. }`) is
+/// syntactically indistinguishable from a plain-struct destructure here and
+/// reads as a plain struct — an under-flag in the safe direction, matching the
+/// rule's bias toward false negatives over false positives.
+fn struct_pattern_is_enum_variant(pattern: tree_sitter::Node) -> bool {
+    pattern
+        .child_by_field_name("type")
+        .is_some_and(|ty| ty.kind() == "scoped_type_identifier")
 }
 
 /// True if `segment` is a SCREAMING_SNAKE_CASE associated constant rather
@@ -1895,6 +1927,39 @@ mod tests {
         let src = "use serde_json::*;\n\
                    use crate::foo::Color;\n\
                    fn f(c: Color) -> i32 { match c { Color::Red => 1, _ => 0, } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_on_unqualified_struct_pattern() {
+        // Issue #6987: alacritty's `grid/mod.rs`. `Point` is a plain struct, so
+        // `Point { column: Column(0), .. }` destructures it directly — there is no
+        // exhaustible variant set, so the `_` arm is correct. The bare
+        // (`type_identifier`) `struct_pattern` type must not read as enum-like.
+        let src = "fn f(p: Point) { match p { \
+                   Point { column: Column(0), .. } => { reset(); } \
+                   _ => step(), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_on_qualified_struct_variant_patterns() {
+        // Issue #6987 control: a qualified `struct_pattern` type
+        // (`MyEnum::Foo { a }`, a `scoped_type_identifier`) is a genuine enum
+        // struct-variant whose siblings are exhaustible, so the `_` arm must
+        // still flag.
+        let src = "fn f(x: MyEnum) -> i32 { match x { \
+                   MyEnum::Foo { a } => 1, MyEnum::Bar { b } => 2, _ => 3 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_on_tuple_variant_patterns() {
+        // Issue #6987 control: tuple-variant patterns (`MyEnum::A(v)`,
+        // `tuple_struct_pattern`) are unchanged by the struct_pattern fix and
+        // must still flag.
+        let src = "fn f(x: MyEnum) -> i32 { match x { \
+                   MyEnum::A(v) => 1, MyEnum::B(v) => 2, _ => 3 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
