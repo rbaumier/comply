@@ -3,7 +3,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, TSType, TSTypeAnnotation, TemplateLiteral, VariableDeclarationKind};
+use oxc_ast::ast::{
+    Expression, ObjectPropertyKind, TSType, TSTypeAnnotation, TemplateLiteral,
+    VariableDeclarationKind,
+};
 use std::sync::Arc;
 
 pub struct Check;
@@ -62,18 +65,22 @@ impl OxcCheck for Check {
 /// string content, so the ReDoS / injection vector the rule targets is absent.
 ///
 /// Safe shapes:
-/// - A string/regexp literal, or a template literal whose `${}` slots are all
-///   statically numeric (a number coerces to decimal digits only — no regex
-///   metacharacters reachable).
+/// - A string/regexp literal, or a template literal whose `${}` slots are each
+///   themselves safe — a statically numeric expression (digits only) or any other
+///   safe pattern (string literal, const literal binding, const-keys join, …).
 /// - An identifier bound by a module/function-local `const` whose initializer is
 ///   itself a safe pattern (a constant pattern defined once, not runtime input).
 /// - A `.source` member access whose object is itself a safe pattern, i.e.
 ///   `new RegExp(RE.source, flags)` rebuilding a regex from a const literal regex
 ///   with different flags — `.source` reads the compile-time pattern text.
+/// - An `Object.keys(<const-object>).join(<string literal>)` chain — a local `const`
+///   object literal with statically-written keys (no computed `[expr]` key, no
+///   `...spread`) has author-fixed keys, so the joined string is fixed at author
+///   time, not runtime input.
 fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
     match expr {
         Expression::StringLiteral(_) | Expression::RegExpLiteral(_) => true,
-        Expression::TemplateLiteral(tpl) => template_slots_all_numeric(tpl, semantic),
+        Expression::TemplateLiteral(tpl) => template_slots_all_safe(tpl, semantic),
         Expression::Identifier(ident) => is_const_literal_binding(ident, semantic),
         // `RE.source` is safe only when the object is itself a safe pattern (a const
         // bound to a regex/string literal), so the read yields a compile-time-fixed
@@ -82,16 +89,96 @@ fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool
         Expression::StaticMemberExpression(member) if member.property.name.as_str() == "source" => {
             is_safe_pattern(&member.object, semantic)
         }
+        Expression::CallExpression(call) => is_object_keys_join_of_const(call, semantic),
         _ => false,
     }
 }
 
-/// True when every `${}` slot of `tpl` is a statically numeric expression, so the
-/// interpolated text is digits only. A slot-free template is vacuously numeric.
-fn template_slots_all_numeric(tpl: &TemplateLiteral, semantic: &oxc_semantic::Semantic) -> bool {
+/// True when every `${}` slot of `tpl` is provably developer-controlled: a
+/// statically numeric expression (digits only) or any other safe pattern. A
+/// slot-free template is vacuously safe.
+fn template_slots_all_safe(tpl: &TemplateLiteral, semantic: &oxc_semantic::Semantic) -> bool {
     tpl.expressions
         .iter()
-        .all(|slot| is_static_numeric_expr(slot, semantic))
+        .all(|slot| is_static_numeric_expr(slot, semantic) || is_safe_pattern(slot, semantic))
+}
+
+/// True when `call` is the chain `Object.keys(<const-object>).join(<string literal>)`.
+/// The keys of a locally-declared `const` object literal are fixed by the author, so
+/// joining them with a literal separator yields a developer-controlled string — no
+/// attacker input can reach the resulting regex pattern.
+fn is_object_keys_join_of_const(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    // Outer call must be `<obj>.join(<StringLiteral>)`.
+    let Expression::StaticMemberExpression(join_member) = &call.callee else {
+        return false;
+    };
+    if join_member.property.name.as_str() != "join" {
+        return false;
+    }
+    if call.arguments.len() != 1 {
+        return false;
+    }
+    let Some(Expression::StringLiteral(_)) =
+        call.arguments.first().and_then(|arg| arg.as_expression())
+    else {
+        return false;
+    };
+    // `<obj>` must itself be `Object.keys(<const-object>)`.
+    let Expression::CallExpression(keys_call) = &join_member.object else {
+        return false;
+    };
+    is_object_keys_of_const(keys_call, semantic)
+}
+
+/// True when `call` is `Object.keys(<ident>)` and `<ident>` resolves to a local
+/// `const` binding whose initializer is an object literal with statically-written
+/// keys (no computed `[expr]` key, no `...spread`). Such keys are fixed at author
+/// time; a `let`/`var`, parameter, imported object, or an object whose keys can be
+/// runtime-derived (computed/spread) is not provably static.
+fn is_object_keys_of_const(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind as AK;
+
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "keys" {
+        return false;
+    }
+    let Expression::Identifier(obj_ident) = &member.object else {
+        return false;
+    };
+    if obj_ident.name.as_str() != "Object" {
+        return false;
+    }
+    if call.arguments.len() != 1 {
+        return false;
+    }
+    let Some(Expression::Identifier(arg_ident)) =
+        call.arguments.first().and_then(|arg| arg.as_expression())
+    else {
+        return false;
+    };
+    let Some(AK::VariableDeclarator(decl)) = resolve_binding_declarator(arg_ident, semantic) else {
+        return false;
+    };
+    if decl.kind != VariableDeclarationKind::Const {
+        return false;
+    }
+    let Some(Expression::ObjectExpression(obj)) = &decl.init else {
+        return false;
+    };
+    // Every key must be fixed by the author. A computed key (`[expr]: v`) or a
+    // spread (`...src`) can pull a runtime-derived string into `Object.keys`, so
+    // such an object's keys are not provably developer-controlled.
+    obj.properties
+        .iter()
+        .all(|prop| matches!(prop, ObjectPropertyKind::ObjectProperty(p) if !p.computed))
 }
 
 /// True when `expr` can only evaluate to a `number` — a numeric literal, or an
@@ -323,6 +410,94 @@ mod tests {
         // Tightness guard: `.source` on a call-expression object is not a const
         // regex literal, so the pattern is not provably static — still flagged.
         let src = r#"const r = new RegExp(buildPattern().source);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_object_keys_join_of_const_object_in_template() {
+        // Issue #6901: `Object.keys(CONST_OBJ).join(literal)` in a template slot is a
+        // fixed, developer-controlled string — the regex character class is static.
+        let src = r#"
+            const replacements = {
+                ' ': '\\u2028',
+                ' ': '\\u2029'
+            };
+            const pattern = new RegExp(`[${Object.keys(replacements).join('')}]`, 'g');
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_object_keys_join_of_const_object_direct() {
+        // The same chain as the first RegExp argument, with no template wrapper.
+        let src = r#"
+            const replacements = { a: 1, b: 2 };
+            const pattern = new RegExp(Object.keys(replacements).join('|'));
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_object_keys_join_of_let_binding() {
+        // A `let` binding can be reassigned to runtime input — keys not provably static.
+        let src = r#"
+            let replacements = { a: 1 };
+            const pattern = new RegExp(`[${Object.keys(replacements).join('')}]`, 'g');
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_object_keys_join_of_param() {
+        // A function parameter is runtime input — its keys can carry metacharacters.
+        let src = r#"
+            function build(replacements: Record<string, string>): RegExp {
+                return new RegExp(`[${Object.keys(replacements).join('')}]`, 'g');
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_object_keys_join_of_imported_object() {
+        // An imported object is not a local const literal — its keys are not provably
+        // developer-controlled in this module.
+        let src = r#"
+            import { replacements } from './config';
+            const pattern = new RegExp(`[${Object.keys(replacements).join('')}]`, 'g');
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_object_keys_join_with_dynamic_separator() {
+        // The separator is a variable, not a string literal — the joined string is
+        // not provably static.
+        let src = r#"
+            const replacements = { a: 1 };
+            const pattern = new RegExp(`[${Object.keys(replacements).join(sep)}]`, 'g');
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_object_keys_join_of_const_with_computed_key() {
+        // A computed key can be runtime-derived — `Object.keys` then yields the
+        // attacker's string. The const object's keys are not provably static.
+        let src = r#"
+            const replacements = { [req.query.evil]: 1 };
+            const pattern = new RegExp(Object.keys(replacements).join('|'));
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_object_keys_join_of_const_with_spread() {
+        // A spread pulls runtime keys into the object — keys not provably static.
+        let src = r#"
+            const replacements = { ...req.query };
+            const pattern = new RegExp(`[${Object.keys(replacements).join('')}]`, 'g');
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 }
