@@ -393,12 +393,15 @@ fn collect<'a>(
             );
             if let Some(args) = &tref.type_arguments {
                 for arg in &args.params {
-                    if is_self_call
-                        && let TSType::TSTypeReference(arg_ref) = arg
-                        && let TSTypeName::IdentifierReference(id) = &arg_ref.type_name
-                        && arg_ref.type_arguments.is_none()
-                    {
-                        self_call_args.push(id.name.as_str());
+                    if is_self_call {
+                        if let TSType::TSTypeReference(arg_ref) = arg
+                            && let TSTypeName::IdentifierReference(id) = &arg_ref.type_name
+                            && arg_ref.type_arguments.is_none()
+                        {
+                            self_call_args.push(id.name.as_str());
+                        } else if let Some(narrowed) = narrowed_infer_ref_name(arg) {
+                            self_call_args.push(narrowed);
+                        }
                     }
                     collect(arg, alias_name, infer_names, self_call_args);
                 }
@@ -469,6 +472,44 @@ fn collect<'a>(
         }
         _ => {}
     }
+}
+
+/// If `arg` is a narrowing-conditional wrapper of the exact shape
+/// `X extends <bound> ? X : never` — the check type and the true branch are both
+/// a bare reference to the same identifier `X` and the false branch is `never` —
+/// return `X`'s name. Such a wrapper re-narrows `X` (e.g. an `infer` binding
+/// inferred as `unknown[]`) to a tighter constraint while passing it through
+/// unchanged, so feeding it to a recursive call is equivalent to passing the bare
+/// reference `X`. Any other conditional shape (a different true branch, or a
+/// false branch other than `never`) may alter what is passed and is not matched.
+fn narrowed_infer_ref_name<'a>(arg: &'a oxc_ast::ast::TSType<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::{TSType, TSTypeName};
+
+    let TSType::TSConditionalType(cond) = arg else {
+        return None;
+    };
+    if !matches!(cond.false_type, TSType::TSNeverKeyword(_)) {
+        return None;
+    }
+    let TSType::TSTypeReference(check_ref) = &cond.check_type else {
+        return None;
+    };
+    let TSType::TSTypeReference(true_ref) = &cond.true_type else {
+        return None;
+    };
+    let TSTypeName::IdentifierReference(check_id) = &check_ref.type_name else {
+        return None;
+    };
+    let TSTypeName::IdentifierReference(true_id) = &true_ref.type_name else {
+        return None;
+    };
+    if check_ref.type_arguments.is_some()
+        || true_ref.type_arguments.is_some()
+        || check_id.name.as_str() != true_id.name.as_str()
+    {
+        return None;
+    }
+    Some(check_id.name.as_str())
 }
 
 /// Walk a function or constructor type signature, recording `infer` bindings in
@@ -1098,6 +1139,68 @@ type InferFallbacks<TSchema> = TSchema extends Schema<infer TEntries>
         // unrelated variable does not descend per-key, so the recursion stays
         // unbounded even though a mapped key (`P`) is in scope.
         let src = "type Loop<T, K extends keyof T> = T extends object ? { [P in keyof T]: Loop<T[K], K> } : T;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_narrowing_conditional_infer_binding_rollback() {
+        // The recursive argument `L extends string[] ? L : never` is a narrowing
+        // wrapper around the `infer L` tuple-rest binding: it re-narrows `L`
+        // (inferred as `unknown[]`) to `string[]` but passes it through unchanged,
+        // so the tuple strictly shrinks each step and the recursion is bounded.
+        let src = r#"
+export type RollbackToSavepoint<
+  S extends string[],
+  SN extends S[number],
+> = S extends [...infer L, infer R]
+  ? R extends SN
+    ? S
+    : RollbackToSavepoint<L extends string[] ? L : never, SN>
+  : never
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_narrowing_conditional_infer_binding_release() {
+        // Same narrowing-conditional shrinkage as RollbackToSavepoint; the true
+        // branch returning `L` instead of `S` does not change the recursive arg.
+        let src = r#"
+export type ReleaseSavepoint<
+  S extends string[],
+  SN extends S[number],
+> = S extends [...infer L, infer R]
+  ? R extends SN
+    ? L
+    : ReleaseSavepoint<L extends string[] ? L : never, SN>
+  : never
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_narrowing_conditional_with_different_true_branch() {
+        // The conditional's true branch is `S` (the full tuple), not the checked
+        // infer binding `L`, so the wrapper does not pass `L` through — the
+        // recursion could feed back the full input and stays unbounded.
+        let src = r#"
+type Loop<S extends string[]> = S extends [...infer L, infer R]
+  ? Loop<L extends string[] ? S : never>
+  : never;
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_narrowing_conditional_with_non_never_false_branch() {
+        // The conditional's false branch is `S` rather than `never`, so the
+        // wrapper can yield the full input instead of the shrinking `L`; it is not
+        // a pass-through of the infer binding and the recursion stays unbounded.
+        let src = r#"
+type Loop<S extends string[]> = S extends [...infer L, infer R]
+  ? Loop<L extends string[] ? L : S>
+  : never;
+"#;
         assert_eq!(run_on(src).len(), 1);
     }
 }
