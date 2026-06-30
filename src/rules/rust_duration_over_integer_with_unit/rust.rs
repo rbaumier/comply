@@ -33,15 +33,17 @@
 //! file-wide — it does not verify a structural link — which deliberately errs
 //! toward silence over a false positive on a name collision.
 //! Test code is exempted via `is_in_test_context`.
-//! A parameter of a trait-impl method (`impl SomeTrait for T { fn f(ms: u32) }`)
-//! is exempted: the signature must match the trait's declaration exactly, so the
-//! integer type is the trait author's choice, not the implementor's. Inherent-impl
+//! A parameter of a trait method — both the definition
+//! (`trait Foo { fn f(ms: u32); }`) and any implementation
+//! (`impl SomeTrait for T { fn f(ms: u32) }`) — is exempted: the signature is the
+//! trait author's contract, fixed in the definition and matched exactly by every
+//! impl, so the integer type is not chosen at the flagged site. Inherent-impl
 //! methods, free functions, and struct fields still flag — there the unit-in-name
 //! design is the author's own.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_in_trait_impl};
+use crate::rules::rust_helpers::{is_in_test_context, is_in_trait_definition, is_in_trait_impl};
 
 const SUFFIXES: &[&str] = &[
     "_seconds",
@@ -106,11 +108,13 @@ impl AstCheck for Check {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
             return;
         }
-        // Function parameter: `fn f(window_days: u32)`. A trait-impl method's
-        // signature must match the trait declaration, so the integer type is not
-        // the implementor's choice — exempt it.
+        // Function parameter: `fn f(window_days: u32)`. A trait method's
+        // signature is the trait author's contract — fixed in the definition and
+        // matched exactly by every impl — so the integer type is not chosen at the
+        // flagged site. Exempt both the trait definition and its implementations.
         if node.kind() == "parameter"
             && !is_in_trait_impl(node)
+            && !is_in_trait_definition(node)
             && let Some(pattern) = node.child_by_field_name("pattern")
             && let Some(type_node) = node.child_by_field_name("type")
             && let Ok(name) = pattern.utf8_text(source_bytes)
@@ -566,5 +570,32 @@ impl embedded_hal_async::delay::DelayNs for NoDelay {
         // The trait-impl exemption is parameter-scoped: a struct field carrying a
         // unit name is the struct author's choice and still flags.
         assert_eq!(run_on("struct S { timeout_ms: u64 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_trait_definition_method_param() {
+        // deno `pub trait File`: the parameter types are the trait author's API
+        // contract — every implementor must match them exactly — so the integer
+        // is not chosen at this site, just like a trait *impl* method. Regression
+        // for #6904.
+        let source = "\
+pub trait File {
+    fn utime_sync(
+        self: Rc<Self>,
+        atime_secs: i64,
+        atime_nanos: u32,
+        mtime_secs: i64,
+        mtime_nanos: u32,
+    ) -> FsResult<()>;
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_free_function_secs_param() {
+        // A free function with the same `secs: i64` parameter is the author's own
+        // choice — the rule still flags it, proving the trait-definition exemption
+        // does not neuter the check.
+        assert_eq!(run_on("fn touch(atime_secs: i64) {}").len(), 1);
     }
 }
