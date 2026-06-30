@@ -18,6 +18,13 @@
 //! `Weak` struct mirrors the owner's field names so `upgrade()` reconstructs
 //! the strong form). They cannot be merged — the wrapper changes from a strong
 //! to a weak handle — so they do not form a data clump.
+//!
+//! Structs carrying a layout-constraining `repr` attribute (`#[repr(C)]`,
+//! `#[repr(packed)]`, `#[repr(transparent)]`, `#[repr(align(N))]`, or any
+//! combination such as `#[repr(C, packed)]`) are excluded: these pin an exact
+//! in-memory layout for FFI or byte-level casts (e.g. `bytemuck`), so factoring
+//! shared fields into a nested type would change the layout and break the
+//! contract.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -162,7 +169,10 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
         }
         names.sort();
         names.dedup();
-        if names.len() >= 3 && !is_borrowed_view_struct(node) {
+        if names.len() >= 3
+            && !is_borrowed_view_struct(node)
+            && !has_layout_repr_attr(node, source)
+        {
             out.push(StructFields {
                 line: node.start_position().row + 1,
                 names,
@@ -283,6 +293,64 @@ fn type_contains_reference(node: tree_sitter::Node) -> bool {
     }
     let mut cursor = node.walk();
     node.children(&mut cursor).any(type_contains_reference)
+}
+
+/// True if `struct_node` carries a layout-constraining `repr` attribute —
+/// `#[repr(C)]`, `#[repr(packed)]`, `#[repr(transparent)]`, `#[repr(align(N))]`,
+/// or any combination. Such attributes pin the struct's exact in-memory layout
+/// (FFI, `bytemuck` byte-casts, alignment guarantees), so extracting shared
+/// fields into a nested type would change the layout and break the contract;
+/// the struct therefore cannot participate in a data clump.
+///
+/// Attributes are the struct's preceding `attribute_item` siblings; interleaved
+/// comment siblings are skipped and unrelated attributes (`#[derive(...)]`) are
+/// traversed past.
+fn has_layout_repr_attr(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = struct_node.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if repr_attr_constrains_layout(s, source) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `attribute_item` is a `#[repr(...)]` whose arguments contain a
+/// layout-constraining token: `C`, `packed`, `transparent`, or `align` (the
+/// latter two also in their argument-bearing forms `packed(N)` / `align(N)`).
+/// Integer reprs (`#[repr(u8)]`) and non-`repr` attributes yield `false`.
+fn repr_attr_constrains_layout(attribute_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    if path.utf8_text(source) != Ok("repr") {
+        return false;
+    }
+    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+    let Ok(text) = token_tree.utf8_text(source) else {
+        return false;
+    };
+    let inner = text.trim().trim_start_matches('(').trim_end_matches(')');
+    inner.split(',').any(|tok| {
+        let head = tok.trim().split('(').next().unwrap_or("").trim();
+        matches!(head, "C" | "packed" | "transparent" | "align")
+    })
 }
 
 /// If `ty` is a single `Arc<X>`, `Rc<X>`, or `Weak<X>` smart-pointer wrapper,
@@ -622,6 +690,154 @@ struct Weakish {
     a: Weak<Foo>,
     b: Weak<Other>,
     c: Weak<Baz>,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn allows_repr_c_layout_structs_issue_6950() {
+        let src = r#"
+#[derive(Debug, Clone, Copy, NoUninit, CheckedBitPattern)]
+#[repr(C)]
+pub struct SetVectors {
+    pub docid: DocumentId,
+    pub embedder_id: u8,
+    _padding: [u8; 3],
+}
+
+#[derive(Debug, Clone, Copy, NoUninit, CheckedBitPattern)]
+#[repr(C)]
+pub struct SetVector {
+    pub docid: DocumentId,
+    pub embedder_id: u8,
+    pub extractor_id: u8,
+    _padding: [u8; 2],
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_repr_packed_layout_structs() {
+        let src = r#"
+#[repr(packed)]
+struct PackedA {
+    a: u32,
+    b: u16,
+    c: u8,
+}
+
+#[repr(packed)]
+struct PackedB {
+    a: u32,
+    b: u16,
+    c: u8,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_repr_align_layout_structs() {
+        let src = r#"
+#[repr(align(8))]
+struct AlignedA {
+    a: u32,
+    b: u32,
+    c: u32,
+}
+
+#[repr(align(8))]
+struct AlignedB {
+    a: u32,
+    b: u32,
+    c: u32,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_repr_c_packed_combination_structs() {
+        let src = r#"
+#[repr(C, packed)]
+struct ComboA {
+    a: u32,
+    b: u16,
+    c: u8,
+}
+
+#[repr(C, packed)]
+struct ComboB {
+    a: u32,
+    b: u16,
+    c: u8,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// One struct carries `#[repr(C)]`, the other is plain. The repr struct is
+    /// exempt and never collected, so only one struct remains for the shared
+    /// subset — a clump needs two, so nothing is flagged.
+    #[test]
+    fn one_repr_one_plain_does_not_flag_pair() {
+        let src = r#"
+#[repr(C)]
+struct ReprStruct {
+    a: u32,
+    b: u32,
+    c: u32,
+}
+
+struct PlainStruct {
+    a: u32,
+    b: u32,
+    c: u32,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_structs_with_only_derive() {
+        let src = r#"
+#[derive(Clone)]
+struct Alpha {
+    a: u32,
+    b: u32,
+    c: u32,
+}
+
+#[derive(Clone)]
+struct Beta {
+    a: u32,
+    b: u32,
+    c: u32,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    /// `#[repr(u8)]` is an integer discriminant repr, not a layout repr, so it
+    /// is NOT exempt — these structs still form a clump. Locks the token-tree
+    /// discriminator that distinguishes layout reprs from integer reprs.
+    #[test]
+    fn still_flags_repr_int_structs() {
+        let src = r#"
+#[repr(u8)]
+struct IntA {
+    a: u32,
+    b: u32,
+    c: u32,
+}
+
+#[repr(u8)]
+struct IntB {
+    a: u32,
+    b: u32,
+    c: u32,
 }
 "#;
         assert_eq!(run_on(src).len(), 2);
