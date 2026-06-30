@@ -5,6 +5,11 @@
 //! for T` blocks in the same file. If `PartialEq` is *derived* but
 //! `Eq` is missing, we emit a diagnostic at the type definition.
 //!
+//! Only an *unconditional* `#[derive(...)]` counts. A conditional
+//! `#[cfg_attr(test, derive(PartialEq))]` derives `PartialEq` only in
+//! builds where the cfg predicate holds, so it is not treated as an
+//! unconditional `PartialEq` and does not trigger the rule.
+//!
 //! Types in a test context (`#[cfg(test)]` module, `#[test]` fn) are
 //! skipped: they are throwaway fixtures deriving `PartialEq` only for
 //! `assert_eq!`, so a missing `Eq` is not a defect.
@@ -466,20 +471,7 @@ fn collect_derives(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
     for i in (0..idx).rev() {
         let c = children[i];
         match c.kind() {
-            "attribute_item" => {
-                let Ok(text) = c.utf8_text(source) else {
-                    continue;
-                };
-                if let Some(start) = text.find("derive(") {
-                    let after = &text[start + "derive(".len()..];
-                    if let Some(end) = after.find(')') {
-                        let list = &after[..end];
-                        for item in list.split(',') {
-                            out.push(item.trim().to_string());
-                        }
-                    }
-                }
-            }
+            "attribute_item" => collect_unconditional_derive_traits(c, source, &mut out),
             "line_comment" | "block_comment" => {
                 // Interleaved comment — keep walking.
             }
@@ -487,6 +479,46 @@ fn collect_derives(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Appends the traits of `attribute_item` to `out` when it is an
+/// *unconditional* `#[derive(...)]`. `attribute_item > attribute` parses as
+/// `seq($._path, optional(arguments: token_tree))`: the attribute's meta-path
+/// is its first named child, and only an exact `derive` contributes. A
+/// `#[cfg_attr(<cfg>, derive(...))]` is conditional — its nested `derive`
+/// applies only when the cfg predicate holds — so its path is `cfg_attr` and
+/// it is skipped; the test-only derive it carries is never read as
+/// unconditional. Trait names are the `identifier` tokens of the attribute's
+/// argument `token_tree` (`derive(PartialEq, Eq)` → `PartialEq`, `Eq`).
+fn collect_unconditional_derive_traits(
+    attribute_item: tree_sitter::Node,
+    source: &[u8],
+    out: &mut Vec<String>,
+) {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return;
+    };
+    let Some(path) = attribute.named_child(0) else {
+        return;
+    };
+    if path.utf8_text(source) != Ok("derive") {
+        return;
+    }
+    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
+        return;
+    };
+    let mut tree_cursor = token_tree.walk();
+    for tok in token_tree.children(&mut tree_cursor) {
+        if tok.kind() == "identifier"
+            && let Ok(text) = tok.utf8_text(source)
+        {
+            out.push(text.to_string());
+        }
+    }
 }
 
 /// How `PartialEq` / `Eq` are provided for a type, combining derives
@@ -874,5 +906,45 @@ struct A {
         let source = "#[derive(Debug, PartialEq)]\nstruct Unit;";
         let diags = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/api.rs");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_type_with_cfg_attr_test_only_partial_eq() {
+        // Issue #7024 (tauri `InvokeResponseBody`): `PartialEq` is derived only
+        // under `#[cfg_attr(test, ...)]`, so it exists in test builds alone. The
+        // production type has no `PartialEq`, so demanding `Eq` is wrong — the
+        // conditional derive must not be read as unconditional.
+        let source = "\
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
+pub enum InvokeResponseBody {
+    Json(String),
+    Raw(Vec<u8>),
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unconditional_partial_eq_alongside_test_only_eq() {
+        // `PartialEq` is unconditional while `Eq` exists only in test builds, so
+        // production code has `PartialEq` without `Eq` — still a defect. The
+        // `cfg_attr` derive must not satisfy the `Eq` requirement.
+        let source = "#[derive(PartialEq)]\n#[cfg_attr(test, derive(Eq))]\nstruct C;";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unconditional_partial_eq_unit_struct() {
+        // A field-less type with an unconditional `#[derive(PartialEq)]` is still
+        // flagged: it is vacuously Eq-capable.
+        let source = "#[derive(PartialEq)]\nstruct A;";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_unit_struct_with_unconditional_partial_eq_and_eq() {
+        // `#[derive(PartialEq, Eq)]` provides both unconditionally — not flagged.
+        let source = "#[derive(PartialEq, Eq)]\nstruct B;";
+        assert!(run_on(source).is_empty());
     }
 }
