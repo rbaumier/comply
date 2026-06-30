@@ -7,6 +7,13 @@
 //! - A clause present but without a `type` key  → "missing `type: \"json\"`".
 //! - A `type` key set to a non-`json` value     → left alone (the author has
 //!   declared a deliberate, different module type).
+//!
+//! Build-tool config files (`vite.config.ts`, `jest.config.ts`,
+//! `webpack.config.js`, … — anything matched by
+//! [`crate::rules::path_utils::is_config_file`]) are exempt: their JSON imports
+//! are resolved natively by the bundler/test runner (Vite, esbuild, Jest) at
+//! tool startup, where the `with { type: "json" }` attribute is neither required
+//! nor conventional.
 
 use std::sync::Arc;
 
@@ -37,6 +44,13 @@ impl OxcCheck for Check {
         let AstKind::ImportDeclaration(import) = node.kind() else {
             return;
         };
+
+        // Build-tool config files resolve JSON imports natively (Vite/esbuild/
+        // Jest at tool startup), so the `type: "json"` attribute is neither
+        // required nor conventional there.
+        if crate::rules::path_utils::is_config_file(ctx.path) {
+            return;
+        }
 
         // Biome queries `JsImportDefaultClause`: only a default import is in
         // scope (`import x from './x.json'`). JSON modules expose a single
@@ -111,6 +125,10 @@ mod tests {
 
     fn run_on(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "src/index.ts")
+    }
+
+    fn run_on_path(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, path)
     }
 
     // ── Biome `invalid.js` fixtures: a default JSON import without
@@ -241,6 +259,32 @@ import hoge from 'hoge.json' with {
         // `import foo, { bar } from '...json'` carries a default specifier and
         // is therefore in scope.
         let diags = run_on("import foo, { bar } from 'data.json';");
+        assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
+    }
+
+    // ── Build-tool config files are exempt (issue #6942) ───────────────────
+
+    #[test]
+    fn ignores_missing_attribute_in_vite_config() {
+        // A Vite config resolves the JSON import natively (esbuild at startup),
+        // so a missing `type: "json"` attribute is not flagged.
+        let diags = run_on_path(
+            "import packageJson from './package.json'",
+            "packages/react-query/vite.config.ts",
+        );
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn ignores_missing_attribute_in_jest_config() {
+        let diags = run_on_path("import foo from './bar.json';", "jest.config.ts");
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn flags_missing_attribute_in_regular_source_file() {
+        // The same import in an ordinary source file is still flagged.
+        let diags = run_on_path("import foo from './bar.json';", "src/index.ts");
         assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
     }
 }
