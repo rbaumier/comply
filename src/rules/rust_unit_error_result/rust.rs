@@ -67,6 +67,16 @@
 //! check no longer holds for `Result<…>` usages in that file, so the rule does
 //! not fire there. A genuine std `Result<_, ()>` in a file with no such alias
 //! still flags.
+//!
+//! Private-type-alias exception: a `Result<_, ()>` that is the right-hand side
+//! of a module-private `type Name<…> = Result<_, ()>;` alias — a `type_item`
+//! carrying no visibility modifier — is exempt. Such a named, private alias is
+//! the nom/winnow parser-combinator idiom: `Err(())` means "this input did not
+//! match; try another combinator", and the error detail is collected
+//! out-of-band by the top-level parser. The private alias is a deliberate,
+//! auditable author decision with no consumer to mislead. A public alias
+//! (`pub` / `pub(crate)` / `pub(super)` — any visibility modifier present) and
+//! a direct function-return `Result<_, ()>` still flag.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
@@ -85,6 +95,11 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     // A file-local `Result` alias may reorder T/E; see the module docs and
     // `file_has_local_result_alias`.
     if file_has_local_result_alias(node, source) {
+        return;
+    }
+    // A module-private `type Name<…> = Result<_, ()>;` alias is the nom/winnow
+    // parser-combinator idiom; see the module docs and `is_private_type_alias_rhs`.
+    if is_private_type_alias_rhs(node) {
         return;
     }
     if is_in_test_context(node, source) {
@@ -127,6 +142,54 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         severity: Severity::Warning,
         span: None,
     });
+}
+
+/// True when this `Result<_, ()>` `generic_type` is the right-hand side of a
+/// module-private type alias (`type Name<…> = Result<_, ()>;` with no visibility
+/// modifier) — a named, auditable parser-combinator type (nom/winnow style)
+/// where `Err(())` is the conventional "input did not match" rejection signal.
+///
+/// The match is pure AST position + visibility: the `generic_type` must be the
+/// alias's declared `type` (its RHS itself, not a `Result<_, ()>` nested as a
+/// generic argument deeper on the RHS), the `type_item` must be a free-standing
+/// module-scope alias (not an associated type in an `impl`/`trait` body), and it
+/// must carry no `visibility_modifier`. Any visibility modifier (`pub`,
+/// `pub(crate)`, `pub(super)`) makes the alias non-exempt, and a direct
+/// function-return `Result<_, ()>` is not a `type_item` RHS so it stays flagged.
+fn is_private_type_alias_rhs(node: Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "type_item" {
+        return false;
+    }
+    // The `generic_type` must be the alias's declared RHS, not nested deeper.
+    if parent.child_by_field_name("type") != Some(node) {
+        return false;
+    }
+    // An associated type in an `impl`/`trait` body is also a `type_item` that
+    // never carries a visibility modifier, so the visibility check below cannot
+    // tell it apart from a private module alias. It is a trait-contract member,
+    // not a parser-combinator alias, so it must keep flagging.
+    if type_item_is_associated(parent) {
+        return false;
+    }
+    // No visibility modifier at all → module-private alias.
+    let mut cursor = parent.walk();
+    !parent
+        .children(&mut cursor)
+        .any(|child| child.kind() == "visibility_modifier")
+}
+
+/// True when `type_item` is an associated type inside an `impl`/`trait` body —
+/// its enclosing `declaration_list` belongs to an `impl_item`/`trait_item` —
+/// rather than a free-standing module-scope (or `mod`-scoped) type alias.
+fn type_item_is_associated(type_item: Node) -> bool {
+    type_item
+        .parent()
+        .filter(|p| p.kind() == "declaration_list")
+        .and_then(|list| list.parent())
+        .is_some_and(|owner| matches!(owner.kind(), "impl_item" | "trait_item"))
 }
 
 /// True when this `Result<&T, ()>` is the return type of a `to_`/`as_`/`try_`
@@ -979,6 +1042,76 @@ mod tests {
         // the error type there.
         assert_eq!(
             run_on_src("fn g() -> std::result::Result<i32, ()> { Ok(0) }").len(),
+            1
+        );
+    }
+
+    // --- private type alias: nom/winnow parser-combinator idiom (#6965) ---
+
+    #[test]
+    fn allows_unit_error_in_private_type_alias_rhs() {
+        // The gitoxide repro: a module-private `type ParseResult<T> =
+        // Result<T, ()>` parser-combinator alias where `Err(())` is the "input
+        // did not match" rejection signal. No visibility modifier → exempt.
+        assert!(run_on_src("type ParseResult<T> = Result<T, ()>;").is_empty());
+    }
+
+    #[test]
+    fn allows_unit_error_in_private_iresult_alias() {
+        // The nom-style `type IResult<T> = Result<T, ()>` alias is the same
+        // idiom and is exempt for the same reason.
+        assert!(run_on_src("type IResult<T> = Result<T, ()>;").is_empty());
+    }
+
+    #[test]
+    fn flags_unit_error_in_pub_type_alias() {
+        // Load-bearing negative: a `pub` alias is part of the public surface —
+        // it can mislead a consumer, so it stays flagged.
+        assert_eq!(
+            run_on_src("pub type ParseResult<T> = Result<T, ()>;").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_pub_crate_type_alias() {
+        // Load-bearing negative: any visibility modifier (here `pub(crate)`)
+        // makes the alias non-exempt — only a fully module-private alias is.
+        assert_eq!(
+            run_on_src("pub(crate) type ParseResult<T> = Result<T, ()>;").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_function_return_not_alias() {
+        // Load-bearing negative: a direct `Result<_, ()>` in a function return
+        // type is not a `type_item` RHS, so it stays flagged.
+        assert_eq!(
+            run_on_src("fn parse() -> Result<u8, ()> { Err(()) }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_nested_under_private_alias_rhs() {
+        // Load-bearing negative: the exemption is the alias's RHS *itself*; a
+        // `Result<_, ()>` nested as a generic argument under the RHS (here under
+        // `Box`) is not the declared alias type, so it stays flagged.
+        assert_eq!(
+            run_on_src("type Foo<T> = Box<Result<T, ()>>;").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_associated_type_in_trait_impl() {
+        // Load-bearing negative: an associated `type Assoc = Result<_, ()>;` in
+        // an `impl`/`trait` body is also a `type_item` with no visibility
+        // modifier, but it is a trait-contract member, not a private module
+        // parser alias, so it stays flagged.
+        assert_eq!(
+            run_on_src("impl Tr for T { type Assoc = Result<Value, ()>; }").len(),
             1
         );
     }
