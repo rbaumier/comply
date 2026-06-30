@@ -1222,6 +1222,69 @@ fn is_in_callback_property<'a>(
     matches!(nodes.kind(parent_id), AstKind::ObjectProperty(_))
 }
 
+/// Standard `Array.prototype` iteration methods whose callback receives
+/// positional parameters fixed by the iteration protocol — the element, its
+/// index, the array, and (for the reducers) the accumulator. Matched against the
+/// call's member-property name.
+const ARRAY_ITERATION_METHODS: &[&str] = &[
+    "reduce",
+    "reduceRight",
+    "map",
+    "filter",
+    "forEach",
+    "flatMap",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "some",
+    "every",
+    "sort",
+];
+
+/// True when the identifier is a parameter of an arrow/function passed directly
+/// as an argument to a standard `Array.prototype` iteration method call
+/// (`arr.reduce((acc, curr, idx, arr) => …)`, `xs.map((item, idx) => …)`). In
+/// that position the parameters are positional — their meaning is fixed by their
+/// index in the iteration protocol (element, index, array, accumulator) — so the
+/// API prescribes the position and the author has no rename freedom, the same
+/// rationale already applied to object-literal method callbacks in
+/// `is_in_callback_property`. The exemption keys on the AST position (a callback
+/// of an array-method call), never on the parameter's spelling. Matched by the
+/// callee being a static member access whose property name is in
+/// `ARRAY_ITERATION_METHODS`; a callback to any other method (`p.then((data) =>
+/// …)`, `el.addEventListener('x', (data) => …)`) is not exempted.
+fn is_array_method_callback_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut func_node_id = None;
+    for (kind, nid) in nodes.ancestor_kinds(node.id()).zip(nodes.ancestor_ids(node.id())) {
+        match kind {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                func_node_id = Some(nid);
+                break;
+            }
+            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => continue,
+            _ => break,
+        }
+    }
+    let Some(fid) = func_node_id else { return false };
+    let parent_id = nodes.parent_id(fid);
+    if parent_id == fid {
+        return false;
+    }
+    let AstKind::CallExpression(call) = nodes.kind(parent_id) else {
+        return false;
+    };
+    matches!(
+        &call.callee,
+        Expression::StaticMemberExpression(m)
+            if ARRAY_ITERATION_METHODS.contains(&m.property.name.as_str())
+    )
+}
+
 /// Property names that, when assigned a function value, mark that function as a
 /// message-event handler (`self.onmessage = …`, `worker.onmessageerror = …`).
 const MESSAGE_HANDLER_PROPERTIES: &[&str] = &["onmessage", "onmessageerror"];
@@ -1556,6 +1619,16 @@ impl OxcCheck for Check {
                     if is_in_callback_property(node, semantic) {
                         return;
                     }
+                    // The identifier is a positional parameter of a callback
+                    // passed directly to a standard Array iteration method
+                    // (`arr.reduce((acc, curr, idx, arr) => …)`, `xs.map((item,
+                    // idx) => …)`). The parameters are fixed by the iteration
+                    // protocol (element, index, array, accumulator), so the API
+                    // prescribes the position and the author has no rename
+                    // freedom — same rationale as `is_in_callback_property`.
+                    if is_array_method_callback_param(node, semantic) {
+                        return;
+                    }
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -1663,6 +1736,13 @@ impl OxcCheck for Check {
             // (e.g. TanStack Query's `onSuccess: (data) => {}`). The
             // library's own API prescribes `data` as the parameter name.
             if is_in_callback_property(node, semantic) {
+                return;
+            }
+            // A positional parameter of a callback passed directly to a standard
+            // Array iteration method (`xs.map((data, idx) => …)`,
+            // `xs.forEach((item) => …)`): the parameters are fixed by the
+            // iteration protocol, so the API prescribes the position.
+            if is_array_method_callback_param(node, semantic) {
                 return;
             }
             // The `data` parameter of a message-event handler (`self.onmessage =
@@ -2562,12 +2642,13 @@ mod tests {
 
     #[test]
     fn still_flags_info_param_in_call_argument_callback_issue_1716() {
-        // Negative space: the exemption is for callbacks that are object-literal
-        // *property values*. An `info` param of a callback passed as a *call
-        // argument* (`.filter((info) => …)`) is not API-prescribed and is still
-        // a vague name — must still flag. (`row`/`cell` are no longer banned;
-        // see #5623.)
-        let src = r#"items.filter((info) => info.ok);"#;
+        // Negative space: the callback-param exemptions cover object-literal
+        // property values (`is_in_callback_property`) and standard Array-method
+        // callbacks (`is_array_method_callback_param`). An `info` param of a
+        // callback passed to an ordinary (non-array-method) call is neither, so
+        // it is not position-prescribed and the vague name still flags.
+        // (`row`/`cell` are no longer banned; see #5623.)
+        let src = r#"validate((info) => info.ok);"#;
         assert_eq!(run(src).len(), 1);
     }
 
@@ -2818,10 +2899,13 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_temp_in_iterator_callback() {
-        // Negative: a genuinely generic name stays flagged in the same shape
-        // (`value`/`item` are param-exempt, but `temp` is not).
-        let src = r#"const names = list.map(temp => `on${temp}`);"#;
+    fn still_flags_temp_in_non_array_method_callback() {
+        // Negative: a genuinely generic name stays flagged in a callback that is
+        // not position-prescribed — neither an object-literal property value nor
+        // a standard Array-method callback (`value`/`item` are param-exempt, but
+        // `temp` is not). A `.map(temp => …)` callback is now exempt by position
+        // (see #6971); a plain-call callback is not.
+        let src = r#"const names = transform(temp => `on${temp}`);"#;
         assert_eq!(run(src).len(), 1);
     }
 
@@ -3108,5 +3192,40 @@ mod tests {
         // don't know what this holds" and keep firing.
         assert_eq!(run("const data = fetchData();").len(), 1);
         assert_eq!(run("function f() { const value = mk(); return value; }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_array_method_callback_params_issue_6971() {
+        // Regression for #6971 — `acc`/`curr`/`idx`/`arr` are the positional
+        // parameters of an `Array.prototype.reduce` callback. Their meaning is
+        // fixed by their index in the iteration protocol, so the API prescribes
+        // the position and the author has no rename freedom.
+        assert!(
+            run("function g(o) { return Object.keys(o).reduce((acc, curr, idx, arr) => (acc[curr] ??= arr[idx]), {}); }")
+                .is_empty()
+        );
+        // The same holds for the other standard iteration methods, and for both
+        // a banned word (`idx`) and a banned segment (`data`) in callback position.
+        assert!(run("xs.map((data, idx) => data + idx);").is_empty());
+        assert!(run("xs.forEach((item, idx, arr) => use(item, idx, arr));").is_empty());
+        assert!(run("xs.filter((val) => !!val);").is_empty());
+        assert!(run("xs.sort((a, b) => a - b);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_generic_names_outside_array_method_callbacks_issue_6971() {
+        // Negative space for #6971 — the exemption keys on the AST position
+        // (callback param of an array-method call), never on the spelling.
+        // A standalone variable still flags.
+        assert_eq!(run("const curr = getThing();").len(), 1);
+        // A named, non-callback function parameter still flags.
+        assert_eq!(run("function handle(arr) { return arr; }").len(), 1);
+        // A callback param to a non-array method still flags: `then` and
+        // `addEventListener` are not in the array-iteration set.
+        assert_eq!(run("p.then((data) => use(data));").len(), 1);
+        assert_eq!(run("el.addEventListener('click', (val) => use(val));").len(), 1);
+        // A flagged standalone receiver of an array-method call still flags at
+        // its declaration — only the callback parameter position is exempt.
+        assert_eq!(run("const arr = build(); arr.map((x) => x);").len(), 1);
     }
 }
