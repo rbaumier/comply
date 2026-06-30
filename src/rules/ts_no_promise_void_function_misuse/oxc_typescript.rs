@@ -150,7 +150,8 @@ fn is_awaited_reduce(
 ///   combinator (the inline idiom `Promise.all(arr.map(async ...))`), or
 /// - the call is the entire right-hand side of a binding (`const xs = arr.map(...)`
 ///   or `xs = arr.map(...)`) and the bound variable later reaches an awaiting sink
-///   — passed to one of those combinators, `await`ed, or `return`ed.
+///   — passed to one of those combinators, `await`ed, `return`ed, or spread into a
+///   `.push(...)`/`.unshift(...)` accumulator array that itself reaches such a sink.
 ///
 /// The second case is resolved through the semantic model, so it holds whatever
 /// the variable is named, whichever combinator awaits it, and regardless of the
@@ -249,20 +250,75 @@ fn bound_variable(
 
 /// True when any reference to `symbol_id` is consumed by an awaiting sink: it is
 /// `await`ed, `return`ed, or passed to a `Promise.<all|allSettled|race|any>(...)`
-/// combinator. Such a sink awaits the collected promises, so they are handled.
+/// combinator. A reference spread into a `.push(...)`/`.unshift(...)` accumulator
+/// array also counts when that accumulator itself reaches such a sink — the
+/// promises are collected into a shared array and later awaited via
+/// `Promise.all(accumulator)`, so they are handled.
 fn variable_reaches_awaiting_sink(
     symbol_id: SymbolId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
+    reaches_awaiting_sink(symbol_id, semantic, true)
+}
+
+/// Core of [`variable_reaches_awaiting_sink`]. When `follow_spread` is set, a
+/// reference spread into a `.push(...)`/`.unshift(...)` accumulator counts as a
+/// sink if the accumulator reaches a sink itself; the recursive accumulator check
+/// runs with `follow_spread` cleared, bounding the transitivity to one extra hop
+/// so mutually-spreading accumulators cannot recurse without end.
+fn reaches_awaiting_sink(
+    symbol_id: SymbolId,
+    semantic: &oxc_semantic::Semantic,
+    follow_spread: bool,
+) -> bool {
     let nodes = semantic.nodes();
     semantic.symbol_references(symbol_id).any(|reference| {
-        let ref_span = nodes.kind(reference.node_id()).span();
-        let parent_kind = nodes.parent_node(reference.node_id()).kind();
-        matches!(
-            parent_kind,
+        let ref_node_id = reference.node_id();
+        let ref_span = nodes.kind(ref_node_id).span();
+        let parent = nodes.parent_node(ref_node_id);
+        if matches!(
+            parent.kind(),
             AstKind::AwaitExpression(_) | AstKind::ReturnStatement(_)
-        ) || is_awaiting_combinator_argument(parent_kind, ref_span)
+        ) || is_awaiting_combinator_argument(parent.kind(), ref_span)
+        {
+            return true;
+        }
+        follow_spread && reference_spreads_into_awaited_accumulator(parent, semantic)
     })
+}
+
+/// True when `parent` is the `SpreadElement` of an `accumulator.push(...ref)` /
+/// `accumulator.unshift(...ref)` call whose `accumulator` identifier resolves to a
+/// symbol that reaches an awaiting sink. The accumulator is matched purely on AST
+/// shape (member call, `push`/`unshift` property) and resolved by `SymbolId`, and
+/// its own references are checked without following a further spread.
+fn reference_spreads_into_awaited_accumulator(
+    parent: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    if !matches!(parent.kind(), AstKind::SpreadElement(_)) {
+        return false;
+    }
+    let AstKind::CallExpression(call) = semantic.nodes().parent_node(parent.id()).kind() else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !matches!(member.property.name.as_str(), "push" | "unshift") {
+        return false;
+    }
+    let Expression::Identifier(accumulator) = &member.object else {
+        return false;
+    };
+    let Some(accumulator_symbol) = semantic
+        .scoping()
+        .get_reference(accumulator.reference_id())
+        .symbol_id()
+    else {
+        return false;
+    };
+    reaches_awaiting_sink(accumulator_symbol, semantic, false)
 }
 
 #[cfg(test)]
@@ -410,6 +466,66 @@ mod tests {
         let src = "function run() {\n\
                        const ps = items.map(async (x) => fetchOne(x));\n\
                        console.log(ps.length);\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // --- #6988: map result spread into an accumulator that is later awaited ---
+
+    #[test]
+    fn allows_map_async_spread_into_awaited_accumulator() {
+        // Exact issue example: the map result is bound, spread into the `promises`
+        // accumulator via `.push(...)`, and the accumulator is awaited via
+        // `Promise.all` — the promises are collected, not dropped.
+        let src = "async function run() {\n\
+                       const promises = [];\n\
+                       const coreInputPromises = inputList.core.map(async (schema) => {\n\
+                           const response = await fetchInputSchema(schema);\n\
+                           schemas[schema] = response;\n\
+                       });\n\
+                       promises.push(...coreInputPromises);\n\
+                       await Promise.all(promises);\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_async_unshift_into_awaited_accumulator() {
+        // `.unshift(...)` collects into the accumulator the same way `.push(...)`
+        // does.
+        let src = "async function run() {\n\
+                       const promises = [];\n\
+                       const tasks = items.map(async (x) => { await save(x); });\n\
+                       promises.unshift(...tasks);\n\
+                       await Promise.all(promises);\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_map_async_spread_into_unawaited_accumulator() {
+        // The accumulator is never awaited, returned, or combined — spreading into
+        // it does not launder the floating promises, so the diagnostic fires.
+        let src = "function run() {\n\
+                       const promises = [];\n\
+                       const tasks = items.map(async (x) => { await save(x); });\n\
+                       promises.push(...tasks);\n\
+                       console.log(promises.length);\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_async_mutual_spread_no_sink() {
+        // Two accumulators spread into each other but neither reaches a sink. The
+        // one-hop bound must terminate (no infinite recursion) and still flag.
+        let src = "function run() {\n\
+                       const a = [];\n\
+                       const b = [];\n\
+                       const tasks = items.map(async (x) => { await save(x); });\n\
+                       a.push(...tasks);\n\
+                       b.push(...a);\n\
+                       a.push(...b);\n\
                    }";
         assert_eq!(run(src).len(), 1);
     }
