@@ -24,7 +24,9 @@ fn is_valid_namespaced(key: &str) -> bool {
         }
         let mut chars = seg.chars();
         let first = chars.next().unwrap();
-        if !first.is_ascii_lowercase() {
+        // Accept `$` as a segment's first char: framework-namespaced i18n
+        // domains use it by JS convention (Vue's `$vuetify`, `$store`, `$router`).
+        if !first.is_ascii_lowercase() && first != '$' {
             return false;
         }
         for c in chars {
@@ -130,6 +132,26 @@ mod tests {
     #[test]
     fn flags_missing_domain() {
         assert_eq!(run("t('welcome')").len(), 1);
+    }
+
+    // Regression for rbaumier/comply#6896 — Vuetify namespaces its i18n keys
+    // under `$vuetify.`; the leading `$` is a framework-namespacing convention,
+    // so a `$`-led domain is properly namespaced and must not be flagged.
+    #[test]
+    fn allows_dollar_prefixed_domain() {
+        assert!(run("t('$vuetify.monthPicker.range.title')").is_empty());
+        assert!(run("t('$vuetify.monthPicker.header')").is_empty());
+    }
+
+    #[test]
+    fn flags_uppercase_leading_domain() {
+        // First segment starts with neither a lowercase letter nor `$`.
+        assert_eq!(run("t('Key.sub')").len(), 1);
+    }
+
+    #[test]
+    fn allows_lowercase_domain() {
+        assert!(run("t('app.title')").is_empty());
     }
 
     // Regression for rbaumier/comply#5054 — vue-i18n's own test suite passes
