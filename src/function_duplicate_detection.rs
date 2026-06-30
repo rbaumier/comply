@@ -10,15 +10,15 @@
 //! - Extract every named function with a body from each TS/JS file:
 //!   `function foo() {…}` declarations and `const foo = (…) => {…}` /
 //!   `const foo = function (…) {…}` bindings.
-//! - Tokenize the parameter list, the return-type annotation, and the body
-//!   (leaf tokens, comments excluded) into an exact signature, so formatting and
-//!   comments do not matter but renamed identifiers and divergent type
-//!   annotations do.
+//! - Tokenize the generic type parameters, the parameter list, the return-type
+//!   annotation, and the body (leaf tokens, comments excluded) into an exact
+//!   signature, so formatting and comments do not matter but renamed identifiers
+//!   and divergent type annotations do.
 //! - Bucket by `(name, signature)`; a bucket spanning two or more files whose
 //!   body clears `min_body_tokens` is reported, one diagnostic per extra file.
 //!   Two functions sharing a name and an identical body but differing in their
-//!   parameter types or return type are not interchangeable, so they bucket
-//!   apart and are not flagged.
+//!   generic constraints, parameter types, or return type are not
+//!   interchangeable, so they bucket apart and are not flagged.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -121,9 +121,9 @@ struct FnEntry {
     /// has no importable surface, so the "extract to a shared module" remedy does
     /// not apply across a package boundary.
     is_exported: bool,
-    /// Exact fingerprint of the parameter list, return-type annotation, and
-    /// body: each leaf token's `(kind_id, text)`, in order. Two functions are
-    /// duplicates iff their signatures are byte-equal.
+    /// Exact fingerprint of the generic type parameters, parameter list,
+    /// return-type annotation, and body: each leaf token's `(kind_id, text)`, in
+    /// order. Two functions are duplicates iff their signatures are byte-equal.
     signature: Vec<u8>,
     /// Identifier names referenced in the body that are not the function's own
     /// parameters — an over-approximation of its free variables. Compared against
@@ -470,12 +470,16 @@ fn build_entry(
     let name_text = source.get(name.start_byte()..name.end_byte())?;
     let name_str = std::str::from_utf8(name_text).ok()?.to_string();
 
-    // Head: parameter list + return-type annotation tokens. Two same-named,
-    // same-bodied functions with divergent parameter or return types differ
-    // here and bucket apart. A delimiter separates head from body so a token
-    // stream can never straddle the boundary.
+    // Head: generic type parameters + parameter list + return-type annotation
+    // tokens. Two same-named, same-bodied functions with divergent generic
+    // constraints, parameter types, or return types differ here and bucket
+    // apart. A delimiter separates head from body so a token stream can never
+    // straddle the boundary.
     let mut signature = Vec::new();
     let mut head_count = 0;
+    if let Some(type_params) = sig_node.child_by_field_name("type_parameters") {
+        collect_body_tokens(type_params, source, &mut signature, &mut head_count);
+    }
     if let Some(params) = sig_node.child_by_field_name("parameters") {
         collect_body_tokens(params, source, &mut signature, &mut head_count);
     }
@@ -826,6 +830,46 @@ function wrap() {
             run(&[&a, &b]).is_empty(),
             "different return-type annotations are not duplicates"
         );
+    }
+
+    #[test]
+    fn same_name_same_body_different_generic_constraints_not_flagged() {
+        // Issue #6827 (drizzle-orm): two dialect-specific `alias` functions with
+        // byte-identical bodies, parameters, and return types but divergent
+        // generic constraints (`TTable extends SQLiteTable | SQLiteViewBase` vs
+        // `TTable extends GelTable | GelViewBase`). The constraints are enforced
+        // at call sites, so the functions are not interchangeable. Distinct keys,
+        // no finding.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "sqlite-core/alias.ts",
+            "export function alias<TTable extends SQLiteTable | SQLiteViewBase, TAlias extends string>(\n  table: TTable,\n  alias: TAlias,\n): BuildAliasTable<TTable, TAlias> {\n  return new Proxy(table, new TableAliasProxyHandler(alias, false)) as any;\n}\n",
+        );
+        let b = write(
+            &dir,
+            "gel-core/alias.ts",
+            "export function alias<TTable extends GelTable | GelViewBase, TAlias extends string>(\n  table: TTable,\n  alias: TAlias,\n): BuildAliasTable<TTable, TAlias> {\n  return new Proxy(table, new TableAliasProxyHandler(alias, false)) as any;\n}\n",
+        );
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "different generic constraints are not duplicates"
+        );
+    }
+
+    #[test]
+    fn same_name_same_generic_constraints_same_body_still_flagged() {
+        // Acceptance: identical generic constraints, signature, and body across
+        // files is a genuine copy-paste and is still flagged. Including the
+        // generic constraints in the fingerprint only splits buckets that differ
+        // in generics; it must not stop flagging real duplicates.
+        let dir = tempfile::tempdir().unwrap();
+        let f = "export function alias<TTable extends SQLiteTable | SQLiteViewBase, TAlias extends string>(\n  table: TTable,\n  alias: TAlias,\n): BuildAliasTable<TTable, TAlias> {\n  return new Proxy(table, new TableAliasProxyHandler(alias, false)) as any;\n}\n";
+        let a = write(&dir, "a/alias.ts", f);
+        let b = write(&dir, "b/alias.ts", f);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "identical generics + signature + body is still a duplicate");
+        assert!(diags[0].message.contains("`alias`"));
     }
 
     #[test]
