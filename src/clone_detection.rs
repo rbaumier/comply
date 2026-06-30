@@ -615,25 +615,43 @@ fn is_feature_variant_stem(stem: &str) -> bool {
     stem.starts_with("with-") || stem.starts_with("without-")
 }
 
-/// Returns true when two paths are scaffold template variants: both live in the
-/// same directory under a scaffold/`template/` context segment and both stems
-/// follow the `with-*` / `without-*` feature-variant convention. Such files are
-/// standalone templates copied verbatim into a generated project for a given
-/// feature combination, so their large shared blocks are load-bearing rather
-/// than refactorable copy-paste.
+/// True when a path component is a scaffold context segment (`template`,
+/// `templates`, `scaffold`), compared case-insensitively.
+fn is_scaffold_context_segment(seg: &str) -> bool {
+    SCAFFOLD_CONTEXT_SEGMENTS.contains(&seg.to_ascii_lowercase().as_str())
+}
+
+/// Returns true when two paths are scaffold template variants whose shared blocks
+/// are load-bearing rather than refactorable copy-paste, in either of two shapes:
+///
+/// 1. **Same-directory feature variants** — both files live in the same directory
+///    under a scaffold context segment and both stems follow the `with-*` /
+///    `without-*` feature-variant convention (e.g. `with-auth-db.ts` /
+///    `with-better-auth.ts`). Each is a standalone template copied verbatim into
+///    a generated project for a given feature combination.
+/// 2. **Sibling variant-directory subpaths** — the two paths are identical except
+///    for exactly one directory segment (the variant directory, e.g. `tsx` vs
+///    `sfc`), the remainder including the file name is identical, and a scaffold
+///    context segment sits elsewhere on the shared path (e.g.
+///    `template/.../tsx/src/locale/index.ts` vs `.../sfc/src/locale/index.ts`). A
+///    CLI generator emits one self-contained project per variant directory, so a
+///    byte-identical file copied into each cannot be hoisted to a shared module.
 fn are_scaffold_template_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    is_same_dir_feature_variant_pair(a, b) || is_sibling_variant_subpath_pair(a, b)
+}
+
+/// Case 1 of [`are_scaffold_template_pair`]: both files share a parent directory
+/// under a scaffold context segment and both stems follow the `with-*` /
+/// `without-*` feature-variant convention.
+fn is_same_dir_feature_variant_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
     if a.parent() != b.parent() {
         return false;
     }
-    let under_scaffold = |path: &std::path::Path| {
-        path.components().any(|c| match c {
-            std::path::Component::Normal(s) => s
-                .to_str()
-                .is_some_and(|seg| SCAFFOLD_CONTEXT_SEGMENTS.contains(&seg.to_ascii_lowercase().as_str())),
-            _ => false,
-        })
-    };
-    if !under_scaffold(a) {
+    let under_scaffold = a.components().any(|c| match c {
+        std::path::Component::Normal(s) => s.to_str().is_some_and(is_scaffold_context_segment),
+        _ => false,
+    });
+    if !under_scaffold {
         return false;
     }
     let variant_stem = |path: &std::path::Path| {
@@ -643,6 +661,55 @@ fn are_scaffold_template_pair(a: &std::path::Path, b: &std::path::Path) -> bool 
             .is_some_and(|s| is_feature_variant_stem(&s))
     };
     variant_stem(a) && variant_stem(b)
+}
+
+/// Normal path components as string slices, preserving the file extension so the
+/// trailing file name is compared exactly (unlike [`path_segments_no_ext`]).
+fn path_normal_segments(path: &std::path::Path) -> Vec<&str> {
+    path.components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Case 2 of [`are_scaffold_template_pair`]: the two paths are identical except
+/// for exactly one *directory* segment, and a scaffold context segment sits
+/// elsewhere on the shared path. The single differing segment is the variant
+/// directory; its name is irrelevant, so no variant names are enumerated.
+///
+/// The divergence must be a directory, not the trailing file name: a differing
+/// file name (`index.ts` vs `main.ts`) is genuine duplication. Requiring every
+/// other segment — including the file name — to match keeps duplication between
+/// unrelated files, and multi-segment divergences, flagged.
+fn is_sibling_variant_subpath_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let segs_a = path_normal_segments(a);
+    let segs_b = path_normal_segments(b);
+    if segs_a.len() != segs_b.len() {
+        return false;
+    }
+    let mut diff_pos: Option<usize> = None;
+    for (i, (sa, sb)) in segs_a.iter().zip(segs_b.iter()).enumerate() {
+        if sa != sb {
+            if diff_pos.is_some() {
+                return false; // more than one differing segment
+            }
+            diff_pos = Some(i);
+        }
+    }
+    let Some(pos) = diff_pos else {
+        return false; // identical paths are not a variant pair
+    };
+    // The diverging segment must be a directory, not the trailing file name.
+    if pos + 1 == segs_a.len() {
+        return false;
+    }
+    // A scaffold context segment must sit elsewhere on the shared path.
+    segs_a
+        .iter()
+        .enumerate()
+        .any(|(i, seg)| i != pos && is_scaffold_context_segment(seg))
 }
 
 // --- Test-spec-sibling detection ---
@@ -2125,6 +2192,49 @@ mod tests {
         assert!(!are_scaffold_template_pair(
             Path::new("cli/template/extras/within.ts"),
             Path::new("cli/template/extras/within-bounds.ts"),
+        ));
+    }
+
+    #[test]
+    fn are_scaffold_template_pair_recognizes_sibling_variant_subpaths() {
+        use std::path::Path;
+        // varletjs/varlet FP: identical file at the same relative subpath in two
+        // sibling project-variant dirs (`tsx` vs `sfc`) under a `template/`
+        // ancestor → suppressed.
+        assert!(are_scaffold_template_pair(
+            Path::new(
+                "packages/varlet-cli/template/generators/config/i18n/tsx/src/locale/index.ts"
+            ),
+            Path::new(
+                "packages/varlet-cli/template/generators/config/i18n/sfc/src/locale/index.ts"
+            ),
+        ));
+        // Same shape but no scaffold ancestor → genuine clone, not suppressed.
+        assert!(!are_scaffold_template_pair(
+            Path::new("app/tsx/src/locale/index.ts"),
+            Path::new("app/sfc/src/locale/index.ts"),
+        ));
+        // Two diverging segments under a template ancestor → not single-segment
+        // divergence, not suppressed.
+        assert!(!are_scaffold_template_pair(
+            Path::new("template/a/x/index.ts"),
+            Path::new("template/b/y/index.ts"),
+        ));
+        // The divergence is the trailing file name → genuine duplication.
+        assert!(!are_scaffold_template_pair(
+            Path::new("template/i18n/src/locale/index.ts"),
+            Path::new("template/i18n/src/locale/main.ts"),
+        ));
+        // Different path depth → not a single-segment divergence.
+        assert!(!are_scaffold_template_pair(
+            Path::new("template/tsx/src/locale/index.ts"),
+            Path::new("template/sfc/locale/index.ts"),
+        ));
+        // The only scaffold token IS the diverging segment → no scaffold context
+        // on the shared path, so not suppressed.
+        assert!(!are_scaffold_template_pair(
+            Path::new("a/template/x.ts"),
+            Path::new("a/scaffold/x.ts"),
         ));
     }
 
