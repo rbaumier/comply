@@ -516,6 +516,26 @@ mod tests {
         assert_eq!(run_on(src).len(), 1);
     }
 
+    // Regression for #6903 — a Prisma client code generator emits a JSDoc
+    // string "Select specific fields to fetch from the X" through a
+    // documentation API (`ts.docComment(...)`). `select … from` appear in
+    // clause order, but the text between them is English prose, not a column
+    // projection, so the literal is not a SQL query.
+    #[test]
+    fn does_not_flag_doc_comment_select_from_english_prose() {
+        let src = r#"builder.setDocComment(ts.docComment(`Select specific fields to fetch from the ${this.type.name}`));"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #6903 guard — a genuine interpolated query with a real `*` projection is
+    // still an injection risk and must fire. Tightening the prose check must
+    // not neuter real SQL.
+    #[test]
+    fn still_flags_interpolated_select_star_query() {
+        let src = r#"db.query(`SELECT * FROM users WHERE id = ${id}`);"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
     // Issue #3878 — a table name interpolated into an identifier position
     // cannot be a bind parameter, so it is the only possible form.
     #[test]
