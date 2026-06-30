@@ -7,6 +7,36 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Byte length of the escape sequence starting at `pattern[i]` (`\`), so the
+/// whole sequence becomes one token. Numeric escapes (`\uXXXX`, `\u{...}`,
+/// `\xHH`) are consumed whole so their hex digits never tokenize individually
+/// and form phantom repetition runs; any other escape is `\` plus the next
+/// UTF-8 char. Caller guarantees `i + 1 < pattern.len()`.
+fn escape_len(pattern: &str, i: usize) -> usize {
+    let bytes = pattern.as_bytes();
+    if bytes[i + 1] == b'u' {
+        if bytes.get(i + 2) == Some(&b'{') {
+            let mut j = i + 3;
+            while j < bytes.len() && bytes[j] != b'}' {
+                j += 1;
+            }
+            if j < bytes.len() {
+                j += 1;
+            }
+            return j - i;
+        }
+        if i + 6 <= bytes.len() && bytes[i + 2..i + 6].iter().all(u8::is_ascii_hexdigit) {
+            return 6;
+        }
+    } else if bytes[i + 1] == b'x'
+        && i + 4 <= bytes.len()
+        && bytes[i + 2..i + 4].iter().all(u8::is_ascii_hexdigit)
+    {
+        return 4;
+    }
+    1 + pattern[i + 1..].chars().next().map_or(1, |c| c.len_utf8())
+}
+
 /// Tokenize a regex pattern into elements (single chars or escape
 /// sequences like `\d`). Character classes `[...]`, groups `(` `)`,
 /// alternation `|`, and `{m,n}` quantifiers are emitted as opaque
@@ -17,9 +47,9 @@ fn tokenize(pattern: &str) -> Vec<&str> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
-            let next_len = pattern[i + 1..].chars().next().map_or(1, |c| c.len_utf8());
-            tokens.push(&pattern[i..i + 1 + next_len]);
-            i += 1 + next_len;
+            let len = escape_len(pattern, i);
+            tokens.push(&pattern[i..i + len]);
+            i += len;
         } else if bytes[i] == b'[' {
             let start = i;
             i += 1;
@@ -226,5 +256,44 @@ mod tests {
     #[test]
     fn ignores_scoped_import_path() {
         assert!(run_on(r#"import X from "@tanstack/react-query";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_unicode_escape_with_repeated_hex_digits() {
+        // \uFFFE tokenizes as one token, not as \u + F + F + F + E.
+        assert!(run_on(r#"const re = /\uFFFE(.)/g;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_unicode_escape_fffd() {
+        assert!(run_on(r#"const re = /\uFFFD([A-E])/g;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_braced_unicode_escape_repeated_hex() {
+        assert!(run_on(r#"const re = /\u{FFFFF}/u;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_hex_escape_repeated_digits() {
+        // \xFF is one token; the trailing F does not form a 3-run with split hex.
+        assert!(run_on(r#"const re = /\xFFF/;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_repeated_identical_unicode_escapes() {
+        // Atomic tokenization, not blanket escape suppression: three identical
+        // A escapes are a genuine repeat and still fire.
+        assert_eq!(run_on(r#"const re = /\u0041\u0041\u0041/;"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_truncated_or_malformed_escapes_without_panic() {
+        // EOF after \u / \x, a non-hex digit, and an unclosed \u{ must each
+        // tokenize without panicking and produce no diagnostic.
+        assert!(run_on(r#"const re = /\u/;"#).is_empty());
+        assert!(run_on(r#"const re = /\x/;"#).is_empty());
+        assert!(run_on(r#"const re = /\xG/;"#).is_empty());
+        assert!(run_on(r#"const re = /\u{FFFF/;"#).is_empty());
     }
 }
