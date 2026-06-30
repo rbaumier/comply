@@ -110,34 +110,45 @@ fn is_jsx_attribute_value(
     )
 }
 
-/// Check if the async function is a property of an object literal that is passed
-/// as an argument to a call expression, covering both the shorthand-method shape
-/// (`$config({ async run() {} })`) and the arrow-value shape
-/// (`useForm({ onSubmit: async () => {} })`). The walk is `Function ->
-/// ObjectProperty -> ObjectExpression -> CallExpression(arguments)`. Like a bare
-/// arrow callback, the callee owns the contract: framework/library options
-/// objects type such callbacks `(...) => Promise<T>` (SST/Pulumi `run()`,
-/// TanStack Form `onSubmit`), so `async` is mandatory even when the body never
-/// awaits.
+/// Check if the async function is the value of an object-literal property whose
+/// object is — directly or through one or more nested object levels — an argument
+/// of a call expression. Covers the shorthand-method shape
+/// (`$config({ async run() {} })`), the arrow-value shape
+/// (`useForm({ onSubmit: async () => {} })`), and methods nested in sub-objects of
+/// the call argument (`defineStore({ actions: { async fn() {} } })`). The walk
+/// climbs consecutive `ObjectProperty -> ObjectExpression` hops, succeeding as
+/// soon as an `ObjectExpression` is an argument of a `CallExpression`. Like a bare
+/// arrow callback, the callee owns the contract: framework/library options objects
+/// type such callbacks `(...) => Promise<T>` (SST/Pulumi `run()`, TanStack Form
+/// `onSubmit`, Pinia `defineStore` actions), so `async` is mandatory even when the
+/// body never awaits. Any node interrupting the pure ObjectProperty/ObjectExpression
+/// chain before the call argument (a plain object literal, a class member, ...)
+/// breaks the walk and keeps the function flagged.
 fn is_object_property_in_call_arg(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let nodes = semantic.nodes();
 
-    let property = nodes.parent_node(func_node.id());
-    let AstKind::ObjectProperty(_) = property.kind() else { return false };
+    let mut property = nodes.parent_node(func_node.id());
+    loop {
+        let AstKind::ObjectProperty(_) = property.kind() else { return false };
 
-    let object = nodes.parent_node(property.id());
-    let AstKind::ObjectExpression(_) = object.kind() else { return false };
+        let object = nodes.parent_node(property.id());
+        let AstKind::ObjectExpression(_) = object.kind() else { return false };
 
-    let call = nodes.parent_node(object.id());
-    let AstKind::CallExpression(call_expr) = call.kind() else { return false };
-    let object_span = object.kind().span();
-    call_expr
-        .arguments
-        .iter()
-        .any(|arg| arg.span() == object_span)
+        let parent = nodes.parent_node(object.id());
+        if let AstKind::CallExpression(call_expr) = parent.kind() {
+            let object_span = object.kind().span();
+            return call_expr
+                .arguments
+                .iter()
+                .any(|arg| arg.span() == object_span);
+        }
+
+        // The object is the value of an outer property: climb another hop.
+        property = parent;
+    }
 }
 
 /// Check if a function/arrow body is exactly one `return <CallExpression>;`,
@@ -916,6 +927,53 @@ mod tests {
         // An object method outside any call argument is an ordinary async
         // function without await — it stays flagged.
         let src = "const obj = { async run() { return 42; } };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_async_method_nested_in_call_arg_subobject() {
+        // Regression for rbaumier/comply#6807 — Pinia `defineStore` actions. The
+        // async method is two object levels deep inside the call argument
+        // (`fn -> ObjectProperty -> ObjectExpression(actions value) ->
+        // ObjectProperty(actions) -> ObjectExpression(options) -> CallExpression`).
+        // Pinia types every action `(...) => Promise<T>`, so `async` is mandatory
+        // even when the body never awaits — same contract as a method directly in
+        // the call-argument object.
+        let src = r#"export const useTabbarStore = defineStore('core-tabbar', {
+            actions: {
+                async openTabInNewWindow(tab, router) {
+                    const href = router.resolve(tab.fullPath || tab.path).href;
+                    openWindow(new URL(href, location.href).href, { target: '_blank' });
+                },
+                async pinTab(tab) {
+                    const index = this.tabs.findIndex((item) => equalTab(item, tab));
+                    if (index === -1) return;
+                    tab.meta.affixTab = true;
+                },
+            },
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_method_three_levels_deep_in_call_arg() {
+        // The walk climbs an arbitrary number of `ObjectProperty -> ObjectExpression`
+        // hops, so a method nested three object levels deep in a call argument is
+        // also exempt.
+        let src = r#"configure({
+            a: { b: { async run() { doSync(); } } },
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_method_nested_in_plain_object() {
+        // Negative space for #6807: a method nested in sub-objects of a *plain*
+        // object literal (not a call argument) has no callee contract — the chain
+        // climbs `ObjectProperty -> ObjectExpression -> ObjectProperty ->
+        // ObjectExpression -> VariableDeclarator`, which is not a call argument, so
+        // it stays flagged.
+        let src = "const store = { actions: { async run() { return 1; } } };";
         assert_eq!(run_on(src).len(), 1);
     }
 
