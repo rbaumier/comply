@@ -2,7 +2,9 @@
 //! Flags when no justification exists: neither an inline `reason = "..."`
 //! argument (stabilized in Rust 1.81) nor a `//` comment. For a single-line
 //! attribute the comment may sit on the same line, the line above, or the line
-//! below; for a multiline attribute it may sit on any line the attribute spans.
+//! below — and on the line below it counts whether it is a standalone comment
+//! or a trailing inline comment on the attributed item's code. For a multiline
+//! attribute it may sit on any line the attribute spans.
 //! A comment above the first of a consecutive `#[allow]` cluster justifies every
 //! member of the cluster.
 
@@ -91,7 +93,7 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     });
 
     let has_preceding_comment = cluster_has_preceding_comment(node, source);
-    let has_following_comment = lines.get(row + 1).is_some_and(|l| l.trim().starts_with("//"));
+    let has_following_comment = lines.get(row + 1).is_some_and(|l| line_has_comment(l));
 
     let end_row = node.end_position().row;
     let has_inner_comment = end_row > row
@@ -301,6 +303,32 @@ fn has_adjacent_cfg_attribute(lines: &[&str], row: usize) -> bool {
     prev_is_cfg || next_is_cfg
 }
 
+/// True when `line` carries a `//` line comment — either a standalone comment or
+/// a trailing inline comment on a code line. A `//` inside a double-quoted string
+/// literal (e.g. `"a//b"`) is skipped so it is not mistaken for a comment; this
+/// mirrors how the same-line check treats `//` after the `#[allow(...)]` text as
+/// a justification. Only double-quoted string state is tracked (with `\` escapes);
+/// char literals and raw-string hashes are not modeled — an accepted edge for a
+/// trailing-comment check.
+fn line_has_comment(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if in_string => {
+                i += 2; // skip the escaped character, e.g. `\"`
+                continue;
+            }
+            b'"' => in_string = !in_string,
+            b'/' if !in_string && bytes.get(i + 1) == Some(&b'/') => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -485,6 +513,37 @@ mod tests {
     #[test]
     fn allows_with_following_comment() {
         assert!(run("#[allow(dead_code)]\n// justified below\ntype Foo = i32;").is_empty());
+    }
+
+    #[test]
+    fn allows_with_trailing_inline_comment_on_following_line() {
+        // #6945: the justification is a trailing inline comment on the code line
+        // immediately after the `#[allow]` (here a match arm), not a standalone
+        // comment that starts with `//`.
+        assert!(
+            run("fn f() {\n    match last_id.checked_add(1) {\n        Some(id) => id..=u32::MAX,\n        #[allow(clippy::reversed_empty_ranges)]\n        None => 1..=0, // empty range iterator\n    };\n}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_following_line_without_comment() {
+        // Load-bearing guard: the same match-arm shape with no trailing comment
+        // on the following line stays flagged.
+        assert_eq!(
+            run("fn f() {\n    match last_id.checked_add(1) {\n        Some(id) => id..=u32::MAX,\n        #[allow(clippy::reversed_empty_ranges)]\n        None => 1..=0,\n    };\n}").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_following_line_with_slashes_only_inside_string() {
+        // Load-bearing guard: a `//` that appears only inside a string literal on
+        // the following line is not a comment, so it does not justify the allow.
+        assert_eq!(
+            run("#[allow(clippy::foo)]\nfn f() -> usize { \"x//y\".len() }").len(),
+            1
+        );
     }
 
     #[test]
