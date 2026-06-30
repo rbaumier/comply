@@ -60,6 +60,7 @@ pub mod test_validation_rejection;
 pub mod throw_assertion;
 pub mod vue_sfc;
 pub mod vue_sfc_oxc;
+pub mod vue_shadow_scope;
 pub mod vue_template_helpers;
 pub mod walker;
 pub mod yaml_k8s_helpers;

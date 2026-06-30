@@ -1,9 +1,13 @@
 //! vue-ref-value-in-script AST backend.
 //!
 //! Scans `<script>` section for `ref()` declarations and flags comparisons /
-//! conditions that reference the bare identifier without `.value`.
+//! conditions that reference the bare identifier without `.value`. A bare use
+//! whose offset falls inside a function/arrow body that redeclares the ref name
+//! (a same-named parameter, or an earlier `const`/`let`/`var` local) is the
+//! shadowing plain value, not the ref, and is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::vue_shadow_scope::collect_shadow_scopes;
 
 fn script_range(source: &str) -> Option<(usize, usize)> {
     let start = source.find("<script")?;
@@ -45,6 +49,7 @@ crate::ast_check! { on ["component"] prefilter = ["ref(", "shallowRef("] => |nod
         return;
     }
 
+    let shadow_scopes = collect_shadow_scopes(ctx.source);
     let base_line = ctx.source[..start].matches('\n').count();
 
     for (idx, line) in script.lines().enumerate() {
@@ -69,27 +74,39 @@ crate::ast_check! { on ["component"] prefilter = ["ref(", "shallowRef("] => |nod
                 format!("({name} >= "),
                 format!("({name} <= "),
             ];
-            let mut hit = false;
-            for pat in &patterns {
-                if line.contains(pat) {
-                    hit = true;
-                    break;
-                }
+            let Some(pat) = patterns.iter().find(|p| line.contains(p.as_str())) else {
+                continue;
+            };
+            // Absolute byte offset (in `ctx.source`) of the bare-name use the
+            // pattern matched: `line` is a subslice of `ctx.source`, so pointer
+            // arithmetic recovers its start, and the name sits at the rightmost
+            // position of the matched pattern.
+            let name_offset = (line.as_ptr() as usize - ctx.source.as_ptr() as usize)
+                + line.find(pat.as_str()).unwrap()
+                + pat.rfind(name.as_str()).unwrap();
+            // A same-named function/arrow parameter — or a `const`/`let`/`var`
+            // local declared earlier in the body — shadows the outer ref inside
+            // that scope; the bare name there is the plain local value, so the
+            // comparison is correct and must not be flagged.
+            if shadow_scopes.iter().any(|s| {
+                s.body.contains(&name_offset)
+                    && (s.params.contains(name.as_str())
+                        || s.locals.iter().any(|(n, d)| n == name && *d < name_offset))
+            }) {
+                continue;
             }
-            if hit {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: base_line + idx + 1,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: format!(
-                        "`{name}` is a ref — comparing it without `.value` compares the Ref object, not the inner value. Use `{name}.value`."
-                    ),
-                    severity: Severity::Error,
-                    span: None,
-                });
-                break;
-            }
+            diagnostics.push(Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line: base_line + idx + 1,
+                column: 1,
+                rule_id: super::META.id.into(),
+                message: format!(
+                    "`{name}` is a ref — comparing it without `.value` compares the Ref object, not the inner value. Use `{name}.value`."
+                ),
+                severity: Severity::Error,
+                span: None,
+            });
+            break;
         }
     }
 }
@@ -125,5 +142,63 @@ mod tests {
     fn ignores_non_ref() {
         let sfc = "<script setup>\nconst x = 0\nif (x > 0) {}\n</script>";
         assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_function_param_shadowing_ref() {
+        // varletjs/varlet repro (#6922): outer `const index = ref(0)`, shadowed
+        // by the `clampIndex(index)` parameter. The `index < 0` / `index >=`
+        // comparisons inside the body are the plain number param, not the ref.
+        let sfc = "<script setup>\nconst index = ref(0)\nfunction clampIndex(index) {\n  if (index < 0) { return length.value + index }\n  if (index >= length.value) { return index - length.value }\n}\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_param_shadowing_ref() {
+        // An arrow param `count` shadows the outer ref inside the block body, so
+        // the `count > 0` comparison is the plain param value, not the ref.
+        let sfc = "<script setup>\nconst count = ref(0)\nconst handler = (count) => {\n  if (count > 0) { return count }\n}\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_destructured_param_shadowing_ref() {
+        // An array-destructured `watch` callback param `[index, inner]` binds the
+        // outer-ref name `inner`; inside the body `inner === null` is the
+        // destructured plain value — proving destructured-param tracking applies.
+        let sfc = "<script setup>\nconst inner = ref(null)\nwatch([a, b], ([index, inner]) => {\n  if (inner === null) { return a }\n  return b\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_unshadowed_bare_ref() {
+        // No shadowing param: the top-scope `if (visible)` is a genuine bare-ref
+        // misuse and must still flag.
+        let sfc = "<script setup>\nconst visible = ref(false)\nif (visible) {}\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_ref_misuse_in_function_without_param_shadow() {
+        // The function param is `flag`, not `visible`, so the bare `visible`
+        // comparison inside the body is still the outer ref and must flag.
+        let sfc = "<script setup>\nconst visible = ref(false)\nfunction check(flag) {\n  if (visible) { return flag }\n}\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_local_const_shadow_in_function() {
+        // A local `const placeholder` declared before the comparison shadows the
+        // outer ref; `placeholder === 'x'` after it is the plain local value.
+        let sfc = "<script setup>\nconst placeholder = ref(0)\nfunction f() {\n  const placeholder = props.placeholder\n  if (placeholder === 'x') { return 1 }\n}\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_ref_before_local_redeclaration() {
+        // The comparison precedes the local `const placeholder`, so it is still
+        // the outer ref (position-aware shadowing) and must flag.
+        let sfc = "<script setup>\nconst placeholder = ref(0)\nfunction f() {\n  if (placeholder === 'x') { return 1 }\n  const placeholder = 2\n}\n</script>";
+        assert_eq!(run(sfc).len(), 1);
     }
 }
