@@ -2091,6 +2091,9 @@ pub struct CargoManifest {
     async_runtime: bool,
     /// `[package].categories` lists `"no-std"`.
     no_std_category: bool,
+    /// `[package].categories` lists `"development-tools::testing"` — the crate
+    /// declares its purpose as testing infrastructure.
+    testing_crate: bool,
     /// A derive-based error-handling library (`thiserror`, `snafu`, `miette`,
     /// `derive_more`, `error-stack`) is declared in any dependency section.
     error_derive_crate: bool,
@@ -2190,6 +2193,16 @@ impl CargoManifest {
                     .any(|category| category.as_str() == Some("no-std"))
             });
 
+        let testing_crate = value
+            .get("package")
+            .and_then(|package| package.get("categories"))
+            .and_then(toml::Value::as_array)
+            .is_some_and(|categories| {
+                categories
+                    .iter()
+                    .any(|category| category.as_str() == Some("development-tools::testing"))
+            });
+
         let links_native_library = value
             .get("package")
             .and_then(|p| p.get("links"))
@@ -2209,6 +2222,7 @@ impl CargoManifest {
             explicit_target_paths,
             async_runtime,
             no_std_category,
+            testing_crate,
             error_derive_crate,
             links_native_library,
             rust_version,
@@ -2281,6 +2295,14 @@ impl CargoManifest {
     /// True when `[package].categories` lists `"no-std"`.
     pub fn is_no_std(&self) -> bool {
         self.no_std_category
+    }
+
+    /// True when `[package].categories` lists `"development-tools::testing"`.
+    /// That standardized crates.io category is an author-declared marker that
+    /// the crate is testing infrastructure, where `panic!`-based assertion
+    /// reporting and `.unwrap()` are idiomatic.
+    pub fn is_testing_crate(&self) -> bool {
+        self.testing_crate
     }
 
     /// True when a derive-based error-handling library is declared in any

@@ -23,6 +23,9 @@
 //! time during macro expansion, so a panic surfaces as a compile error in
 //! the downstream build, never a runtime abort of a shipped program — the
 //! rule's "aborts at runtime" premise does not hold there.
+//! Crates declaring `categories = ["development-tools::testing"]` are exempt
+//! as well: they are dedicated test infrastructure where `panic!`-based
+//! assertion-failure reporting is idiomatic.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -78,6 +81,19 @@ impl AstCheck for Check {
             .project
             .nearest_cargo_manifest(ctx.path)
             .is_some_and(|m| m.is_proc_macro())
+        {
+            return;
+        }
+        // A crate declaring `categories = ["development-tools::testing"]` is
+        // dedicated test infrastructure (e.g. `tracing-mock`): `panic!`-based
+        // assertion-failure reporting is the idiomatic mechanism, often from
+        // trait callbacks returning `()` where no `Result` is possible. The
+        // standardized crates.io category is an author-declared marker of that
+        // purpose, so all panic-family macros are exempt.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_testing_crate())
         {
             return;
         }
@@ -269,6 +285,14 @@ edition = "2021"
 
 [lib]
 name = "normal_lib"
+"#;
+
+    const TESTING_CARGO_TOML: &str = r#"
+[package]
+name = "tracing-mock"
+version = "0.1.0"
+edition = "2021"
+categories = ["development-tools::testing"]
 "#;
 
     #[test]
@@ -653,5 +677,45 @@ name = "normal_lib"
         assert!(proc_macro.is_proc_macro());
         let normal = CargoManifest::parse(LIB_CARGO_TOML, PathBuf::from("/c")).unwrap();
         assert!(!normal.is_proc_macro());
+    }
+
+    /// Closes #7014: tracing-mock's `Cargo.toml` declares
+    /// `categories = ["development-tools::testing"]`, so its `panic!`-based
+    /// assertion reporters in normally-named module files (`expect.rs`,
+    /// `layer.rs`, `subscriber.rs`) must not flag.
+    #[test]
+    fn allows_panic_family_in_testing_category_crate() {
+        assert!(
+            run_on_with_cargo(TESTING_CARGO_TOML, r#"fn bad() { panic!("expected event but got"); }"#)
+                .is_empty(),
+            "panic! in a development-tools::testing crate must not flag"
+        );
+        assert!(
+            run_on_with_cargo(TESTING_CARGO_TOML, "fn f() { unimplemented!(); }").is_empty(),
+            "unimplemented! in a development-tools::testing crate must not flag"
+        );
+    }
+
+    /// Negative space: an ordinary library crate without the testing category
+    /// must keep flagging `panic!` even in a normally-named module file.
+    #[test]
+    fn still_flags_panic_in_non_testing_category_crate() {
+        assert_eq!(
+            run_on_with_cargo(LIB_CARGO_TOML, r#"fn bad() { panic!("boom"); }"#).len(),
+            1,
+            "panic! in a crate without the testing category must still flag"
+        );
+    }
+
+    /// The manifest predicate the exemption keys on: a `development-tools::testing`
+    /// category parses to `is_testing_crate()`; a plain `[lib]` table does not.
+    #[test]
+    fn manifest_detects_testing_crate() {
+        use crate::project::CargoManifest;
+        use std::path::PathBuf;
+        let testing = CargoManifest::parse(TESTING_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(testing.is_testing_crate());
+        let normal = CargoManifest::parse(LIB_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(!normal.is_testing_crate());
     }
 }

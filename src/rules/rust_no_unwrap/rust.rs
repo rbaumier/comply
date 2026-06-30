@@ -9,6 +9,13 @@
 //! a panic cleanly fails the test. We skip any call whose enclosing
 //! function has `#[test]` or whose enclosing module has `#[cfg(test)]`.
 //!
+//! Testing-infrastructure crates are exempted — a crate declaring
+//! `categories = ["development-tools::testing"]` (e.g. `tracing-mock`) is
+//! dedicated test support where `.unwrap()` panicking on a failed expectation
+//! is idiomatic, often from trait callbacks returning `()` where `?` cannot
+//! propagate. The standardized crates.io category is an author-declared marker
+//! of that purpose.
+//!
 //! build.rs is exempted — panics in Cargo build scripts are an acceptable
 //! error mode during compilation (e.g. env::var("FOO").unwrap()).
 //!
@@ -143,6 +150,18 @@ impl AstCheck for Check {
         }
         // Skip test code — `.unwrap()` is fine there.
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+            return;
+        }
+        // Skip crates declaring `categories = ["development-tools::testing"]` —
+        // dedicated test infrastructure (e.g. `tracing-mock`) where `.unwrap()`
+        // panicking on a failed expectation is idiomatic, often from trait
+        // callbacks returning `()` where `?` cannot propagate. The standardized
+        // crates.io category is an author-declared marker of that purpose.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_testing_crate())
+        {
             return;
         }
         // Skip example code — `.unwrap()` keeps examples concise.
@@ -477,6 +496,36 @@ mod tests {
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
+
+    /// Run on a file next to the given `Cargo.toml` so the manifest
+    /// (`development-tools::testing` category exemption) resolves via
+    /// `nearest_cargo_manifest`.
+    fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            cargo_toml_contents,
+            source,
+            "src/expect.rs",
+        )
+    }
+
+    const TESTING_CARGO_TOML: &str = r#"
+[package]
+name = "tracing-mock"
+version = "0.1.0"
+edition = "2021"
+categories = ["development-tools::testing"]
+"#;
+
+    const LIB_CARGO_TOML: &str = r#"
+[package]
+name = "normal-lib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "normal_lib"
+"#;
 
     #[test]
     fn flags_unwrap_in_production_fn() {
@@ -959,5 +1008,44 @@ mod tests {
         // *parameter* typed `Result<…>` does not block the exemption.
         let source = r#"fn f(x: Result<u8, E>) -> bool { x.expect("m") }"#;
         assert!(run_on(source).is_empty());
+    }
+
+    /// Closes #7014: tracing-mock's `Cargo.toml` declares
+    /// `categories = ["development-tools::testing"]`, so `.unwrap()`/`.expect()`
+    /// in its normally-named module files (`expect.rs`) must not flag.
+    #[test]
+    fn allows_unwrap_in_testing_category_crate() {
+        assert!(
+            run_on_with_cargo(TESTING_CARGO_TOML, "pub fn h() { let x = y.unwrap(); }").is_empty(),
+            ".unwrap() in a development-tools::testing crate must not flag"
+        );
+        assert!(
+            run_on_with_cargo(TESTING_CARGO_TOML, r#"pub fn h() { let x = y.expect("nope"); }"#)
+                .is_empty(),
+            ".expect() in a development-tools::testing crate must not flag"
+        );
+    }
+
+    /// Negative space: an ordinary library crate without the testing category
+    /// must keep flagging `.unwrap()` even in a normally-named module file.
+    #[test]
+    fn still_flags_unwrap_in_non_testing_category_crate() {
+        assert_eq!(
+            run_on_with_cargo(LIB_CARGO_TOML, "pub fn h() { let x = y.unwrap(); }").len(),
+            1,
+            ".unwrap() in a crate without the testing category must still flag"
+        );
+    }
+
+    /// The manifest predicate the exemption keys on: a `development-tools::testing`
+    /// category parses to `is_testing_crate()`; a plain `[lib]` table does not.
+    #[test]
+    fn manifest_detects_testing_crate() {
+        use crate::project::CargoManifest;
+        use std::path::PathBuf;
+        let testing = CargoManifest::parse(TESTING_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(testing.is_testing_crate());
+        let normal = CargoManifest::parse(LIB_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(!normal.is_testing_crate());
     }
 }
