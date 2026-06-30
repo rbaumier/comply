@@ -4,12 +4,16 @@
 //! the ambiguous suffixes `Result` and `Payload` qualify only when the shape
 //! also carries a response-shaped field (`data`, `error`, `status`, …), so
 //! library return types like `LoadCodegenConfigResult` and Redux action
-//! payloads like `KeyboardTooltipActionPayload` are left alone.
+//! payloads like `KeyboardTooltipActionPayload` are left alone. A
+//! response-shaped field typed by one of the declaration's own generic
+//! parameters (`data: TData | undefined`) is a generic container, not a
+//! concrete HTTP envelope, so it does not make an ambiguous type qualify.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{PropertyKey, TSSignature, TSType};
+use oxc_ast::ast::{PropertyKey, TSSignature, TSType, TSTypeName, TSTypeParameterDeclaration};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -54,29 +58,84 @@ fn classify_response_type(name: &str) -> ResponseMatch {
     }
 }
 
-fn member_name<'a>(member: &'a TSSignature) -> Option<&'a str> {
-    let TSSignature::TSPropertySignature(prop) = member else { return None };
-    match &prop.key {
-        PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
-        _ => None,
+/// Names of the generic type parameters declared directly on the type, e.g.
+/// `TData` and `TError` for `interface QueryObserverBaseResult<TData, TError>`.
+fn collect_type_params<'a>(
+    type_parameters: Option<&'a TSTypeParameterDeclaration<'a>>,
+) -> HashSet<&'a str> {
+    let mut names = HashSet::new();
+    if let Some(decl) = type_parameters {
+        for param in &decl.params {
+            names.insert(param.name.name.as_str());
+        }
+    }
+    names
+}
+
+/// Whether `ts_type` resolves to one of the declaration's own type parameters
+/// (`param_names`), inspecting only the top level: the type itself, the members
+/// of a top-level union (so `TData | undefined` and `TError | null` match), and
+/// the inside of a parenthesized type. The generic *arguments* of a named
+/// reference are deliberately not inspected, so a concrete wrapper such as
+/// `ApiResponse<TData>` does not match.
+fn annotation_is_declared_type_param(ts_type: &TSType, param_names: &HashSet<&str>) -> bool {
+    match ts_type {
+        TSType::TSTypeReference(reference) => match &reference.type_name {
+            TSTypeName::IdentifierReference(id) => param_names.contains(id.name.as_str()),
+            _ => false,
+        },
+        TSType::TSParenthesizedType(paren) => {
+            annotation_is_declared_type_param(&paren.type_annotation, param_names)
+        }
+        TSType::TSUnionType(union) => union
+            .types
+            .iter()
+            .any(|member| annotation_is_declared_type_param(member, param_names)),
+        _ => false,
     }
 }
 
-fn has_response_shaped_field(members: &[TSSignature]) -> bool {
-    members.iter().filter_map(member_name).any(|name| {
-        RESPONSE_SHAPED_FIELDS
+/// Whether any member is a response-shaped field with a concrete (non-parameter)
+/// type. A field named `data`/`error`/… whose annotation is one of the type's
+/// own generic parameters is the canonical signature of a generic container
+/// (`data: TData | undefined`), not a concrete HTTP envelope, so it does not
+/// count.
+fn has_response_shaped_field(members: &[TSSignature], param_names: &HashSet<&str>) -> bool {
+    members.iter().any(|member| {
+        let TSSignature::TSPropertySignature(prop) = member else {
+            return false;
+        };
+        let PropertyKey::StaticIdentifier(id) = &prop.key else {
+            return false;
+        };
+        let name = id.name.as_str();
+        if !RESPONSE_SHAPED_FIELDS
             .iter()
             .any(|f| name.eq_ignore_ascii_case(f))
+        {
+            return false;
+        }
+        match &prop.type_annotation {
+            Some(ann) => !annotation_is_declared_type_param(&ann.type_annotation, param_names),
+            None => true,
+        }
     })
 }
 
 /// Whether `members` should be checked for non-extensible boolean fields, given
-/// how the declaration name matched. Ambiguous suffixes require a
+/// how the declaration name matched. Ambiguous suffixes require a concrete
 /// response-shaped field; strong suffixes always qualify.
-fn should_check(suffix_match: ResponseMatch, members: &[TSSignature]) -> bool {
+fn should_check(
+    suffix_match: ResponseMatch,
+    members: &[TSSignature],
+    type_parameters: Option<&TSTypeParameterDeclaration>,
+) -> bool {
     match suffix_match {
         ResponseMatch::Strong => true,
-        ResponseMatch::Ambiguous => has_response_shaped_field(members),
+        ResponseMatch::Ambiguous => {
+            let param_names = collect_type_params(type_parameters);
+            has_response_shaped_field(members, &param_names)
+        }
         ResponseMatch::None => false,
     }
 }
@@ -217,6 +276,52 @@ mod tests {
         );
         assert_eq!(d.len(), 1, "a Payload type carrying data/status is a real response: {d:?}");
     }
+
+    #[test]
+    fn no_fp_on_generic_query_result_typed_by_type_params() {
+        // Issue #6940: TanStack Query hook return type. `data`/`error` are typed
+        // by the interface's own generic parameters, so it is a container, not an
+        // HTTP response envelope.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "interface QueryObserverBaseResult<TData = unknown, TError = DefaultError> { data: TData | undefined; error: TError | null; isError: boolean; isFetching: boolean }",
+            "src/types.ts",
+        );
+        assert!(d.is_empty(), "generic *Result whose response-shaped fields are type parameters should not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_concrete_result_with_typed_response_field() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "interface FetchResult { data: UserProfile; error?: string; isSuccess: boolean }",
+            "src/api/fetch.ts",
+        );
+        assert_eq!(d.len(), 1, "a Result with concrete response-shaped field types is a real response: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_result_with_generic_wrapper_response_field() {
+        // The type parameter only appears as a nested type argument of a concrete
+        // wrapper (`ApiResponse<TData>`), not at the top level, so `data` stays a
+        // response-shaped field.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "interface FooResult<TData> { data: ApiResponse<TData>; isOk: boolean }",
+            "src/api/foo.ts",
+        );
+        assert_eq!(d.len(), 1, "a response-shaped field typed by a concrete wrapper over a generic must still flag: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_strong_suffix_with_type_param_field() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "interface UserResponse<TData> { data: TData | undefined; isError: boolean }",
+            "src/api/user.ts",
+        );
+        assert_eq!(d.len(), 1, "strong response suffix flags regardless of generic-param fields: {d:?}");
+    }
 }
 
 impl OxcCheck for Check {
@@ -237,14 +342,14 @@ impl OxcCheck for Check {
         match node.kind() {
             AstKind::TSInterfaceDeclaration(decl) => {
                 let m = classify_response_type(decl.id.name.as_str());
-                if should_check(m, &decl.body.body) {
+                if should_check(m, &decl.body.body, decl.type_parameters.as_deref()) {
                     check_members(&decl.body.body, ctx, diagnostics);
                 }
             }
             AstKind::TSTypeAliasDeclaration(decl) => {
                 let m = classify_response_type(decl.id.name.as_str());
                 if let TSType::TSTypeLiteral(obj) = &decl.type_annotation {
-                    if should_check(m, &obj.members) {
+                    if should_check(m, &obj.members, decl.type_parameters.as_deref()) {
                         check_members(&obj.members, ctx, diagnostics);
                     }
                 }
