@@ -770,6 +770,11 @@ const THEME_COLLECTION_DIRS: &[&str] =
 /// Data/config extensions a color-theme file uses.
 const THEME_DATA_EXTS: &[&str] = &["yml", "yaml", "toml", "json", "ron"];
 
+/// Source extensions a per-component theme-config module uses, beyond the data
+/// formats in `THEME_DATA_EXTS`. A theming system that registers tokens from code
+/// (e.g. Varlet, MUI) ships one such module per variant directory.
+const THEME_CODE_EXTS: &[&str] = &["ts", "js", "mjs", "cjs"];
+
 fn is_theme_data_file(p: &std::path::Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
@@ -777,27 +782,85 @@ fn is_theme_data_file(p: &std::path::Path) -> bool {
         .is_some_and(|e| THEME_DATA_EXTS.contains(&e.as_str()))
 }
 
-/// True when `a` and `b` are intentional color-theme / palette VARIANTS: both
-/// live in the SAME directory whose name is a theme/palette collection
-/// (`themes/`, `palette/`, `colors/`, …) and both are data files. Such files
-/// share a key schema but hold distinct palette values — they ARE the data, not
-/// an abstraction over it, so the structural clone is intentional (cf. locale
-/// variants).
+/// True when `p` is a theme-config file the sibling-variant case covers: a data
+/// file (`THEME_DATA_EXTS`) or a source module (`THEME_CODE_EXTS`).
+fn is_theme_config_file(p: &std::path::Path) -> bool {
+    is_theme_data_file(p)
+        || p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .is_some_and(|e| THEME_CODE_EXTS.contains(&e.as_str()))
+}
+
+/// True when `dir`'s final component is a theme/palette collection directory name.
+fn is_theme_collection_dir(dir: &std::path::Path) -> bool {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_ascii_lowercase())
+        .is_some_and(|n| THEME_COLLECTION_DIRS.contains(&n.as_str()))
+}
+
+/// True when `a` and `b` are intentional color-theme / palette VARIANTS whose
+/// structural clone is the data itself rather than a missing abstraction, in
+/// either of two shapes:
+///
+/// 1. **Same-directory data variants** — both files are data files
+///    (`THEME_DATA_EXTS`) in the SAME directory whose name is a theme/palette
+///    collection (`themes/`, `palette/`, `colors/`, …). The files share a key
+///    schema but hold distinct palette values — they ARE the data, not an
+///    abstraction over it (cf. locale variants).
+/// 2. **Sibling variant-subdirectory configs** — both files have the identical
+///    file name and a theme-config extension (`THEME_DATA_EXTS` or
+///    `THEME_CODE_EXTS`) and sit in different direct-child subdirectories of a
+///    common parent whose name is a theme collection (e.g.
+///    `themes/dark/alert.ts` vs `themes/md3-light/alert.ts`). A theming system
+///    registers the same per-component token keys in every variant, so each
+///    variant must ship its own copy — extracting a shared module would break it.
+///    The variant directory names are irrelevant and are never inspected.
 fn are_theme_palette_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    is_same_dir_theme_data_pair(a, b) || is_sibling_theme_config_pair(a, b)
+}
+
+/// Case 1 of [`are_theme_palette_pair`]: both are data files in the SAME
+/// theme-collection directory.
+fn is_same_dir_theme_data_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
     let (Some(da), Some(db)) = (a.parent(), b.parent()) else {
         return false;
     };
     if da != db {
         return false;
     }
-    let Some(dir) = da.file_name().and_then(|n| n.to_str()) else {
-        return false;
-    };
-    let dir = dir.to_ascii_lowercase();
-    if !THEME_COLLECTION_DIRS.contains(&dir.as_str()) {
+    if !is_theme_collection_dir(da) {
         return false;
     }
     is_theme_data_file(a) && is_theme_data_file(b)
+}
+
+/// Case 2 of [`are_theme_palette_pair`]: identical file name and a theme-config
+/// extension, in different direct-child subdirectories of a shared
+/// theme-collection directory (the files' common grandparent). The differing
+/// variant-directory name is never inspected; the identical-file-name and
+/// theme-collection-grandparent requirements keep genuine duplication between
+/// unrelated files flagged.
+fn is_sibling_theme_config_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let (Some(da), Some(db)) = (a.parent(), b.parent()) else {
+        return false;
+    };
+    // Distinct variant directories sharing one theme-collection grandparent.
+    if da == db {
+        return false;
+    }
+    let (Some(grandparent_a), Some(grandparent_b)) = (da.parent(), db.parent()) else {
+        return false;
+    };
+    if grandparent_a != grandparent_b || !is_theme_collection_dir(grandparent_a) {
+        return false;
+    }
+    // Same component file name on both sides — the tight structural signal.
+    if a.file_name() != b.file_name() {
+        return false;
+    }
+    is_theme_config_file(a) && is_theme_config_file(b)
 }
 
 // --- Complete/streaming-variant detection ---
@@ -1943,6 +2006,64 @@ mod tests {
             1,
             "cloned non-data files in a themes/ directory must still be flagged"
         );
+    }
+
+    #[test]
+    fn are_theme_palette_pair_recognizes_sibling_variant_subdirs() {
+        use std::path::Path;
+        // varletjs/varlet FP (#6920): byte-identical per-component theme-config
+        // module at the same file name in two sibling variant dirs (`dark` vs
+        // `md3-light`) whose common parent is `themes/` → suppressed.
+        assert!(are_theme_palette_pair(
+            Path::new("packages/varlet-ui/src/themes/dark/alert.ts"),
+            Path::new("packages/varlet-ui/src/themes/md3-light/alert.ts"),
+        ));
+        // The directory-gap fix is extension-agnostic within the allowed set: a
+        // sibling-variant `.json` config is suppressed the same way.
+        assert!(are_theme_palette_pair(
+            Path::new("themes/dark/x.json"),
+            Path::new("themes/light/x.json"),
+        ));
+        // Sibling subdirs but the grandparent is not a theme collection → genuine
+        // duplication, not suppressed.
+        assert!(!are_theme_palette_pair(
+            Path::new("src/widgets/dark/alert.ts"),
+            Path::new("src/widgets/light/alert.ts"),
+        ));
+        // Different file names → genuine duplication, not suppressed.
+        assert!(!are_theme_palette_pair(
+            Path::new("themes/dark/alert.ts"),
+            Path::new("themes/light/button.ts"),
+        ));
+        // Disallowed extension (`.rs` is not a theme-config extension) → not
+        // suppressed even with the sibling-variant shape.
+        assert!(!are_theme_palette_pair(
+            Path::new("themes/dark/alert.rs"),
+            Path::new("themes/light/alert.rs"),
+        ));
+        // More than one directory level apart (grandparents differ) → not a
+        // sibling-variant pair, not suppressed.
+        assert!(!are_theme_palette_pair(
+            Path::new("themes/dark/sub/alert.ts"),
+            Path::new("themes/light/alert.ts"),
+        ));
+    }
+
+    #[test]
+    fn are_theme_palette_pair_preserves_same_dir_data_behavior() {
+        use std::path::Path;
+        // Case 1 is unchanged: two data files in the same themes/ directory are a
+        // pair, …
+        assert!(are_theme_palette_pair(
+            Path::new("themes/catppuccin-mocha.yml"),
+            Path::new("themes/catppuccin-macchiato.yml"),
+        ));
+        // … but a code file in the same themes/ directory is NOT — the
+        // sibling-variant widening never relaxes the same-dir data-only rule.
+        assert!(!are_theme_palette_pair(
+            Path::new("themes/alert.ts"),
+            Path::new("themes/button.ts"),
+        ));
     }
 
     /// Builds two scaffold template variant files at the same directory under a
