@@ -256,15 +256,17 @@ fn child_text<'a>(node: tree_sitter::Node, kind: &str, source: &'a [u8]) -> Opti
 /// The attribute name to validate, or `None` when the node is out of scope.
 ///
 /// - plain `attribute` → its `attribute_name`, unless the name contains a `:`,
-///   a `.`, or `--`. None of these characters can appear in a JavaScript
-///   identifier, so such a name is never a Vue prop or DOM attribute subject to
-///   the kebab-case convention. A `:` marks a namespaced / variant-prefixed name
-///   (an XML/SVG namespace like `xlink:href`, or a UnoCSS/Windi attributify
-///   variant like `md:grid-cols-2`). A `.` is either the trailing segment of a
-///   member-expression element tag (`<motion.div>` → `tag_name` `motion` plus a
-///   spurious `.div` attribute) or UnoCSS attributify decimal-value notation
-///   (`gap-0.5`, `px1.2`, `mx-1.25rem`). `--` is UnoCSS attributify
-///   negative-value notation (`me--4`, `z--1`, `inset-ie--10`). All are skipped.
+///   a `.`, or `--`, or starts with `_`. None of these can begin or appear in a
+///   real Vue prop or DOM attribute subject to the kebab-case convention. A `:`
+///   marks a namespaced / variant-prefixed name (an XML/SVG namespace like
+///   `xlink:href`, or a UnoCSS/Windi attributify variant like `md:grid-cols-2`).
+///   A `.` is either the trailing segment of a member-expression element tag
+///   (`<motion.div>` → `tag_name` `motion` plus a spurious `.div` attribute) or
+///   UnoCSS attributify decimal-value notation (`gap-0.5`, `px1.2`, `mx-1.25rem`).
+///   `--` is UnoCSS attributify negative-value notation (`me--4`, `z--1`,
+///   `inset-ie--10`). A leading `_` is the trailing segment of an
+///   underscore-containing component tag (`<demo_ListView>` → `tag_name` `demo`
+///   plus a spurious `_ListView` attribute). All are skipped.
 /// - `directive_attribute` with name `:`, `v-bind`, or `v-model` → its static
 ///   `directive_argument`. Dynamic arguments (`:[key]`), argument-less directives,
 ///   and any other directive (`v-on`, `@`, `v-if`, ...) are skipped.
@@ -292,6 +294,15 @@ fn checked_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str
             // name; `--` is UnoCSS attributify negative-value notation (`me--4`,
             // `z--1`, `inset-ie--10`), a utility token rather than a Vue prop.
             if name.contains("--") {
+                return None;
+            }
+            // A leading `_` is a scanner artifact from a component name containing
+            // an underscore (`<demo_ListView>` → `tag_name` `demo` plus a spurious
+            // `_ListView` attribute). `scan_tag_name` in the tree-sitter-html
+            // external scanner stops at `_` (only `iswalnum`, `-`, `:` are valid
+            // tag-name characters), so the remainder leaks into attribute position.
+            // No real Vue prop or DOM attribute begins with `_`.
+            if name.starts_with('_') {
                 return None;
             }
             Some(name)
@@ -681,5 +692,33 @@ mod tests {
         // The guard only skips the `.bar` member-segment artifact; a genuine
         // camelCase attribute on the same element is still flagged.
         assert_eq!(run(&wrap("<motion.div fooBar=\"x\"></motion.div>")).len(), 1);
+    }
+
+    // --- Underscore-containing component tags (`<demo_ListView>`, e.g. nativescript-vue) ---
+
+    #[test]
+    fn allows_underscore_component_tag_scanner_artifact() {
+        // Issue #7011: `<demo_ListView>` is a nativescript-vue component whose name
+        // contains an underscore; the tree-sitter-html scanner stops at `_` and
+        // splits it into a `demo` tag with a spurious `_ListView` attribute. The
+        // `_ListView` segment is part of the component name, not an attribute, so it
+        // must not be flagged.
+        let diags = run(&wrap(
+            "<GridLayout rows=\"auto, auto, *\">\
+             <ContentView row=\"2\">\
+             <demo_ListView />\
+             </ContentView>\
+             </GridLayout>",
+        ));
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    #[test]
+    fn flags_real_camelcase_attribute_on_underscore_element() {
+        // The guard only skips the leading-`_` component-name artifact; a genuine
+        // camelCase attribute on the same element is still flagged.
+        let diags = run(&wrap("<demo_ListView fooBar=\"x\" />"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fooBar"));
     }
 }
