@@ -1,9 +1,11 @@
 //! jsdoc-complete-sentence OxcCheck backend — JSDoc descriptions must start
 //! with a capital letter and end with terminal punctuation. The capital-letter
-//! check fires only on a cased lowercase first letter, and the terminal-
-//! punctuation check accepts both ASCII (`.`/`!`/`?`) and CJK (`。`/`！`/`？`)
-//! terminators, so case-less scripts (Chinese, Japanese, Korean) are not
-//! flagged.
+//! check fires only on a cased lowercase first letter, and is waived when the
+//! description opens with a dotted Latin initialism (`e.g.`, `i.e.` — a run of
+//! single lowercase letters each followed by a period), which is lowercase by
+//! convention. The terminal-punctuation check accepts both ASCII (`.`/`!`/`?`)
+//! and CJK (`。`/`！`/`？`) terminators, so case-less scripts (Chinese,
+//! Japanese, Korean) are not flagged.
 //!
 //! A `/** … */` comment whose description (the prose before the first `@tag`)
 //! is a single line and that documents a property/field signature — a
@@ -248,10 +250,13 @@ impl OxcCheck for Check {
             // First line must start with a capital letter. Only a cased
             // lowercase letter (Latin/Cyrillic/Greek `a`-`z`, etc.) is wrong:
             // scripts without letter case (CJK ideographs, Hiragana, Hangul,
-            // …) return `false` for `is_lowercase`, so they are not flagged.
+            // …) return `false` for `is_lowercase`, so they are not flagged. A
+            // description opening with a dotted Latin initialism (`e.g.`,
+            // `i.e.`) is exempt: such abbreviations are lowercase by convention.
             let (first_text, first_offset) = &description_lines[0];
             if let Some(ch) = first_text.chars().next()
-                && ch.is_lowercase() {
+                && ch.is_lowercase()
+                && !starts_with_dotted_abbreviation(first_text) {
                     let line_byte_offset =
                         find_line_byte_offset(raw, *first_offset);
                     let (line, column) = byte_offset_to_line_col(
@@ -326,6 +331,31 @@ fn is_terminal_punctuation(ch: char) -> bool {
 /// exempt non-Latin descriptions from the ASCII terminal-punctuation rule.
 fn is_caseless_script_letter(ch: char) -> bool {
     ch.is_alphabetic() && !ch.is_uppercase() && !ch.is_lowercase()
+}
+
+/// Whether a description opens with a dotted Latin initialism: a leading run of
+/// single lowercase ASCII letters each followed by a period, repeated at least
+/// twice (`e.g.`, `i.e.`, and any longer form like `a.b.c.`). Such
+/// abbreviations are lowercase by convention and are never capitalized in
+/// technical prose, so a description that begins with one is exempt from the
+/// capital-letter check. The shape is purely structural — no ordinary English
+/// sentence opens with `<letter>.<letter>.` — so it does not mask a genuine
+/// lowercase-word sentence start (`returns the value`), which is still flagged.
+///
+/// Two-letter abbreviations like `cf.` are deliberately not covered: a short
+/// lowercase token followed by a single period is structurally
+/// indistinguishable from a real lowercase sentence start, so matching it would
+/// suppress genuine violations.
+fn starts_with_dotted_abbreviation(desc: &str) -> bool {
+    let mut chars = desc.chars();
+    let mut segments = 0;
+    loop {
+        match (chars.next(), chars.next()) {
+            (Some(letter), Some('.')) if letter.is_ascii_lowercase() => segments += 1,
+            _ => break,
+        }
+    }
+    segments >= 2
 }
 
 /// Find the byte offset of a given line number (0-based) within text.
@@ -989,5 +1019,69 @@ interface EffectStore {
 "#;
         let d = run_on(source);
         assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn allows_dotted_latin_abbreviation_start() {
+        // Regression for rbaumier/comply#6911 — a JSDoc description opening with
+        // a dotted Latin initialism (`e.g.`, `i.e.`) is lowercase by convention
+        // and must not flag the capital-letter check.
+        let eg = r#"
+export interface ParserOptions {
+  /**
+   * e.g. platform native elements, e.g. `<div>` for browsers
+   */
+  isNativeTag?: (tag: string) => boolean
+}
+"#;
+        assert!(run_on(eg).is_empty());
+
+        let ie = r#"
+/**
+ * i.e. the foo.
+ */
+function bar(): void {}
+"#;
+        assert!(!run_on(ie).iter().any(|d| d.message.contains("capital")));
+    }
+
+    #[test]
+    fn still_flags_lowercase_word_start_not_abbreviation() {
+        // The abbreviation exemption is structural — an ordinary lowercase word
+        // that is not a dotted initialism still flags the capital-letter check.
+        let source = r#"
+/**
+ * returns the parser options.
+ */
+function getOptions(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("capital")));
+    }
+
+    #[test]
+    fn allows_capitalized_description_unchanged() {
+        // A properly capitalized description is unaffected by the abbreviation
+        // exemption.
+        let source = r#"
+/**
+ * Platform native elements.
+ */
+function getOptions(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn dotted_abbreviation_detection_is_shape_only() {
+        // The exemption signal is purely the `<letter>.<letter>.` shape repeated
+        // at least twice: ordinary lowercase words and two-letter abbreviations
+        // like `cf.` are not covered.
+        assert!(starts_with_dotted_abbreviation("e.g. platform native elements"));
+        assert!(starts_with_dotted_abbreviation("i.e. the foo"));
+        assert!(starts_with_dotted_abbreviation("a.b.c. and so on"));
+        assert!(!starts_with_dotted_abbreviation("returns the value"));
+        assert!(!starts_with_dotted_abbreviation("cf. the spec"));
+        assert!(!starts_with_dotted_abbreviation("e.g without trailing dot"));
     }
 }
