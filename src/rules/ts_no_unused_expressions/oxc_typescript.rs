@@ -5,14 +5,22 @@ use oxc_ast::ast::{ChainElement, Expression, IdentifierReference, TSType};
 use std::path::Path;
 use std::sync::Arc;
 
-/// SolidJS reactive primitives that re-run their callback whenever a tracked
-/// signal read inside it changes. A bare member access in that callback is the
-/// subscription itself — the proxy getter access registers the dependency.
-const SOLID_REACTIVE_PRIMITIVES: &[&str] = &[
+/// Framework reactive primitives that re-run their callback whenever a tracked
+/// reactive source read inside it changes. A bare member access in that callback
+/// is the subscription itself — the proxy getter access registers the
+/// dependency. Covers SolidJS (`createEffect`/`createMemo`/`createRenderEffect`/
+/// `createComputed`) and Vue 3 (`computed`/`watchEffect`/`watch`), matched only
+/// in the bare-identifier callee form (a namespaced `Vue.computed(…)` is not).
+const REACTIVE_CALLBACK_PRIMITIVES: &[&str] = &[
+    // SolidJS
     "createEffect",
     "createMemo",
     "createRenderEffect",
     "createComputed",
+    // Vue 3
+    "computed",
+    "watchEffect",
+    "watch",
 ];
 
 /// DOM geometry properties whose read forces the browser to flush pending style
@@ -71,14 +79,13 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // A bare member-read statement inside a SolidJS reactive callback
+            // A bare member-read statement inside a Vue/SolidJS reactive callback
             // registers a reactive subscription — the proxy getter access is the
-            // intended side effect, so the read must not be flagged.
-            if matches!(
-                expr,
-                Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
-            ) && is_in_reactive_callback(node, semantic)
-            {
+            // intended side effect, so the read must not be flagged. Optional-
+            // chained reads (`a?.b?.value`) qualify via `is_bare_member_access`;
+            // a chain ending in a call is excluded there and already handled as a
+            // side-effectful call.
+            if is_bare_member_access(expr) && is_in_reactive_callback(node, semantic) {
                 continue;
             }
 
@@ -153,9 +160,10 @@ fn is_concise_arrow_body(
 }
 
 /// True when `node` sits inside a callback (arrow or function) passed directly
-/// as an argument to a call whose callee is a SolidJS reactive primitive
-/// (`createEffect`, `createMemo`, …). Walks up to the nearest enclosing
-/// function, then checks the call that function is an argument to.
+/// as an argument to a call whose callee is a framework reactive primitive
+/// (`createEffect`, `computed`, …). Walks up to the nearest enclosing function,
+/// then checks the call that function is an argument to. The callee must be a
+/// bare identifier; a namespaced `Vue.computed(…)` callee is not matched.
 fn is_in_reactive_callback(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -170,7 +178,7 @@ fn is_in_reactive_callback(
                 return matches!(
                     &call.callee,
                     Expression::Identifier(id)
-                        if SOLID_REACTIVE_PRIMITIVES.contains(&id.name.as_str())
+                        if REACTIVE_CALLBACK_PRIMITIVES.contains(&id.name.as_str())
                 );
             }
             _ => {}
@@ -205,9 +213,10 @@ fn preceded_by_ts_expect_error(
 }
 
 /// True when `expr` is a bare member access used as a statement: `a.b`,
-/// `fn().prop`, computed `a[k]`, or their optional-chained forms (`a?.b`). In a
-/// type-test file these are compile-time existence assertions. A trailing call
-/// is excluded — `fn();` is a real call, handled by `has_side_effects`.
+/// `fn().prop`, computed `a[k]`, or their optional-chained forms (`a?.b`,
+/// `a?.b?.c`). A trailing call is excluded — `fn();` is a real call, handled by
+/// `has_side_effects`. Serves both the type-test existence-assertion gate and
+/// the reactive-callback subscription-read gate.
 fn is_bare_member_access(expr: &Expression) -> bool {
     match expr {
         Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => true,
@@ -909,5 +918,73 @@ mod tests {
         assert_eq!(run_on_path("1 + 1;", "types/test.tsx").len(), 1);
         assert_eq!(run_on_path("a === b;", "src/foo.test-d.ts").len(), 1);
         assert_eq!(run_on_path("let x = 1; x;", "types/test.tsx").len(), 1);
+    }
+
+    // Regression #7022: reading a `Ref.value` inside a Vue 3 reactive callback
+    // (`computed`/`watchEffect`/`watch`) registers a reactive dependency — the
+    // proxy getter access is the subscription itself, exactly like the SolidJS
+    // primitives. Both plain member reads and optional-chained reads must be
+    // exempt.
+    #[test]
+    fn allows_vue_ref_read_in_computed_callback_issue_7022() {
+        let src =
+            r#"const passedMs = computed(() => { interval.counter.value; if (x) return 0; return 1; });"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_vue_optional_chain_ref_read_in_computed_callback_issue_7022() {
+        let src = r#"const query = computed(() => { router?.currentRoute?.value?.query; return new URLSearchParams(); });"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_vue_ref_read_in_watch_effect_callback_issue_7022() {
+        assert!(
+            run_on("watchEffect(() => { foo.value; });").is_empty(),
+            "{:?}",
+            run_on("watchEffect(() => { foo.value; });")
+        );
+        assert!(
+            run_on("watch(source, () => { foo.value; });").is_empty(),
+            "{:?}",
+            run_on("watch(source, () => { foo.value; });")
+        );
+    }
+
+    #[test]
+    fn still_flags_vue_ref_read_outside_reactive_callback_issue_7022() {
+        // The SAME bare reads, outside any reactive callback, are genuine unused
+        // expressions and must still flag — including the optional-chain form.
+        assert_eq!(run_on("interval.counter.value;").len(), 1);
+        assert_eq!(run_on("router?.currentRoute?.value?.query;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_member_read_in_non_reactive_callback_issue_7022() {
+        // A bare member read inside a callback that is NOT a reactive primitive
+        // (setTimeout, Array#forEach) is still an unused expression.
+        assert_eq!(run_on("setTimeout(() => { foo.bar; });").len(), 1);
+        assert_eq!(run_on("arr.forEach(() => { foo.bar; });").len(), 1);
+    }
+
+    #[test]
+    fn call_tailed_chain_handled_as_call_not_reactive_gate_issue_7022() {
+        // A chain ending in a CALL (`foo?.bar?.()`) is a real call: it is
+        // exempted by `has_side_effects` ordering BEFORE the reactive-read gate
+        // is reached, so it is not flagged in or out of a reactive callback. The
+        // reactive gate never broadens to call tails — `is_bare_member_access`
+        // rejects a call-tailed chain — but the call-exemption path is what
+        // actually fires here.
+        assert!(run_on("computed(() => { foo?.bar?.(); });").is_empty());
+        assert!(run_on("foo?.bar?.();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_namespaced_vue_computed_callback_issue_7022() {
+        // The reactive-callback exemption matches only a bare-identifier callee;
+        // a namespaced `Vue.computed(...)` callee is out of scope (tracked by
+        // #7028), so a bare member read inside its callback still flags.
+        assert_eq!(run_on("Vue.computed(() => { foo.value; });").len(), 1);
     }
 }
