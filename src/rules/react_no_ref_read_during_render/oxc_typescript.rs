@@ -221,6 +221,129 @@ fn collect_post_mount_effect_only_refs<'a>(
         .collect()
 }
 
+/// Collect ref names that are "attached" to a React element — passed as a JSX
+/// `ref={refName}` attribute, or as a `ref` property (`{ ref: refName }` or the
+/// shorthand `{ ref }`) of a `createElement`/hyperscript props object. React
+/// writes `refName.current = node` after render, so an attached ref IS mutated
+/// even with no literal `.current =` in source. Such a ref is therefore NOT
+/// write-free: reading it during render is the stale-read the rule catches.
+fn collect_attached_refs<'a>(
+    body_span: oxc_span::Span,
+    refs: &FxHashSet<String>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> FxHashSet<String> {
+    let mut attached = FxHashSet::default();
+    for node in semantic.nodes().iter() {
+        // The identifier sitting in a `ref=`/`ref:` position, if any.
+        let ident = match node.kind() {
+            AstKind::JSXAttribute(attr) => {
+                let oxc_ast::ast::JSXAttributeName::Identifier(name) = &attr.name else {
+                    continue;
+                };
+                if name.name.as_str() != "ref" {
+                    continue;
+                }
+                let Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container)) =
+                    &attr.value
+                else {
+                    continue;
+                };
+                let oxc_ast::ast::JSXExpression::Identifier(ident) = &container.expression else {
+                    continue;
+                };
+                ident.as_ref()
+            }
+            AstKind::ObjectProperty(prop) => {
+                let key = match &prop.key {
+                    oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                    oxc_ast::ast::PropertyKey::StringLiteral(s) => s.value.as_str(),
+                    _ => continue,
+                };
+                if key != "ref" {
+                    continue;
+                }
+                let oxc_ast::ast::Expression::Identifier(ident) = &prop.value else {
+                    continue;
+                };
+                ident.as_ref()
+            }
+            _ => continue,
+        };
+        if ident.span.start < body_span.start || ident.span.end > body_span.end {
+            continue;
+        }
+        if refs.contains(ident.name.as_str()) {
+            attached.insert(ident.name.to_string());
+        }
+    }
+    attached
+}
+
+/// Collect ref names that are provably immutable after init and therefore safe
+/// to read during render: a `useRef(<value>)` whose `.current` is NEVER written
+/// (no assignment or update target anywhere in the component body, including
+/// handlers and effects) AND which is not attached to an element (see
+/// `collect_attached_refs`). Such a ref always returns its initial value — no
+/// tearing is possible.
+///
+/// Refs initialized to a safe-default placeholder (`useRef(0)`/`useRef(null)`,
+/// see `is_safe_default_init`) are excluded: a placeholder ref read during
+/// render is the antipattern the rule targets, not the deliberate "freeze a
+/// captured value" pattern (`useRef(initialValue)`) this exemption covers.
+fn collect_write_free_refs<'a>(
+    body_span: oxc_span::Span,
+    refs: &FxHashSet<String>,
+    safe_default_refs: &FxHashSet<String>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> FxHashSet<String> {
+    // Any write to `ref.current` (assignment LHS or update target) anywhere in
+    // the body disqualifies the ref — a write means the value can differ
+    // between reads, so the read can tear.
+    let mut written: FxHashSet<String> = FxHashSet::default();
+    for node in semantic.nodes().iter() {
+        let member = match node.kind() {
+            AstKind::AssignmentExpression(assign) => {
+                let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left
+                else {
+                    continue;
+                };
+                member.as_ref()
+            }
+            AstKind::UpdateExpression(update) => {
+                let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
+                    &update.argument
+                else {
+                    continue;
+                };
+                member.as_ref()
+            }
+            _ => continue,
+        };
+        if member.property.name.as_str() != "current" {
+            continue;
+        }
+        if member.span.start < body_span.start || member.span.end > body_span.end {
+            continue;
+        }
+        let oxc_ast::ast::Expression::Identifier(obj) = &member.object else {
+            continue;
+        };
+        if refs.contains(obj.name.as_str()) {
+            written.insert(obj.name.to_string());
+        }
+    }
+
+    let attached = collect_attached_refs(body_span, refs, semantic);
+
+    refs.iter()
+        .filter(|name| {
+            let n = name.as_str();
+            !written.contains(n) && !attached.contains(n) && !safe_default_refs.contains(n)
+        })
+        .cloned()
+        .collect()
+}
+
 /// True if `expr` is the member expression `<ref_name>.current`.
 fn is_ref_current_read(expr: &oxc_ast::ast::Expression, ref_name: &str) -> bool {
     let oxc_ast::ast::Expression::StaticMemberExpression(member) = expr else {
@@ -772,6 +895,13 @@ impl OxcCheck for Check {
                 ctx.source,
             );
 
+            // Refs that are provably immutable: a `useRef(<captured value>)`
+            // whose `.current` is never written anywhere in the body and which
+            // is not attached to an element. Such a ref always returns its
+            // initial value, so reading it during render cannot tear.
+            let write_free_refs =
+                collect_write_free_refs(body_span, &refs, &safe_default_refs, semantic);
+
             // Refs following React's sanctioned lazy-init pattern: every
             // render-time write to `ref.current` is gated by `if (!ref.current)`
             // (or an equivalent nullish guard) on that same ref, so the write
@@ -825,6 +955,12 @@ impl OxcCheck for Check {
                 // Skip refs written only in a post-mount effect with a safe
                 // default init — the render-time read cannot tear.
                 if post_mount_only_refs.contains(obj.name.as_str()) {
+                    continue;
+                }
+                // Skip provably-immutable write-free refs (never assigned
+                // anywhere, not attached to an element) — the read always
+                // returns the frozen initial value and cannot tear.
+                if write_free_refs.contains(obj.name.as_str()) {
                     continue;
                 }
                 // Skip refs following the sanctioned lazy-init pattern — every
@@ -1424,5 +1560,84 @@ mod tests {
                    return <div>{ref.current}</div>; \
                    }";
         assert_eq!(run(src).len(), 2);
+    }
+
+    // Regression for issue #6986 — a `useRef(initialValue)` that freezes a
+    // captured value, is never written anywhere, and is not attached (a
+    // separate `ref` is attached) always returns the frozen value when read
+    // during render. No tearing is possible, so the read must not flag.
+    #[test]
+    fn allows_write_free_ref_read_during_render() {
+        let src = "function DomValueHost({ value }) { \
+                   const ref = useRef(null); \
+                   const initialValueRef = useRef(value); \
+                   useEffect(() => { const el = ref.current; }, [value]); \
+                   return h(element, { defaultValue: initialValueRef.current, ref }, children); \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    // FALSE-NEGATIVE GUARD for #6986 — a ref attached via a JSX `ref={myRef}`
+    // attribute is mutated by React after render (`myRef.current = node`), so it
+    // is NOT write-free even with no literal `.current =`. A non-default init
+    // rules out the safe-default discriminator, so only the attachment check
+    // keeps the render read flagged.
+    #[test]
+    fn still_flags_jsx_attached_ref_read_during_render() {
+        let src = "function C({ initial }) { \
+                   const myRef = useRef(initial); \
+                   return <div ref={myRef}>{myRef.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // FALSE-NEGATIVE GUARD for #6986 — React also mutates a ref attached via a
+    // `ref` prop of a `createElement`/hyperscript props object, so such a ref is
+    // not write-free and the render read still flags.
+    #[test]
+    fn still_flags_createelement_attached_ref_read_during_render() {
+        let src = "function C({ initial }) { \
+                   const myRef = useRef(initial); \
+                   return h('div', { ref: myRef, 'data-v': myRef.current }, null); \
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // FALSE-NEGATIVE GUARD for #6986 — a ref written in an event handler is
+    // mutated (just not during render), so it is not write-free; the render-time
+    // read can observe a changed value and still flags.
+    #[test]
+    fn still_flags_ref_written_in_handler_read_during_render() {
+        let src = "function C({ initial }) { \
+                   const myRef = useRef(initial); \
+                   return <button onClick={() => { myRef.current = 1; }}>{myRef.current}</button>; \
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // FALSE-NEGATIVE GUARD for #6986 — a non-default init does not exempt a ref
+    // written during render: the write makes it mutable, so the read still flags
+    // (only the write LHS is suppressed).
+    #[test]
+    fn still_flags_ref_written_in_render_read_during_render() {
+        let src = "function C({ initial }) { \
+                   const myRef = useRef(initial); \
+                   myRef.current = compute(); \
+                   return <div>{myRef.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Discriminator for #6986 — a write-free ref initialized to a safe-default
+    // placeholder (`useRef(null)`) is NOT the "freeze a captured value" pattern;
+    // reading the placeholder during render is the antipattern the rule targets,
+    // so it still flags.
+    #[test]
+    fn still_flags_write_free_safe_default_placeholder_read() {
+        let src = "function C() { \
+                   const myRef = useRef(null); \
+                   return <div>{myRef.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 1);
     }
 }
