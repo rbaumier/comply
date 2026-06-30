@@ -280,7 +280,7 @@ fn merge_and_emit(
     }
 
     // Phase 2 — suppress symmetric sibling pairs.
-    // Nine suppression criteria, any one is sufficient:
+    // Ten suppression criteria, any one is sufficient:
     //
     // A) Small-gap: the tokens NOT covered by any matching window in the
     //    reporter file are few (> 0, ≤ SYMMETRIC_SIBLING_GAP_THRESHOLD).  A
@@ -352,6 +352,19 @@ fn merge_and_emit(
     //    avoided. Files with no enclosing `Cargo.toml` (non-Rust trees, or
     //    sources outside any crate) resolve to `None` and are never suppressed
     //    here, so same-crate duplication and all non-Rust behavior are unchanged.
+    //
+    // J) Cross-npm-package copy: the two files resolve to DIFFERENT nearest-
+    //    ancestor `package.json` roots AND occupy the SAME relative path within
+    //    their respective packages (e.g. both `src/useMutationState.ts`). Sibling
+    //    npm packages in a monorepo (`@tanstack/react-query` vs
+    //    `@tanstack/preact-query`) deliberately copy a framework-adapter layer
+    //    from each other to stay dependency-isolated; the only `no-clones` remedy
+    //    — extracting a shared package — would force the cross-package dependency
+    //    the authors avoided. Both conditions are required: a differing relative
+    //    path keeps genuine cross-package duplication flagged, and a shared
+    //    package root (same `package.json`) keeps intra-package duplication
+    //    flagged. Files with no enclosing `package.json` resolve to `None` and are
+    //    never suppressed here.
     let mut suppressed = FxHashSet::<usize>::default();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
@@ -359,6 +372,8 @@ fn merge_and_emit(
             by_pair.entry((s.rfi, s.cfi)).or_default().push(idx);
         }
         let mut crate_root_memo: FxHashMap<usize, Option<std::path::PathBuf>> =
+            FxHashMap::default();
+        let mut package_root_memo: FxHashMap<usize, Option<std::path::PathBuf>> =
             FxHashMap::default();
         for ((rfi, cfi), idxs) in &by_pair {
             let total = file_data[*rfi].as_ref().map_or(0, |ft| ft.tokens.len());
@@ -384,6 +399,8 @@ fn merge_and_emit(
                 are_arch_sibling_pair(&files[*rfi].path, &files[*cfi].path);
             let cross_crate =
                 is_cross_cargo_crate_pair(*rfi, *cfi, files, &mut crate_root_memo);
+            let cross_npm =
+                is_cross_npm_package_pair(*rfi, *cfi, files, &mut package_root_memo);
             if small_gap
                 || name_siblings
                 || locale_variants
@@ -393,6 +410,7 @@ fn merge_and_emit(
                 || complete_streaming_variants
                 || arch_siblings
                 || cross_crate
+                || cross_npm
             {
                 suppressed.extend(idxs);
             }
@@ -1005,6 +1023,60 @@ fn is_cross_cargo_crate_pair(
     };
     match (root(rfi), root(cfi)) {
         (Some(a), Some(b)) => a != b,
+        _ => false,
+    }
+}
+
+// --- Cross-npm-package detection ---
+
+/// Nearest ancestor directory of `path` that holds a `package.json` — the npm
+/// package root that owns the file — or `None` when no enclosing manifest
+/// exists. Reuses the same upward walk (`walk_up_finding`) the Cargo gate uses
+/// for `Cargo.toml`, targeting `package.json` instead; the gate only needs the
+/// package-root directory to compare relative paths against, so the manifest is
+/// never parsed.
+fn nearest_package_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    crate::project::walk_up_finding(path.parent()?, "package.json")
+}
+
+/// True when `rfi` and `cfi` are an intentional cross-package adapter copy: they
+/// resolve to DIFFERENT nearest-ancestor `package.json` roots AND occupy the
+/// SAME relative path within their respective packages (e.g. both
+/// `src/useMutationState.ts`). Sibling npm packages in a monorepo
+/// (`@tanstack/react-query` vs `@tanstack/preact-query`) deliberately copy a
+/// framework-adapter layer from each other to stay dependency-isolated; the only
+/// `no-clones` remedy — extracting a shared package — would force the
+/// cross-package dependency the authors avoided. Package roots are memoized per
+/// file index in `memo` so each file is walked at most once. Both conditions are
+/// required: a differing relative path keeps genuine cross-package duplication
+/// flagged, and a shared package root (same `package.json`) keeps intra-package
+/// duplication flagged. Files with no enclosing `package.json` resolve to `None`
+/// and are never suppressed here.
+fn is_cross_npm_package_pair(
+    rfi: usize,
+    cfi: usize,
+    files: &[&SourceFile],
+    memo: &mut FxHashMap<usize, Option<std::path::PathBuf>>,
+) -> bool {
+    let mut root = |fi: usize| -> Option<std::path::PathBuf> {
+        if let Some(hit) = memo.get(&fi) {
+            return hit.clone();
+        }
+        let resolved = nearest_package_root(&files[fi].path);
+        memo.insert(fi, resolved.clone());
+        resolved
+    };
+    let (Some(root_r), Some(root_c)) = (root(rfi), root(cfi)) else {
+        return false;
+    };
+    if root_r == root_c {
+        return false;
+    }
+    match (
+        files[rfi].path.strip_prefix(&root_r),
+        files[cfi].path.strip_prefix(&root_c),
+    ) {
+        (Ok(rel_r), Ok(rel_c)) => rel_r == rel_c,
         _ => false,
     }
 }
@@ -2635,6 +2707,107 @@ mod tests {
             lint_files(&[&fa, &fb]).len(),
             1,
             "intra-crate duplication must still be flagged"
+        );
+    }
+
+    /// Writes an npm package at `<dir>/<pkg_name>/` with a minimal `package.json`
+    /// and a source file at `<rel>` (relative to the package root, e.g.
+    /// `src/useMutationState.ts`) carrying `content`, returning the source file.
+    fn write_npm_package_file(
+        dir: &tempfile::TempDir,
+        pkg_name: &str,
+        rel: &str,
+        content: &str,
+    ) -> SourceFile {
+        let pkg_dir = dir.path().join(pkg_name);
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            format!("{{\n  \"name\": \"@tanstack/{pkg_name}\"\n}}\n"),
+        )
+        .unwrap();
+        let path = pkg_dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, content).unwrap();
+        SourceFile { path, language: Language::TypeScript }
+    }
+
+    #[test]
+    fn no_false_positive_on_cross_npm_package_adapter_copy() {
+        // Regression test for issue #6941.
+        // `@tanstack/react-query` and `@tanstack/preact-query` are separate npm
+        // packages in the TanStack Query monorepo that deliberately copy the
+        // framework-adapter layer from each other (same hook algorithm, different
+        // framework primitives) to stay dependency-isolated. The two files live in
+        // different packages (different `package.json` roots) at the same relative
+        // path `src/useMutationState.ts`; the only no-clones remedy — extracting a
+        // shared package — would force the cross-package dependency the authors
+        // avoided, so the duplication must not be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let fa = write_npm_package_file(&dir, "react-query", "src/useMutationState.ts", &block);
+        let fb = write_npm_package_file(&dir, "preact-query", "src/useMutationState.ts", &block);
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "cross-npm-package adapter copies at the same relative path must not be flagged"
+        );
+    }
+
+    #[test]
+    fn intra_npm_package_duplication_still_flagged() {
+        // Precision guard for the cross-npm gate (issue #6941): two near-identical
+        // files within the SAME npm package (one `package.json` root) are trivially
+        // refactorable into a shared module, so intra-package duplication is still
+        // flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let fa = write_npm_package_file(&dir, "react-query", "src/useMutationState.ts", &block);
+        let fb = write_npm_package_file(&dir, "react-query", "src/useQueries.ts", &block);
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "intra-package duplication must still be flagged"
+        );
+    }
+
+    #[test]
+    fn cross_npm_package_different_relative_path_still_flagged() {
+        // Precision guard for the cross-npm gate (issue #6941): the relative-path
+        // identity is required. Two files in different packages but at DIFFERENT
+        // relative paths are ordinary cross-package duplication, not a parallel-
+        // layout adapter copy, so they must still be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let fa = write_npm_package_file(&dir, "react-query", "src/useMutationState.ts", &block);
+        let fb = write_npm_package_file(&dir, "preact-query", "src/useQueries.ts", &block);
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "cross-package duplication at differing relative paths must still be flagged"
+        );
+    }
+
+    #[test]
+    fn cross_npm_exemption_requires_package_manifests() {
+        // Non-vacuity + no-manifest guard for issue #6941: the same two files at an
+        // identical relative path but with NO enclosing `package.json` resolve to
+        // `None` and are not suppressed — proving the crafted block trips the
+        // detector and the exemption hinges on the package-root walk, not on the
+        // path shape alone.
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let pa = dir.path().join("react-query/src/useMutationState.ts");
+        let pb = dir.path().join("preact-query/src/useMutationState.ts");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::TypeScript };
+        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "identical relative paths without package.json roots must still be flagged"
         );
     }
 }
