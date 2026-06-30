@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_template, is_vue_file};
+use crate::rules::vue_template_helpers::{extract_template, is_vue_file, mask_html_comments};
 
 #[derive(Debug)]
 pub struct Check;
@@ -42,22 +42,28 @@ impl TextCheck for Check {
         let byte_offset = template.as_ptr() as usize - ctx.source.as_ptr() as usize;
         let lines_before = ctx.source[..byte_offset].matches('\n').count();
 
+        // Blank `<!-- ... -->` comment spans to spaces before scanning so a
+        // `></tag>` substring inside commented-out markup is not matched as a
+        // real empty element. Byte length and `\n` positions are preserved, so
+        // every offset below maps to the same line as in the original template.
+        let scan = mask_html_comments(template);
+
         // Look for `<tag></tag>` with nothing between them.
         // Regex-free: search for `></` preceded by a tag name.
-        for (i, _) in template.match_indices("></") {
+        for (i, _) in scan.match_indices("></") {
             // Find the close tag end. Skip past "></".
-            let rest = &template[i + 3..];
+            let rest = &scan[i + 3..];
             let Some(close_end) = rest.find('>') else {
                 continue;
             };
             let close_tag = &rest[..close_end];
 
             // Find the open tag start — walk backwards from i.
-            let before = &template[..i];
+            let before = &scan[..i];
             let Some(open_lt) = before.rfind('<') else {
                 continue;
             };
-            let between = &template[open_lt + 1..i];
+            let between = &scan[open_lt + 1..i];
             // Extract tag name (first word).
             let tag = between.split_whitespace().next().unwrap_or("");
             if tag.is_empty() || VOID_ELEMENTS.contains(&tag) {
@@ -72,7 +78,7 @@ impl TextCheck for Check {
             if close_tag.trim() != tag {
                 continue;
             }
-            let line = lines_before + 1 + template[..open_lt].matches('\n').count();
+            let line = lines_before + 1 + scan[..open_lt].matches('\n').count();
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
                 line,
@@ -192,5 +198,33 @@ mod tests {
             run_rule_gated(&Check, source, "src/components/AppHeader.vue").len(),
             1
         );
+    }
+
+    #[test]
+    fn ignores_empty_element_inside_html_comment() {
+        // Issue #6806 (vue-vben-admin auth.vue): the `></template>` substring
+        // lives only inside an HTML comment — commented-out code, not a real
+        // empty element — so it must not be flagged.
+        let source = "<template>\n  <AuthPageLayout>\n    <!-- 自定义工具栏 -->\n    <!-- <template #toolbar></template> -->\n  </AuthPageLayout>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_real_empty_template_element_outside_comment() {
+        // The issue's tag is `template`; an empty nested `<template></template>`
+        // that is NOT commented out must still be flagged.
+        let source = "<template>\n  <div>\n    <template></template>\n  </div>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_real_element_after_multiline_comment_with_correct_line() {
+        // A multi-line comment must not shift the reported line number: the real
+        // empty `<div></div>` sits on line 6 and that is what is reported.
+        let source =
+            "<template>\n  <!--\n    commented\n    <span></span>\n  -->\n  <div></div>\n</template>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 6);
     }
 }
