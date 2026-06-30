@@ -68,6 +68,12 @@ fn chain_is_safe<'a>(
             AstKind::ReturnStatement(_)
             | AstKind::AwaitExpression(_)
             | AstKind::YieldExpression(_) => return true,
+            // `void <chain>` is the idiomatic fire-and-forget discard: the author
+            // has explicitly marked the floating promise as intentional, so the
+            // swallowed rejection is by design rather than an oversight.
+            AstKind::UnaryExpression(u) if u.operator == UnaryOperator::Void => {
+                return true
+            }
             AstKind::ArrowFunctionExpression(a) if a.expression => return true,
             AstKind::VariableDeclarator(_) | AstKind::AssignmentExpression(_) => {
                 return true
@@ -277,6 +283,41 @@ export function serial(tasks, function_) {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_prefixed_then_chain() {
+        // #6820: sindresorhus/ky timeout.ts — the whole chain is `void`-prefixed,
+        // the idiomatic fire-and-forget discard signal, so the floating terminal
+        // `.then()` is intentional and must not be flagged.
+        let src = r#"
+new Promise((resolve, reject) => {
+  const timeoutId = setTimeout(() => {}, options.timeout);
+  void options
+    .fetch(request, init)
+    .then(resolve)
+    .catch(reject)
+    .then(() => {
+      clearTimeout(timeoutId);
+    });
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_minimal_void_then() {
+        // #6820: minimal `void p.then(fn)` — `void` is an ancestor of the floating
+        // `.then()`, marking it as an intentional discard.
+        assert!(run_on("void p.then((x) => use(x));").is_empty());
+    }
+
+    #[test]
+    fn flags_floating_then_with_unrelated_sibling_void() {
+        // #6820: a `void` that is not an ancestor of the floating `.then`
+        // (a separate statement) must not suppress it.
+        let d = run_on("void 0;\np.then((x) => use(x));");
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
