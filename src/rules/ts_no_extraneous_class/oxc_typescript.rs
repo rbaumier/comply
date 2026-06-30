@@ -28,6 +28,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip abstract classes: an abstract class is an inheritance /
+        // type-constraint scaffold (cannot be instantiated directly, cannot be
+        // replaced by a namespace or function), so it always has a reason to
+        // exist as a class.
+        if class.r#abstract {
+            return;
+        }
+
         // Skip decorated classes.
         if !class.decorators.is_empty() {
             return;
@@ -275,5 +283,50 @@ mod tests {
         let diags = crate::rules::test_helpers::run_rule(&Check, "const unused = class {}", "src/widget.js");
         assert_eq!(diags.len(), 1, "unreferenced empty class expression must still fire");
         assert!(diags[0].message.contains("empty"));
+    }
+
+    // Regression for #6993: an empty `abstract class` is a mixin-base /
+    // type-constraint scaffold (mikro-orm's `abstract class EmptyBase {}` used as
+    // `Base: TBase = EmptyBase as any`), not a dead namespace, so it must not fire.
+    #[test]
+    fn allows_empty_abstract_class() {
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, "abstract class EmptyBase {}", "src/base.ts");
+        assert!(diags.is_empty(), "empty abstract class must not fire");
+    }
+
+    // A typical abstract base declaring abstract members is an inheritance
+    // scaffold and must not fire either.
+    #[test]
+    fn allows_abstract_class_with_abstract_member() {
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "abstract class Shape { abstract area(): number }",
+            "src/shape.ts",
+        );
+        assert!(diags.is_empty(), "abstract class with abstract member must not fire");
+    }
+
+    // Negative-space guard: the exemption is gated on the `abstract` modifier,
+    // not on emptiness — a non-abstract empty class is still extraneous.
+    #[test]
+    fn still_flags_non_abstract_empty_class() {
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, "class Empty {}", "src/widget.ts");
+        assert_eq!(diags.len(), 1, "non-abstract empty class must still fire");
+        assert!(diags[0].message.contains("empty"));
+    }
+
+    // Negative-space guard: a non-abstract static-only namespace class is still
+    // extraneous and must fire.
+    #[test]
+    fn still_flags_non_abstract_static_only_class() {
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "class Utils { static f() {} }",
+            "src/utils.ts",
+        );
+        assert_eq!(diags.len(), 1, "non-abstract static-only class must still fire");
+        assert!(diags[0].message.contains("static"));
     }
 }
