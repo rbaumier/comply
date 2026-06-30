@@ -1,6 +1,8 @@
 //! no-all-duplicated-branches Rust backend.
 //!
-//! Flag if/else chains where every branch has identical code.
+//! Flag if/else chains that end in an unconditional `else` where every branch
+//! has identical code. A chain without a terminal `else` is gated rather than
+//! exhaustive, so identical branches are not pointless and are left alone.
 //! Also flags match expressions where all arms have identical bodies.
 //! Branches are compared by their ordered AST leaf tokens, so formatting and
 //! indentation differences are ignored while string-literal content (including
@@ -48,40 +50,48 @@ fn node_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     out.join("\u{1f}")
 }
 
-fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+/// Collect the branch signatures of an `if`/`else if` chain and report whether
+/// the chain terminates with an unconditional `else { ... }` block. The chain
+/// only covers every case when such a terminal `else` is present; otherwise its
+/// body is gated by the conditions, so identical branches are not pointless.
+fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> (Vec<String>, bool) {
     let mut branches = Vec::new();
 
     if let Some(consequence) = if_node.child_by_field_name("consequence") {
         branches.push(block_interior_signature(consequence, source));
     }
 
-    if let Some(alternative) = if_node.child_by_field_name("alternative") {
-        match alternative.kind() {
-            "else_clause" => {
-                let mut cursor = alternative.walk();
-                for child in alternative.children(&mut cursor) {
-                    if child.kind() == "if_expression" {
-                        let sub = collect_if_branches(child, source);
-                        branches.extend(sub);
-                        return branches;
-                    }
-                    if child.kind() == "block" {
-                        branches.push(block_interior_signature(child, source));
-                    }
+    let Some(alternative) = if_node.child_by_field_name("alternative") else {
+        return (branches, false);
+    };
+
+    match alternative.kind() {
+        "else_clause" => {
+            let mut cursor = alternative.walk();
+            for child in alternative.children(&mut cursor) {
+                if child.kind() == "if_expression" {
+                    let (sub, has_terminal_else) = collect_if_branches(child, source);
+                    branches.extend(sub);
+                    return (branches, has_terminal_else);
+                }
+                if child.kind() == "block" {
+                    branches.push(block_interior_signature(child, source));
+                    return (branches, true);
                 }
             }
-            "if_expression" => {
-                let sub = collect_if_branches(alternative, source);
-                branches.extend(sub);
-            }
-            "block" => {
-                branches.push(block_interior_signature(alternative, source));
-            }
-            _ => {}
+            (branches, false)
         }
+        "if_expression" => {
+            let (sub, has_terminal_else) = collect_if_branches(alternative, source);
+            branches.extend(sub);
+            (branches, has_terminal_else)
+        }
+        "block" => {
+            branches.push(block_interior_signature(alternative, source));
+            (branches, true)
+        }
+        _ => (branches, false),
     }
-
-    branches
 }
 
 impl AstCheck for Check {
@@ -105,8 +115,9 @@ impl AstCheck for Check {
                     return;
                 }
 
-                let branches = collect_if_branches(node, source_bytes);
-                if branches.len() >= 2
+                let (branches, has_terminal_else) = collect_if_branches(node, source_bytes);
+                if has_terminal_else
+                    && branches.len() >= 2
                     && !branches[0].is_empty()
                     && branches.iter().all(|b| *b == branches[0])
                 {
@@ -268,6 +279,43 @@ fn f() {
 "#;
         let d = run_on(source);
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_identical_if_else_if_else_chain() {
+        let source = r#"
+fn f() {
+    if a {
+        do_something();
+    } else if b {
+        do_something();
+    } else {
+        do_something();
+    }
+}
+"#;
+        let d = run_on(source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("3 branches"));
+    }
+
+    // https://github.com/rbaumier/comply/issues/6800
+    #[test]
+    fn allows_if_else_if_chain_without_terminal_else() {
+        let source = r#"
+fn f() {
+    while x {
+        if let FileTreeItemKind::File(_) = &tree_items[idx].kind {
+            should_skip_over -= 1;
+            break;
+        } else if self.tree.multiple_items_at_path(idx) {
+            should_skip_over -= 1;
+            break;
+        }
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
