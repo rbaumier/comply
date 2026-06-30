@@ -28,6 +28,19 @@ const BANNED_WORDS: &[&str] = &[
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
 
+/// The subset of `BANNED_WORDS` that names a primitive scalar / binary data
+/// type. Lowercase, these are the C/Java "name the variable after its type"
+/// anti-pattern (`int i`, `char c`, `float f`, `str s`) the rule targets. In
+/// SCREAMING_SNAKE_CASE, the same word is the universal convention for a named
+/// type token in a type/schema registry — a SQL data-type export (`CHAR`,
+/// `FLOAT`, `BLOB`, `INT` in an ORM), a GraphQL scalar, a protobuf/AST
+/// node-type tag — a specific domain constant, not a lazy variable. The casing
+/// re-categorizes the word, so the exemption is gated on the whole identifier
+/// being SCREAMING_SNAKE_CASE; a generic all-caps constant whose word is *not*
+/// a primitive type (`RESULT`, `VALUE`, `TEMP`, `INFO`) stays flagged.
+const PRIMITIVE_TYPE_WORDS: &[&str] =
+    &["bool", "int", "float", "char", "str", "num", "ptr", "blob"];
+
 /// Filler nouns flagged whenever they appear as a standalone word *segment* of
 /// an identifier — a segment being a run delimited by `_` or a camelCase /
 /// PascalCase boundary. `data` fires in `data`, `dataValue`, `data_value`,
@@ -630,6 +643,22 @@ fn init_is_computed_member(init: &Expression) -> bool {
 /// PascalCase convention React requires of component identifiers.
 fn is_pascal_case(name: &str) -> bool {
     name.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+}
+
+/// True when every character of `name` is ASCII uppercase, a digit, or `_`, and
+/// at least one is a letter — the SCREAMING_SNAKE_CASE convention for a
+/// module-level constant or enum-like value. Requiring a letter keeps a
+/// digits/underscores-only string from qualifying.
+fn is_screaming_snake_case(name: &str) -> bool {
+    let mut has_letter = false;
+    for &b in name.as_bytes() {
+        if b.is_ascii_uppercase() {
+            has_letter = true;
+        } else if !(b.is_ascii_digit() || b == b'_') {
+            return false;
+        }
+    }
+    has_letter
 }
 
 /// React HOC factory names whose call result is a component (`forwardRef(...)`,
@@ -1437,6 +1466,18 @@ impl OxcCheck for Check {
             {
                 let lower = name.to_ascii_lowercase();
                 if BANNED_WORDS.contains(&lower.as_str()) {
+                    // A SCREAMING_SNAKE_CASE constant whose word names a primitive
+                    // scalar/binary type (`CHAR`, `FLOAT`, `BLOB`, `INT`) is a named
+                    // type token in a type/schema registry (SQL data-type export,
+                    // GraphQL scalar), not a lazily-named variable — the casing
+                    // re-categorizes the word. Narrow to the primitive-type subset:
+                    // a generic all-caps constant (`RESULT`, `VALUE`, `TEMP`) is not
+                    // in `PRIMITIVE_TYPE_WORDS`, so it still flags.
+                    if is_screaming_snake_case(name)
+                        && PRIMITIVE_TYPE_WORDS.contains(&lower.as_str())
+                    {
+                        return;
+                    }
                     // A type-alias/interface declared inside a `namespace`/`module`
                     // (`namespace P { export type Value = … }`) is always referenced
                     // qualified (`P.Value`), so the namespace supplies the
@@ -1722,6 +1763,41 @@ mod tests {
         // the body of a predicate-returning function — only the parameter qualifies.
         let body = run("const isX = (a): a is Date => { const val = 5; return a instanceof Date; };");
         assert!(body.iter().any(|d| d.message.contains("val")));
+    }
+
+    #[test]
+    fn no_fp_screaming_snake_case_primitive_type_constants_issue_6925() {
+        // Regression for #6925 — Sequelize exports SQL data-type names as
+        // SCREAMING_SNAKE_CASE constants. The casing makes `CHAR`/`FLOAT`/`BLOB` a
+        // named type token (a SQL data type), not the lazy lowercase variable
+        // (`char c`) the banned-word list targets.
+        assert!(run("export const CHAR = classToInvokable(DataTypes.CHAR);").is_empty());
+        assert!(run("export const FLOAT = classToInvokable(DataTypes.FLOAT);").is_empty());
+        assert!(run("export const BLOB = classToInvokable(DataTypes.BLOB);").is_empty());
+        // Generalizes across the primitive-type subset, not just the three names.
+        assert!(run("export const INT = makeType();").is_empty());
+        assert!(run("export const BOOL = makeType();").is_empty());
+        assert!(run("export const STR = makeType();").is_empty());
+        assert!(run("export const NUM = makeType();").is_empty());
+        assert!(run("export const PTR = makeType();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_generic_screaming_snake_case_constants_issue_6925() {
+        // Over-suppression control: the exemption is narrowed to the
+        // primitive-type subset, so generic-noun banned words in all-caps
+        // (`RESULT`, `VALUE`, `TEMP`, `INFO`, `JUNK`) are NOT exempt — a blanket
+        // SCREAMING_SNAKE_CASE exemption would wrongly let these through.
+        assert_eq!(run("export const RESULT = compute();").len(), 1);
+        assert_eq!(run("export const VALUE = compute();").len(), 1);
+        assert_eq!(run("export const TEMP = compute();").len(), 1);
+        assert_eq!(run("export const INFO = compute();").len(), 1);
+        assert_eq!(run("export const JUNK = compute();").len(), 1);
+        // Lowercase/camelCase primitive-type names are unchanged: the casing,
+        // not the word, is what re-categorizes them, so these still flag.
+        assert_eq!(run("const char = read();").len(), 1);
+        assert_eq!(run("let temp = compute();").len(), 1);
+        assert_eq!(run("const blob = fetchBlob();").len(), 1);
     }
 
     #[test]
