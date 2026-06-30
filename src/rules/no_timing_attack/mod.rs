@@ -1,9 +1,9 @@
 //! no-timing-attack — flag direct `==` / `!=` / `===` / `!==` comparison
 //! of a value whose identifier name ends with a sensitive word
-//! (`password`, `passwd`, `secret`, `apikey`, `auth`, `digest`, `hmac`,
-//! `credential`, `otp`, `pin`), or with an ambiguous role word (`token`,
-//! `signature`, `hash`) when the name also carries the matching secret /
-//! cryptographic qualifier.
+//! (`password`, `passwd`, `secret`, `apikey`, `auth`, `hmac`,
+//! `credential`, `otp`, `pin`), or with an overloaded word (`token`,
+//! `signature`, `hash`, `digest`) when the name also carries the matching
+//! secret / cryptographic qualifier.
 //!
 //! ## Why
 //!
@@ -29,11 +29,12 @@
 //! non-security concepts (lexer / comment-syntax tokens, LSP
 //! function-call signatures), so a name ending with one of those is only
 //! sensitive when it also contains a secret indicator (`auth`, `access`,
-//! `api`, …): `auth_token` is flagged, `comment_token` is not. `hash` is
-//! likewise overloaded — a cryptographic digest in auth code but a URL
-//! fragment (`location.hash`, `route.hash`) in routing code — so it fires
-//! only with a crypto qualifier (`passwordHash`, `expectedHash`), never on
-//! a bare `hash`.
+//! `api`, …): `auth_token` is flagged, `comment_token` is not. `hash` and
+//! `digest` are likewise overloaded — a cryptographic checksum in auth code
+//! (`passwordHash`, `auth_digest`) but a URL fragment (`location.hash`,
+//! `route.hash`) or an OCI / sigstore content hash (`blob_digest`, a struct
+//! field `digest`) elsewhere — so each fires only with a crypto qualifier
+//! (`passwordHash`, `expected_digest`), never on a bare `hash` / `digest`.
 //!
 //! A comparison inside the `eq` method of an `impl PartialEq for T` (Rust) is
 //! exempt: `self.hash == other.hash` there is a structural-hash short-circuit
@@ -50,8 +51,9 @@
 //! checksum / digest indicator (`sha256`, `md5`, `checksum`, `etag`, …), the
 //! comparison verifies a public content fingerprint (e.g. a downloaded file's
 //! SHA-256 digest against its expected value), not a secret, so it is not a
-//! timing-attack target. This keeps a bare `hash` / `digest` name flagged on
-//! its own while exempting `sha256 !== hash`.
+//! timing-attack target. This additionally clears a *qualified* crypto name
+//! such as `md5Digest != computed`, which the qualifier check would otherwise
+//! flag.
 //!
 //! ## Known gap
 //!

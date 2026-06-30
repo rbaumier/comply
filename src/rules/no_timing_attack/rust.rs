@@ -446,4 +446,31 @@ fn validate(transition: &Mat, observation: &Mat, initial: &Vec) {
             "fn f(prefix: String, suffix: &str, input: &str) -> bool { let secret = prefix + suffix; secret == input }";
         assert_eq!(run_on(src).len(), 1);
     }
+
+    /// jdx/mise crates/mise-sigstore/src/lib.rs:767 (#6809) — `digest.digest`
+    /// is a sigstore bundle's content-addressable SHA-256, compared against the
+    /// artifact's own public hash. `digest` is the OCI/sigstore content-hash
+    /// term, not a credential, so neither operand is a secret.
+    #[test]
+    fn does_not_flag_sigstore_bundle_digest() {
+        let src = "fn verify(digest: &Digest, artifact_hash: &str) -> bool { digest.digest != artifact_hash }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// jdx/mise src/oci/layout.rs:70 (#6809) — an OCI blob content-integrity
+    /// check; `actual` and `digest` are both public SHA-256 fingerprints.
+    #[test]
+    fn does_not_flag_oci_blob_digest_mismatch() {
+        let src = "fn check(actual: &str, digest: &str) -> bool { actual != digest }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Over-exemption guard: a credential-qualified digest (auth context)
+    /// carries a crypto qualifier and stays flagged — only the bare /
+    /// content-addressed `digest` is exempt.
+    #[test]
+    fn flags_auth_digest_comparison() {
+        let src = "fn f(auth_digest: &str, expected_digest: &str) -> bool { auth_digest != expected_digest }";
+        assert_eq!(run_on(src).len(), 1);
+    }
 }
