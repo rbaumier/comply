@@ -92,6 +92,41 @@ fn any_relative_import_dependency(
         .any(|name| is_relative_specifier(map_a.get(name)) || is_relative_specifier(map_b.get(name)))
 }
 
+/// Whether any identifier shared by the two bodies resolves to a top-level
+/// module-local declaration whose implementation *diverges* across the two
+/// files. The two functions share a `(name, signature)` bucket, so their
+/// body-token streams — and identifier sets — are identical; iterating one
+/// side's `body_idents` is enough. A name maps to its declaration's signature
+/// fingerprint, so a callee is divergent when it is module-local in both files
+/// with differing fingerprints, or module-local in only one (it resolves to a
+/// local implementation in that file and to something else — an import, a
+/// global — in the other). Such a callee cannot be hoisted: extracting the
+/// caller into a shared module would rebind the callee and silently change
+/// behavior in at least one file. A module-local callee that is byte-identical
+/// in both files is *not* divergent — the caller is genuinely hoistable
+/// alongside it — so it does not suppress, mirroring how
+/// `any_divergent_import_source` keys on a *differing* specifier rather than on
+/// the mere presence of an import. The functions' own shared name is excluded:
+/// a same-name decl can be exported in one file and module-local in the other
+/// (export status is not part of the bucket key), which would otherwise read as
+/// a spurious one-sided divergence.
+fn any_divergent_module_local(
+    a: &FnEntry,
+    b: &FnEntry,
+    module_local_decls: &[FxHashMap<String, Vec<u8>>],
+) -> bool {
+    let locals_a = &module_local_decls[a.file_idx];
+    let locals_b = &module_local_decls[b.file_idx];
+    a.body_idents
+        .iter()
+        .filter(|name| name.as_str() != a.name)
+        .any(|name| match (locals_a.get(name), locals_b.get(name)) {
+            (Some(fa), Some(fb)) => fa != fb,
+            (Some(_), None) | (None, Some(_)) => true,
+            (None, None) => false,
+        })
+}
+
 /// Whether the declaration at `decl` is `export`ed: a TS/JS `export` keyword
 /// wraps the declaration in an `export_statement` ancestor. Walks up because a
 /// `const` binding sits two levels under the `export_statement` (via its
@@ -168,10 +203,12 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
     // `[rules.<id>]` block, so the `Language` passed to the lookup is immaterial.
     let min_body_tokens = config.threshold(RULE_ID, "min_body_tokens", Language::TypeScript);
 
-    // Each file yields its functions and its import map (local-name →
-    // module-specifier). `collect` preserves file order, so `import_maps[idx]`
-    // is the map of the file whose functions carry `file_idx == idx`.
-    let per_file: Vec<(Vec<FnEntry>, FxHashMap<String, String>)> = files
+    // Each file yields its functions, its import map (local-name →
+    // module-specifier), and its module-local declarations (top-level
+    // non-exported name → signature fingerprint). `collect` preserves file
+    // order, so `import_maps[idx]` and `module_local_decls[idx]` belong to the
+    // file whose functions carry `file_idx == idx`.
+    let per_file: Vec<(Vec<FnEntry>, FxHashMap<String, String>, FxHashMap<String, Vec<u8>>)> = files
         .par_iter()
         .enumerate()
         .map_init(Parser::new, |parser, (idx, file)| {
@@ -180,9 +217,12 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
         .collect();
     let mut entries: Vec<FnEntry> = Vec::new();
     let mut import_maps: Vec<FxHashMap<String, String>> = Vec::with_capacity(per_file.len());
-    for (file_entries, imports) in per_file {
+    let mut module_local_decls: Vec<FxHashMap<String, Vec<u8>>> =
+        Vec::with_capacity(per_file.len());
+    for (file_entries, imports, locals) in per_file {
         entries.extend(file_entries);
         import_maps.push(imports);
+        module_local_decls.push(locals);
     }
 
     let mut buckets: FxHashMap<(&str, &[u8]), Vec<usize>> = FxHashMap::default();
@@ -264,6 +304,22 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             if any_divergent_import_source(entry, canonical, &import_maps) {
                 continue;
             }
+            // Driver adapters (`@prisma/adapter-neon`,
+            // `@prisma/adapter-better-sqlite3`) each export a byte-identical
+            // `convertDriverError` whose body delegates to a module-LOCAL
+            // `mapDriverError`/`isDriverError` — a top-level non-exported
+            // declaration defined differently per file (PostgreSQL vs SQLite error
+            // mapping). The shared name resolves to a different implementation in
+            // each file, so the bodies cannot be hoisted into one shared module:
+            // the callee would rebind to the shared version and silently break each
+            // adapter. Skip when a body identifier resolves to a module-local
+            // declaration whose implementation diverges across the two files. A
+            // body delegating only to imported, built-in, or byte-identical
+            // module-local symbols carries no such divergence and stays flagged —
+            // it is genuinely hoistable.
+            if any_divergent_module_local(entry, canonical, &module_local_decls) {
+                continue;
+            }
             // Framework-adapter packages (`@xstate/svelte`, `@xstate/solid`,
             // `@xstate/vue`) each export the same thin public hook (`useMachine`,
             // `useStore`, `useAtomState`) whose byte-identical body delegates to a
@@ -310,9 +366,9 @@ fn extract_functions(
     file: &SourceFile,
     file_idx: usize,
     min_body_tokens: usize,
-) -> (Vec<FnEntry>, FxHashMap<String, String>) {
+) -> (Vec<FnEntry>, FxHashMap<String, String>, FxHashMap<String, Vec<u8>>) {
     let Ok(source) = std::fs::read_to_string(&file.path) else {
-        return (Vec::new(), FxHashMap::default());
+        return (Vec::new(), FxHashMap::default(), FxHashMap::default());
     };
     // Minified/bundled files (e.g. `*-min.js`, `*.min.js`, webpack bundles, or a
     // multi-KB single payload line) are machine-emitted build artifacts whose
@@ -323,12 +379,15 @@ fn extract_functions(
     if crate::rules::file_ctx::is_generated_content(&source)
         || crate::rules::file_ctx::scan_minified(&file.path, &source)
     {
-        return (Vec::new(), FxHashMap::default());
+        return (Vec::new(), FxHashMap::default(), FxHashMap::default());
     }
     let Some(tree) = parse_with_grammar(parser, file.language, source.as_bytes()) else {
-        return (Vec::new(), FxHashMap::default());
+        return (Vec::new(), FxHashMap::default(), FxHashMap::default());
     };
     let bytes = source.as_bytes();
+
+    let mut module_local_decls = FxHashMap::default();
+    collect_module_local_decls(tree.root_node(), bytes, &mut module_local_decls);
 
     let mut entries = Vec::new();
     let mut import_map = FxHashMap::default();
@@ -353,10 +412,59 @@ fn extract_functions(
                 break;
             }
             if !cursor.goto_parent() {
-                return (entries, import_map);
+                return (entries, import_map, module_local_decls);
             }
         }
     }
+}
+
+/// Top-level, non-`export`ed declarations that resolve to a module-local
+/// implementation, as `name → signature fingerprint`: a `function foo() {…}`
+/// declaration or a `const foo = (…) => {…}` / `const foo = function (…) {…}`
+/// binding (and the `let`/`var` forms). The same identifier can name a
+/// completely different implementation per file, so a body delegating to one
+/// may not be interchangeable across files. The fingerprint lets the caller
+/// tell an actually-divergent callee from a byte-identical one (which is
+/// hoistable). `export`ed declarations are excluded: they carry an importable
+/// surface and are hoistable alongside, not a hidden divergence (an
+/// `export_statement` wrapper is not matched here, so its declarations are
+/// skipped). Only direct children of the program are scanned, so a binding
+/// nested inside a function body — which cannot collide with another file's
+/// top-level name — is ignored.
+fn collect_module_local_decls(root: Node, source: &[u8], out: &mut FxHashMap<String, Vec<u8>>) {
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        match child.kind() {
+            "function_declaration" => insert_decl_fingerprint(child, source, out),
+            "lexical_declaration" | "variable_declaration" => {
+                let mut inner = child.walk();
+                for declarator in child.named_children(&mut inner) {
+                    insert_decl_fingerprint(declarator, source, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Insert `declared-name → signature fingerprint` for `node` when it is a named
+/// function form — a `function_declaration`, or a `variable_declarator` bound to
+/// an arrow/function expression. Reuses `named_function_parts` so the same
+/// binding-kind rule that selects entries also selects module-local callees;
+/// other declarators (e.g. `const MAX = 5`, a destructuring pattern) carry no
+/// callee that can diverge under a shared name and are skipped.
+fn insert_decl_fingerprint(node: Node, source: &[u8], out: &mut FxHashMap<String, Vec<u8>>) {
+    let Some((name, _, sig_node, body)) = named_function_parts(node) else {
+        return;
+    };
+    let Ok(text) = name.utf8_text(source) else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    let (fingerprint, _) = signature_fingerprint(sig_node, body, source);
+    out.insert(text.to_string(), fingerprint);
 }
 
 /// Record every local binding an `import` statement introduces as
@@ -458,23 +566,15 @@ fn named_function_parts<'a>(node: Node<'a>) -> Option<(Node<'a>, Node<'a>, Node<
     }
 }
 
-fn build_entry(
-    name: Node,
-    decl: Node,
-    sig_node: Node,
-    body: Node,
-    source: &[u8],
-    file_idx: usize,
-    min_body_tokens: usize,
-) -> Option<FnEntry> {
-    let name_text = source.get(name.start_byte()..name.end_byte())?;
-    let name_str = std::str::from_utf8(name_text).ok()?.to_string();
-
-    // Head: generic type parameters + parameter list + return-type annotation
-    // tokens. Two same-named, same-bodied functions with divergent generic
-    // constraints, parameter types, or return types differ here and bucket
-    // apart. A delimiter separates head from body so a token stream can never
-    // straddle the boundary.
+/// The exact `(name, signature)` interchangeability fingerprint of a function:
+/// its generic type parameters, parameter list, return-type annotation, and
+/// body, each leaf token as `(kind_id, text)` in order. Two same-named functions
+/// with divergent generic constraints, parameter types, return types, or body
+/// produce different fingerprints and so are not interchangeable. A
+/// `\x00body\x00` delimiter separates head from body so a token stream can never
+/// straddle the boundary. Returns the fingerprint and the body token count, so
+/// the caller can gate trivial bodies.
+fn signature_fingerprint(sig_node: Node, body: Node, source: &[u8]) -> (Vec<u8>, usize) {
     let mut signature = Vec::new();
     let mut head_count = 0;
     if let Some(type_params) = sig_node.child_by_field_name("type_parameters") {
@@ -488,9 +588,25 @@ fn build_entry(
     }
     signature.extend_from_slice(b"\x00body\x00");
 
-    let mut token_count = 0;
-    collect_body_tokens(body, source, &mut signature, &mut token_count);
-    if token_count < min_body_tokens {
+    let mut body_token_count = 0;
+    collect_body_tokens(body, source, &mut signature, &mut body_token_count);
+    (signature, body_token_count)
+}
+
+fn build_entry(
+    name: Node,
+    decl: Node,
+    sig_node: Node,
+    body: Node,
+    source: &[u8],
+    file_idx: usize,
+    min_body_tokens: usize,
+) -> Option<FnEntry> {
+    let name_text = source.get(name.start_byte()..name.end_byte())?;
+    let name_str = std::str::from_utf8(name_text).ok()?.to_string();
+
+    let (signature, body_token_count) = signature_fingerprint(sig_node, body, source);
+    if body_token_count < min_body_tokens {
         return None;
     }
 
@@ -1184,5 +1300,188 @@ export function shallowEqual(a: Record<string, unknown>, b: Record<string, unkno
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "a bare-import cross-package duplicate is still flagged");
         assert!(diags[0].message.contains("`useMachine`"));
+    }
+
+    // An adapter error module mirroring prisma's `adapter-neon` /
+    // `adapter-better-sqlite3`: a byte-identical exported `convertDriverError`
+    // delegating to module-local `isDriverError`/`mapDriverError` whose bodies map
+    // driver-specific error codes and so differ per adapter.
+    fn adapter_errors(guard: &str, map_arm: &str) -> String {
+        format!(
+            "function isDriverError(error: unknown): boolean {{\n\
+            \x20 return {guard};\n\
+             }}\n\
+             function mapDriverError(error: DriverError): MappedError {{\n\
+            \x20 switch (error.code) {{\n\
+            \x20   {map_arm}\n\
+            \x20   default:\n\
+            \x20     return {{ kind: \"Unknown\" }};\n\
+            \x20 }}\n\
+             }}\n\
+             export function convertDriverError(error: unknown): DriverAdapterErrorObject {{\n\
+            \x20 if (isDriverError(error)) {{\n\
+            \x20   return {{ originalCode: error.code, originalMessage: error.message, ...mapDriverError(error) }};\n\
+            \x20 }}\n\
+            \x20 throw error;\n\
+             }}\n"
+        )
+    }
+
+    #[test]
+    fn module_local_divergent_delegate_not_flagged() {
+        // Issue #6902 (prisma/prisma): `adapter-neon` and `adapter-better-sqlite3`
+        // each export a byte-identical `convertDriverError` whose body delegates to
+        // a module-local `isDriverError`/`mapDriverError` defined differently per
+        // file (PostgreSQL vs SQLite error mapping). Hoisting `convertDriverError`
+        // into a shared module would rebind the callees to the shared versions and
+        // break both adapters — not a true duplicate.
+        let dir = tempfile::tempdir().unwrap();
+        let neon = adapter_errors(
+            "typeof error === \"object\" && error !== null && \"severity\" in error",
+            "case \"22001\":\n      return { kind: \"LengthMismatch\", column: error.column };",
+        );
+        let sqlite = adapter_errors(
+            "error instanceof Error && error.name === \"SqliteError\"",
+            "case \"SQLITE_BUSY\":\n      return { kind: \"SocketTimeout\" };",
+        );
+        let a = write(&dir, "adapter-neon/src/errors.ts", &neon);
+        let b = write(&dir, "adapter-better-sqlite3/src/errors.ts", &sqlite);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "a body delegating to divergent module-local callees is exempt"
+        );
+    }
+
+    #[test]
+    fn shared_imported_delegate_still_flagged() {
+        // Negative control for #6902: the same delegating `convertDriverError`, but
+        // `isDriverError`/`mapDriverError` are *imported* from a shared module under
+        // the same specifier in both files. The callees resolve to one shared
+        // implementation, so the function is genuinely hoistable and stays flagged —
+        // proving the exemption is keyed on module-local divergence, not on
+        // delegation alone.
+        let dir = tempfile::tempdir().unwrap();
+        let f = "import { isDriverError, mapDriverError } from \"./shared\";\n\
+                 export function convertDriverError(error: unknown): DriverAdapterErrorObject {\n\
+                \x20 if (isDriverError(error)) {\n\
+                \x20   return { originalCode: error.code, originalMessage: error.message, ...mapDriverError(error) };\n\
+                \x20 }\n\
+                \x20 throw error;\n\
+                 }\n";
+        let a = write(&dir, "a.ts", f);
+        let b = write(&dir, "b.ts", f);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "an imported shared delegate stays a duplicate");
+        assert!(diags[0].message.contains("`convertDriverError`"));
+    }
+
+    #[test]
+    fn recursive_private_helper_still_flagged() {
+        // A recursive file-private helper copied verbatim references its own name,
+        // which is itself a top-level module-local declaration. The self-reference
+        // resolves to the same duplicated body in both files, so it is not a
+        // divergence: the own name is excluded and the duplicate stays flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let f = "\
+function deepClone(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((v) => deepClone(v));
+  if (value && typeof value === \"object\") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) out[key] = deepClone(value[key]);
+    return out;
+  }
+  return value;
+}
+";
+        let a = write(&dir, "a.ts", f);
+        let b = write(&dir, "b.ts", f);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a recursive private helper is still a duplicate");
+        assert!(diags[0].message.contains("`deepClone`"));
+    }
+
+    #[test]
+    fn recursive_exported_vs_private_still_flagged() {
+        // Locks the own-name exclusion on its load-bearing path: export status is
+        // not part of the bucket key, so a recursive function exported in one file
+        // and private in the other still buckets together. The private side lists
+        // its own name in `module_local_decls` while the exported side does not, so
+        // without excluding the shared name the self-reference would read as a
+        // one-sided divergence and wrongly exempt this genuine duplicate.
+        let dir = tempfile::tempdir().unwrap();
+        let body = "\
+function factorial(n: number): number {
+  if (n <= 1) return 1;
+  return n * factorial(n - 1);
+}
+";
+        let a = write(&dir, "a.ts", &format!("export {body}"));
+        let b = write(&dir, "b.ts", body);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a recursive duplicate exported in one file is still flagged");
+        assert!(diags[0].message.contains("`factorial`"));
+    }
+
+    #[test]
+    fn const_arrow_divergent_module_local_not_flagged() {
+        // The divergent module-local callee may itself be an arrow/`const`
+        // binding, not only a `function` declaration. Two byte-identical exported
+        // `convertDriverError`s each delegate to a `const mapDriverError = (…) =>`
+        // whose body differs per file, so they are not interchangeable.
+        let dir = tempfile::tempdir().unwrap();
+        let module = |arm: &str| {
+            format!(
+                "const mapDriverError = (error: DriverError): MappedError => {{\n\
+                \x20 switch (error.code) {{\n\
+                \x20   {arm}\n\
+                \x20   default:\n\
+                \x20     return {{ kind: \"Unknown\" }};\n\
+                \x20 }}\n\
+                 }};\n\
+                 export function convertDriverError(error: DriverError): MappedError {{\n\
+                \x20 const mapped = mapDriverError(error);\n\
+                \x20 return {{ ...mapped, originalCode: error.code }};\n\
+                 }}\n"
+            )
+        };
+        let a = write(&dir, "neon.ts", &module("case \"22001\":\n      return { kind: \"LengthMismatch\" };"));
+        let b = write(&dir, "sqlite.ts", &module("case \"SQLITE_BUSY\":\n      return { kind: \"SocketTimeout\" };"));
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "a divergent const-arrow module-local callee is exempt"
+        );
+    }
+
+    #[test]
+    fn identical_module_local_delegate_still_flagged() {
+        // Negative control: when the module-local callee is byte-identical in both
+        // files, the wrapper is genuinely hoistable alongside it, so both the
+        // wrapper and the shared helper stay flagged. Proves the exemption keys on
+        // the callee actually *diverging*, not on delegation to a module-local
+        // name per se.
+        let dir = tempfile::tempdir().unwrap();
+        let f = "\
+function helper(value: number): number {
+  const scaled = value * 2;
+  return scaled + 1;
+}
+export function compute(input: number): number {
+  const base = helper(input);
+  return base + helper(base);
+}
+";
+        let a = write(&dir, "a.ts", f);
+        let b = write(&dir, "b.ts", f);
+        let diags = run(&[&a, &b]);
+        // Both the wrapper `compute` and the shared `helper` are real duplicates.
+        let names: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert!(
+            names.iter().any(|m| m.contains("`compute`")),
+            "the wrapper delegating to an identical module-local helper is still flagged"
+        );
+        assert!(
+            names.iter().any(|m| m.contains("`helper`")),
+            "the identical module-local helper is still flagged"
+        );
     }
 }
