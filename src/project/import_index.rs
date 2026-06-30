@@ -3699,6 +3699,16 @@ fn is_cypress_dir(dir: &Path) -> bool {
     dir.join("cypress").is_dir()
 }
 
+/// True when `dir` is the root of a Nuxt project, signalled by a
+/// `nuxt.config.{ts,js,mjs}` file in `dir`. Gating the synthetic `~/*` and
+/// `@/*` aliases on this keeps a `~/...` or `@/...` import in a non-Nuxt
+/// project unresolved, so it cannot mis-map to an unrelated project file.
+fn is_nuxt_dir(dir: &Path) -> bool {
+    ["nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs"]
+        .iter()
+        .any(|f| dir.join(f).is_file())
+}
+
 /// Parse a `package.json`, or `None` when the file is absent or unparseable.
 fn read_package_json(manifest: &Path) -> Option<crate::project::PackageJson> {
     let raw = std::fs::read_to_string(manifest).ok()?;
@@ -3916,6 +3926,10 @@ impl OxcPathResolver {
         // Directories that are the root of a Cypress project. Their `cypress/*`
         // alias is synthesized below, independent of a checked-in `tsconfig.json`.
         let mut cypress_dirs: FxHashSet<PathBuf> = FxHashSet::default();
+        // Directories that are the root of a Nuxt project. Their `~/*` and `@/*`
+        // aliases are synthesized below, independent of a checked-in
+        // `tsconfig.json`.
+        let mut nuxt_dirs: FxHashSet<PathBuf> = FxHashSet::default();
         // Workspace member name → its manifest directory. Built from every
         // named `package.json` reachable above an indexed file.
         let mut workspace_packages: FxHashMap<String, PathBuf> = FxHashMap::default();
@@ -3955,6 +3969,9 @@ impl OxcPathResolver {
                 if is_cypress_dir(dir) {
                     cypress_dirs.insert(dir.to_path_buf());
                 }
+                if is_nuxt_dir(dir) {
+                    nuxt_dirs.insert(dir.to_path_buf());
+                }
                 let Some(parent) = dir.parent() else { break };
                 dir = parent;
             }
@@ -3974,6 +3991,7 @@ impl OxcPathResolver {
                     Some(&tsconfig_path),
                     &sveltekit_dirs,
                     &cypress_dirs,
+                    &nuxt_dirs,
                     &subpath_import_dirs,
                 );
                 let oxc = Self::make_oxc(Some(tsconfig_path));
@@ -3983,13 +4001,16 @@ impl OxcPathResolver {
 
         // Project roots that carry an in-process synthetic alias but no
         // checked-in `tsconfig.json` still need a resolver entry: `$lib` for
-        // SvelteKit, `cypress/*` for Cypress, and `#`-subpath imports from
-        // `package.json`. A Cypress base dir, in particular, typically ships only
-        // `cypress.config.*` and no `tsconfig.json`, and a `package.json` with an
+        // SvelteKit, `cypress/*` for Cypress, `~/*` and `@/*` for Nuxt, and
+        // `#`-subpath imports from `package.json`. A Cypress base dir, in
+        // particular, typically ships only `cypress.config.*` and no
+        // `tsconfig.json`; a Nuxt root's `~/`/`@/` aliases live in the
+        // gitignored `.nuxt/tsconfig.json`; and a `package.json` with an
         // `imports` field need not have a sibling `tsconfig.json` at all.
         let synthetic_dirs: FxHashSet<&PathBuf> = sveltekit_dirs
             .iter()
             .chain(cypress_dirs.iter())
+            .chain(nuxt_dirs.iter())
             .chain(subpath_import_dirs.keys())
             .collect();
         for dir in synthetic_dirs {
@@ -4001,6 +4022,7 @@ impl OxcPathResolver {
                 None,
                 &sveltekit_dirs,
                 &cypress_dirs,
+                &nuxt_dirs,
                 &subpath_import_dirs,
             );
             let oxc = Self::make_oxc(None);
@@ -4032,6 +4054,16 @@ impl OxcPathResolver {
     ///   maps to `<dir>/cypress/utils/urls`. The alias only wins when the
     ///   expanded path is an indexed source file; a real npm `cypress` subpath
     ///   import (no matching project file) falls through to oxc resolution.
+    /// - Nuxt root: `~/*` and `@/*` → `<dir>/*`. Nuxt maps both built-in
+    ///   aliases to `srcDir` (its default, the project root), but declares them
+    ///   only in the generated `.nuxt/tsconfig.json` (gitignored, absent in a
+    ///   fresh clone); since alias reading does not follow `extends`, the
+    ///   mappings are reconstructed here. A project that overrides `srcDir`
+    ///   only loses resolution for those imports (no wrong edge), since the
+    ///   alias wins only when its expansion names an indexed file. They are
+    ///   appended after the tsconfig `paths`, so an explicit `~/*`/`@/*` entry
+    ///   in the checked-in `tsconfig.json` is matched first and these stay a
+    ///   fallback.
     /// - `package.json` `imports`: each `#`-prefixed key maps to its
     ///   manifest-relative target, e.g. `"#app/*": "./app/*"` →
     ///   `#app/*` → `<dir>/app/*`. A `#`-specifier with no matching key stays
@@ -4042,6 +4074,7 @@ impl OxcPathResolver {
         tsconfig_path: Option<&Path>,
         sveltekit_dirs: &FxHashSet<PathBuf>,
         cypress_dirs: &FxHashSet<PathBuf>,
+        nuxt_dirs: &FxHashSet<PathBuf>,
         subpath_import_dirs: &FxHashMap<PathBuf, Vec<(String, String)>>,
     ) -> Vec<(String, Vec<PathBuf>)> {
         let mut aliases = tsconfig_path
@@ -4053,6 +4086,10 @@ impl OxcPathResolver {
         }
         if cypress_dirs.contains(dir) {
             aliases.push(("cypress/*".to_string(), vec![dir.join("cypress").join("*")]));
+        }
+        if nuxt_dirs.contains(dir) {
+            aliases.push(("~/*".to_string(), vec![dir.join("*")]));
+            aliases.push(("@/*".to_string(), vec![dir.join("*")]));
         }
         if let Some(targets) = subpath_import_dirs.get(dir) {
             for (key, target) in targets {
@@ -6064,6 +6101,136 @@ mod tests {
         assert!(
             imp.source_path.is_none(),
             "cypress/* must not alias-resolve in a non-Cypress project"
+        );
+    }
+
+    /// Build a Nuxt-shaped project: a `nuxt.config.ts` at the root, a
+    /// `directives/CodeHighlight.ts` default-exporting a value, a
+    /// `service/NodeService.ts` exporting `getData` (and `dead_export`), and a
+    /// `plugins/app.ts` importing both via Nuxt's built-in `~/` and `@/`
+    /// project-root aliases.
+    #[cfg(test)]
+    fn build_nuxt_index() -> (TempDir, ImportIndex, PathBuf, PathBuf, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("nuxt.config.ts"), "export default {};\n").unwrap();
+        fs::create_dir_all(dir.path().join("directives")).unwrap();
+        fs::create_dir_all(dir.path().join("service")).unwrap();
+        fs::create_dir_all(dir.path().join("plugins")).unwrap();
+        let directive = dir.path().join("directives/CodeHighlight.ts");
+        fs::write(&directive, "const CodeHighlight = {};\nexport default CodeHighlight;\n").unwrap();
+        let service = dir.path().join("service/NodeService.ts");
+        fs::write(
+            &service,
+            "export const getData = () => [];\nexport const dead_export = () => [];\n",
+        )
+        .unwrap();
+        let plugin = dir.path().join("plugins/app.ts");
+        fs::write(
+            &plugin,
+            "import CodeHighlight from '~/directives/CodeHighlight';\nimport { getData } from '@/service/NodeService';\nexport const used = [CodeHighlight, getData];\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: directive.clone(), language: Language::TypeScript },
+            SourceFile { path: service.clone(), language: Language::TypeScript },
+            SourceFile { path: plugin.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let directive_canon = fs::canonicalize(&directive).unwrap();
+        let service_canon = fs::canonicalize(&service).unwrap();
+        let plugin_canon = fs::canonicalize(&plugin).unwrap();
+        (dir, index, directive_canon, service_canon, plugin_canon)
+    }
+
+    // Regression for #6832: in a Nuxt project the built-in `~/` and `@/` aliases
+    // map to the project root, so `~/directives/CodeHighlight` resolves to
+    // `directives/CodeHighlight.ts` and `@/service/NodeService` to
+    // `service/NodeService.ts`. The synthesized aliases must link the importer
+    // and keep the default + `getData` exports cross-file used (not dead).
+    #[test]
+    fn nuxt_tilde_and_at_aliases_resolve_when_nuxt_detected() {
+        let (_dir, index, directive_canon, service_canon, plugin_canon) = build_nuxt_index();
+
+        let tilde = index
+            .get_imports(&plugin_canon)
+            .iter()
+            .find(|i| i.specifier == "~/directives/CodeHighlight")
+            .expect("~/directives/CodeHighlight import must be indexed")
+            .source_path
+            .clone();
+        assert_eq!(
+            tilde.as_ref(),
+            Some(&directive_canon),
+            "~/* must resolve to <root>/* in a Nuxt project"
+        );
+        let at = index
+            .get_imports(&plugin_canon)
+            .iter()
+            .find(|i| i.specifier == "@/service/NodeService")
+            .expect("@/service/NodeService import must be indexed")
+            .source_path
+            .clone();
+        assert_eq!(
+            at.as_ref(),
+            Some(&service_canon),
+            "@/* must resolve to <root>/* in a Nuxt project"
+        );
+        assert!(
+            !index.get_usages(&directive_canon, "default").is_empty(),
+            "the default export must record a cross-file usage via the ~/ alias"
+        );
+        assert!(
+            !index.get_usages(&service_canon, "getData").is_empty(),
+            "getData must record a cross-file usage via the @/ alias"
+        );
+    }
+
+    // Negative-space guard for #6832: an export that nothing imports stays dead
+    // even when the Nuxt aliases are active. The alias must not blanket-resolve
+    // every export in the Nuxt root as used.
+    #[test]
+    fn nuxt_alias_keeps_genuinely_unused_export_dead() {
+        let (_dir, index, _directive_canon, service_canon, _plugin_canon) = build_nuxt_index();
+
+        assert!(
+            index.get_usages(&service_canon, "dead_export").is_empty(),
+            "an export imported by nobody must stay dead under the Nuxt aliases"
+        );
+    }
+
+    // Negative-space guard for #6832: the `~/*` and `@/*` synthesis is gated on
+    // the Nuxt signal (a `nuxt.config.*` file). A project without it must not
+    // synthesize the aliases, so a `~/...` specifier stays unresolved here.
+    #[test]
+    fn nuxt_alias_not_resolved_without_nuxt_signal() {
+        let dir = TempDir::new().unwrap();
+        // No nuxt.config.*: not a Nuxt project.
+        fs::create_dir_all(dir.path().join("directives")).unwrap();
+        let directive = dir.path().join("directives/CodeHighlight.ts");
+        fs::write(&directive, "const CodeHighlight = {};\nexport default CodeHighlight;\n").unwrap();
+        let consumer = dir.path().join("consumer.ts");
+        fs::write(
+            &consumer,
+            "import CodeHighlight from '~/directives/CodeHighlight';\nexport const used = CodeHighlight;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: directive.clone(), language: Language::TypeScript },
+            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let imp = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "~/directives/CodeHighlight")
+            .expect("~/directives/CodeHighlight import must be indexed");
+        assert!(
+            imp.source_path.is_none(),
+            "~/* must not alias-resolve in a non-Nuxt project"
         );
     }
 
