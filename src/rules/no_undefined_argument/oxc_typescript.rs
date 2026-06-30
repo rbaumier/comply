@@ -52,6 +52,25 @@ fn is_sole_undefined_with_type_args(call: &oxc_ast::ast::CallExpression) -> bool
         && matches!(call.arguments.as_slice(), [arg] if is_undefined_arg(arg))
 }
 
+/// True when an `undefined` argument at position `idx` is a *value inserted into
+/// an array* by a standard `Array.prototype` mutation method, where omitting it
+/// changes the collection's contents rather than being a no-op. `push`/`unshift`
+/// take only insertion values — `arr.push(undefined)` grows the array by one
+/// `undefined` element, while `arr.push()` is a no-op — so every argument is
+/// load-bearing. `splice(start, deleteCount, ...items)` inserts its 3rd-and-later
+/// arguments, so `undefined` at `idx >= 2` is an inserted value; its first two
+/// arguments keep normal trailing-placeholder semantics.
+fn is_array_insertion_value(callee: &Expression, idx: usize) -> bool {
+    let Expression::StaticMemberExpression(m) = callee else {
+        return false;
+    };
+    match m.property.name.as_str() {
+        "push" | "unshift" => true,
+        "splice" => idx >= 2,
+        _ => false,
+    }
+}
+
 /// True when a callee expression's member/call chain bottoms out in an
 /// `expect(...)` / `assert(...)` call. Handles chains where the assertion is
 /// the *object* rather than the immediate property, e.g.
@@ -142,6 +161,11 @@ impl OxcCheck for Check {
                 // this one means the `undefined` is required to reach that later
                 // argument (JS has no named arguments), so it cannot be omitted.
                 if args[idx + 1..].iter().any(|later| !is_undefined_arg(later)) {
+                    continue;
+                }
+                // `undefined` inserted into an array by push/unshift/splice is
+                // the element being added, not an omittable trailing parameter.
+                if is_array_insertion_value(&call.callee, idx) {
                     continue;
                 }
                 let span = arg.span();
@@ -336,6 +360,47 @@ mod tests {
         // omitted (placeholder rule), and a trailing one stays omittable.
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, "const x = f<T>(a, undefined);", "t.ts").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_undefined_inserted_by_array_push_unshift_issue_6900() {
+        // `push`/`unshift` take only insertion values: `undefined` is the element
+        // being appended, not an omittable trailing parameter.
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "branch.push(undefined);", "t.ts").is_empty()
+        );
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "arr.unshift(undefined);", "t.ts").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_undefined_inserted_by_array_splice_issue_6900() {
+        // `splice(start, deleteCount, ...items)` inserts its 3rd-and-later args;
+        // `undefined` at the items position is the value being inserted.
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "branch.splice(i, 0, undefined);", "t.ts").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_trailing_undefined_on_arbitrary_member_method_issue_6900() {
+        // An arbitrary member method is not an array-insertion API, so a trailing
+        // `undefined` remains an omittable placeholder.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "obj.bar(x, undefined);", "t.ts").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_splice_delete_count_undefined_issue_6900() {
+        // `splice`'s 2nd argument (deleteCount) is not an inserted item, so a
+        // trailing `undefined` there is still an omittable trailing parameter.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "arr.splice(i, undefined);", "t.ts").len(),
             1
         );
     }
