@@ -2,6 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -105,6 +106,42 @@ fn in_promise_combinator_array<'a>(
     }
 }
 
+/// True when the nearest function/arrow boundary enclosing `node` (a `.catch()`
+/// call) is a non-`async` executor of `new Promise((resolve, reject) => {...})`
+/// — that boundary is the first argument of a `NewExpression` whose callee is
+/// the identifier `Promise`. The executor is intentionally synchronous (an
+/// `async` executor is a Promise-constructor anti-pattern), so
+/// `chain.then(resolve).catch(reject)` is the only way to forward the inner
+/// promise's settlement to the outer `resolve`/`reject`; no `await` rewrite
+/// preserves the semantics without restructuring the function. A `.catch()`
+/// whose nearest host is an `async` function — where `try`/`await` is the
+/// correct rewrite — is not exempt; this `async`-host exclusion is the only
+/// part shared with `.then()`. Unlike `.then()` (exempt in any non-async host),
+/// this exemption additionally requires the non-async host to be a `Promise`
+/// executor.
+fn in_promise_executor<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let (is_async, fn_span) = match ancestor.kind() {
+            AstKind::Function(f) => (f.r#async, f.span),
+            AstKind::ArrowFunctionExpression(a) => (a.r#async, a.span),
+            _ => continue,
+        };
+        if is_async {
+            return false;
+        }
+        let AstKind::NewExpression(new_expr) = nodes.parent_node(ancestor.id()).kind() else {
+            return false;
+        };
+        return matches!(&new_expr.callee, Expression::Identifier(id) if id.name.as_str() == "Promise")
+            && new_expr.arguments.first().is_some_and(|arg| arg.span() == fn_span);
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -180,6 +217,18 @@ impl OxcCheck for Check {
             // `try/catch` would force serial `await`s, destroying the
             // parallelism — the chain is idiomatic here.
             if in_promise_combinator_array(node, semantic) {
+                return;
+            }
+
+            // A `.catch(reject)` inside the executor of `new Promise((resolve,
+            // reject) => {...})` forwards the inner promise's rejection to the
+            // outer promise's `reject`. The executor is intentionally
+            // synchronous, so `chain.then(resolve).catch(reject)` is the only
+            // correct forwarding — there is no `await` rewrite that preserves
+            // the semantics. Like `.then()` below, an async host is never exempt
+            // (try/await fits there); unlike `.then()`, a non-async host is
+            // exempt only when it is a `Promise` executor.
+            if in_promise_executor(node, semantic) {
                 return;
             }
         }
@@ -344,6 +393,42 @@ mod tests {
         // A non-combinator `Promise` method (e.g. `Promise.resolve`) does not
         // aggregate an array of promises, so the element stays flagged.
         let src = "function f() { return Promise.resolve([p().catch(() => null)]); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_catch_in_promise_executor() {
+        // Regression for issue #6819 (sindresorhus/ky timeout.ts): the executor
+        // of `new Promise((resolve, reject) => {...})` is intentionally
+        // synchronous, so `.then(resolve).catch(reject)` is the only way to
+        // forward settlement to the outer promise — no `await` rewrite preserves
+        // the semantics. The `.catch(reject)` sits mid-chain, so none of the
+        // await/void/top-level/combinator exemptions cover it.
+        let src = "async function timeout(request, init, options) {\n\
+                   \x20\x20return new Promise((resolve, reject) => {\n\
+                   \x20\x20\x20\x20void options.fetch(request, init)\n\
+                   \x20\x20\x20\x20\x20\x20.then(resolve)\n\
+                   \x20\x20\x20\x20\x20\x20.catch(reject)\n\
+                   \x20\x20\x20\x20\x20\x20.then(() => { clearTimeout(id); });\n\
+                   \x20\x20});\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_catch_in_async_promise_executor() {
+        // An `async` executor is a Promise-constructor anti-pattern, and inside
+        // it `try`/`await` is the correct rewrite — the `.catch()` stays flagged.
+        let src =
+            "function f() { return new Promise(async (resolve, reject) => { foo().catch(reject); }); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_catch_in_non_promise_constructor_executor() {
+        // The constructor must be `Promise`: a callback to another constructor
+        // is not a Promise executor, so the `.catch()` stays flagged.
+        let src = "function f() { return new Foo((resolve, reject) => { bar().catch(reject); }); }";
         assert_eq!(run(src).len(), 1);
     }
 }
