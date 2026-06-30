@@ -25,6 +25,12 @@
 //! a sibling call this `Drop`-scoped walk cannot see, so the panic fires
 //! only when the operation was abandoned, where aborting is intended.
 //!
+//! A `Drop` impl in a test context — inside a `#[cfg(test)]` module, a
+//! `#[test]` function, or a `#![cfg(test)]` file — is exempt: it is compiled
+//! out of production binaries, and test fixtures routinely `unwrap`/`panic!`
+//! in `Drop` to assert teardown state, where the harness catches the panic and
+//! no production unwinding is aborted.
+//!
 //! A `.unwrap()` / `.expect(...)` whose receiver is proven non-empty by an
 //! enclosing `if <recv>.is_some() { … }` / `if <recv>.is_ok() { … }` guard on
 //! the same receiver is exempt: the branch body runs only when the value is
@@ -280,6 +286,14 @@ impl AstCheck for Check {
         let trait_text = trait_node.utf8_text(source_bytes).unwrap_or("");
         let bare = trait_text.rsplit("::").next().unwrap_or(trait_text);
         if bare != "Drop" {
+            return;
+        }
+        // A `Drop` impl inside a test context — a `#[cfg(test)]` module, a
+        // `#[test]` function, or a `#![cfg(test)]` file — is compiled out of
+        // production binaries. Test fixtures routinely `unwrap`/`panic!` in
+        // `Drop` to assert teardown state; the harness handles those panics and
+        // there is no production unwinding to abort, so the rule does not apply.
+        if crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
             return;
         }
         // A `Drop` impl nested inside a diverging function (`fn … -> !`) is the
@@ -639,6 +653,35 @@ mod tests {
         // The `else` branch runs when the value is `None`/`Err` — unwrap panics.
         let source = "struct R; impl Drop for R { fn drop(&mut self) { \
                       if self.itr.is_some() { g(); } else { let _ = self.itr.unwrap(); } } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_unwrap_in_drop_inside_inline_cfg_test_module() {
+        // jdx/mise src/github/sigstore.rs: a RAII test fixture that clears test
+        // state on drop, nested in an inline `#[cfg(test)] mod tests` in a src
+        // file. Compiled out of production, so the unwrap cannot abort a binary.
+        let source = "#[cfg(test)] mod tests { struct TokensFileOverrideGuard; \
+                      impl Drop for TokensFileOverrideGuard { fn drop(&mut self) { \
+                      *TOKENS_FILE_OVERRIDE.write().unwrap() = None; } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_drop_inside_cfg_test_file() {
+        // A whole file marked `#![cfg(test)]` is test-only; a Drop fixture
+        // panicking there cannot abort a production binary.
+        let source = "#![cfg(test)] struct A; \
+                      impl Drop for A { fn drop(&mut self) { panic!(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unwrap_in_production_drop_outside_cfg_test() {
+        // The same shape outside any `#[cfg(test)]` module still fires: a
+        // production `Drop` panicking during unwinding aborts the process.
+        let source = "struct Guard; impl Drop for Guard { fn drop(&mut self) { \
+                      *TOKENS_FILE_OVERRIDE.write().unwrap() = None; } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
