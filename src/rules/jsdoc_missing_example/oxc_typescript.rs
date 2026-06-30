@@ -1,5 +1,6 @@
 //! jsdoc-missing-example OxcCheck backend — every JSDoc on an exported function
-//! must contain an `@example` tag.
+//! must contain an `@example` tag, unless the block is tagged `@deprecated`
+//! (a deprecated function shouldn't document how to call it).
 
 use std::sync::Arc;
 
@@ -53,6 +54,12 @@ impl OxcCheck for Check {
         };
 
         if jsdoc_text.contains("@example") {
+            return;
+        }
+
+        // A `@deprecated` block tells callers to stop using the function;
+        // requiring an example of how to call it would contradict that.
+        if jsdoc_text.contains("@deprecated") {
             return;
         }
 
@@ -122,5 +129,56 @@ fn find_jsdoc_above<'a>(
         Some(text)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_jsdoc_without_example() {
+        let d = run_on(
+            "/**\n * Adds two numbers.\n */\nexport function add(a: number, b: number): number {\n  return a + b;\n}",
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "jsdoc-missing-example");
+    }
+
+    #[test]
+    fn allows_jsdoc_with_example() {
+        let d = run_on(
+            "/**\n * Adds two numbers.\n * @example\n *   add(1, 2) // => 3\n */\nexport function add(a: number, b: number): number {\n  return a + b;\n}",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_deprecated_without_example() {
+        // #6938: a `@deprecated` function shouldn't be required to document an example.
+        let d = run_on(
+            "/**\n * @deprecated Use `defineRobotsSchema()` instead.\n */\nexport function asSeoCollection(c: number): number {\n  return c;\n}",
+        );
+        assert!(d.is_empty());
     }
 }
