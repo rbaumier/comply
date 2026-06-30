@@ -29,6 +29,13 @@
 //! code that merely mentions individual keywords — e.g. "Would
 //! update X from Y" (`update` with no `SET`) or Prisma JSDoc
 //! containing `update`/`where`/`create` API method names.
+//!
+//! The text *between* the verb and its clause must also be shaped like
+//! a SQL projection/target rather than English prose: a column list,
+//! qualified name, function call or single column reference — never a
+//! run of free-form words. This rejects sentences like "Select specific
+//! fields to fetch from the model", where `select … from` appear in
+//! clause order but the words between them are prose, not a projection.
 
 /// Whole-word, case-insensitive substring check. `text` should
 /// already be lowercase. `word` should be lowercase.
@@ -80,25 +87,107 @@ const DML_STATEMENT_SHAPES: &[(&str, &str)] = &[
     ("update", "set"),
 ];
 
+/// SQL keywords that may separate identifiers inside a single projection or
+/// target reference (`DISTINCT name`, `id AS user_id`). A span containing one
+/// of these is still one projection item, not free-form prose.
+const PROJECTION_KEYWORDS: &[&str] = &["distinct", "all", "as"];
+
 /// Returns true if `text` looks like a SQL query. Requires a DML verb
 /// followed (in token order) by its mandatory companion clause keyword
-/// — `SELECT … FROM`, `DELETE … FROM`, `INSERT … INTO`, `UPDATE … SET`.
-/// Word-boundary matching means identifiers containing the keywords
-/// don't trigger, and the ordering requirement rejects prose or
-/// generated code that merely mentions the keywords out of clause
-/// structure.
+/// — `SELECT … FROM`, `DELETE … FROM`, `INSERT … INTO`, `UPDATE … SET`
+/// — with the text between them shaped like a SQL projection/target
+/// rather than English prose. Word-boundary matching means identifiers
+/// containing the keywords don't trigger, the ordering requirement
+/// rejects prose that mentions the keywords out of clause structure,
+/// and the projection-shape requirement rejects sentences whose words
+/// happen to span `select … from`.
 pub fn is_sql_string(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    let words: Vec<&str> = lower
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .filter(|w| !w.is_empty())
-        .collect();
-    DML_STATEMENT_SHAPES.iter().any(|(verb, clause)| {
-        words
-            .iter()
-            .position(|w| w == verb)
-            .is_some_and(|verb_at| words[verb_at + 1..].iter().any(|w| w == clause))
-    })
+    DML_STATEMENT_SHAPES
+        .iter()
+        .any(|(verb, clause)| dml_shape_matches(&lower, verb, clause))
+}
+
+/// Whether `lower` (already lowercase) contains the `verb … clause` DML shape:
+/// a whole-word `verb` followed by a whole-word `clause`, with the text between
+/// them shaped like a SQL projection/target rather than English prose.
+fn dml_shape_matches(lower: &str, verb: &str, clause: &str) -> bool {
+    let Some((_, verb_end)) = find_word(lower, verb, 0) else {
+        return false;
+    };
+    let Some((clause_start, _)) = find_word(lower, clause, verb_end) else {
+        return false;
+    };
+    span_is_projection_shaped(&lower[verb_end..clause_start])
+}
+
+/// Byte range `(start, end)` of the first whole-word occurrence of `needle`
+/// (lowercase) in `haystack` (lowercase) at or after `from`, or `None`. A
+/// whole word is not flanked by identifier bytes, so `from` does not match
+/// inside `from_user`.
+fn find_word(haystack: &str, needle: &str, from: usize) -> Option<(usize, usize)> {
+    let bytes = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    if needle.is_empty() || bytes.len() < needle.len() {
+        return None;
+    }
+    let mut i = from;
+    while i + needle.len() <= bytes.len() {
+        if bytes[i..i + needle.len()] == *needle {
+            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+            let after = i + needle.len();
+            let after_ok = after >= bytes.len() || !is_ident_byte(bytes[after]);
+            if before_ok && after_ok {
+                return Some((i, after));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Whether the text between a DML verb and its companion clause is shaped like
+/// a SQL projection/target rather than English prose.
+///
+/// A SQL projection separates its parts with punctuation or operators — a
+/// column list (`id, name`), qualified name (`a.b`), function call
+/// (`count(*)`), expression (`price + tax`) — or wraps a single column in
+/// keyword modifiers (`DISTINCT name`, `id AS user_id`). English prose instead
+/// runs plain words separated only by whitespace. So the span is prose iff it
+/// holds two adjacent non-keyword words with only whitespace between them
+/// ("specific fields to fetch"), which is how `SELECT … FROM` matches an
+/// English sentence.
+///
+/// The discriminator is the inter-word separator, so the rare sentence that
+/// punctuates between every word (a comma-spliced clause) can still pass, and a
+/// bare implicit-alias projection (`SELECT price net FROM orders`, no `AS` and
+/// no punctuation) is conversely read as prose. Both are accepted heuristic
+/// limits, not a regression of the keyword-order gate.
+fn span_is_projection_shaped(span: &str) -> bool {
+    let bytes = span.as_bytes();
+    let mut prev_was_content_word = false;
+    let mut only_whitespace_since_word = true;
+    let mut word_start: Option<usize> = None;
+    // Iterate one past the end so a trailing word is flushed by the same arm.
+    for i in 0..=bytes.len() {
+        if i < bytes.len() && is_ident_byte(bytes[i]) {
+            word_start.get_or_insert(i);
+            continue;
+        }
+        if let Some(start) = word_start.take() {
+            let word = &span[start..i];
+            let is_keyword = PROJECTION_KEYWORDS.contains(&word);
+            if !is_keyword && prev_was_content_word && only_whitespace_since_word {
+                return false;
+            }
+            prev_was_content_word = !is_keyword;
+            only_whitespace_since_word = true;
+        }
+        if i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            only_whitespace_since_word = false;
+        }
+    }
+    true
 }
 
 /// DDL keywords that may legally sit between the verb (`CREATE`/`ALTER`)
@@ -299,6 +388,46 @@ mod tests {
         assert!(!is_sql_string(
             "Update the database schema with migrations"
         ));
+    }
+
+    #[test]
+    fn rejects_english_prose_spanning_select_from_issue_6903() {
+        // "Select specific fields to fetch from the X" — `select … from` appear
+        // in clause order, but the span between them ("specific fields to
+        // fetch") is free-form prose, not a column projection.
+        assert!(!is_sql_string(
+            "Select specific fields to fetch from the User"
+        ));
+        assert!(!is_sql_string("select the value from the cache"));
+    }
+
+    #[test]
+    fn accepts_single_column_and_keyword_modified_projection() {
+        // Single column, qualified name, aliased column, DISTINCT modifier and
+        // a `*` projection are all genuine SQL shapes between SELECT and FROM.
+        assert!(is_sql_string("SELECT id FROM users"));
+        assert!(is_sql_string("SELECT a.b FROM t"));
+        assert!(is_sql_string("SELECT id AS user_id FROM users"));
+        assert!(is_sql_string("SELECT DISTINCT name FROM users"));
+        assert!(is_sql_string("SELECT 1 FROM dual"));
+        assert!(is_sql_string("SELECT COUNT(*) FROM users"));
+    }
+
+    #[test]
+    fn accepts_expression_projection() {
+        // An arithmetic expression projection separates its operands with an
+        // operator, not whitespace, so it is a SQL shape — not prose. A missed
+        // injection here would be the dangerous direction of error.
+        assert!(is_sql_string("SELECT a + b FROM t"));
+        assert!(is_sql_string("SELECT price - discount FROM orders"));
+    }
+
+    #[test]
+    fn rejects_hyphenated_english_prose_spanning_select_from() {
+        // Hyphenated prose ("read-only fields") must stay rejected: the hyphen
+        // separates `read`/`only`, but `only fields` are whitespace-adjacent
+        // plain words.
+        assert!(!is_sql_string("Select read-only fields from the model"));
     }
 
     #[test]
