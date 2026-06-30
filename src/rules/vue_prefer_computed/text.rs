@@ -7,7 +7,10 @@
 //!
 //! Heuristic (text-based — Vue SFCs skip tree-sitter):
 //! 1. Find a line starting a `watch(` or `watchEffect(` call.
-//! 2. Collect the callback body by tracking brace depth until it closes.
+//! 2. Collect the inline callback body by tracking brace depth until it closes.
+//!    When the `watch(...)` call closes (outer paren returns to 0) before any
+//!    inline `{ ... }` body is entered, the callback is an external function
+//!    reference — there is no body to analyse, so the watch is skipped.
 //! 3. If the body has exactly one non-trivial statement and it is a bare
 //!    `<ident>.value = <expr>` assignment, flag the watch.
 //!
@@ -15,7 +18,12 @@
 //! that produce side effects (console, fetch, emit, push, ...), and
 //! conditional assignments are left alone.
 //!
-//! Three usage-context exemptions, because `computed()` is read-only:
+//! A `{ deep: true }` watch is exempt on reactive semantics: it reacts to
+//! deeply-nested property mutations, whereas a `computed()` only re-evaluates
+//! when a value it directly reads changes. The shallow read of a `computed`
+//! can't replicate deep watching, so such a watch can't be replaced.
+//!
+//! Three further usage-context exemptions, because `computed()` is read-only:
 //! - A constant RHS (`''`, `0`, `true`, ...) is a reset on a trigger, not a
 //!   derivation; `computed()` would freeze the ref to that constant.
 //! - A target ref assigned at another site in the file is mutable interactive
@@ -54,10 +62,17 @@ impl TextCheck for Check {
             }
 
             // Collect the watch statement body by following brace depth until
-            // the outer `watch(...)` parenthesis closes.
-            let Some((body, _)) = extract_watch_callback_body(&lines, i) else {
+            // the outer `watch(...)` parenthesis closes. `has_deep` reports a
+            // `{ deep: true }` option in the trailing argument list.
+            let Some((body, has_deep)) = extract_watch_callback_body(&lines, i) else {
                 continue;
             };
+
+            // A deep watch reacts to nested mutations that a `computed`'s
+            // shallow read can't observe — it can't be replaced.
+            if has_deep {
+                continue;
+            }
 
             if let Some((ident, rhs)) = parse_single_value_assignment(&body) {
                 // A constant RHS can't be lazily derived — the watch is a reset
@@ -99,9 +114,14 @@ impl TextCheck for Check {
 }
 
 /// Extract the body of the first `{ ... }` block inside the watch/watchEffect
-/// call that starts on `lines[start]`. Returns the body text and the line
-/// index of the closing brace.
-fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, usize)> {
+/// call that starts on `lines[start]`. Returns the body text and whether the
+/// trailing options object carries `{ deep: true }`.
+///
+/// Returns `None` when the `watch(...)` call closes (outer paren back to 0)
+/// before an inline callback body is entered — that means the callback is an
+/// external function reference (`watch(src, handler)`), so there is nothing to
+/// analyse and the scan must not run on into the next statement.
+fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, bool)> {
     // Find the first `{` after the watch identifier — this is the start of the
     // callback body. We skip braces that appear inside the arg list but we
     // need to handle `watch(() => src, () => { ... })` too, so the *last*
@@ -110,24 +130,40 @@ fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, 
     let mut depth: i32 = 0;
     let mut paren: i32 = 0;
     let mut in_body = false;
+    let mut after_body = false;
     let mut body = String::new();
+    let mut trailing = String::new();
     let mut body_start_paren: i32 = 0;
 
-    for (j, line) in lines.iter().enumerate().skip(start) {
+    for line in lines.iter().skip(start) {
         let mut chars = line.chars().peekable();
         while let Some(c) = chars.next() {
             // Skip line comments.
             if c == '/' && chars.peek() == Some(&'/') {
                 break;
             }
-            if in_body {
+            if after_body {
+                trailing.push(c);
+            } else if in_body {
                 body.push(c);
             }
             match c {
                 '(' => paren += 1,
                 ')' => {
                     paren -= 1;
-                    if paren < body_start_paren {
+                    if after_body {
+                        // The `watch(...)` argument list ended; the body and
+                        // any options object have been seen.
+                        if paren == 0 {
+                            return Some((body, trailing_has_deep_option(&trailing)));
+                        }
+                    } else if in_body {
+                        if paren < body_start_paren {
+                            return None;
+                        }
+                    } else if paren == 0 {
+                        // The call closed without entering an inline body — the
+                        // callback is an external function reference.
                         return None;
                     }
                 }
@@ -138,16 +174,18 @@ fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, 
                         body.clear();
                         continue;
                     }
-                    if in_body {
+                    if in_body && !after_body {
                         depth += 1;
                     }
                 }
                 '}' => {
-                    if in_body {
+                    if in_body && !after_body {
                         if depth == 0 {
-                            // Strip the closing brace we just pushed.
+                            // Strip the closing brace we just pushed; the body
+                            // is complete. Keep scanning the trailing options.
                             body.pop();
-                            return Some((body, j));
+                            after_body = true;
+                            continue;
                         }
                         depth -= 1;
                     }
@@ -155,11 +193,53 @@ fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, 
                 _ => {}
             }
         }
-        if in_body {
+        if after_body {
+            trailing.push('\n');
+        } else if in_body {
             body.push('\n');
         }
     }
-    None
+    // The body closed but the outer `watch(...)` paren never did (malformed or
+    // truncated source): still report the body, with whatever options we saw.
+    if after_body {
+        Some((body, trailing_has_deep_option(&trailing)))
+    } else {
+        None
+    }
+}
+
+/// Returns true when `trailing` (the watch argument text after the callback
+/// body) carries a `deep: true` option, tolerant of whitespace around the
+/// colon. `deep` is matched on a word boundary so `isDeep`/`deeply` don't
+/// count, and `true` must be a standalone token.
+fn trailing_has_deep_option(trailing: &str) -> bool {
+    let bytes = trailing.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = trailing[from..].find("deep") {
+        let pos = from + rel;
+        from = pos + "deep".len();
+        // Word boundary before `deep`.
+        if pos > 0
+            && matches!(bytes[pos - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$')
+        {
+            continue;
+        }
+        // `deep` <ws>? `:` <ws>? `true` with a word boundary after.
+        let Some(after_colon) = trailing[from..].trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let Some(rest) = after_colon.trim_start().strip_prefix("true") else {
+            continue;
+        };
+        let continues = rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        if !continues {
+            return true;
+        }
+    }
+    false
 }
 
 /// Parses `body` as a single bare `<ident>.value = <rhs>` assignment and
@@ -480,6 +560,58 @@ mod tests {
         // `previousAvatar` — the word boundary must prevent a prefix match.
         let src = "const previousAvatarExtra = useLocalStorage('k', false)\n\
                    watch(showAvatar, () => {\n  previousAvatar.value = showAvatar.value\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn does_not_attribute_next_watch_inline_body_to_external_ref_watch() {
+        // The first watch's callback is an external function reference (no
+        // inline body); the body scan must stop at its closing `)`, not run on
+        // into the second watch's inline arrow body and mis-attribute it.
+        let src = "watch(() => length.value, matchBoundary)\n\
+                   \n\
+                   watch(\n\
+                   () => props.fabProps,\n\
+                   (newValue) => {\n\
+                   fabProps.value = newValue\n\
+                   },\n\
+                   )";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        // The single diagnostic points at the second watch (line 3), not line 1.
+        assert_eq!(diags[0].line, 3);
+    }
+
+    #[test]
+    fn allows_deep_watch() {
+        // `{ deep: true }` reacts to nested mutations a `computed`'s shallow
+        // read can't replicate, so it must not be flagged.
+        let src = "watch(\n\
+                   () => props.x,\n\
+                   (v) => {\n\
+                   foo.value = { ...v }\n\
+                   },\n\
+                   { immediate: true, deep: true },\n\
+                   )";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_plain_inline_watch_without_deep() {
+        let src = "watch(() => x, () => { foo.value = x })";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_watch_with_immediate_but_not_deep() {
+        // Only `deep` exempts; `{ immediate: true }` alone is still replaceable.
+        let src = "watch(\n\
+                   () => props.x,\n\
+                   (v) => {\n\
+                   foo.value = v\n\
+                   },\n\
+                   { immediate: true },\n\
+                   )";
         assert_eq!(run(src).len(), 1);
     }
 }
