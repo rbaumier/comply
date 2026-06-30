@@ -146,6 +146,22 @@ const DERIVED_QUANTITY_HEADS: &[&str] = &["resolution", "iterations"];
 /// leading qualifier precedes the temporal head.
 const TEMPORAL_DIMENSION_HEADS: &[&str] = &["timeout", "interval", "delay", "duration"];
 
+/// Head nouns that mark a compound as a categorical code or discriminator rather
+/// than a measured magnitude. When an ambiguous base is only a leading qualifier
+/// (e.g. `TIMEOUT_ERR`, `ABORT_CODE`, `INTERVAL_STATUS`) and the head — the last
+/// segment — is one of these, the identifier names a code/status/kind *of* the
+/// base concept (the `TimeoutError` ordinal from the Web IDL error-names table,
+/// the kind of interval), not a quantity of it. Its integer value is an opaque
+/// categorical ordinal, so a unit suffix like `Ms`/`Bytes` is meaningless.
+///
+/// In head position these words name a discriminator/code *of* the base — a
+/// `<base>Code`/`<base>Status`/`<base>Kind`/`<base>Type`/`<base>Err` is a category
+/// tag, not a quantity of the base — so the set suppresses no genuine measurement
+/// in the JS/TS web/Node code this rule targets. A base that is itself the head
+/// (a bare `timeout`/`interval`) is unaffected: the value IS the base magnitude
+/// and stays flagged.
+const CATEGORICAL_CODE_HEADS: &[&str] = &["err", "error", "code", "status", "kind", "type"];
+
 /// Coordinate-space / domain qualifiers that, when present as a camelCase
 /// segment of the identifier, already pin down the abstract unit-space — so a
 /// physical-unit suffix is neither expected nor meaningful.
@@ -472,6 +488,9 @@ fn check_name(name: &str, offset: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
     if base_is_qualifier_of_temporal_head(name, base) {
         return;
     }
+    if base_is_qualifier_of_categorical_code(name, base) {
+        return;
+    }
     let (line, column) = byte_offset_to_line_col(ctx.source, offset as usize);
     diagnostics.push(Diagnostic {
         path: Arc::clone(&ctx.path_arc),
@@ -545,6 +564,23 @@ fn base_is_qualifier_of_temporal_head(name: &str, base: &str) -> bool {
         return false;
     }
     TEMPORAL_DIMENSION_HEADS.contains(&head.as_str())
+}
+
+/// Whether the matched base is only a leading qualifier of a compound whose head
+/// noun is a categorical-code word (`TIMEOUT_ERR`, `ABORT_CODE`, `INTERVAL_STATUS`).
+/// The trailing word marks the identifier as a code/discriminator *of* the base,
+/// so its integer is an opaque categorical ordinal, not a magnitude that takes a
+/// unit. A base that is itself the head (a bare `timeout`/`interval`) stays
+/// flagged: the value IS the base magnitude and is genuinely unit-ambiguous.
+fn base_is_qualifier_of_categorical_code(name: &str, base: &str) -> bool {
+    let segments: Vec<String> = camel_segments(name).collect();
+    let Some(head) = segments.last() else {
+        return false;
+    };
+    if head == base {
+        return false;
+    }
+    CATEGORICAL_CODE_HEADS.contains(&head.as_str())
 }
 
 /// Whether the identifier carries a coordinate-space/domain qualifier as one of
@@ -1102,5 +1138,38 @@ mod tests {
             1
         );
         assert_eq!(run_on("function f(threshold: number) { setTimeout(fn, threshold); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_categorical_code_head_where_base_is_qualifier() {
+        // A compound whose ambiguous base is only a leading qualifier and whose
+        // head noun marks a categorical code/discriminator (`_ERR`/`_CODE`/
+        // `_STATUS`/`Kind`/`Type`) names an opaque ordinal, not a measured
+        // quantity — `timeoutErrMs`/`timeoutErrBytes` are nonsensical, so it must
+        // not be flagged (#6906). `TIMEOUT_ERR = 23` is the issue's exact FP: a
+        // DOM-exception error code from the Web IDL error-names table, where
+        // `timeout` is a base but the value `23` is a categorical ordinal.
+        assert!(run_on("const TIMEOUT_ERR = 23;").is_empty());
+        assert!(run_on("const TIMEOUT_CODE = 23;").is_empty());
+        assert!(run_on("const INTERVAL_STATUS: number = 2;").is_empty());
+        assert!(run_on("const intervalError: number = 1;").is_empty());
+        assert!(run_on("const intervalKind: number = 1;").is_empty());
+        assert!(run_on("const limitType: number = 0;").is_empty());
+        // The surrounding DOM-exception constants from the issue stay clean too:
+        // their leading word is not an ambiguous base, so they never matched.
+        assert!(run_on("const ABORT_ERR = 20;").is_empty());
+        assert!(run_on("const QUOTA_EXCEEDED_ERR = 22;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_base_with_non_categorical_head_or_bare() {
+        // The categorical-code gate only exempts a base that is a leading
+        // qualifier of a categorical-code head. A bare base stays flagged, a base
+        // followed by a non-code head (`timeoutValue`) still denotes the base
+        // magnitude, and a measurement whose head is not a code word
+        // (`distanceTraveled`) still needs a unit (#6906).
+        assert_eq!(run_on("const timeout = 500;").len(), 1);
+        assert_eq!(run_on("const timeoutValue: number = 5000;").len(), 1);
+        assert_eq!(run_on("const distanceTraveled: number = 5;").len(), 1);
     }
 }
