@@ -4,12 +4,21 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
     let Ok(text) = node.utf8_text(source) else { return };
     if !super::has_keyword(text) { return; }
     if super::has_reference(text) { return; }
+    if super::has_reason_clause(text) { return; }
 
     let row = node.start_position().row;
     let lines: Vec<&str> = ctx.source.lines().collect();
     let lookahead = (row + 1..=(row + 2).min(lines.len().saturating_sub(1)))
         .any(|i| super::has_reference(lines[i]));
     if lookahead { return; }
+
+    // Lookback: a nearby preceding comment line may already state why the hack
+    // is needed, leaving no ticket to require.
+    let lookback = (row.saturating_sub(2)..row).any(|i| {
+        let line = lines[i].trim_start();
+        line.starts_with("//") && super::has_reason_clause(line)
+    });
+    if lookback { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -79,5 +88,42 @@ mod tests {
     #[test]
     fn allows_jira_ref() {
         assert!(run("// Workaround for PROJ-123\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_hack_with_inline_reason() {
+        // Reason connector on the same line as the keyword, mirroring how an
+        // inline issue reference is accepted.
+        assert!(run("// hack because the API can't expose codes directly\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_hack_with_reason_two_lines_up() {
+        // Far edge of the 2-line lookback window: reason on row-2, an unrelated
+        // comment on row-1.
+        let src = "    // because the API is limited\n    // see the implementation note\n    // hack to patch the output\n    fn f() {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_hack_with_reason_on_preceding_line() {
+        // hexyl colors.rs:30 — the second line of a self-explanatory comment
+        // block; the line above already states the reason ("isn't designed").
+        let src = "    // owo_colors' API isn't designed to get the terminal codes directly for\n    // dynamic colors, so we use this hack to get them from the LHS of some text.\n    fn f() {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_hack_when_preceding_comment_has_no_reason() {
+        let src = "    // some unrelated comment\n    // hack to fix rendering\n    fn f() {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_hack_when_reason_word_is_in_preceding_code() {
+        // A reason connector in a non-comment line must not suppress: the
+        // explanation has to live in the comment block, not arbitrary code.
+        let src = "    let msg = \"because of latency\";\n    // hack to fix rendering\n    fn f() {}";
+        assert_eq!(run(src).len(), 1);
     }
 }

@@ -33,6 +33,17 @@ pub fn register() -> RuleDef {
 
 const KEYWORDS: &[&str] = &["workaround", "hack", "compat"];
 
+const REASON_CONNECTORS: &[&str] = &[
+    "because",
+    "since",
+    "can't",
+    "cannot",
+    "isn't designed",
+    "not designed",
+    "doesn't support",
+    "doesn't allow",
+];
+
 fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
@@ -63,6 +74,19 @@ pub(crate) fn has_keyword(text: &str) -> bool {
     KEYWORDS
         .iter()
         .any(|&kw| word_boundary_contains(&lower, kw))
+}
+
+/// True when `line` uses reason-giving language — a connector that explains
+/// *why* a hack is needed ("because", "since", "isn't designed", "doesn't
+/// support", …). Case-insensitive and whole-word via `word_boundary_contains`,
+/// so a connector never matches inside a larger token. Used to skip the warning
+/// when the hack comment, or a nearby preceding comment line, already documents
+/// the reason, leaving no upstream ticket to require.
+pub(crate) fn has_reason_clause(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    REASON_CONNECTORS
+        .iter()
+        .any(|&connector| word_boundary_contains(&lower, connector))
 }
 
 pub(crate) fn has_reference(line: &str) -> bool {
