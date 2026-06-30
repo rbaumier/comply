@@ -16,7 +16,10 @@
 //!
 //! A pattern is considered enum-like if its text contains `::`, or
 //! if it is a bare PascalCase identifier (an uppercase lead with at
-//! least one lowercase letter, e.g. `Direction`, `Foo`). Range
+//! least one lowercase letter, e.g. `Direction`, `Foo`). A brace
+//! destructure (`T { .. }`) counts only when `T` is qualified
+//! (`Enum::Variant { .. }`); a bare `Point { .. }` is a plain struct,
+//! which has no variant set to enumerate, so its `_` arm is correct. Range
 //! patterns (`'a'..='z'`, `0..=9`) and SCREAMING_SNAKE_CASE constants
 //! (`EOF_CHAR`, `NUL`) apply only to scalar types (`char`, integers,
 //! bytes) and are never enum-like. This intentionally accepts false
