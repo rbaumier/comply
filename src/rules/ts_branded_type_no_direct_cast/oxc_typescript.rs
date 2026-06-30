@@ -101,6 +101,26 @@ fn local_alias_is_branded<'a>(
     found
 }
 
+/// Returns the definition of a local `type <name> = …` alias declared in the
+/// same file, so a wrapper return type (`TrackedEnvelope`) can be resolved to
+/// the type tree it stands for. `None` when the name is imported or built-in and
+/// thus has no in-file structure to inspect. First match wins: TypeScript forbids
+/// two same-named aliases in one scope, so a single definition is authoritative.
+fn local_alias_definition<'a>(
+    name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    // A namespace-qualified target (`Schemas.TrackedEnvelope`) is declared under
+    // its bare trailing segment, as `local_alias_is_branded` also compares.
+    let bare = name.rsplit('.').next().unwrap_or(name);
+    semantic.nodes().iter().find_map(|node| {
+        let AstKind::TSTypeAliasDeclaration(alias) = node.kind() else {
+            return None;
+        };
+        (alias.id.name.as_str() == bare).then_some(&alias.type_annotation)
+    })
+}
+
 /// Base name of a type reference (`Brand<…>` → `Brand`), or `None` for any
 /// other type form. Used to compare a return-type operand against the brand the
 /// cast targets.
@@ -116,23 +136,99 @@ fn type_reference_base_name<'a>(ty: &TSType<'a>) -> Option<&'a str> {
     }
 }
 
-/// True when a declared return-type annotation IS the brand named `brand`, or a
-/// union that includes it (`Brand | undefined`, `Brand | null`).
-fn return_type_is_brand(annotation: Option<&oxc_ast::ast::TSTypeAnnotation>, brand: &str) -> bool {
-    let Some(ann) = annotation else { return false };
-    match &ann.type_annotation {
-        TSType::TSUnionType(union) => union
+/// Bounds alias resolution so a cyclic alias chain (`type A = B; type B = A`)
+/// cannot recurse forever; genuine return-type trees nest far shallower.
+const MAX_ALIAS_DEPTH: u32 = 16;
+
+/// True when a type reference named `brand` appears anywhere in `ty`'s resolved
+/// tree: directly, inside tuple elements, union/intersection operands, array
+/// elements, generic type arguments, or a local alias the type refers to (looked
+/// up via `local_alias_definition`). This recognises a factory whose declared
+/// return type *wraps* the brand — `TrackedEnvelope<T> = [TrackedId, T, …]` — not
+/// only one returning the brand directly (`Brand`, `Brand | undefined`). `depth`
+/// caps alias-chain recursion. Object-property wrapping (`{ id: Brand }`) is
+/// intentionally not walked: a narrow exemption avoids silencing genuine casts in
+/// functions that merely return a struct mentioning the brand.
+fn brand_in_resolved_type<'a>(
+    ty: &TSType<'a>,
+    brand: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    depth: u32,
+) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    match ty {
+        TSType::TSTypeReference(r) => {
+            let base = type_reference_base_name(ty);
+            if base == Some(brand) {
+                return true;
+            }
+            let arg_has_brand = r.type_arguments.as_ref().is_some_and(|args| {
+                args.params
+                    .iter()
+                    .any(|arg| brand_in_resolved_type(arg, brand, semantic, depth - 1))
+            });
+            arg_has_brand
+                || base
+                    .and_then(|name| local_alias_definition(name, semantic))
+                    .is_some_and(|def| brand_in_resolved_type(def, brand, semantic, depth - 1))
+        }
+        TSType::TSParenthesizedType(p) => {
+            brand_in_resolved_type(&p.type_annotation, brand, semantic, depth - 1)
+        }
+        TSType::TSArrayType(arr) => {
+            brand_in_resolved_type(&arr.element_type, brand, semantic, depth - 1)
+        }
+        TSType::TSTypeOperatorType(op) => {
+            brand_in_resolved_type(&op.type_annotation, brand, semantic, depth - 1)
+        }
+        TSType::TSUnionType(u) => u
             .types
             .iter()
-            .any(|ty| type_reference_base_name(ty) == Some(brand)),
-        ty => type_reference_base_name(ty) == Some(brand),
+            .any(|t| brand_in_resolved_type(t, brand, semantic, depth - 1)),
+        TSType::TSIntersectionType(i) => i
+            .types
+            .iter()
+            .any(|t| brand_in_resolved_type(t, brand, semantic, depth - 1)),
+        TSType::TSTupleType(tuple) => tuple
+            .element_types
+            .iter()
+            .any(|el| tuple_element_contains_brand(el, brand, semantic, depth - 1)),
+        TSType::TSNamedTupleMember(member) => {
+            tuple_element_contains_brand(&member.element_type, brand, semantic, depth - 1)
+        }
+        _ => false,
     }
 }
 
-/// True when an enclosing function/arrow declares `brand` as its return type.
-/// Such a function IS the brand's factory: it takes ownership of the raw value
-/// and stamps it with the brand, so the `as Brand` cast on the return path is
-/// the single sanctioned place the type boundary is crossed.
+/// Bridges a `TSTupleElement` (possibly optional/rest-wrapped) back into
+/// `brand_in_resolved_type`, mirroring tuple handling in other type walks.
+fn tuple_element_contains_brand<'a>(
+    el: &oxc_ast::ast::TSTupleElement<'a>,
+    brand: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    depth: u32,
+) -> bool {
+    use oxc_ast::ast::TSTupleElement;
+    match el {
+        TSTupleElement::TSOptionalType(opt) => {
+            brand_in_resolved_type(&opt.type_annotation, brand, semantic, depth)
+        }
+        TSTupleElement::TSRestType(rest) => {
+            brand_in_resolved_type(&rest.type_annotation, brand, semantic, depth)
+        }
+        other => other
+            .as_ts_type()
+            .is_some_and(|inner| brand_in_resolved_type(inner, brand, semantic, depth)),
+    }
+}
+
+/// True when an enclosing function/arrow's declared return type contains `brand`
+/// — either directly, or wrapped inside a tuple/intersection/generic resolved
+/// through local aliases. Such a function IS the brand's factory: it takes
+/// ownership of the raw value and stamps it with the brand, so the `as Brand`
+/// cast on the return path is the single sanctioned place the boundary is crossed.
 fn is_inside_brand_factory<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -147,7 +243,9 @@ fn is_inside_brand_factory<'a>(
             AstKind::ArrowFunctionExpression(a) => a.return_type.as_deref(),
             _ => None,
         };
-        return_type_is_brand(return_type, bare)
+        return_type.is_some_and(|ann| {
+            brand_in_resolved_type(&ann.type_annotation, bare, semantic, MAX_ALIAS_DEPTH)
+        })
     })
 }
 
@@ -355,6 +453,69 @@ function makeUserId(raw: string): string {
 }"#;
         let diags = run_rule_gated(&Check, src, "src/user/id.ts");
         assert_eq!(diags.len(), 1, "cast in a function not returning the brand must fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_cast_in_brand_factory_with_wrapper_alias_return_type() {
+        // Issue #6848 — `tracked()` is the sole factory for `TrackedId`. Its
+        // return type is a local alias `TrackedEnvelope<T> = [TrackedId, T, …]`
+        // that wraps the brand in a tuple, so the brand never appears at the top
+        // of the return annotation. Resolving the alias finds `TrackedId` inside
+        // the tuple, marking the function the brand's factory; the cast is exempt.
+        let src = r#"const trackedSymbol = Symbol();
+type TrackedId = string & { __brand: 'TrackedId' };
+export type TrackedEnvelope<TData> = [TrackedId, TData, typeof trackedSymbol];
+export function tracked<TData>(id: string, data: TData): TrackedEnvelope<TData> {
+  if (id === '') {
+    throw new Error('`id` must not be an empty string');
+  }
+  return [id as TrackedId, data, trackedSymbol];
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/stream/tracked.ts");
+        assert!(diags.is_empty(), "cast in a factory whose return type wraps the brand in a tuple alias must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_cast_when_wrapper_alias_return_type_lacks_the_brand() {
+        // Gate: resolving the wrapper alias is brand-specific. A function whose
+        // tuple-alias return type does NOT contain `TrackedId` is not that brand's
+        // factory, so a direct `as TrackedId` cast inside it still bypasses the
+        // validator and must fire.
+        let src = r#"type TrackedId = string & { __brand: 'TrackedId' };
+type OtherEnvelope = [string, number];
+function build(raw: string): OtherEnvelope {
+  const id = raw as TrackedId;
+  return [String(id), 0];
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/stream/other.ts");
+        assert_eq!(diags.len(), 1, "cast to a brand absent from the wrapper return type must still fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_cast_in_factory_returning_brand_in_generic_argument() {
+        // The brand may sit in a generic type argument of an imported wrapper
+        // (`Promise<UserId>`) with no local alias to resolve; the return-type walk
+        // must descend into type arguments to recognise the factory.
+        let src = r#"type UserId = string & { readonly __brand: 'UserId' };
+async function loadUserId(raw: string): Promise<UserId> {
+  return raw as UserId;
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/user/id.ts");
+        assert!(diags.is_empty(), "cast in a factory returning the brand inside a generic argument must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_cast_when_return_type_is_cyclic_alias_without_brand() {
+        // A self-referential alias chain must terminate (depth-bounded) without
+        // exempting: the brand never appears in the cycle, so the cast still fires.
+        let src = r#"type UserId = string & { readonly __brand: 'UserId' };
+type Loop = [Loop];
+function makeLoop(raw: string): Loop {
+  const id = raw as UserId;
+  throw new Error(id);
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/user/loop.ts");
+        assert_eq!(diags.len(), 1, "cast to a brand absent from a cyclic return-type alias must still fire (and terminate), got: {diags:?}");
     }
 
     #[test]
