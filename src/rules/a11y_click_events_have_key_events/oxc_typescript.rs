@@ -10,52 +10,7 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Native HTML tags with built-in keyboard activation — `Space`/`Enter`
-/// fire `click` automatically, so adding `onKeyDown` is redundant.
-const NATIVE_INTERACTIVE_TAGS: &[&str] =
-    &["button", "a", "input", "select", "textarea", "summary", "details"];
-
-/// Component-name roots whose `*Item` descendants expose a native
-/// `menuitem`/`option`-style role (full keyboard + typeahead navigation by
-/// construction). Matched together with the `Item` suffix so only items of an
-/// interactive container are exempt — `ListItem`/`GridItem`/`AccordionItem`
-/// stay flagged.
-const INTERACTIVE_ITEM_CONTAINERS: &[&str] = &[
-    "Menu",
-    "Select",
-    "Combobox",
-    "Listbox",
-    "Command",
-    "Dropdown",
-    "Autocomplete",
-];
-
-fn tag_has_native_keyboard_support(tag: &str) -> bool {
-    // Lowercase identifier = native HTML tag.
-    if NATIVE_INTERACTIVE_TAGS.contains(&tag) {
-        return true;
-    }
-    // Uppercase identifier = component. Treat names ending in `Button`
-    // (Button, IconButton, PrimaryButton, …) as wrapping a real
-    // `<button>` — same keyboard semantics apply.
-    if tag.ends_with("Button") {
-        return true;
-    }
-    // Link components (Link, NavLink, RouterLink, …) render an `<a href>`;
-    // Enter activates them natively, like the native `<a>` above.
-    if tag.ends_with("Link") {
-        return true;
-    }
-    // Menu/select/listbox/combobox item components carry a `menuitem`/`option`
-    // role with built-in keyboard navigation (DropdownMenuItem, SelectItem,
-    // ContextMenuItem, DropdownMenuRadioItem, …). `Option` is the bare case.
-    if tag == "Option" {
-        return true;
-    }
-    tag.ends_with("Item") && INTERACTIVE_ITEM_CONTAINERS.iter().any(|root| tag.contains(root))
-}
-
-/// Member-expression form of [`tag_has_native_keyboard_support`] — the
+/// Member-expression form of [`super::tag_has_native_keyboard_support`] — the
 /// namespaced component API (`<DropdownMenu.Item>`, `<NavigationMenu.Link>`,
 /// `<Select.Item>`). Exempt when the object root is an interactive container
 /// and the property is an item/option, or the property is a link.
@@ -65,7 +20,7 @@ fn member_tag_has_native_keyboard_support(object: &str, property: &str) -> bool 
     }
     let is_item_property =
         property == "Option" || property.ends_with("Item") || property.ends_with("Option");
-    is_item_property && INTERACTIVE_ITEM_CONTAINERS.iter().any(|root| object.contains(root))
+    is_item_property && super::INTERACTIVE_ITEM_CONTAINERS.iter().any(|root| object.contains(root))
 }
 
 impl OxcCheck for Check {
@@ -85,9 +40,13 @@ impl OxcCheck for Check {
         };
 
         let exempt = match &opening.name {
-            JSXElementName::Identifier(id) => tag_has_native_keyboard_support(&id.name),
-            JSXElementName::IdentifierReference(id) => tag_has_native_keyboard_support(&id.name),
-            JSXElementName::NamespacedName(ns) => tag_has_native_keyboard_support(&ns.name.name),
+            JSXElementName::Identifier(id) => super::tag_has_native_keyboard_support(&id.name),
+            JSXElementName::IdentifierReference(id) => {
+                super::tag_has_native_keyboard_support(&id.name)
+            }
+            JSXElementName::NamespacedName(ns) => {
+                super::tag_has_native_keyboard_support(&ns.name.name)
+            }
             JSXElementName::MemberExpression(m) => {
                 // Object root identifier, e.g. `DropdownMenu` in `<DropdownMenu.Item>`.
                 let object = match &m.object {
