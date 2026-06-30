@@ -50,6 +50,16 @@
 //!
 //! [logos]: https://github.com/maciejhirsz/logos
 //!
+//! Parser-combinator-cursor exception: a `Result<T, ()>` that is the return type
+//! of a function whose first parameter is a `&mut &…` input cursor (`&mut &[u8]`,
+//! `&mut &str`, `&mut &BStr`, `&mut &'a [u8]`) is a stateless winnow/nom-style
+//! parser combinator. Such a combinator advances the borrowed input in place via
+//! the `&mut &…` cursor and reads `Err(())` as "parse rejected, input unchanged —
+//! try another combinator"; the `()` error is mandated by the combinator contract,
+//! mirroring the logos `&mut Lexer<…>` callback exemption. The first parameter's
+//! type must be a mutable reference whose referent is itself a reference/slice; a
+//! shared `&[u8]` (not `&mut &…`) or a non-cursor first parameter stays flagged.
+//!
 //! FromStr-trait exception: a `Result<T, ()>` that is the return type of a
 //! function inside an `impl <…::>FromStr for T` block is mandated by the std
 //! `FromStr` trait, whose signature is `fn from_str(&str) -> Result<Self,
@@ -124,6 +134,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     }
     if is_logos_lexer_callback(node, source) {
+        return;
+    }
+    if is_parser_combinator_cursor(node) {
         return;
     }
     if is_in_fromstr_impl(node, source) {
@@ -294,6 +307,62 @@ fn type_is_mut_ref_to_lexer(ty: Node, source: &[u8]) -> bool {
     // `Lexer` (type_identifier) or `logos::Lexer` (scoped_type_identifier).
     base.utf8_text(source)
         .is_ok_and(|t| t == "Lexer" || t.ends_with("::Lexer"))
+}
+
+/// True when this `Result<T, ()>` is the return type of a stateless
+/// parser-combinator function — a function whose first parameter is a `&mut &…`
+/// input cursor (`&mut &[u8]`, `&mut &str`, `&mut &BStr`).
+///
+/// winnow/nom-style combinators advance the borrowed input in place via the
+/// `&mut &…` cursor and read `Err(())` as "parse rejected, input unchanged", so
+/// the `()` error is mandated by the combinator contract. The `Result` must sit
+/// in the enclosing function's `return_type` and its first non-`self` parameter
+/// must carry the `&mut &…` cursor type — a `Result<_, ()>` elsewhere, or a
+/// function whose first parameter is a shared `&[u8]` or a non-cursor type, stays
+/// flagged.
+fn is_parser_combinator_cursor(node: Node) -> bool {
+    let Some(func) = enclosing_fn(node) else {
+        return false;
+    };
+    // The Result must be the function's RETURN TYPE, not its body or parameters.
+    let Some(ret) = func.child_by_field_name("return_type") else {
+        return false;
+    };
+    if node.start_byte() < ret.start_byte() || node.end_byte() > ret.end_byte() {
+        return false;
+    }
+    let Some(params) = func.child_by_field_name("parameters") else {
+        return false;
+    };
+    // The cursor is the first non-`self` parameter (a `self` receiver is a
+    // `self_parameter`, not a `parameter`, so `find` skips it).
+    let mut cursor = params.walk();
+    params
+        .named_children(&mut cursor)
+        .find(|p| p.kind() == "parameter")
+        .and_then(|p| p.child_by_field_name("type"))
+        .is_some_and(type_is_mut_ref_to_ref)
+}
+
+/// True when `ty` is `&mut &…` — a mutable reference whose referent is itself a
+/// reference/slice (`&mut &[u8]`, `&mut &[T]`, `&mut &str`, `&mut &BStr`,
+/// `&mut &'a [u8]`). This is the stateless parser-combinator input-cursor shape.
+fn type_is_mut_ref_to_ref(ty: Node) -> bool {
+    if ty.kind() != "reference_type" {
+        return false;
+    }
+    // `&mut` is exposed as an anonymous `mutable_specifier` child, not a field.
+    let mut ty_cursor = ty.walk();
+    if !ty
+        .children(&mut ty_cursor)
+        .any(|c| c.kind() == "mutable_specifier")
+    {
+        return false;
+    }
+    // The referent must itself be a reference (`&[u8]`, `&str`, `&BStr`), making
+    // the whole type `&mut &…` — not `&mut [u8]` (mut ref to a bare slice).
+    ty.child_by_field_name("type")
+        .is_some_and(|referent| referent.kind() == "reference_type")
 }
 
 /// True when this `Result<T, ()>` is the return type of a function inside an
@@ -887,6 +956,105 @@ mod tests {
                 "impl C {\n\
                  \x20   fn cb(&self, lex: &mut Lexer<Token>) \
                  -> Result<u8, ()> { Err(()) }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    // --- parser-combinator cursor: `&mut &[u8]` first param, `Err(())` rejects (#6973) ---
+
+    #[test]
+    fn allows_parser_combinator_with_mut_ref_slice_cursor() {
+        // The gitoxide repro: a winnow-style combinator advances `&mut &'a [u8]`
+        // in place and returns `Result<&'a BStr, ()>`; `Err(())` is "parse
+        // rejected, input unchanged", so the `()` is mandated.
+        assert!(
+            run_on_src(
+                "fn until_line_end_without_separator<'a>(input: &mut &'a [u8]) \
+                 -> Result<&'a BStr, ()> { todo!() }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_parser_combinator_pub_header_with_mut_ref_slice_cursor() {
+        // The issue's `pub fn header(input: &mut &[u8]) -> Result<Header, ()>`
+        // combinator (non-lifetime-annotated `&mut &[u8]` cursor).
+        assert!(
+            run_on_src("pub fn header(input: &mut &[u8]) -> Result<Header, ()> { todo!() }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_parser_combinator_with_mut_ref_str_cursor() {
+        // `&mut &str` is the same advancing-cursor shape over a string slice.
+        assert!(
+            run_on_src("fn p(input: &mut &str) -> Result<Token, ()> { todo!() }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_parser_combinator_with_mut_ref_bstr_cursor() {
+        // `&mut &BStr` — the cursor referent is a `&BStr` reference, exempt too.
+        assert!(
+            run_on_src("fn p(input: &mut &BStr) -> Result<Token, ()> { todo!() }").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_with_non_cursor_first_param() {
+        // Load-bearing negative: a first parameter that is not a `&mut &…` cursor
+        // (a plain `u32`) is not a parser combinator, so it stays flagged.
+        assert_eq!(
+            run_on_src("fn f(x: u32) -> Result<T, ()> { todo!() }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_with_shared_ref_slice_first_param() {
+        // Load-bearing negative: a shared `&[u8]` (not `&mut &…`) is not an
+        // advancing cursor, so it stays flagged.
+        assert_eq!(
+            run_on_src("fn g(input: &[u8]) -> Result<T, ()> { todo!() }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_with_mut_ref_to_bare_slice_first_param() {
+        // Load-bearing negative: `&mut [u8]` is a mutable reference to a bare
+        // slice, not `&mut &…`; the referent is not itself a reference, so it
+        // stays flagged.
+        assert_eq!(
+            run_on_src("fn g(input: &mut [u8]) -> Result<T, ()> { todo!() }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_parser_combinator_cursor_in_struct_field() {
+        // Load-bearing negative: the exemption is scoped to the function's return
+        // type; a struct field stays flagged.
+        assert_eq!(
+            run_on_src("struct S { last: Result<u8, ()> }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_parser_combinator_method_with_self_and_cursor() {
+        // Combinators can be methods: a `(&mut self, input: &mut &[u8])` receiver
+        // alongside the cursor is still exempt — the `self` parameter is skipped,
+        // the first non-`self` parameter is the `&mut &[u8]` cursor.
+        assert!(
+            run_on_src(
+                "impl P {\n\
+                 \x20   fn next(&mut self, input: &mut &[u8]) \
+                 -> Result<u8, ()> { todo!() }\n\
                  }"
             )
             .is_empty()
