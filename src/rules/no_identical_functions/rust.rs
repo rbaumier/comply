@@ -10,16 +10,21 @@
 //! whose receivers differ in ownership/mutability (`self` vs `&self` vs
 //! `&mut self`) are exempt too: the idiomatic `as_x`/`as_x_mut` and
 //! `into_x`/`as_x` variants have syntactically identical bodies but
-//! incompatible types, so no shared helper can serve both. Free-function
-//! pairs whose bodies match but whose signatures differ (parameter list,
+//! incompatible types, so no shared helper can serve both. Function pairs
+//! whose bodies match but whose signatures differ (parameter list,
 //! `where`-clause / generic bounds, or return type) are exempt for the same
-//! reason: the immutable/mutable free-function pair
+//! reason, whether they are free functions or methods on the same type with
+//! the same receiver: the immutable/mutable free-function pair
 //! (`visit_relations`/`visit_relations_mut`, the `iter`/`iter_mut` shape) has a
 //! textually identical body but dispatches through different traits and
-//! borrows, and a return-type-polymorphic pair (`decode -> Option<Vec<char>>`
-//! vs `decode_to_string -> Option<String>`, where the shared `.collect()` body
-//! resolves to a different concrete type per return annotation) is two distinct
-//! functions, so no single generic helper can serve both. Functions in
+//! borrows; a return-type-polymorphic free-function pair (`decode ->
+//! Option<Vec<char>>` vs `decode_to_string -> Option<String>`, where the shared
+//! `.collect()` body resolves to a different concrete type per return
+//! annotation) is two distinct functions; and a same-type return-type-
+//! polymorphic method pair (`try_into_usize`/`try_into_u64`, whose identical
+//! `.try_into()` body resolves to a different `TryFrom<i64>` impl per return
+//! type) likewise cannot be merged — so no single generic helper can serve
+//! both. Functions in
 //! different `mod` blocks are exempt as well: Rust's path
 //! system makes `a::f` and `b::f` distinct, and co-located test suites
 //! routinely repeat the same assertions in sibling modules. Same-name pairs
@@ -41,9 +46,9 @@
 //! its body while the per-case data lives in the test attributes (rstest's
 //! `#[case]`/`#[values]`, or the `#[test_case(...)]` marker itself), so two such
 //! tests have identical bodies by design — so in each case the identical body is
-//! unavoidable. Free functions with identical signatures, and inherent methods
-//! on the same type with the same receiver and in the same module, are still
-//! flagged.
+//! unavoidable. Pairs with identical signatures *and* bodies — free functions,
+//! or inherent methods on the same type with the same receiver, in the same
+//! module — are still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -194,15 +199,22 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             if ri != Receiver::None && rj != Receiver::None && ri != rj {
                 continue;
             }
-            // Free functions carry no `self`, so the receiver guard above never
-            // reaches them. A free-function pair whose bodies match but whose
-            // signatures (parameters / generic bounds / `where`-clause) differ
-            // is the forced borrow-variant case at free-function scope (the
-            // `visit_relations`/`visit_relations_mut` shape: `&V`/`&mut V`,
-            // `Visit`/`VisitMut`). No single generic helper can serve both, so
-            // skip it. Identical signature *and* body remains a true duplicate.
-            if ri == Receiver::None
-                && rj == Receiver::None
+            // A pair whose bodies match but whose signatures (parameters /
+            // generic bounds / `where`-clause / return type) differ cannot be
+            // unified into one shared helper, provided they share the same
+            // receiver shape and — for methods — the same inherent type. Two
+            // cases: the forced borrow-variant free-function pair
+            // (`visit_relations`/`visit_relations_mut`: `&V`/`&mut V`,
+            // `Visit`/`VisitMut`), and the return-type-polymorphic same-type
+            // method pair (`try_into_usize`/`try_into_u64`, whose identical
+            // `.try_into()` body resolves to a different `TryFrom<i64>` impl per
+            // return type). Free functions carry `Receiver::None` and
+            // `inherent_type` `None`, so both equality checks hold for them;
+            // same-type methods pass when their receivers match. Different-type
+            // methods are already exempt above, and identical signature *and*
+            // body remains a true duplicate that is still flagged.
+            if functions[i].inherent_type == functions[j].inherent_type
+                && ri == rj
                 && functions[i].signature != functions[j].signature
             {
                 continue;
@@ -787,6 +799,118 @@ impl Foo {
         let a = x + 1;
         let b = a * 2;
         b
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_same_type_methods_differing_only_in_return_type() {
+        // Issue #6963: gitoxide's `try_into_usize`/`try_into_u64` on the same
+        // `UnsignedInteger` type share the same `&'static self` receiver and a
+        // byte-identical `.try_into()` body, but their return types differ
+        // (`Result<usize, _>` vs `Result<u64, _>`). `.try_into()` is return-type
+        // polymorphic — it resolves to a different `TryFrom<i64>` impl per return
+        // type — so the methods are semantically distinct and cannot be merged.
+        let src = r#"
+struct UnsignedInteger;
+
+impl UnsignedInteger {
+    pub fn try_into_usize(
+        &'static self,
+        value: Result<i64, Error>,
+    ) -> Result<usize, ConfigError> {
+        value
+            .map_err(|err| ConfigError::from(self).with_source(err))
+            .and_then(|value| {
+                value
+                    .try_into()
+                    .map_err(|_| ConfigError::from(self))
+            })
+    }
+
+    pub fn try_into_u64(
+        &'static self,
+        value: Result<i64, Error>,
+    ) -> Result<u64, ConfigError> {
+        value
+            .map_err(|err| ConfigError::from(self).with_source(err))
+            .and_then(|value| {
+                value
+                    .try_into()
+                    .map_err(|_| ConfigError::from(self))
+            })
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_same_type_owned_methods_differing_only_in_return_type() {
+        // Issue #6963: gitoxide's `try_into_commit`/`try_into_tag` on the same
+        // `Object` type take `self` by value and share a byte-identical body
+        // whose `.try_into()` resolves to a different concrete `TryFrom` impl per
+        // return type (`Result<Commit, _>` vs `Result<Tag, _>`), so the pair
+        // cannot be unified into one helper.
+        let src = r#"
+struct Object;
+
+impl Object {
+    pub fn try_into_commit(self) -> Result<Commit, Error> {
+        let kind = self.kind;
+        let data = self.data;
+        self.try_into()
+            .map_err(|_| Error::new(kind, data))
+    }
+
+    pub fn try_into_tag(self) -> Result<Tag, Error> {
+        let kind = self.kind;
+        let data = self.data;
+        self.try_into()
+            .map_err(|_| Error::new(kind, data))
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_same_type_methods_identical_return_type_and_body() {
+        // Negative-space guard for #6963: two same-type methods with the SAME
+        // receiver, SAME signature (return type included), and identical body are
+        // genuine duplication and must still be flagged — the return-type
+        // exemption must not over-suppress same-signature same-type duplicates.
+        let src = r#"
+struct UnsignedInteger;
+
+impl UnsignedInteger {
+    pub fn try_into_usize(
+        &'static self,
+        value: Result<i64, Error>,
+    ) -> Result<usize, ConfigError> {
+        value
+            .map_err(|err| ConfigError::from(self).with_source(err))
+            .and_then(|value| {
+                value
+                    .try_into()
+                    .map_err(|_| ConfigError::from(self))
+            })
+    }
+
+    pub fn try_into_usize_copy(
+        &'static self,
+        value: Result<i64, Error>,
+    ) -> Result<usize, ConfigError> {
+        value
+            .map_err(|err| ConfigError::from(self).with_source(err))
+            .and_then(|value| {
+                value
+                    .try_into()
+                    .map_err(|_| ConfigError::from(self))
+            })
     }
 }
 "#;
