@@ -9,7 +9,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "workaround-reference",
-    description: "Workaround/hack/compat comment without a reference to the upstream issue.",
+    description: "Workaround/hack comment without a reference to the upstream issue.",
     remediation: "Add a link or issue number explaining what the workaround is for.",
     severity: Severity::Warning,
     doc_url: None,
@@ -31,7 +31,7 @@ pub fn register() -> RuleDef {
     }
 }
 
-const KEYWORDS: &[&str] = &["workaround", "hack", "compat"];
+const KEYWORDS: &[&str] = &["workaround", "hack"];
 
 const REASON_CONNECTORS: &[&str] = &[
     "because",
@@ -49,8 +49,7 @@ fn is_word_byte(b: u8) -> bool {
 }
 
 /// True when `needle` appears in `haystack` as a whole word — surrounded by
-/// non-word characters (or string boundaries). Keeps `compat` from matching
-/// inside `compatible`/`compatibility`/`incompatible` and `hack` from matching
+/// non-word characters (or string boundaries). Keeps `hack` from matching
 /// inside `hackathon`.
 fn word_boundary_contains(haystack: &str, needle: &str) -> bool {
     let bytes = haystack.as_bytes();

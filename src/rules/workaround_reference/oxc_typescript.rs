@@ -7,7 +7,7 @@ pub struct Check;
 
 impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&["workaround", "hack", "compat", "Workaround", "Hack", "Compat", "HACK"])
+        Some(&["workaround", "hack", "Workaround", "Hack", "HACK"])
     }
 
     fn run_on_semantic<'a>(
@@ -46,7 +46,7 @@ impl OxcCheck for Check {
                 line,
                 column: 1,
                 rule_id: super::META.id.into(),
-                message: "Workaround/hack/compat comment without an issue reference — \
+                message: "Workaround/hack comment without an issue reference — \
                           add a link or ticket number."
                     .into(),
                 severity: Severity::Warning,

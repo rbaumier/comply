@@ -24,7 +24,7 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
         ctx.path,
         &node,
         super::META.id,
-        "Workaround/hack/compat comment without an issue reference — \
+        "Workaround/hack comment without an issue reference — \
          add a link or ticket number.".into(),
         Severity::Warning,
     ));
@@ -81,8 +81,30 @@ mod tests {
     }
 
     #[test]
-    fn flags_compat_without_ref() {
-        assert_eq!(run("// compat shim for old API\nfn f() {}").len(), 1);
+    fn compat_alone_does_not_trigger() {
+        // `compat` is a compatibility-domain noun/adjective, not a workaround
+        // marker, so it does not fire on its own.
+        assert!(run("// compat shim for old API\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_compatibility_notes() {
+        // deno false positives: `compat` as a standalone compatibility noun.
+        assert!(run("// node compat test\nfn f() {}").is_empty());
+        assert!(run("// Backwards compat. cb() is undocumented\nfn f() {}").is_empty());
+        assert!(run("// (node compat)\nfn f() {}").is_empty());
+        assert!(run("// compat surface does for reporter detection\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_compat_workaround() {
+        // `compat` next to a genuine `workaround` keyword still fires.
+        assert_eq!(run("// compat workaround for old API\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_hack_with_colon() {
+        assert_eq!(run("// hack: patch the output\nfn f() {}").len(), 1);
     }
 
     #[test]
