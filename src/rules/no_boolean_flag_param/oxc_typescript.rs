@@ -21,6 +21,13 @@
 //! A boolean parameter is also exempt when it is a class setter's parameter
 //! (`set foo(value: boolean) {}`). A setter has exactly one parameter — the
 //! value being assigned — and cannot be split into two named functions.
+//!
+//! A boolean parameter is also exempt when it is a TypeScript parameter property
+//! (`constructor(private flag: boolean)` — any accessibility or `readonly`
+//! modifier). The modifier turns the argument into a class field initialised from
+//! it, so the boolean is stored object state rather than a mode flag branched on
+//! inside the constructor; and a class has exactly one constructor, so the
+//! split-into-two-functions advice is structurally inapplicable.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -78,6 +85,15 @@ impl OxcCheck for Check {
             ts_type,
             oxc_ast::ast::TSType::TSBooleanKeyword(_)
         ) {
+            return;
+        }
+
+        // A TypeScript parameter property (`constructor(private flag: boolean)`)
+        // declares an instance field, not a local mode flag: the modifier turns
+        // the argument into stored object state read elsewhere, not branched on
+        // to select behavior. A class has exactly one constructor, so the "split
+        // into two named functions" advice is structurally inapplicable.
+        if crate::oxc_helpers::is_parameter_property(param) {
             return;
         }
 
@@ -574,5 +590,33 @@ mod tests {
     #[test]
     fn still_flags_boolean_flag_param_in_arrow() {
         assert_eq!(run("const send = (urgent: boolean) => {};").len(), 1);
+    }
+
+    // Regression for #6828: a TypeScript parameter property
+    // (`constructor(private _isResponseInArrayMode: boolean)`) declares an
+    // instance field read later as stored state, not a constructor mode flag — and
+    // a class has one constructor, so "split into two functions" is inapplicable.
+    // Every accessibility / `readonly` modifier variant is exempt. Reproducer
+    // shape from drizzle-team/drizzle-orm driver sessions.
+    #[test]
+    fn no_fp_constructor_parameter_property_issue_6828() {
+        assert!(
+            run("class C { constructor(private _isResponseInArrayMode: boolean) {} }").is_empty()
+        );
+        assert!(run("class C { constructor(public verbose: boolean) {} }").is_empty());
+        assert!(run("class C { constructor(protected eager: boolean) {} }").is_empty());
+        assert!(run("class C { constructor(readonly strict: boolean) {} }").is_empty());
+        assert!(
+            run("class C { constructor(public readonly strict: boolean) {} }").is_empty()
+        );
+    }
+
+    // Guard: a constructor boolean parameter WITHOUT an accessibility/readonly
+    // modifier is an ordinary local binding, not a parameter property, so it still
+    // fires; a normal function boolean param fires too.
+    #[test]
+    fn still_flags_modifierless_constructor_and_function_boolean_param() {
+        assert_eq!(run("class C { constructor(flag: boolean) {} }").len(), 1);
+        assert_eq!(run("function f(flag: boolean) {}").len(), 1);
     }
 }

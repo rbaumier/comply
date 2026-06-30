@@ -211,24 +211,6 @@ fn is_optional_flag_param(param: &FormalParameter) -> bool {
     param.optional || param.initializer.is_some()
 }
 
-/// True when a constructor parameter carries an accessibility (`public` /
-/// `private` / `protected`) or `readonly` modifier — a TypeScript *parameter
-/// property*. Such a parameter is not a free local binding: it declares an
-/// instance field, so its identifier becomes the class's property name and is
-/// governed by the data-model / implemented-interface contract (e.g. `public
-/// trainable: boolean` realizes the `Variable.trainable` field of an external
-/// ML API). The rule already leaves plain class-field and interface-member
-/// declarations out of scope; a parameter property is the same field
-/// declaration written in shorthand, so it is exempt for the same reason.
-///
-/// Anchored on the modifier shape, not a name list: an ordinary required
-/// boolean parameter without a modifier (`constructor(trainable: boolean)`,
-/// `format(colored: boolean)`) is still a local binding and keeps needing a
-/// predicate prefix.
-fn is_parameter_property(param: &FormalParameter) -> bool {
-    param.accessibility.is_some() || param.readonly
-}
-
 /// True when the parameter belongs to a type-only callable signature rather than
 /// a runtime function — an interface/type-literal method signature, a function or
 /// constructor type (`type F = (flag: boolean) => boolean`), a call/construct
@@ -480,7 +462,7 @@ impl OxcCheck for Check {
                 // class's property name, governed by the implemented data-model /
                 // API contract. Plain field/interface-member declarations are
                 // already out of scope, so the shorthand form is too.
-                if is_parameter_property(param) {
+                if crate::oxc_helpers::is_parameter_property(param) {
                     return;
                 }
                 // A `set loop(loop: boolean)` accessor mirroring a standard
