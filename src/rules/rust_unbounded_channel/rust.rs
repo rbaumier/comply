@@ -11,13 +11,15 @@
 //!   call is unqualified, so a lock-free queue with an `unbounded()`
 //!   constructor (`ConcurrentQueue::unbounded()`) is not mistaken for a
 //!   channel.
-//! - `channel` when the file uses `std::sync::mpsc` — `std::sync::mpsc`
-//!   has no bounded `channel()` (the bounded one is `sync_channel(N)`),
-//!   so a zero-arg `mpsc::channel()` is always unbounded. Tokio's
-//!   `mpsc::channel(N)` takes a capacity, so calls with arguments are
-//!   left alone. A `oneshot::channel()` path is excluded: a oneshot
-//!   carries at most one message by construction (the sender is consumed
-//!   by a single `send`), so it can never grow unbounded.
+//! - `channel` only when the call resolves to `std::sync::mpsc::channel` —
+//!   matched positively, either qualified (`mpsc::channel`,
+//!   `std::sync::mpsc::channel`) or a bare `channel()` brought in by
+//!   `use std::sync::mpsc::channel`. `std::sync::mpsc` has no bounded
+//!   `channel()` (the bounded one is `sync_channel(N)`), so a zero-arg
+//!   `mpsc::channel()` is always unbounded; tokio's `mpsc::channel(N)`
+//!   takes a capacity, so calls with arguments are left alone. Any other
+//!   `channel()` — `oneshot`, `broadcast`, `watch`, a third-party channel —
+//!   is not mpsc and is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -53,9 +55,7 @@ impl AstCheck for Check {
         let last_segment = text.rsplit("::").next().unwrap_or(text);
         let is_unbounded = last_segment == "unbounded_channel"
             || last_segment == "unbounded" && is_channel_unbounded_path(text)
-            || last_segment == "channel"
-                && is_inside_mpsc_use(node, source_bytes)
-                && !text.contains("oneshot");
+            || last_segment == "channel" && channel_is_std_mpsc(text, source_bytes);
         if !is_unbounded {
             return;
         }
@@ -130,11 +130,40 @@ fn is_channel_unbounded_path(text: &str) -> bool {
     }
 }
 
-/// Last-resort heuristic for the bare `channel()` call (no scoping).
-/// True if the file has `use std::sync::mpsc` or `use mpsc::*` somewhere.
-fn is_inside_mpsc_use(_node: tree_sitter::Node, source: &[u8]) -> bool {
+/// True when a `channel()` call resolves to `std::sync::mpsc::channel` — the
+/// only zero-argument `channel` constructor that is unbounded. Two accepted
+/// shapes:
+///   * qualified — the path segment immediately before `channel` is `mpsc`
+///     (`mpsc::channel`, `std::sync::mpsc::channel`, `sync::mpsc::channel`);
+///   * bare `channel()` brought in by `use std::sync::mpsc::channel;` — accepted
+///     only when the file actually imports `channel` from an `mpsc` path.
+/// Any other `channel()` (`oneshot`, `broadcast`, `watch`, a third-party
+/// channel, …), qualified OR bare-imported, is not mpsc and is not flagged.
+fn channel_is_std_mpsc(text: &str, source: &[u8]) -> bool {
+    let mut segments = text.rsplit("::");
+    let _ = segments.next(); // skip the trailing `channel`
+    match segments.next() {
+        Some("mpsc") => true,
+        Some(_) => false,
+        None => imports_bare_mpsc_channel(source),
+    }
+}
+
+/// True when the file imports `channel` from an `mpsc` module, so a bare
+/// `channel()` call refers to `std::sync::mpsc::channel`. Matches
+/// `use std::sync::mpsc::channel;` and a brace group `use std::sync::mpsc::{…, channel, …}`.
+fn imports_bare_mpsc_channel(source: &[u8]) -> bool {
     let text = std::str::from_utf8(source).unwrap_or("");
-    text.contains("std::sync::mpsc") || text.contains("use mpsc")
+    if text.contains("mpsc::channel") {
+        return true;
+    }
+    // brace-group import: `use std::sync::mpsc::{Sender, channel};`
+    text.split("mpsc::{").skip(1).any(|after| {
+        after
+            .split('}')
+            .next()
+            .is_some_and(|group| group.split([',', ' ', '\n', '\t']).any(|t| t.trim() == "channel"))
+    })
 }
 
 /// True when the unbounded construction at `node` is the implementation of a
@@ -489,9 +518,9 @@ mod tests {
 
     #[test]
     fn allows_tokio_oneshot_channel_issue_6706() {
-        // Issue #6706: a file that uses std::sync::mpsc elsewhere makes
-        // `is_inside_mpsc_use` true file-wide, but a tokio oneshot carries at
-        // most one message by construction and must not be flagged.
+        // Issue #6706: a file also using std::sync::mpsc must not flag a tokio
+        // oneshot — its qualified path is `oneshot`, not `mpsc`, so the positive
+        // mpsc match rejects it.
         let source =
             "use std::sync::mpsc;\nfn f() { let (tx, rx) = tokio::sync::oneshot::channel(); }";
         assert!(run_on(source).is_empty());
@@ -500,6 +529,34 @@ mod tests {
     #[test]
     fn flags_std_mpsc_but_not_oneshot_in_same_file() {
         let source = "use std::sync::mpsc;\nfn f() {\n    let (tx, rx) = mpsc::channel();\n    let (otx, orx) = tokio::sync::oneshot::channel();\n}";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_imported_oneshot_channel_in_mpsc_file() {
+        // A bare `channel()` imported from tokio oneshot, in a file that also
+        // uses std::sync::mpsc elsewhere: the path is `channel` (no `mpsc`
+        // qualifier) and the file imports `channel` from `oneshot`, not `mpsc`,
+        // so the positive match rejects it.
+        let source = "use std::sync::mpsc;\nuse tokio::sync::oneshot::channel;\nfn f() { let (tx, rx) = channel(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_imported_mpsc_channel() {
+        let source = "use std::sync::mpsc::channel;\nfn f() { let (tx, rx) = channel(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_qualified_std_mpsc_channel() {
+        let source = "fn f() { let (tx, rx) = std::sync::mpsc::channel(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_brace_group_mpsc_channel_import() {
+        let source = "use std::sync::mpsc::{Sender, channel};\nfn f() { let _ = channel(); }";
         assert_eq!(run_on(source).len(), 1);
     }
 
