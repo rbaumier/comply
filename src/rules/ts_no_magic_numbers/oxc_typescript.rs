@@ -135,6 +135,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The `space` argument of `JSON.stringify(value, replacer, 4)` is the
+        // pretty-print indentation width — a defined third parameter of the
+        // standard-library serializer, named by the builtin it is passed to.
+        // `JSON.stringify(pkg, null, 4)` is the canonical pretty-print idiom; the
+        // indentation width (2/4/…) is a formatting parameter, not a magic
+        // application constant.
+        if is_json_stringify_space_argument(node.id(), semantic) {
+            return;
+        }
+
         // A literal participating in modular arithmetic (`n % 10`, `n % 100 === 11`)
         // is self-documenting: the `%` operation gives the modulus and residue
         // their meaning. This is the structural shape of CLDR/Unicode plural rules
@@ -728,6 +738,53 @@ fn is_parse_int_callee(callee: &Expression<'_>) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when this literal is the third (`space`) argument of a call to the
+/// builtin `JSON.stringify(...)` — `JSON.stringify(pkg, null, 4)`. The `space`
+/// argument is the pretty-print indentation width, a defined parameter of a
+/// standard-library function whose position is fixed by the spec, so the literal
+/// is a formatting parameter, not an application magic number. Anchored tightly:
+/// only the `JSON.stringify` callee and only the 3rd argument, so a numeric
+/// `value`/`replacer` argument (`JSON.stringify(4)`), a literal in any other
+/// position, or a `stringify` on some other object (`yaml.stringify(a, b, 4)`)
+/// is unaffected.
+fn is_json_stringify_space_argument(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let arg_span = nodes.get_node(node_id).kind().span();
+
+    let call_id = nodes.parent_id(node_id);
+    if call_id == node_id {
+        return false;
+    }
+    let AstKind::CallExpression(call) = nodes.get_node(call_id).kind() else {
+        return false;
+    };
+    if !is_json_stringify_callee(&call.callee) {
+        return false;
+    }
+    // The literal must be the third argument (the `space`), matched by span so a
+    // literal nested inside an earlier argument never qualifies.
+    call.arguments
+        .get(2)
+        .is_some_and(|third| third.span() == arg_span)
+}
+
+/// True when a call expression's callee is the builtin `JSON.stringify` — the
+/// member access `JSON.stringify`.
+fn is_json_stringify_callee(callee: &Expression<'_>) -> bool {
+    matches!(
+        callee,
+        Expression::StaticMemberExpression(member)
+            if member.property.name == "stringify"
+                && matches!(
+                    &member.object,
+                    Expression::Identifier(obj) if obj.name == "JSON"
+                )
+    )
 }
 
 /// True when this literal is a modular-arithmetic constant — either the right
@@ -2417,6 +2474,42 @@ mod tests {
         // The exemption is anchored on the `parseInt` callee; the same literal as
         // the 2nd argument of an unrelated call is still a magic number.
         let src = r#"function f(fn: () => void) { setTimeout(fn, 10); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #6833: `JSON.stringify(value, replacer, space)` has a
+    // well-defined third positional parameter — the pretty-print indentation
+    // width. The `space` literal is a formatting parameter of the standard-library
+    // serializer, named by the builtin it is passed to, not a magic number.
+    #[test]
+    fn allows_json_stringify_space_argument() {
+        let src = r#"
+            function f(pkg: unknown, obj: unknown, replacer: unknown) {
+                const a = JSON.stringify(pkg, null, 4);
+                const b = JSON.stringify(obj, replacer, 8);
+                return a + b;
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "the space argument of JSON.stringify must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_json_stringify_non_space_argument() {
+        // Only the 3rd argument (the `space`) is the indentation width; a numeric
+        // literal in the `value` (1st) or `replacer` (2nd) position is an ordinary
+        // value and stays flagged.
+        assert_eq!(run(r#"function f() { return JSON.stringify(86400); }"#).len(), 1);
+        assert_eq!(run(r#"function f(v: unknown) { return JSON.stringify(v, 7); }"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_third_argument_of_non_json_stringify() {
+        // The exemption is anchored on the `JSON.stringify` callee; a `stringify`
+        // method on some other object keeps its 3rd-argument literal flagged.
+        let src = r#"function f(yaml: any, a: unknown, b: unknown) { return yaml.stringify(a, b, 4); }"#;
         assert_eq!(run(src).len(), 1);
     }
 
