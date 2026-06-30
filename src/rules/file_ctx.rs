@@ -539,6 +539,7 @@ const VENDORED_SEGMENTS: &[&str] = &[
     "vendors",
     "vendored",
     "external",
+    "external-crates",
     "third-party",
     "third_party",
 ];
@@ -1335,6 +1336,13 @@ mod tests {
         assert!(scan_path(&PathBuf::from("server/core/static/external/base64.js")).is_vendored);
         assert!(scan_path(&PathBuf::from("lib/third-party/confetti.js")).is_vendored);
         assert!(scan_path(&PathBuf::from("lib/third_party/confetti.js")).is_vendored);
+        // `external-crates/` is the Rust-workspace local-fork convention, e.g.
+        // meilisearch's patched async-openai fork (issue #6947). `external` does
+        // not cover it because matching is exact-segment, not prefix.
+        assert!(
+            scan_path(&PathBuf::from("external-crates/async-openai/src/types/message.rs"))
+                .is_vendored
+        );
     }
 
     #[test]
@@ -1354,6 +1362,10 @@ mod tests {
     fn normal_files_not_vendored() {
         assert!(!scan_path(&PathBuf::from("src/app.ts")).is_vendored);
         assert!(!scan_path(&PathBuf::from("lib/utils.js")).is_vendored);
+        // A first-party `crates/` workspace member is not vendored: `crates` is
+        // not itself a vendored segment, and `external-crates` only matches a
+        // whole `external-crates/` segment.
+        assert!(!scan_path(&PathBuf::from("crates/foo/src/lib.rs")).is_vendored);
     }
 
     #[test]
