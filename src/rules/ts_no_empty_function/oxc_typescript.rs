@@ -10,6 +10,10 @@
 //! An empty function as the right operand of a `??` / `||` fallback
 //! (`existing ?? (() => {})`) is exempt: the no-op body is the intended behavior
 //! when the left operand is nullish/falsy.
+//! An empty function as a JSX attribute value (`onClick={() => {}}`) is exempt in
+//! any file: it is a deliberate no-op satisfying a required event-handler prop.
+//! Other placeholder callback positions — call/new arguments — are exempt only in
+//! test files.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -27,18 +31,51 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__") || s.contains("_test.")
 }
 
-/// Returns true when the function expression sits in a JSX expression container
-/// or as an argument to a call/new expression (including parenthesized).
+/// Returns true when the empty function — after transparently unwrapping a single
+/// `ParenthesizedExpression` — is the value of a JSX *attribute*
+/// (`onClick={() => {}}`): its enclosing `JSXExpressionContainer` is a
+/// `JSXAttribute` value, not a JSX child expression. A no-op handler satisfying a
+/// required event-handler prop is a deliberate interface placeholder, so it is
+/// exempt in production and test code alike. A bare function as a JSX *child*
+/// (`<div>{() => {}}</div>`) is not an attribute value and is not exempted here.
+fn is_jsx_attribute_callback_position(
+    nodes: &oxc_semantic::AstNodes,
+    node_id: oxc_semantic::NodeId,
+) -> bool {
+    // Unwrap at most one ParenthesizedExpression wrapper.
+    let mut outer_id = node_id;
+    let parent_id = nodes.parent_id(outer_id);
+    if parent_id != outer_id
+        && matches!(nodes.kind(parent_id), AstKind::ParenthesizedExpression(_))
+    {
+        outer_id = parent_id;
+    }
+    let container_id = nodes.parent_id(outer_id);
+    if container_id == outer_id
+        || !matches!(nodes.kind(container_id), AstKind::JSXExpressionContainer(_))
+    {
+        return false;
+    }
+    let attr_id = nodes.parent_id(container_id);
+    attr_id != container_id && matches!(nodes.kind(attr_id), AstKind::JSXAttribute(_))
+}
+
+/// Returns true when the function expression sits in a placeholder callback
+/// position: the value of a JSX attribute (see
+/// `is_jsx_attribute_callback_position`), or an argument to a call/new expression
+/// (including parenthesized).
 fn is_placeholder_callback_position(
     nodes: &oxc_semantic::AstNodes,
     node_id: oxc_semantic::NodeId,
 ) -> bool {
+    if is_jsx_attribute_callback_position(nodes, node_id) {
+        return true;
+    }
     let parent_id = nodes.parent_id(node_id);
     if parent_id == node_id {
         return false;
     }
     match nodes.kind(parent_id) {
-        AstKind::JSXExpressionContainer(_) => true,
         AstKind::CallExpression(call) => {
             let node_span = nodes.kind(node_id).span();
             call.arguments.iter().any(|arg| arg.span() == node_span)
@@ -54,9 +91,7 @@ fn is_placeholder_callback_position(
             }
             matches!(
                 nodes.kind(grandparent_id),
-                AstKind::CallExpression(_)
-                    | AstKind::NewExpression(_)
-                    | AstKind::JSXExpressionContainer(_)
+                AstKind::CallExpression(_) | AstKind::NewExpression(_)
             )
         }
         _ => false,
@@ -288,9 +323,18 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Dual-read: the unit-test harness injects an empty default FileCtx, so
-        // `in_test_dir` is false in tests — fall back to the local check, which
-        // also covers the `_test.` infix that `in_test_dir` does not.
+        // A no-op function as a JSX attribute value (`onClick={() => {}}`) is a
+        // deliberate placeholder satisfying a required event-handler prop. The
+        // attribute's interface mandates it in production as well as tests, so it
+        // is exempt regardless of file kind.
+        if is_jsx_attribute_callback_position(semantic.nodes(), node.id()) {
+            return;
+        }
+
+        // Other placeholder callback positions — call/new arguments — stay exempt
+        // only in test files. Dual-read: the unit-test harness injects an empty
+        // default FileCtx, so `in_test_dir` is false in tests — fall back to the
+        // local check, which also covers the `_test.` infix `in_test_dir` does not.
         if (ctx.file.path_segments.in_test_dir || is_test_file(ctx.path))
             && is_placeholder_callback_position(semantic.nodes(), node.id())
         {
@@ -399,12 +443,49 @@ mod tests {
     }
 
     #[test]
-    fn flags_empty_arrow_in_jsx_prop_in_non_test_file() {
+    fn allows_empty_arrow_in_jsx_prop_in_non_test_file() {
+        // Repro #6968 (remix-run/remix bench): a no-op handler satisfying a
+        // required JSX event-handler prop is a deliberate placeholder, exempt in
+        // production as well as tests.
         let src = r#"
-            const x = <Foo onClose={() => {}} />;
+            const x = (
+                <tr onClick={() => {}}>
+                    <td>{row.id}</td>
+                </tr>
+            );
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    #[test]
+    fn flags_empty_arrow_as_jsx_child_in_non_test_file() {
+        // Negative space: a bare function as a JSX *child* is not an attribute
+        // value (it satisfies no prop contract), so it is still flagged.
+        let src = r#"
+            const x = <div>{() => {}}</div>;
         "#;
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.tsx");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_arrow_as_call_argument_in_non_test_file() {
+        // Negative space: a plain empty arrow as a call argument is NOT a JSX
+        // attribute placeholder; outside test files it is still flagged.
+        let src = r#"
+            foo(() => {});
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.tsx");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_arrow_as_plain_call_argument_in_test_file() {
+        // The non-JSX placeholder positions stay exempt in test files.
+        let src = r#"
+            foo(() => {});
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "Foo.test.tsx").is_empty());
     }
 
     #[test]
