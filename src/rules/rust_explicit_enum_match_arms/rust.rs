@@ -62,10 +62,13 @@
 //! impossible/error/absent case, not a catch-all standing in for unenumerated
 //! variants, so it is not flagged.
 //!
-//! A `_ => None` arm paired with at least one `Variant(v) => Some(v)` arm
-//! is the variant-accessor idiom ("extract this variant, else nothing").
-//! A later variant should still yield `None` here, so exhaustive listing
-//! adds noise without safety, and the wildcard is not flagged.
+//! The variant-accessor idiom ("extract this variant, else fall through")
+//! is exempt in both its forms: a `_ => None` arm paired with at least one
+//! `Variant(v) => Some(v)` arm (the `Option` form), or a `_ => Err(...)` arm
+//! paired with at least one `Variant(v) => Ok(v)` arm (the `Result` form, as in
+//! a `try_into_*` accessor). A later variant should still fall through here, so
+//! exhaustive listing adds noise without safety, and the wildcard is not
+//! flagged.
 //!
 //! We do not descend into nested `match`es here — the walker visits
 //! every `match_expression` independently, so each match is classified
@@ -104,10 +107,11 @@ impl AstCheck for Check {
         // patterns of arms that look enum-like.
         let mut wildcard_arms: Vec<tree_sitter::Node> = Vec::new();
         let mut enum_like_arms: Vec<tree_sitter::Node> = Vec::new();
-        // Tracks the `match self { Variant(v) => Some(v), _ => None }`
-        // accessor idiom: at least one enum-like arm wraps its value in
-        // `Some(...)`.
+        // Tracks the variant-accessor idiom: at least one enum-like arm wraps
+        // its value in `Some(...)` (the `_ => None` form) or in `Ok(...)` (the
+        // `_ => Err(...)` form).
         let mut has_some_extracting_arm = false;
+        let mut has_ok_extracting_arm = false;
         let mut cursor = match_block.walk();
         for child in match_block.named_children(&mut cursor) {
             if child.kind() != "match_arm" {
@@ -132,8 +136,11 @@ impl AstCheck for Check {
                 wildcard_arms.push(child);
             } else if pattern_is_enum_like(pattern, source_bytes) {
                 enum_like_arms.push(pattern);
-                if arm_body_is_some_call(child, source_bytes) {
+                if arm_body_is_ctor_call(child, source_bytes, "Some") {
                     has_some_extracting_arm = true;
+                }
+                if arm_body_is_ctor_call(child, source_bytes, "Ok") {
+                    has_ok_extracting_arm = true;
                 }
             }
         }
@@ -237,11 +244,18 @@ impl AstCheck for Check {
             if arm_has_cfg_attribute(arm, source_bytes) {
                 continue;
             }
-            // Variant-accessor idiom (issue #1252): a `_ => None` arm paired
-            // with a `Variant(v) => Some(v)` arm is "extract this variant,
-            // else nothing". A new variant should still yield `None` here, so
-            // exhaustive listing adds noise without safety.
+            // Variant-accessor idiom: a `_ => None` arm paired with a
+            // `Variant(v) => Some(v)` arm (the `Option` form), or a
+            // `_ => Err(...)` arm paired with a `Variant(v) => Ok(v)` arm (the
+            // `Result` form), is "extract this variant, else fall through". A
+            // new variant should still fall through here, so exhaustive listing
+            // adds noise without safety. The wildcard body is a bare `None`
+            // identifier in the `Option` form but a call to `Err` in the
+            // `Result` form, so the two are detected by different shapes.
             if has_some_extracting_arm && arm_body_is_none(arm, source_bytes) {
+                continue;
+            }
+            if has_ok_extracting_arm && arm_body_is_ctor_call(arm, source_bytes, "Err") {
                 continue;
             }
             let pos = arm.start_position();
@@ -847,9 +861,12 @@ fn source_file_defines_any_variant(
     false
 }
 
-/// True if the `match_arm`'s body is a `Some(...)` constructor call — the
-/// "present" half of a variant-accessor (`Variant(v) => Some(v)`).
-fn arm_body_is_some_call(arm: tree_sitter::Node, source: &[u8]) -> bool {
+/// True if the `match_arm`'s body is a constructor call whose function head is
+/// `ctor` — bare (`Some(v)`, `Ok(v)`, `Err(self)`) or path-qualified
+/// (`Option::Some`, `Result::Ok`). Used to recognize the halves of the
+/// variant-accessor idiom: the `Some(v)`/`Ok(v)` extracting arm and, in the
+/// `Result` form, the `Err(...)` wildcard.
+fn arm_body_is_ctor_call(arm: tree_sitter::Node, source: &[u8], ctor: &str) -> bool {
     let Some(value) = arm.child_by_field_name("value") else {
         return false;
     };
@@ -862,7 +879,7 @@ fn arm_body_is_some_call(arm: tree_sitter::Node, source: &[u8]) -> bool {
     let Ok(text) = callee.utf8_text(source) else {
         return false;
     };
-    text.rsplit("::").next().unwrap_or(text).trim() == "Some"
+    text.rsplit("::").next().unwrap_or(text).trim() == ctor
 }
 
 /// True if the `match_arm`'s body is the bare `None` literal (optionally
@@ -1413,6 +1430,56 @@ mod tests {
         let src = "fn import(self) -> Option<ImportId> { match self { \
                    ImportOrExternCrate::Import(it) => Some(it), _ => None } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_variant_accessor() {
+        // Issue #6972: gitoxide's `try_into_blob`. The `Result` form of the
+        // variant-accessor idiom — `Variant(v) => Ok(v)` paired with
+        // `_ => Err(self)` — extracts one variant and returns the enum unchanged
+        // so the caller can chain further `try_into_*` calls. A new variant
+        // should still fall through to `Err`, so it must not be flagged.
+        let src = "fn try_into_blob(self) -> Result<Blob, Self> { match self { \
+                   Object::Blob(v) => Ok(v), _ => Err(self) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_variant_accessor_qualified_ctors() {
+        // Issue #6972: the path-qualified `Result::Ok` / `Result::Err` form is
+        // the same idiom — the call head's final `::` segment is `Ok` / `Err`.
+        let src = "fn f(self) -> Result<Blob, Self> { match self { \
+                   Object::Blob(v) => Result::Ok(v), _ => Result::Err(self) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_variant_accessor_multiple_ok_arms() {
+        // Issue #6972: several `Variant(v) => Ok(v)` arms paired with a single
+        // `_ => Err(self)` wildcard are the same idiom.
+        let src = "fn f(self) -> Result<V, Self> { match self { \
+                   Object::Blob(v) => Ok(v), Object::Tree(v) => Ok(v), _ => Err(self) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_result_wildcard_err_without_ok_arm() {
+        // Issue #6972 negative space: a `_ => Err(...)` wildcard with NO
+        // `Ok(...)` arm is not the variant-accessor idiom — the non-wildcard
+        // arms do other work, so the `_` arm is a real catch-all and still flags.
+        let src = "fn f(x: Foo) -> Result<i32, Foo> { match x { \
+                   Foo::A => bar(), Foo::B => baz(), _ => Err(x) } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_result_ok_arms_with_non_err_wildcard() {
+        // Issue #6972 negative space: the exemption anchors on the wildcard body
+        // being a call to `Err`. `Ok(v)` arms paired with a `_ => Ok(0)` wildcard
+        // silently maps every new variant to `Ok(0)`, so it must still flag.
+        let src = "fn f(x: Foo) -> Result<i32, E> { match x { \
+                   Foo::A => Ok(1), Foo::B => Ok(2), _ => Ok(0) } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
