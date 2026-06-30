@@ -7,6 +7,7 @@ use oxc_ast::ast::{
     Argument, BindingPattern, Expression, ForStatementLeft, ObjectPropertyKind, PropertyKey,
     VariableDeclarationKind,
 };
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -109,6 +110,37 @@ fn options_has_signal_key(options: &Argument) -> bool {
     })
 }
 
+/// True when the `addEventListener` call is inside the executor of a `new
+/// Promise(...)` — i.e. some enclosing arrow/function expression is the first
+/// argument of a `NewExpression` whose callee is the identifier `Promise`. There the
+/// inline callback closes over the executor-local `resolve`/`reject` bindings and the
+/// listener target is a one-shot object scoped to the executor, so there is no stable
+/// reference to remove and nothing outlives the executor. A function passed as a
+/// later argument, the executor of a non-`Promise` `new Foo(...)`, or one merely
+/// nested elsewhere is not the executor and stays flagged.
+fn inside_promise_executor(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node_id) {
+        let fn_span = match ancestor.kind() {
+            AstKind::Function(f) => f.span,
+            AstKind::ArrowFunctionExpression(a) => a.span,
+            _ => continue,
+        };
+        let AstKind::NewExpression(new_expr) = nodes.parent_node(ancestor.id()).kind() else {
+            continue;
+        };
+        if matches!(&new_expr.callee, Expression::Identifier(id) if id.name.as_str() == "Promise")
+            && new_expr.arguments.first().is_some_and(|arg| arg.span() == fn_span)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -167,6 +199,15 @@ impl OxcCheck for Check {
         if call.arguments.get(2).is_some_and(options_set_once_true)
             || call.arguments.get(2).is_some_and(options_has_signal_key)
         {
+            return;
+        }
+
+        // Exempt a listener registered inside a `new Promise((resolve, reject) => …)`
+        // executor: the inline callback closes over the executor-local `resolve`/
+        // `reject`, and the listener target is a one-shot object scoped to that
+        // executor, so listener removal is structurally impossible and irrelevant. An
+        // inline listener outside any Promise executor stays flagged.
+        if inside_promise_executor(node.id(), semantic) {
             return;
         }
 
@@ -378,6 +419,85 @@ mod tests {
         assert!(
             run(r#"el.addEventListener('click', () => go(), { "signal": s });"#).is_empty()
         );
+    }
+
+    #[test]
+    fn allows_listener_inside_promise_executor() {
+        // Issue #6808: inside a `new Promise((resolve, reject) => …)` executor the
+        // inline callback closes over executor-local `resolve`/`reject` and the IDB
+        // transaction is scoped to the executor — removal is structurally impossible.
+        let src = r#"
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readwrite');
+                const store = tx.objectStore(this.storeName);
+                store.clear();
+                tx.addEventListener('complete', () => resolve());
+                tx.addEventListener('error', () => reject(tx.error));
+                tx.addEventListener('abort', () =>
+                    reject(tx.error ?? new Error('Transaction aborted')),
+                );
+            });
+        "#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_listener_inside_promise_executor_function_expression() {
+        // A `function` executor is equivalent to an arrow executor.
+        let src = r#"
+            new Promise(function (resolve) {
+                tx.addEventListener('complete', () => resolve());
+            });
+        "#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_listener_inside_expression_bodied_promise_executor() {
+        // The `addEventListener` call is the executor arrow's expression body, so the
+        // executor is its immediate parent — the walk must still reach it.
+        let src = r#"
+            new Promise((resolve) => tx.addEventListener('complete', () => resolve()));
+        "#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_inline_listener_in_method_outside_promise() {
+        // Negative-space guard: an inline listener in a plain method body (no Promise
+        // executor) must STILL fire.
+        let src = r#"
+            class C {
+                onMount() {
+                    this.el.addEventListener('click', () => this.go());
+                }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_listener_in_non_promise_constructor_executor() {
+        // The enclosing function is the executor of a non-`Promise` constructor, so
+        // the structural one-shot guarantee does not hold — still flagged.
+        let src = r#"
+            new Foo(() => {
+                el.addEventListener('click', () => go());
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_listener_in_second_arg_of_new_promise() {
+        // The enclosing function is the SECOND argument of `new Promise(...)`, not the
+        // executor (first argument), so it is not exempt — still flagged.
+        let src = r#"
+            new Promise(executor, () => {
+                el.addEventListener('click', () => go());
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
