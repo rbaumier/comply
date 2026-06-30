@@ -151,6 +151,39 @@ mod tests {
     }
 
     #[test]
+    fn allows_conditional_refactored_clause() {
+        // Regression for issue #6917: "if we refactored X" is a conditional
+        // (hypothetical) design musing, not past code-history narration.
+        let src = "// Alternatively, if we refactored the grep interfaces to pass along the\n// full set of matches, then that might also help here.\nfn f() {}";
+        assert!(run(src).is_empty());
+        assert!(run("// unless they refactored it, this stays\nfn f() {}").is_empty());
+        // "rewrote" is not a history word, so a conditional rewrite reads clean.
+        assert!(run("// if you rewrote this it would simplify\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_when_refactored_past_narration() {
+        // "when" is deliberately excluded from the conditional exemption:
+        // "when we refactored the API" narrates a past event (code history).
+        assert_eq!(run("// when we refactored the API, the cache broke\nfn f() {}").len(), 1);
+        // A pronoun clause without a conditional conjunction still narrates.
+        assert_eq!(run("// we refactored the parser into two passes\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_past_refactored_without_conditional_head() {
+        // Past-tense narration without a conditional head must still fire.
+        assert_eq!(run("// was refactored from a Vec\nfn f() {}").len(), 1);
+        assert_eq!(run("// the module was rewritten in v3\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_modal_passive_refactored() {
+        // The pre-existing modal-passive exemption still holds.
+        assert!(run("// this should be refactored later\nfn f() {}").is_empty());
+    }
+
+    #[test]
     fn flags_rename_without_version_anchor() {
         // Negative space for #6145: an internal rename with no version anchor is
         // still code-history narration and must fire.

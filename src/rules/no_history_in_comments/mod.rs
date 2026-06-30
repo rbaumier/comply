@@ -143,9 +143,18 @@ pub(crate) fn mentions_history(raw: &str) -> bool {
         .collect();
     for (i, word) in words.iter().enumerate() {
         if HISTORY_WORDS_ALWAYS.contains(word) {
-            // "be rewritten" / "be refactored" is a verb describing expected
-            // (often negated or hypothetical) behaviour, not a past code change.
-            if i.checked_sub(1).map(|j| words[j]) == Some("be") {
+            let prev = i.checked_sub(1).map(|j| words[j]);
+            let prev2 = i.checked_sub(2).map(|j| words[j]);
+            // Skip hypothetical readings, which describe a possible design path
+            // rather than a past code change: the modal passive ("should be
+            // refactored") and a conditional clause headed by a conjunction +
+            // pronoun ("if we refactored X", "unless they refactored it").
+            // "when" is excluded — "when we refactored the API" usually narrates
+            // a past event, the code history this rule exists to flag.
+            let modal_passive = prev == Some("be");
+            let conditional_clause = matches!(prev, Some("we" | "you" | "they" | "one" | "it"))
+                && matches!(prev2, Some("if" | "unless"));
+            if modal_passive || conditional_clause {
                 continue;
             }
             return true;
