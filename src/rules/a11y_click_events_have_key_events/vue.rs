@@ -1,4 +1,8 @@
 //! a11y-click-events-have-key-events — Vue text backend.
+//!
+//! Native interactive HTML elements (`<button>`, `<input>`, `<a>`, …) have
+//! built-in keyboard activation, so they are exempt from the keyboard-handler
+//! requirement — matching the OXC backend's tag-level decision.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -19,6 +23,11 @@ impl TextCheck for Check {
             // A `@click` on a custom component is a component event binding, not a
             // DOM click handler, so the keyboard-handler requirement does not apply.
             if is_custom_component_tag(elem.tag) {
+                continue;
+            }
+            // Native interactive elements (button, input, a, …) have built-in
+            // keyboard activation; a paired @keydown is redundant.
+            if super::tag_has_native_keyboard_support(elem.tag) {
                 continue;
             }
             // Vue uses @click or v-on:click
@@ -88,5 +97,42 @@ mod tests {
     fn still_flags_native_span() {
         let source = "<template>\n  <span @click=\"handler\">Click</span>\n</template>";
         assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn ignores_native_button() {
+        // Regression for rbaumier/comply#6970 — `<button @click>` has built-in
+        // keyboard activation, so no paired `@keydown` is required.
+        let source =
+            "<template>\n  <button @click=\"onDropdownClick\">Toggle</button>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_native_interactive_elements() {
+        for tag in ["input", "select", "textarea", "summary", "details"] {
+            let source = format!("<template>\n  <{tag} @click=\"handler\" />\n</template>");
+            assert!(run(&source).is_empty(), "<{tag}> should be ignored");
+        }
+    }
+
+    #[test]
+    fn ignores_native_anchor_with_href() {
+        let source =
+            "<template>\n  <a href=\"/back\" @click=\"handler\">Back</a>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_native_li() {
+        let source = "<template>\n  <li @click=\"handler\">Item</li>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_native_button_with_keydown() {
+        let source =
+            "<template>\n  <button @click=\"handler\" @keydown=\"handler\">Toggle</button>\n</template>";
+        assert!(run(source).is_empty());
     }
 }
