@@ -1463,6 +1463,32 @@ pub fn is_nuxt_plugin_file(path: &Path) -> bool {
         == Some("plugins")
 }
 
+/// True when `path` is a Nuxt app-level route middleware module: a file with a
+/// `middleware` path segment that is not preceded by a `server` segment (e.g.
+/// `middleware/auth.ts`, `apps/volt/middleware/route.global.ts`). Nuxt
+/// auto-discovers every file under the app `middleware/` directory and consumes
+/// its `export default defineNuxtRouteMiddleware(...)` by route convention at
+/// build time — `*.global.*` files run on every navigation, the rest when named
+/// in `definePageMeta({ middleware })` — never through a static import, so the
+/// `default` export has no importer yet is live. The `server` exclusion keeps a
+/// `server/middleware/` module (Nitro server middleware, covered by
+/// [`is_nuxt_server_route_file`]) on its own server path rather than this
+/// app-router one. Detection-gated by the caller (Nuxt framework owning the
+/// path).
+pub fn is_nuxt_app_middleware_file(path: &Path) -> bool {
+    let mut prev: Option<&std::ffi::OsStr> = None;
+    for component in path.components() {
+        let segment = component.as_os_str();
+        if segment == std::ffi::OsStr::new("middleware")
+            && prev != Some(std::ffi::OsStr::new("server"))
+        {
+            return true;
+        }
+        prev = Some(segment);
+    }
+    false
+}
+
 /// True when `path` is a `vite-plugin-fake-server` mock module: any file under a
 /// `mock/` or `mocks/` directory (the plugin's default `include` target, matched
 /// as a path segment so the whole subtree counts). The plugin glob-discovers
@@ -2147,6 +2173,29 @@ mod aux_path_tests {
         // An unrelated directory whose name merely contains `plugins` does not
         // qualify; only the exact `plugins/` parent segment matches.
         assert!(!is_nuxt_plugin_file(Path::new("src/myplugins/wagmi.ts")));
+    }
+
+    #[test]
+    fn nuxt_app_middleware_file_segments() {
+        // Issue #6831: Nuxt auto-discovers app route middleware under
+        // `middleware/` (or `<layer>/middleware/`) and calls its `export default
+        // defineNuxtRouteMiddleware(...)` by route convention.
+        assert!(is_nuxt_app_middleware_file(Path::new(
+            "apps/volt/middleware/route.global.ts"
+        )));
+        assert!(is_nuxt_app_middleware_file(Path::new("middleware/auth.ts")));
+        // `server/middleware/` is Nitro server middleware, covered by
+        // `is_nuxt_server_route_file`, not the app-router path.
+        assert!(!is_nuxt_app_middleware_file(Path::new(
+            "server/middleware/auth.ts"
+        )));
+        assert!(!is_nuxt_app_middleware_file(Path::new(
+            "src/server/middleware/auth.ts"
+        )));
+        // No `middleware/` segment — application code stays subject to the rule.
+        assert!(!is_nuxt_app_middleware_file(Path::new(
+            "composables/useToken.ts"
+        )));
     }
 
     #[test]
