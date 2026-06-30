@@ -28,6 +28,13 @@
 //! concurrently — no `Arc` appears because rayon borrows the container across
 //! threads — so the `Mutex`/`RwLock` is justified and stays unflagged.
 //!
+//! A bare `Mutex::new(..)` also escapes the current thread when it is moved
+//! into an `Arc` at the construction site: either as a local later wrapped
+//! (`let m = Mutex::new(..); Arc::new(m)`) or inline as a struct-literal field
+//! initializer whose surrounding literal is the argument of `Arc::new`
+//! (`Arc::new(S { m: Mutex::new(..), .. })`, including nested struct literals).
+//! Both are genuinely shared, so the lock stays unflagged.
+//!
 //! Test code is exempted — tests commonly use bare `Mutex` for simple
 //! state without thread sharing, and rewriting them to `RefCell`
 //! wouldn't catch a real bug.
@@ -36,6 +43,13 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
 
 const SHARING_WRAPPERS: &[&str] = &["Arc", "Rc", "LazyLock", "OnceLock", "Lazy", "OnceCell"];
+
+/// Constructors that move their whole argument into a shared, cross-thread
+/// wrapper. Both `local_mutex_is_shared_later` (the `let m = Mutex::new();
+/// Arc::new(m)` flow) and `mutex_in_arc_wrapped_struct_literal` (the inline
+/// `Arc::new(S { m: Mutex::new(..) })` flow) key on this set.
+const ARC_CONSTRUCTORS: &[&str] =
+    &["Arc::new", "std::sync::Arc::new", "alloc::sync::Arc::new"];
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir { return; }
@@ -121,6 +135,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if local_mutex_is_shared_later(node, source) {
         return;
     }
+    if mutex_in_arc_wrapped_struct_literal(node, source) {
+        return;
+    }
     if enclosing_fn_uses_rayon(node, source) {
         return;
     }
@@ -146,6 +163,78 @@ fn local_mutex_is_shared_later(node: tree_sitter::Node, source: &[u8]) -> bool {
     };
     contains_arc_new_for(after, name)
         || (after.contains("spawn(") && contains_identifier(after, name))
+}
+
+/// `Mutex::new(..)` written inline as a struct-literal field initializer is
+/// shared across threads when the surrounding struct literal is moved into a
+/// recognized sharing wrapper at the construction site
+/// (`Arc::new(S { m: Mutex::new(..), .. })`) — the inline twin of the
+/// `let m = Mutex::new(); Arc::new(m)` data flow `local_mutex_is_shared_later`
+/// already exempts. Ascends from the lock to the enclosing `struct_expression`,
+/// chaining through nested struct literals, and returns true once a literal in
+/// that chain is the argument of an `Arc::new` call.
+fn mutex_in_arc_wrapped_struct_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(mut struct_expr) = enclosing_struct_literal_of_field(node) else {
+        return false;
+    };
+    loop {
+        let Some(parent) = struct_expr.parent() else {
+            return false;
+        };
+        match parent.kind() {
+            "arguments" => return call_is_arc_new(parent, source),
+            // The struct literal is itself a field value of an outer literal;
+            // climb to that outer literal and re-check.
+            "field_initializer" => {
+                let Some(outer) = enclosing_struct_literal_of_field(struct_expr) else {
+                    return false;
+                };
+                struct_expr = outer;
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// From a node inside a struct-literal field value, return the enclosing
+/// `struct_expression` (`field_initializer` → `field_initializer_list` →
+/// `struct_expression`). Returns `None` when the node is not directly inside a
+/// struct-literal field, stopping at a `function_item`/`closure_expression`
+/// boundary so a local in a closure stored as a field is not mistaken for the
+/// field value itself.
+fn enclosing_struct_literal_of_field(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        match parent.kind() {
+            "field_initializer" => {
+                return parent
+                    .parent()
+                    .and_then(|list| list.parent())
+                    .filter(|s| s.kind() == "struct_expression");
+            }
+            "function_item" | "closure_expression" => return None,
+            _ => {}
+        }
+        cur = parent.parent();
+    }
+    None
+}
+
+/// Whether the `call_expression` owning `arguments` calls a recognized
+/// `Arc::new` constructor.
+fn call_is_arc_new(arguments: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(call) = arguments.parent() else {
+        return false;
+    };
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
+    func.utf8_text(source)
+        .map(|text| ARC_CONSTRUCTORS.contains(&text))
+        .unwrap_or(false)
 }
 
 /// Rayon `ParallelIterator` / `IntoParallelIterator` method entry points.
@@ -221,17 +310,9 @@ fn enclosing_let_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&
 }
 
 fn contains_arc_new_for(text: &str, name: &str) -> bool {
-    for prefix in [
-        "Arc::new(",
-        "std::sync::Arc::new(",
-        "alloc::sync::Arc::new(",
-    ] {
-        let needle = format!("{prefix}{name}");
-        if text.contains(&needle) {
-            return true;
-        }
-    }
-    false
+    ARC_CONSTRUCTORS
+        .iter()
+        .any(|ctor| text.contains(&format!("{ctor}({name}")))
 }
 
 fn contains_identifier(text: &str, name: &str) -> bool {
@@ -514,6 +595,37 @@ fn kmeans(nodes: &[Vec<f32>], k: usize) {
 fn a(v: &[u32]) { v.par_iter().for_each(|_| {}); }
 fn b() { let m: Mutex<u32> = Mutex::new(0); let _g = m.lock().unwrap(); }
 "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_mutex_turbofish_in_arc_wrapped_struct_literal() {
+        let src = r#"
+fn new() {
+    let interest = Arc::new(Registration {
+        interest: Mutex::<Option<Interest>>::new(None),
+        end: PipeEnd::Reader,
+    });
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_turbofish_in_nested_arc_wrapped_struct_literal() {
+        let src = "fn f() { let s = Arc::new(Outer { inner: Inner { m: Mutex::<u32>::new(0) } }); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_mutex_turbofish_in_unwrapped_struct_literal() {
+        let src = "fn f() { let r = Registration { interest: Mutex::<u32>::new(0) }; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_mutex_turbofish_in_struct_literal_passed_to_non_arc_call() {
+        let src = "fn f() { sink(Registration { interest: Mutex::<u32>::new(0) }); }";
         assert_eq!(run(src).len(), 1);
     }
 }
