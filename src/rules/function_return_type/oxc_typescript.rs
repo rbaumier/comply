@@ -84,10 +84,12 @@ fn check_return_types(
     if return_types.contains("unknown") {
         return None;
     }
-    // Absence sentinels: `null`/`undefined` and a `false` literal (the
-    // find-or-`false` idiom). Exactly one concrete type alongside any of
-    // these is a deliberate value-or-absence union, not a defect.
-    let is_sentinel = |t: &str| t == "null" || t == "undefined" || t == "false";
+    // Control sentinels: `null`/`undefined` and the boolean literals `false`
+    // (find-or-`false` idiom) and `true` (accept/deny signals, e.g. a Vue
+    // Router navigation guard returning `true` to allow vs. a `RouteLocationRaw`
+    // to redirect). Exactly one concrete type alongside any of these is a
+    // deliberate value-or-signal union, not a defect.
+    let is_sentinel = |t: &str| t == "null" || t == "undefined" || t == "false" || t == "true";
     let has_sentinel = return_types.iter().any(|t| is_sentinel(t));
     let non_sentinel: Vec<_> = return_types.iter().filter(|t| !is_sentinel(t)).collect();
     if has_sentinel && non_sentinel.len() <= 1 {
@@ -190,13 +192,14 @@ fn infer_type(expr: &Expression) -> &'static str {
     match expr {
         Expression::NumericLiteral(_) => "number",
         Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => "string",
-        // A `false` literal is the find-or-`false` negative sentinel — the
-        // same value-or-absence role `null`/`undefined` play. Tag it distinctly
-        // so `check_return_types` can fold it into the absence-sentinel set.
-        // `true` stays a concrete `"boolean"` value.
+        // Boolean literals are control signals, not concrete values: `false`
+        // is the find-or-`false` negative sentinel and `true` is the accept
+        // signal (e.g. a navigation guard allowing vs. returning a redirect).
+        // Tag each distinctly so `check_return_types` can fold them into the
+        // sentinel set, the same value-or-signal role `null`/`undefined` play.
         Expression::BooleanLiteral(lit) => {
             if lit.value {
-                "boolean"
+                "true"
             } else {
                 "false"
             }
@@ -370,13 +373,43 @@ mod tests {
     }
 
     #[test]
-    fn flags_string_with_true() {
-        // {string, boolean} via `true` — `true` is a concrete value, not a
-        // sentinel, so a string/true union still flags.
+    fn ignores_string_with_true_sentinel() {
+        // {string, true} — `true` is the accept signal, an absence/control
+        // sentinel like `false`, so a single concrete type alongside it is a
+        // deliberate value-or-signal union.
         let src = r#"
             function f(x: number) {
                 if (x === 1) return "one";
                 return true;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_true_accept_with_redirect_object() {
+        // Regression for #7023 — a Vue Router navigation guard returns `true`
+        // to allow navigation and a `RouteLocationRaw` object to redirect.
+        // {object, true} is a deliberate accept/redirect union, not a defect.
+        let src = r#"
+            function passwordGuard(to) {
+                if (!configs.remote) return true;
+                if (configs.remote === to.query.password) return true;
+                if (to.params.no) return { path: `/${to.params.no}` };
+                return { path: '' };
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_object_with_string_no_boolean_sentinel() {
+        // {string, object} — a genuine mixed-concrete union with no boolean
+        // sentinel to rescue it still flags.
+        let src = r#"
+            function f(x: number) {
+                if (x === 1) return "a";
+                return { path: '' };
             }
         "#;
         assert!(!run(src).is_empty());
