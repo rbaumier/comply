@@ -72,10 +72,15 @@ impl OxcCheck for Check {
             }
 
             // Skip methods whose enclosing class is decorated, extends a base
-            // class, or implements an interface. With `extends`/`implements`,
-            // the method may be required by the base-class or interface
-            // contract (e.g. NestJS DI factories, overrides), so making it
-            // `static` or extracting it would break polymorphism.
+            // class, implements an interface, or is `abstract`. With
+            // `extends`/`implements`, the method may be required by the
+            // base-class or interface contract (e.g. NestJS DI factories,
+            // overrides), so making it `static` or extracting it would break
+            // polymorphism. An `abstract class` is by definition designed to be
+            // subclassed: its concrete methods are virtual defaults that
+            // subclasses override (`override usesPivotTable()`), so they must
+            // stay instance methods even when their current body omits `this` —
+            // `static` methods cannot participate in `override` dispatch.
             //
             // Also skip methods that reference the enclosing class's own type
             // parameters in any type position (return type, parameter types, or
@@ -85,7 +90,11 @@ impl OxcCheck for Check {
             // omits `this` yet cannot be made `static`.
             if let Some(class) = enclosing_class(node.id(), nodes) {
                 let shape = ClassShape::of(class);
-                if shape.is_decorated || shape.has_super_class || shape.has_implements {
+                if shape.is_decorated
+                    || shape.has_super_class
+                    || shape.has_implements
+                    || shape.is_abstract
+                {
                     continue;
                 }
                 if method_references_class_type_param(method_def.span, class, nodes) {
@@ -431,5 +440,29 @@ mod tests {
         let diags = run_on("class C<T> { foo() { return 42; } }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("foo"));
+    }
+
+    #[test]
+    fn allows_concrete_method_in_abstract_class() {
+        // Issue #6990: a concrete method in an `abstract class` with no `extends`
+        // clause is a virtual default that subclasses override
+        // (`AbstractSqlPlatform extends Platform { override usesPivotTable() … }`).
+        // Making it `static` would break the override, so absence of `this` is
+        // not a smell — even though the class itself has no parent.
+        let src = "abstract class Platform {\n\
+                   usesPivotTable(): boolean { return false; }\n\
+                   usesImplicitTransactions(): boolean { return true; }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_same_method_in_non_abstract_class() {
+        // Negative space for #6990: the exemption is scoped to `abstract class`.
+        // The same `this`-free method in a plain (non-abstract) class is still a
+        // candidate for `static`.
+        let diags = run_on("class Platform { usesPivotTable(): boolean { return false; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("usesPivotTable"));
     }
 }

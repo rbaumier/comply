@@ -4185,12 +4185,15 @@ pub fn enclosing_class<'a>(
 /// callers exempt on exactly the axis they care about. `has_super_class`
 /// (`extends Base`) and `has_implements` (`implements I`) are kept distinct
 /// rather than bundled: rules that only care about `extends` must not also
-/// exempt on `implements`, which would introduce false negatives.
+/// exempt on `implements`, which would introduce false negatives. `is_abstract`
+/// (`abstract class`) marks a class designed to be subclassed, so its concrete
+/// methods are virtual defaults that subclasses override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClassShape {
     pub is_decorated: bool,
     pub has_super_class: bool,
     pub has_implements: bool,
+    pub is_abstract: bool,
 }
 
 impl ClassShape {
@@ -4200,6 +4203,7 @@ impl ClassShape {
             is_decorated: !class.decorators.is_empty(),
             has_super_class: class.super_class.is_some(),
             has_implements: !class.implements.is_empty(),
+            is_abstract: class.r#abstract,
         }
     }
 }
