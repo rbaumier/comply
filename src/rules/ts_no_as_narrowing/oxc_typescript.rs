@@ -102,13 +102,14 @@ fn is_dom_interface_type(name: &str) -> bool {
         || (name.starts_with("FileSystem") && name.ends_with("Entry"))
 }
 
-/// Whether the cast operand is a freshly-constructed literal value: an object
-/// literal (`{} as RouteModules`), an array literal (`[1, 2] as ReadonlyArray<number>`),
-/// or a primitive literal (`"idle" as RevalidationState`). Casting such an
-/// operand is a construction-time type ascription, not a narrowing of a
-/// pre-existing binding — there is no variable to refine with a type predicate
-/// or `in`/`typeof` check, so the rule's remediation does not apply.
-fn operand_is_constructed_literal(expr: &Expression) -> bool {
+/// Whether the cast operand is a freshly-constructed value: an object literal
+/// (`{} as RouteModules`), an array literal (`[1, 2] as ReadonlyArray<number>`),
+/// a primitive literal (`"idle" as RevalidationState`), or a `new` expression
+/// (`new String(value) as SafeHtml`). Casting such an operand is a
+/// construction-time type ascription, not a narrowing of a pre-existing binding
+/// — there is no variable to refine with a type predicate or `in`/`typeof`
+/// check, so the rule's remediation does not apply.
+fn operand_is_constructed_value(expr: &Expression) -> bool {
     matches!(
         expr,
         Expression::ObjectExpression(_)
@@ -120,6 +121,7 @@ fn operand_is_constructed_literal(expr: &Expression) -> bool {
             | Expression::TemplateLiteral(_)
             | Expression::BigIntLiteral(_)
             | Expression::RegExpLiteral(_)
+            | Expression::NewExpression(_)
     )
 }
 
@@ -189,11 +191,12 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip type-ascriptions of a freshly-constructed literal operand
-        // (`{} as T`, `[1, 2] as T`, `"idle" as Union`). These ascribe a type
-        // to a value being built inline; there is no pre-existing binding to
-        // narrow, so a type predicate / `in` / `typeof` guard cannot apply.
-        if operand_is_constructed_literal(&as_expr.expression) {
+        // Skip type-ascriptions of a freshly-constructed operand (`{} as T`,
+        // `[1, 2] as T`, `"idle" as Union`, `new String(v) as SafeHtml`). These
+        // ascribe a type to a value being built inline; there is no pre-existing
+        // binding to narrow, so a type predicate / `in` / `typeof` guard cannot
+        // apply.
+        if operand_is_constructed_value(&as_expr.expression) {
             return;
         }
 
@@ -640,6 +643,48 @@ mod tests {
         // narrowing, so the bare-identifier guard must keep it flagged.
         let src = "function f<T extends Base>({ a }: T) { return a as Concrete; }";
         let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_new_expression_operand_ascription() {
+        // Regression for #6967: `new String(value) as SafeHtml` constructs a
+        // fresh branded wrapper inline; there is no pre-existing binding to
+        // narrow with a type predicate, so the `new` operand must not be flagged.
+        let diags = run_on("const s = new String(value) as SafeHtml;");
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_new_expression_operand_with_user_target() {
+        // #6967: a `new` expression cast to any user narrowing target is still a
+        // freshly-constructed value, not a refinement of an existing variable.
+        let diags = run_on("const m = new Map() as TypedRegistry;");
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_call_expression_operand_narrowing() {
+        // Control for #6967: only `new` constructs a fresh value here. A plain
+        // call's result can be a pre-existing reference, so `makeThing() as Foo`
+        // is still a narrowing and must fire.
+        let diags = run_on("const t = makeThing() as Foo;");
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_identifier_operand_with_new_fix() {
+        // Control for #6967: an identifier binding is a pre-existing value;
+        // `foo as Bar` remains a genuine narrowing after the new-expression fix.
+        let diags = run_on("const x = foo as Bar;");
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_parenthesised_member_operand_with_new_fix() {
+        // Control for #6967: a member access on a pre-existing value is a real
+        // narrowing; `(obj.prop) as Baz` must still fire.
+        let diags = run_on("const y = (obj.prop) as Baz;");
         assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
     }
 }
