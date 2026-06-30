@@ -20,10 +20,12 @@
 //! - Tests annotated `#[tokio::test(start_paused = true)]`: the
 //!   Tokio clock is paused, so `time::sleep` advances simulated time
 //!   instantly instead of blocking — never slow or flaky.
-//! - Sleeps inside a bounded retry loop (a loop containing a
-//!   `break`): polling a condition with an early exit is the correct
-//!   way to wait when no sync primitive exists, not a flaky fixed
-//!   wait.
+//! - Sleeps inside a bounded loop: either a `for`/`loop`/`while`
+//!   containing a `break`, or a `while <condition>` whose predicate is
+//!   the exit criterion (any non-trivial condition; a constant-true
+//!   guard like `while true` still needs a `break`). Polling a
+//!   condition with a bounded exit is the correct way to wait when no
+//!   sync primitive exists, not a flaky fixed wait.
 //! - Sleeps inside a concurrency test — a test whose body also spawns
 //!   OS threads (`thread::spawn`, `thread::scope`, `scope.spawn`). The
 //!   sleep widens the race window so a broken lock-free/seqlock
@@ -70,7 +72,7 @@ impl AstCheck for Check {
         if is_in_start_paused_tokio_test(node, source_bytes) {
             return;
         }
-        if is_in_bounded_retry_loop(node) {
+        if is_in_bounded_retry_loop(node, source_bytes) {
             return;
         }
         if is_zero_duration_sleep(node, source_bytes) {
@@ -159,23 +161,69 @@ fn function_has_start_paused_attr(item: tree_sitter::Node, source: &[u8]) -> boo
 const LOOP_KINDS: &[&str] = &["for_expression", "while_expression", "loop_expression"];
 const SCOPE_BOUNDARY_KINDS: &[&str] = &["function_item", "closure_expression"];
 
-/// True if the sleep call sits inside a loop (within the enclosing
-/// function or closure) that contains a `break`. A loop with a
-/// conditional `break` is bounded condition polling — the sleep
-/// throttles the retries and exits as soon as the condition holds —
-/// not a fixed flaky wait.
-fn is_in_bounded_retry_loop(node: tree_sitter::Node) -> bool {
+/// True if the sleep call sits inside a bounded loop (within the
+/// enclosing function or closure). A loop is bounded when it has a
+/// guaranteed exit: a `for`/`loop`/`while` whose subtree contains a
+/// `break`, or a `while <condition>` whose predicate is itself the exit
+/// criterion. The latter is condition polling (`while pending() { sleep
+/// }`) — the sleep throttles the retries and the loop exits as soon as
+/// the condition clears, not a fixed flaky wait. A `while` with a
+/// constant-true condition (`while true`, `while 1 == 1`) is
+/// effectively `loop` and is bounded only by an explicit `break`.
+fn is_in_bounded_retry_loop(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut current = node;
     while let Some(parent) = current.parent() {
         if SCOPE_BOUNDARY_KINDS.contains(&parent.kind()) {
             return false;
         }
-        if LOOP_KINDS.contains(&parent.kind()) && subtree_contains_break(parent) {
-            return true;
+        if LOOP_KINDS.contains(&parent.kind()) {
+            if parent.kind() == "while_expression"
+                && !while_condition_is_trivially_true(parent, source)
+            {
+                return true;
+            }
+            if subtree_contains_break(parent) {
+                return true;
+            }
         }
         current = parent;
     }
     false
+}
+
+/// True if the `while` loop's condition always holds, making it
+/// effectively a `loop {}`: a bare `true` literal or a tautological
+/// `X == X` comparison (e.g. `1 == 1`). Such a loop is bounded only by
+/// an explicit `break`, so it is excluded from the condition-polling
+/// exemption.
+fn while_condition_is_trivially_true(while_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(cond) = while_node.child_by_field_name("condition") else {
+        return false;
+    };
+    if cond.kind() == "boolean_literal" {
+        return cond.utf8_text(source).is_ok_and(|text| text == "true");
+    }
+    is_tautological_equality(cond, source)
+}
+
+/// True if `node` is an `==` comparison whose two operands are textually
+/// identical (e.g. `1 == 1`) — a constant-true predicate.
+fn is_tautological_equality(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "binary_expression" {
+        return false;
+    }
+    let (Some(left), Some(op), Some(right)) = (
+        node.child_by_field_name("left"),
+        node.child_by_field_name("operator"),
+        node.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    op.utf8_text(source).is_ok_and(|o| o == "==")
+        && matches!(
+            (left.utf8_text(source), right.utf8_text(source)),
+            (Ok(l), Ok(r)) if l == r
+        )
 }
 
 /// True if `node`'s subtree contains a `break` expression, without
@@ -405,5 +453,37 @@ mod tests {
         let source = "#[test]\nfn waits() { setup(); \
                       thread::sleep(Duration::from_secs(1)); assert!(ready()); }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_sleep_in_while_condition_polling_loop_issue_6801() {
+        // gitui asyncgit/src/asyncjob/mod.rs: the `while job.is_pending()`
+        // condition is the exit criterion; the sleep throttles the poll.
+        let source = "#[cfg(test)]\nmod tests { fn wait_for_job(job: &J) { \
+                      while job.is_pending() { thread::sleep(Duration::from_millis(10)); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_sleep_in_while_true_loop_without_break() {
+        // `while true` is effectively `loop`: with no break it is an
+        // unbounded fixed-rate wait, still the flaky pattern.
+        let source = "#[test]\nfn spins() { while true { thread::sleep(d); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_sleep_in_while_tautology_loop_without_break() {
+        let source = "#[test]\nfn spins() { while 1 == 1 { thread::sleep(d); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_sleep_in_while_true_loop_with_break() {
+        // `while true { if done() { break; } sleep }` is bounded by the
+        // break, so it is condition polling, not a fixed wait.
+        let source = "#[test]\nfn polls() { \
+                      while true { if done() { break; } thread::sleep(d); } }";
+        assert!(run_on(source).is_empty());
     }
 }
