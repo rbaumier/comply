@@ -1743,7 +1743,8 @@ fn define_property_target_base<'a>(expr: &'a Expression<'a>) -> Option<&'a str> 
     }
 }
 
-/// True when `call` is a direct `Object.defineProperty(target, …)` whose target
+/// True when `call` is a direct `Object.defineProperty(target, …)` /
+/// `Object.defineProperties(target, …)` whose target
 /// roots at a binding this module exports — the ECMA-402 polyfill pattern
 /// `Object.defineProperty(Collator, 'supportedLocalesOf', { … })` and
 /// `Object.defineProperty(Collator.prototype, 'compare', { … })` where the module
@@ -1762,7 +1763,7 @@ fn is_direct_define_property_on_exported_binding(
         return false;
     };
     if !matches!(&m.object, Expression::Identifier(obj) if obj.name == "Object")
-        || m.property.name != "defineProperty"
+        || !matches!(m.property.name.as_str(), "defineProperty" | "defineProperties")
     {
         return false;
     }
@@ -1770,6 +1771,36 @@ fn is_direct_define_property_on_exported_binding(
         return false;
     };
     define_property_target_base(first).is_some_and(|base| exported.contains(base))
+}
+
+/// True when `call` is `Object.defineProperty(<Ctor>.prototype, …)` or
+/// `Object.defineProperties(<Ctor>.prototype, …)` where `<Ctor>` is a constructor
+/// declared in this module (`locals`). Defining properties on the prototype of a
+/// module-local constructor is the pre-class setup idiom — the CommonJS
+/// `function Reply(){}; Object.defineProperties(Reply.prototype, {…})` pattern:
+/// the call assembles the constructor's public contract once on module load, fully
+/// before any consumer that imports the constructor can observe it — module
+/// initialization, not externally observable state. Generalises across ESM and
+/// CommonJS and across the singular and plural forms. The module-local requirement
+/// keeps it sound: patching the prototype of a *builtin*
+/// (`Object.defineProperty(Array.prototype, …)`) or an *imported* class is a
+/// globally observable mutation and stays flagged, as does a non-`.prototype`
+/// target.
+fn is_define_property_on_local_prototype(
+    call: &oxc_ast::ast::CallExpression,
+    locals: &FxHashSet<String>,
+) -> bool {
+    if !is_define_property_call(call) {
+        return false;
+    }
+    let Some(first) = call.arguments.first().and_then(Argument::as_expression) else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(m) = first else {
+        return false;
+    };
+    m.property.name == "prototype"
+        && matches!(&m.object, Expression::Identifier(id) if locals.contains(id.name.as_str()))
 }
 
 /// Name of the identifier reached by peeling TypeScript casts (`as`,
@@ -2524,6 +2555,7 @@ impl OxcCheck for Check {
         let new_locals = module_const_new_bindings(program);
         let exported_locals = module_exported_local_bindings(program);
         let exported_bindings = module_exported_bindings(program);
+        let top_level_locals = module_top_level_value_bindings(program);
 
         let mut diagnostics = Vec::new();
         for stmt in &program.body {
@@ -2545,6 +2577,7 @@ impl OxcCheck for Check {
                     || is_define_property_wrapper_call(call, program)
                     || is_local_const_config_call(call, &new_locals)
                     || is_export_object_assign(call, &exported_locals)
+                    || is_define_property_on_local_prototype(call, &top_level_locals)
                     || is_direct_define_property_on_exported_binding(call, &exported_bindings)
                     || is_exported_builder_call(call, &exported_bindings)
                     || is_export_patching_foreach(call, &module_locals, &exported_bindings))
@@ -2665,6 +2698,98 @@ mod tests {
             crate::rules::test_helpers::run_rule(&Check, unrelated, "src/core.ts").len(),
             1,
             "an unrelated top-level side effect must still flag"
+        );
+    }
+
+    #[test]
+    fn skips_define_properties_on_constructor_prototype() {
+        // Issue #6823: fastify's `lib/reply.js` is a CommonJS module that exports
+        // `Reply` via `module.exports = Reply` and assembles the constructor's
+        // contract with `Object.defineProperties(Reply.prototype, {…})` — the
+        // standard pre-ES6 prototype-setup idiom. Defining properties on a
+        // `.prototype` target of a module-local constructor is constructor/class
+        // setup that runs once on module load, fully before any consumer that
+        // imports `Reply` observes it — not an externally observable side effect.
+        // Keyed on the `.prototype` shape plus the base resolving to a top-level
+        // declaration, so it holds for both ESM and CommonJS regardless of how the
+        // constructor is exported.
+        let plural = "function Reply(res, request, log) {}\n\
+             Object.defineProperties(Reply.prototype, {\n\
+               elapsedTime: { get() { return 1; } },\n\
+             });\n\
+             module.exports = Reply;\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, plural, "lib/reply.js").is_empty(),
+            "Object.defineProperties on a constructor's prototype must be exempt"
+        );
+
+        let singular = "function Request() {}\n\
+             Object.defineProperty(Request.prototype, 'host', { get() { return ''; } });\n\
+             module.exports = Request;\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, singular, "lib/request.js").is_empty(),
+            "Object.defineProperty on a constructor's prototype must be exempt"
+        );
+    }
+
+    #[test]
+    fn flags_define_properties_on_non_prototype_target() {
+        // The `.prototype` shortcut is bounded to prototype targets. A
+        // `defineProperties`/`defineProperty` on a non-prototype global is external
+        // state and must still flag, as must an unrelated top-level call.
+        let on_window =
+            "Object.defineProperties(window, { x: { value: 1 } });\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, on_window, "src/app.ts").len(),
+            1,
+            "Object.defineProperties on a non-prototype global must still flag"
+        );
+
+        let bare_call = "doSomething();\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, bare_call, "src/app.ts").len(),
+            1,
+            "a genuine top-level side-effecting call must still flag"
+        );
+    }
+
+    #[test]
+    fn flags_define_property_on_builtin_or_imported_prototype() {
+        // The prototype shortcut is gated on the constructor being declared in
+        // this module. Patching the prototype of a *builtin* (the canonical
+        // `Array.prototype.flat` polyfill) or an *imported* class mutates an object
+        // shared across modules — a globally observable side effect — so it must
+        // still flag.
+        let builtin =
+            "Object.defineProperty(Array.prototype, 'flat', { value() {} });\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, builtin, "src/polyfill.ts").len(),
+            1,
+            "Object.defineProperty on a builtin prototype must still flag"
+        );
+
+        let imported = "import { Cls } from 'pkg';\n\
+             Object.defineProperties(Cls.prototype, { x: { value: 1 } });\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, imported, "src/patch.ts").len(),
+            1,
+            "Object.defineProperties on an imported class's prototype must still flag"
+        );
+    }
+
+    #[test]
+    fn skips_define_properties_on_exported_non_prototype_binding() {
+        // Exercises the plural-form branch of
+        // `is_direct_define_property_on_exported_binding` in isolation: the target
+        // is the exported binding itself (not its `.prototype`), so the prototype
+        // shortcut does not apply and only the exported-binding helper can exempt
+        // it. `Object.defineProperties(Foo, {…})` on the module's own export
+        // assembles its contract before consumers observe it.
+        let src = "export const Foo = {};\n\
+             Object.defineProperties(Foo, { x: { value: 1 } });\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/core.ts").is_empty(),
+            "Object.defineProperties on an exported binding must be exempt"
         );
     }
 
