@@ -80,41 +80,132 @@ fn match_delimiter(bytes: &[u8], open: usize) -> Option<usize> {
     None
 }
 
-/// Extract bare parameter identifiers from a parameter list (the text between
-/// the parens). Splits on depth-0 commas, takes each param's leading
-/// identifier, and skips destructuring (`{…}` / `[…]`) params, which never
-/// bind a bare outer-ref name.
+/// Extract every parameter binding identifier from a parameter list (the text
+/// between the parens). Splits on depth-0 commas, then for each parameter
+/// collects all names it binds — including those introduced by array
+/// destructuring (`[a, b, ...rest]`, nested `[a, [b, c]]`) and object
+/// destructuring (`{ a, b }`, renamed `{ a: b }` → the bound name `b`, nested
+/// `{ a: { b } }`, `...rest`). Default-value expressions are ignored.
 fn parse_param_names(param_list: &str) -> FxHashSet<String> {
     let mut names = FxHashSet::default();
+    for seg in split_top_level_commas(param_list) {
+        collect_pattern_idents(seg, &mut names);
+    }
+    names
+}
+
+/// Split `s` on commas that sit at bracket/brace/paren/angle depth 0, returning
+/// the segments. Angle brackets are tracked so commas inside a generic type
+/// annotation (`Map<string, number>`) don't split a parameter.
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
     let mut depth = 0i32;
     let mut start = 0usize;
-    let bytes = param_list.as_bytes();
-    let mut segments: Vec<&str> = Vec::new();
+    let mut segments = Vec::new();
     for (i, &b) in bytes.iter().enumerate() {
         match b {
             b'(' | b'[' | b'{' | b'<' => depth += 1,
             b')' | b']' | b'}' | b'>' => depth -= 1,
             b',' if depth == 0 => {
-                segments.push(&param_list[start..i]);
+                segments.push(&s[start..i]);
                 start = i + 1;
             }
             _ => {}
         }
     }
-    segments.push(&param_list[start..]);
-    for seg in segments {
-        // Strip leading modifiers/spread; destructuring params start with
-        // `{`/`[` and bind no bare name.
-        let trimmed = seg.trim().trim_start_matches("...").trim_start();
-        let ident: String = trimmed
-            .chars()
-            .take_while(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-            .collect();
-        if !ident.is_empty() {
-            names.insert(ident);
+    segments.push(&s[start..]);
+    segments
+}
+
+/// Add every binding identifier introduced by one parameter (or nested
+/// destructuring) pattern to `names`. Handles a plain identifier (with optional
+/// `: Type` annotation and `= default`), array destructuring `[a, b, ...rest]`
+/// (incl. nested `[a, [b, c]]`), and object destructuring `{ a, b }` (shorthand
+/// → `a`/`b`), renamed `{ a: b }` (the BOUND name `b`, not the key), nested
+/// `{ a: { b } }`, and `...rest`. A default-value expression (after `=`) is not
+/// descended into, so a default like `= [1, 2]` or `= inner` cannot leak a
+/// phantom identifier into the shadow set.
+fn collect_pattern_idents(pattern: &str, names: &mut FxHashSet<String>) {
+    let trimmed = pattern.trim().trim_start_matches("...").trim_start();
+    match trimmed.as_bytes().first() {
+        Some(b'[') => {
+            // Array pattern: each element is itself a binding target.
+            if let Some(inner) = bracket_interior(trimmed) {
+                for elem in split_top_level_commas(inner) {
+                    collect_pattern_idents(elem, names);
+                }
+            }
+        }
+        Some(b'{') => {
+            // Object pattern: each property is `key`, `key: target`, or
+            // `key = default`. The bound name is the target after a rename
+            // colon when present, otherwise the key.
+            if let Some(inner) = bracket_interior(trimmed) {
+                for prop in split_top_level_commas(inner) {
+                    let prop = prop.trim().trim_start_matches("...").trim_start();
+                    match object_prop_target(prop) {
+                        Some(target) => collect_pattern_idents(target, names),
+                        None => push_leading_ident(prop, names),
+                    }
+                }
+            }
+        }
+        _ => push_leading_ident(trimmed, names),
+    }
+}
+
+/// Insert the leading identifier of `s` (already trimmed and spread-stripped)
+/// into `names`. Stops at the first non-identifier byte, so a `: Type`
+/// annotation or `= default` suffix is excluded.
+fn push_leading_ident(s: &str, names: &mut FxHashSet<String>) {
+    let ident: String = s
+        .chars()
+        .take_while(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        .collect();
+    if !ident.is_empty() {
+        names.insert(ident);
+    }
+}
+
+/// For a string beginning with `[` or `{`, return the slice strictly inside its
+/// matching close delimiter, ignoring any trailing `: Type` / `= default`.
+/// Tracks all three bracket pairs so a nested pattern (`{ a: [b] }`) closes
+/// correctly. Returns `None` if unbalanced.
+fn bracket_interior(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[1..i]);
+                }
+            }
+            _ => {}
         }
     }
-    names
+    None
+}
+
+/// For one object-destructuring property, return the rename target (the text
+/// after a depth-0 `:`) when the property renames its key (`key: target`).
+/// Returns `None` for a shorthand property (`key` / `key = default`); a `=`
+/// reached before any `:` means there is no rename colon.
+fn object_prop_target(prop: &str) -> Option<&str> {
+    let bytes = prop.as_bytes();
+    let mut depth = 0i32;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b':' if depth == 0 => return Some(&prop[i + 1..]),
+            b'=' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Scan a scope body for local `const`/`let`/`var` declarations that shadow an
@@ -645,6 +736,45 @@ mod tests {
             "const doubled = count + 1\n",
             "</script>",
         );
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_array_destructured_param_shadowing_ref() {
+        // varletjs/varlet repro: an outer `const inner = ref(null)`, shadowed by
+        // the array-destructured `watch` callback params
+        // `([index, inner], [oldIndex, oldInner])`. Inside the callback `inner`
+        // is the destructured plain value, not the ref, so `inner === oldInner`
+        // must not be flagged.
+        let src = "const inner = ref(null);\nwatch([activeItemIndex, () => props.isInner], ([index, inner], [oldIndex, oldInner]) => {\n  const isSame = inner === oldInner;\n  const x = inner === oldIndex ? a : b;\n});";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_object_destructured_param_shadowing_ref() {
+        // An outer ref `inner`, shadowed by an object-destructured arrow param
+        // `{ inner }`. The bare `inner` operand inside is the destructured plain
+        // value, not the ref, so the comparison must not be flagged.
+        let src = "const inner = ref(false);\nconst f = ({ inner }) => { const same = inner === other; };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_renamed_object_destructured_param_shadowing_ref() {
+        // A renamed object-destructured param `{ isInner: inner }` binds the
+        // outer-ref name `inner` (the value, not the key). The bare `inner`
+        // comparison inside must not be flagged.
+        let src = "const inner = ref(false);\nconst f = ({ isInner: inner }) => { return inner === flag; };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_ref_misuse_when_destructured_param_binds_other_name() {
+        // The destructured param `{ isInner: flag }` binds `flag`, NOT `inner`,
+        // so the bare `inner` operand inside the callback is still the outer ref
+        // and the misuse must flag. (Default-value expressions like `= inner`
+        // are likewise not treated as bindings.)
+        let src = "const inner = ref(false);\nconst f = ({ isInner: flag = inner }) => { return inner === flag; };";
         assert_eq!(run(src).len(), 1);
     }
 }
