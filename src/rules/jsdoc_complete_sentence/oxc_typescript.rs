@@ -55,6 +55,12 @@ pub struct Check;
 /// prose sentence: it is the target of an earlier `([N] …)` footnote reference
 /// and typically anchors following `@see`/`@link` tags, so it is excluded and
 /// never gates the punctuation check.
+///
+/// A trailing Markdown bullet list (items introduced by a `- ` or `* ` marker)
+/// is a labeled enumeration of values or options, not a prose sentence: its
+/// items conventionally carry no closing period, so the whole list is excluded
+/// and the `:`-terminated label that introduces it is dropped too, exactly like
+/// a trailing table.
 fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     let mut description_lines = Vec::new();
     let mut in_fence = false;
@@ -91,6 +97,7 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     drop_trailing_bare_url(&mut description_lines);
     drop_trailing_footnote_anchor(&mut description_lines);
     drop_trailing_table_rows(&mut description_lines);
+    drop_trailing_list_items(&mut description_lines);
     description_lines
 }
 
@@ -129,6 +136,41 @@ fn drop_trailing_table_rows(description_lines: &mut Vec<(String, usize)>) {
     if popped_any {
         drop_trailing_code_block_label(description_lines);
     }
+}
+
+/// Drop a trailing Markdown bullet list — a run of list items, each introduced
+/// by a `- ` or `* ` marker and optionally wrapped onto following continuation
+/// lines. List items are a labeled enumeration of values/options, not prose
+/// sentences, and conventionally carry no closing period, so they must not gate
+/// the terminal-punctuation check. The list is only dropped when the description
+/// actually ends with a bullet item; everything from the first item of that
+/// trailing list onward is removed, and the `:`-terminated label that introduces
+/// it (e.g. `The value is one of:`) is dropped too, exactly like a trailing
+/// table. Prose preceding the list — including a sentence that itself lacks a
+/// closing period — is left intact and still checked.
+fn drop_trailing_list_items(description_lines: &mut Vec<(String, usize)>) {
+    if !description_lines
+        .last()
+        .is_some_and(|(text, _)| is_bullet_item(text))
+    {
+        return;
+    }
+    if let Some(start) = description_lines
+        .iter()
+        .position(|(text, _)| is_bullet_item(text))
+    {
+        description_lines.truncate(start);
+        drop_trailing_code_block_label(description_lines);
+    }
+}
+
+/// Whether a line is a Markdown bullet-list item: after trimming leading
+/// whitespace it begins with a `- ` or `* ` marker. The trailing space is
+/// required, so a hyphen-led token (`-5`, `--flag`) or an emphasis asterisk
+/// (`*emphasis*`) is not mistaken for a bullet.
+fn is_bullet_item(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("- ") || t.starts_with("* ")
 }
 
 /// Drop a trailing footnote-anchor line (`[N]`) — the target of an earlier
@@ -1083,5 +1125,99 @@ function getOptions(): void {}
         assert!(!starts_with_dotted_abbreviation("returns the value"));
         assert!(!starts_with_dotted_abbreviation("cf. the spec"));
         assert!(!starts_with_dotted_abbreviation("e.g without trailing dot"));
+    }
+
+    #[test]
+    fn ignores_trailing_bullet_list_in_description() {
+        // Regression for rbaumier/comply#6908 — a JSDoc description that is a
+        // Markdown bullet list documenting the possible values of a union type
+        // must not flag the last bullet item as missing terminal punctuation;
+        // bullet items are an enumeration, not a prose sentence.
+        let source = r#"
+export interface SimpleExpressionNode {
+  /**
+   * - `null` means the expression is a simple identifier that doesn't need
+   *    parsing
+   * - `false` means there was a parsing error
+   */
+  ast?: number
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_bullet_list_with_intro_label() {
+        // A `:`-terminated label introducing the bullet list is a heading, not a
+        // concluding sentence, so it is dropped together with the list, exactly
+        // like a table intro.
+        let source = r#"
+/**
+ * The value is one of:
+ * - `a` the first option
+ * - `b` the second option
+ */
+function pick(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bullet_list_with_terminated_intro_sentence() {
+        // Prose preceding the bullet list is left intact: a complete intro
+        // sentence ending in `.` followed by a bullet list is fine.
+        let source = r#"
+/**
+ * Returns the mode.
+ * - fast
+ * - slow
+ */
+function modes(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_prose_missing_punctuation_with_no_list() {
+        // An ordinary prose description that simply forgot its trailing period
+        // (no bullet list involved) must still flag the terminal-punctuation
+        // violation.
+        let source = r#"
+/**
+ * Returns the parsed value
+ */
+function parse(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_prose_before_bullet_list_missing_punctuation() {
+        // Only the trailing list is dropped — a genuine prose sentence preceding
+        // the list that lacks terminal punctuation is still checked.
+        let source = r#"
+/**
+ * This paragraph is prose and forgot its period
+ * - first option
+ * - second option
+ */
+function f(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn bullet_item_detection_is_shape_only() {
+        // The bullet signal is purely the `- `/`* ` marker shape (the trailing
+        // space is required): a hyphen-led token or an emphasis asterisk is not a
+        // bullet.
+        assert!(is_bullet_item("- first option"));
+        assert!(is_bullet_item("* second option"));
+        assert!(!is_bullet_item("-5 degrees"));
+        assert!(!is_bullet_item("--flag enabled"));
+        assert!(!is_bullet_item("*emphasis* in prose"));
+        assert!(!is_bullet_item("plain prose line"));
     }
 }
