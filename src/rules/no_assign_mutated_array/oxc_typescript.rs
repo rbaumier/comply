@@ -7,7 +7,7 @@
 //! method-name collision on a non-array object (e.g. a canvas `shape.fill(color)`
 //! color-setter), not `Array.prototype`.
 //!
-//! Within genuine arrays, receivers known to be a fresh array (spread copy,
+//! Within genuine arrays, receivers known to be a fresh array (an array literal,
 //! `new Array`, `Array.from`/`of`, `Object.keys`/`values`/`entries`/
 //! `getOwnPropertyNames`, and fresh-returning methods like `slice`/`filter`/
 //! `map`) are exempt: mutating them in place is not observable through any other
@@ -28,7 +28,6 @@ const MUTATING_METHODS: &[&str] = &["sort", "reverse", "fill"];
 fn mutating_method_name<'a>(
     expr: &'a Expression<'a>,
     semantic: &oxc_semantic::Semantic,
-    source: &str,
 ) -> Option<&'a str> {
     let call = unwrap_expr(expr);
     let Expression::CallExpression(call) = call else { return None };
@@ -46,7 +45,7 @@ fn mutating_method_name<'a>(
 
     // Allow when the receiver is a freshly-created array — mutating it in place
     // is unobservable through any other reference.
-    if is_fresh_array(&member.object, source) {
+    if is_fresh_array(&member.object) {
         return None;
     }
 
@@ -65,13 +64,11 @@ fn unwrap_expr<'a, 'b>(expr: &'b Expression<'a>) -> &'b Expression<'a> {
     }
 }
 
-fn is_fresh_array(expr: &Expression, source: &str) -> bool {
+fn is_fresh_array(expr: &Expression) -> bool {
     match expr {
-        Expression::ArrayExpression(_) => {
-            // Spread copy: `[...arr]`
-            let text = &source[expr.span().start as usize..expr.span().end as usize];
-            text.contains("...")
-        }
+        // An array literal `[a, b]` is constructed fresh at this expression and
+        // has no other reference, so mutating it in place is unobservable.
+        Expression::ArrayExpression(_) => true,
         // `new Array(n)` / `new Uint8Array(n)` (or any TypedArray ctor) build a
         // brand-new array-like value with no prior alias.
         Expression::NewExpression(new_expr) => {
@@ -128,7 +125,7 @@ impl OxcCheck for Check {
             AstKind::VariableDeclaration(decl) => {
                 for declarator in &decl.declarations {
                     let Some(init) = &declarator.init else { continue };
-                    let Some(method) = mutating_method_name(init, semantic, ctx.source) else { continue };
+                    let Some(method) = mutating_method_name(init, semantic) else { continue };
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, init.span().start as usize);
                     diagnostics.push(Diagnostic {
@@ -146,7 +143,7 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::AssignmentExpression(assign) => {
-                let Some(method) = mutating_method_name(&assign.right, semantic, ctx.source) else { return };
+                let Some(method) = mutating_method_name(&assign.right, semantic) else { return };
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, assign.right.span().start as usize);
                 diagnostics.push(Diagnostic {
@@ -255,9 +252,22 @@ mod oxc_tests {
     }
 
     #[test]
-    fn flags_array_literal_fill() {
-        // GUARD: an array literal receiver is unambiguously an array.
-        assert_eq!(run("const b = [1, 2, 3].fill(0);").len(), 1);
+    fn allows_array_literal_fill() {
+        // An inline array literal is constructed fresh and has no other reference,
+        // so mutating it in place is unobservable — not misleading.
+        assert!(run("const b = [1, 2, 3].fill(0);").is_empty());
+    }
+
+    // === issue #6927: inline array literal receiver is fresh ===
+
+    #[test]
+    fn allows_inline_array_literal_sort() {
+        // `[this.foreignKey, this.otherKey].sort()` — the literal is fresh, no
+        // prior binding aliases it, so the in-place sort is unobservable.
+        assert!(
+            run("class C { m() { const keys = [this.foreignKey, this.otherKey].sort(); } }")
+                .is_empty()
+        );
     }
 
     #[test]
