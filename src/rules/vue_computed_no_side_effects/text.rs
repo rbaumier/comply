@@ -17,8 +17,9 @@
 //! The pure getter body stays checked.
 //!
 //! Nested-function exemption: markers and `.value =` inside a function the getter
-//! *returns* (an arrow or `function` expression stored as a property/element of
-//! the returned value, e.g. `onClick: () => emit('x')`) are skipped. That body
+//! *returns* (an arrow, `function` expression, or method shorthand stored as a
+//! property/element of the returned value, e.g. `onClick: () => emit('x')` or
+//! `onClick() { emit('x') }`) are skipped. That body
 //! runs when the callback is later invoked, not during getter evaluation, so it
 //! is not a side effect of the computed. Only side effects in the getter's own
 //! body (top-level statements, conditionals, loops that run during evaluation)
@@ -158,23 +159,27 @@ fn non_code_mask(body: &str) -> Vec<bool> {
 /// 2 or deeper is deferred. `code` is `non_code_mask(body)` — only code bytes
 /// (not strings/comments) drive bracket and token tracking.
 ///
-/// Function bodies are recognized two ways:
+/// Function bodies are recognized three ways:
 /// - **Arrow `=>`**: a braced body (`=> { ... }`) ends when its `{` closes; a
 ///   concise body (`=> expr`) ends at the first `,` or closing `)`/`}`/`]` at or
 ///   below the bracket depth where the arrow appeared (its natural expression
 ///   boundary).
 /// - **`function` keyword**: the body is the next `{ ... }` block and ends when
 ///   that brace closes.
+/// - **Method shorthand** (`onClick(params) { ... }`): a `{` immediately
+///   preceded by a `)` whose matching `(` is immediately preceded by a plain
+///   identifier — not a control-flow/`function` keyword (`if`/`for`/`while`/
+///   `switch`/`catch`/`function`) and not a member access (`obj.method(...)`) —
+///   opens a braced body that ends when its `{` closes. This covers a callback
+///   stored as a method on the object the getter returns.
 ///
-/// Method-shorthand callbacks (`onClick() { ... }`) are not recognized as nested
-/// functions; the real-world deferred-callback shapes are arrows and `function`
-/// expressions stored as property values.
-///
-/// Known limitation: an immediately-invoked nested function (an IIFE,
-/// `(() => { ... })()`) runs synchronously during getter evaluation, but its
-/// body is treated as deferred because the trailing `()` invocation is not
-/// detected without re-parsing TS. This trades a vanishingly-rare false negative
-/// for eliminating the common callback-as-property false positive.
+/// Known limitations, both treated as deferred — vanishingly-rare false
+/// negatives that avoid re-parsing TS: an immediately-invoked nested function
+/// (an IIFE, `(() => { ... })()`) runs synchronously during getter evaluation
+/// but its trailing `()` invocation is not detected, and a bare block statement
+/// following a call (`foo()\n{ ... }`) is indistinguishable from method
+/// shorthand. Both trade a rare false negative for eliminating the common
+/// callback-as-property false positive.
 fn deferred_mask(body: &str, code: &[bool]) -> Vec<bool> {
     let bytes = body.as_bytes();
     let mut mask = vec![false; bytes.len()];
@@ -241,6 +246,8 @@ fn deferred_mask(body: &str, code: &[bool]) -> Vec<bool> {
                 if expect_fn_brace {
                     stack.push(Body::Brace(depth - 1));
                     expect_fn_brace = false;
+                } else if is_method_shorthand_brace(body, code, i) {
+                    stack.push(Body::Brace(depth - 1));
                 }
             }
             b')' | b']' => depth -= 1,
@@ -269,6 +276,79 @@ fn deferred_mask(body: &str, code: &[bool]) -> Vec<bool> {
         i += 1;
     }
     mask
+}
+
+/// Whether the `{` at byte `brace` in `body` opens a method-shorthand body —
+/// `name(params) { ... }` as a member of an object/class the getter returns.
+///
+/// The structural signal: the `{` is immediately preceded (modulo whitespace) by
+/// a `)` whose matching `(` is immediately preceded by a plain identifier that is
+/// not a control-flow/`function` keyword and not a member access
+/// (`obj.method(...)`). Only code bytes (per `code`) drive the scan, so parens
+/// inside strings/comments within the parameter list do not skew the brace
+/// matching. A TS return-type annotation between `)` and `{` (`name(): T { ... }`)
+/// is not recognized — the `{` is no longer adjacent to the `)`.
+fn is_method_shorthand_brace(body: &str, code: &[bool], brace: usize) -> bool {
+    let bytes = body.as_bytes();
+    let is_code = |k: usize| code.get(k).copied() == Some(false);
+    let prev_non_ws = |from: usize| -> Option<usize> {
+        let mut k = from;
+        while k > 0 {
+            k -= 1;
+            if is_code(k) && !(bytes[k] as char).is_whitespace() {
+                return Some(k);
+            }
+        }
+        None
+    };
+    // The char before `{` must close a parameter list.
+    let p = match prev_non_ws(brace) {
+        Some(p) if bytes[p] == b')' => p,
+        _ => return false,
+    };
+    // Match parameter-list parens backward to the opening `(`.
+    let mut paren_depth = 0i32;
+    let mut q = p;
+    loop {
+        if is_code(q) {
+            match bytes[q] {
+                b')' => paren_depth += 1,
+                b'(' => {
+                    paren_depth -= 1;
+                    if paren_depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if q == 0 {
+            return false;
+        }
+        q -= 1;
+    }
+    // The identifier's last char sits just before the opening `(`.
+    let end = match prev_non_ws(q) {
+        Some(end) if is_ident_char(bytes[end]) => end,
+        _ => return false,
+    };
+    let mut start = end;
+    while start > 0 && is_code(start - 1) && is_ident_char(bytes[start - 1]) {
+        start -= 1;
+    }
+    // A valid identifier starts with a non-digit; a digit run is a number call.
+    if bytes[start].is_ascii_digit() {
+        return false;
+    }
+    // A member access (`obj.method(...)`) is a call, never a shorthand.
+    if start > 0 && is_code(start - 1) && bytes[start - 1] == b'.' {
+        return false;
+    }
+    // Reserved words that legitimately take the `keyword(...) { ... }` shape.
+    !matches!(
+        &body[start..=end],
+        "if" | "for" | "while" | "switch" | "catch" | "function"
+    )
 }
 
 /// Whether a `function` keyword starts at byte `i` in `body` — a code-byte run
@@ -630,6 +710,35 @@ mod tests {
         // tradeoff eliminates the common callback-as-property false positive.
         let sfc = "<script setup>\nconst c = computed(() => {\n  (() => { emit('x') })()\n  return 1\n})\n</script>";
         assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_value_assign_in_method_shorthand_callback() {
+        // Issue #6918: `.value =` inside a method-shorthand callback on the
+        // object the getter returns is deferred — it runs when the consumer
+        // invokes the method, not during getter evaluation. The getter is pure.
+        let sfc = "<script setup>\nconst c = computed(() => {\n  const list = [{\n    value: x.value,\n    handleFocusing(value: boolean) {\n      focusingFirst.value = value\n    },\n  }]\n  return list\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_getter_side_effect_with_method_shorthand_sibling() {
+        // A real side effect in the getter body is still flagged even when the
+        // returned object also defines a method-shorthand callback — the
+        // masking must not over-mask the getter's own body.
+        let sfc = "<script setup>\nconst c = computed(() => {\n  emit('side')\n  return { handleFocus() { other.value = 1 } }\n})\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        // Only the synchronous getter emit (line 3), not the method body.
+        assert_eq!(diags[0].line, 3);
+    }
+
+    #[test]
+    fn flags_value_assign_inside_if_block_in_getter() {
+        // `if (cond) { ... }` must not be mistaken for a method shorthand: the
+        // assignment inside the conditional runs during getter evaluation.
+        let sfc = "<script setup>\nconst c = computed(() => {\n  if (cond) { someRef.value = 1 }\n  return x\n})\n</script>";
+        assert_eq!(run(sfc).len(), 1);
     }
 
     #[test]
