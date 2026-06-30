@@ -194,7 +194,7 @@ fn is_url_reference(ty: &oxc_ast::ast::TSType) -> bool {
 /// True when the base URL of `new URL(...)` is structurally guaranteed to be a
 /// valid absolute URL, so the constructor cannot throw on the base.
 ///
-/// Four trusted base shapes:
+/// Five trusted base shapes:
 /// * `import.meta.url` — the URL the engine assigns when it loads the module.
 ///   Covers both ESM idioms: single-arg `new URL(import.meta.url)` (the sole
 ///   argument is the base) and two-arg `new URL(<relative>, import.meta.url)`
@@ -211,6 +211,12 @@ fn is_url_reference(ty: &oxc_ast::ast::TSType) -> bool {
 ///   spec defines it to always return a valid `scheme://host:port` absolute-URL
 ///   origin. Anchored to the same `Location` receiver shape as `Location.href`
 ///   so an arbitrary `obj.origin` (which may hold a non-URL value) still flags.
+/// * a `Location.href` getter — `location.href`, or `.location.href` on the same
+///   standard host objects. The browser only ever assigns `Location.href` a
+///   well-formed absolute URL, so resolving a relative reference against it
+///   cannot throw on the base. Shares the `is_location_href_access` helper with
+///   the single-arg trust in `arg_is_trusted`, so the same `location.href` is
+///   trusted in both argument positions.
 /// * a `Node.baseURI` getter — a `.baseURI` read on any receiver. The DOM spec
 ///   defines `Node.baseURI` to always return a valid absolute URL; this mirrors
 ///   the any-receiver property-shape trust of the template `.protocol` origin.
@@ -240,13 +246,17 @@ fn base_is_trusted_absolute_url(new_expr: &oxc_ast::ast::NewExpression) -> bool 
     {
         return true;
     }
-    // A `Location.origin` getter always returns a valid absolute-URL origin, and
-    // a `Node.baseURI` getter always returns a valid absolute URL (both DOM
-    // spec), so resolving a relative reference against either cannot throw on the
-    // base. `.origin` is restricted to recognized `Location` receivers; `.baseURI`
-    // is trusted on any receiver, like the `.protocol` origin shape.
+    // A `Location.origin` getter always returns a valid absolute-URL origin, a
+    // `Location.href` getter always returns a well-formed absolute URL, and a
+    // `Node.baseURI` getter always returns a valid absolute URL (all DOM spec),
+    // so resolving a relative reference against any of them cannot throw on the
+    // base. `.origin`/`.href` are restricted to recognized `Location` receivers
+    // (the latter via the same `is_location_href_access` helper `arg_is_trusted`
+    // uses for the first argument); `.baseURI` is trusted on any receiver, like
+    // the `.protocol` origin shape.
     if let Expression::StaticMemberExpression(member) = base {
         return (member.property.name == "origin" && object_is_location(&member.object))
+            || is_location_href_access(member)
             || member.property.name == "baseURI";
     }
     false
@@ -965,6 +975,34 @@ mod tests {
     #[test]
     fn still_flags_origin_on_non_location_object() {
         assert_eq!(run_on("const u = new URL(x, someArbitraryObj.origin);").len(), 1);
+    }
+
+    // Regression for #6899: `Location.href` always returns a well-formed absolute
+    // URL, so it is a valid base argument too — symmetric with the single-arg
+    // `new URL(location.href)` trust. Covers the bare `location` global and the
+    // standard host-object receivers.
+    #[test]
+    fn allows_location_href_base() {
+        assert!(run_on("const u = new URL(someRelative, location.href);").is_empty());
+        assert!(run_on("const u = new URL(x, window.location.href);").is_empty());
+        assert!(run_on("const u = new URL(x, document.location.href);").is_empty());
+        assert!(run_on("const u = new URL(x, globalThis.location.href);").is_empty());
+        assert!(run_on("const u = new URL(x, self.location.href);").is_empty());
+    }
+
+    // `.href` on a receiver that is not a recognized `Location` object is not the
+    // `Location.href` getter, so the base can still throw — keep flagging.
+    #[test]
+    fn still_flags_href_base_on_non_location_object() {
+        assert_eq!(run_on("const u = new URL(x, anchor.href);").len(), 1);
+        assert_eq!(run_on("const u = new URL(x, state.location.href);").len(), 1);
+    }
+
+    // An arbitrary member-access base that is not a recognized DOM absolute-URL
+    // getter does not statically establish a valid base — keep flagging.
+    #[test]
+    fn still_flags_arbitrary_member_base() {
+        assert_eq!(run_on("const u = new URL(x, config.baseUrl);").len(), 1);
     }
 
     #[test]
