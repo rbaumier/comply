@@ -39,6 +39,21 @@ fn is_self_import(spec: &str, file_path: &Path) -> bool {
     }
 
     let stem = spec.trim_start_matches("./");
+
+    // An explicit source extension on the import names a specific sibling file.
+    // When it differs from the importing file's own extension, treat it as a
+    // distinct module — e.g. an `.mjs` ESM facade importing its `.js` CJS impl in
+    // the dual CJS/ESM publishing pattern — rather than a self-import on the
+    // shared base name.
+    if let Some((_, import_ext)) = stem.rsplit_once('.')
+        && SOURCE_EXTENSIONS.contains(&import_ext)
+    {
+        let file_ext = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if file_ext != import_ext {
+            return false;
+        }
+    }
+
     if matches!(
         stem,
         "index" | "index.ts" | "index.tsx" | "index.js" | "index.jsx"
@@ -190,6 +205,42 @@ mod tests {
         // True positive: a file importing its own path resolves to itself.
         let src = "import { foo } from './utils.ts';\n";
         let diags = run(src, "src/utils.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("imports itself"));
+    }
+
+    #[test]
+    fn allows_mjs_facade_importing_js_impl() {
+        // Dual CJS/ESM publishing: `index.mjs` (ESM facade) importing `./index.js`
+        // (CJS impl) — distinct files, different module formats. The differing
+        // explicit source extension means it is not a self-import.
+        let src = "import Pkg from './index.js';\n";
+        assert!(run(src, "packages/core/src/index.mjs").is_empty());
+    }
+
+    #[test]
+    fn allows_cjs_facade_importing_js_impl() {
+        // `index.cjs` importing `./index.js` — differing explicit source extension.
+        let src = "import Pkg from './index.js';\n";
+        assert!(run(src, "packages/core/src/index.cjs").is_empty());
+    }
+
+    #[test]
+    fn flags_index_without_extension_in_mjs() {
+        // `./index` (no explicit extension) in an index file still resolves to
+        // itself — the guard only fires for an explicit differing extension.
+        let src = "import { foo } from './index';\n";
+        let diags = run(src, "src/index.mjs");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("imports itself"));
+    }
+
+    #[test]
+    fn flags_same_extension_self_import() {
+        // `index.mjs` importing `./index.mjs` — same explicit extension, a real
+        // self-import.
+        let src = "import { foo } from './index.mjs';\n";
+        let diags = run(src, "src/index.mjs");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("imports itself"));
     }
