@@ -12,9 +12,10 @@ names = []
 # Nuxt consumes a module's `export default` by directory convention at build
 # time, never through a static import: Nitro's file-system server router for
 # `server/api/`/`server/routes/`/`server/middleware/` modules
-# (`defineEventHandler(...)`), and the plugin loader for `plugins/` modules
-# (`defineNuxtPlugin(...)`). Scoped to those convention files so a same-named
-# `default` export in an ordinary module stays flaggable.
+# (`defineEventHandler(...)`), the plugin loader for `plugins/` modules
+# (`defineNuxtPlugin(...)`), and the app router for `middleware/` modules
+# (`defineNuxtRouteMiddleware(...)`). Scoped to those convention files so a
+# same-named `default` export in an ordinary module stays flaggable.
 [route_magic_exports]
 route_files = ["default"]
 

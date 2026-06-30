@@ -2304,6 +2304,75 @@ mod tests {
     }
 
     #[test]
+    fn ignores_nuxt_app_middleware_default_export_issue_6831() {
+        // Regression for #6831 (primefaces/primevue) — Nuxt auto-discovers app
+        // route middleware in `middleware/` and consumes its `export default
+        // defineNuxtRouteMiddleware(...)` by route convention at build time,
+        // never through a static import, so the `default` export has no importer
+        // yet is live.
+        let pkg = r#"{ "dependencies": { "nuxt": "^3.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "apps/volt/middleware/route.global.ts",
+                "export default defineNuxtRouteMiddleware((to, from) => {});\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "apps/volt/middleware/route.global.ts");
+        assert!(
+            diags.is_empty(),
+            "Nuxt app middleware `default` is framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_app_middleware_default_export_without_nuxt_dep_issue_6831() {
+        // Negative-space guard for #6831 — the `middleware/` exemption is
+        // dep-gated. The same default export in a project with no Nuxt dependency
+        // is an ordinary unused export and must still be flagged.
+        let pkg = r#"{ "dependencies": { "lodash": "^4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "apps/volt/middleware/route.global.ts",
+                "export default defineNuxtRouteMiddleware((to, from) => {});\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "apps/volt/middleware/route.global.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a middleware default export without the Nuxt dep must still be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_named_export_in_nuxt_app_middleware_file_issue_6831() {
+        // Negative-space guard for #6831 — the exemption is scoped to the
+        // framework-consumed `default` export. An ordinary named export in a
+        // middleware file, with no importer, is genuinely dead and must still fire.
+        let pkg = r#"{ "dependencies": { "nuxt": "^3.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "apps/volt/middleware/route.global.ts",
+                "export default defineNuxtRouteMiddleware(() => {});\n\
+                 export const helper = () => 1;\n",
+            ),
+            ("src/util.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "apps/volt/middleware/route.global.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary named export in a middleware file must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("helper"));
+    }
+
+    #[test]
     fn ignores_vite_fake_server_mock_default_export_issue_4798() {
         // Regression for #4798 (pure-admin/vue-pure-admin) — `vite-plugin-fake-
         // server` glob-discovers every file under `mock/` and registers its
