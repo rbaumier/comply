@@ -15,8 +15,9 @@ const IDENTIFIER_KEYWORDS: &[&str] = &["FROM", "JOIN", "INTO", "UPDATE", "TABLE"
 /// identifier position (a table/column name) rather than a value position.
 ///
 /// Identifier position holds when the text before the placeholder, ignoring
-/// trailing whitespace and a single leading double-quote of a PostgreSQL
-/// quoted identifier (`FROM "{table}"`), either ends with `.` (a `.`-qualified
+/// trailing whitespace and a single leading identifier quoter — a PostgreSQL
+/// double-quote (`FROM "{table}"`) or a SQLite/T-SQL square bracket
+/// (`FROM [{table}]`) — either ends with `.` (a `.`-qualified
 /// member such as `alias.{col}` or `schema.{table}`) or has, as its last word
 /// token, one of [`IDENTIFIER_KEYWORDS`] (case-insensitive). Everything else —
 /// after `=`, inside a single-quoted string literal, inside a `VALUES (…)`
@@ -29,14 +30,15 @@ const IDENTIFIER_KEYWORDS: &[&str] = &["FROM", "JOIN", "INTO", "UPDATE", "TABLE"
 pub(super) fn placeholder_is_identifier_position(sql_text: &str, brace_index: usize) -> bool {
     const WHITESPACE: [char; 4] = [' ', '\t', '\r', '\n'];
     let trimmed = sql_text[..brace_index].trim_end_matches(WHITESPACE);
-    // A PostgreSQL quoted identifier wraps the placeholder in double quotes
-    // (`FROM "{table}"`): the opening `"` sits directly before the placeholder
-    // and would otherwise stop the last-word scan at an empty token, hiding the
-    // preceding keyword. Strip that single opening quote so `FROM "` still reads
-    // as `FROM`. Single quotes (string literals) are not stripped — those are
-    // value positions.
+    // A quoted identifier wraps the placeholder in its opening quoter directly
+    // before the placeholder: a PostgreSQL double-quote (`FROM "{table}"`) or a
+    // SQLite/T-SQL square bracket (`FROM [{table}]`). That opening quoter would
+    // otherwise stop the last-word scan at an empty token, hiding the preceding
+    // keyword. Strip a single one so `FROM "` / `FROM [` still reads as `FROM`.
+    // Single quotes (string literals) are not stripped — those are value
+    // positions.
     let before = trimmed
-        .strip_suffix('"')
+        .strip_suffix(['"', '['])
         .map_or(trimmed, |s| s.trim_end_matches(WHITESPACE));
     if before.ends_with('.') {
         return true;
@@ -120,6 +122,16 @@ mod tests {
         assert!(is_ident_pos("SELECT DISTINCT name FROM \"{table}\" ORDER BY name"));
         assert!(is_ident_pos("UPDATE \"{table}\" SET x = 1"));
         assert!(is_ident_pos("SELECT * FROM \"{table}\""));
+    }
+
+    #[test]
+    fn bracket_quoted_identifier_is_identifier_position() {
+        // SQLite/T-SQL square-bracket identifier: `FROM [{table}]`. The opening
+        // bracket before the placeholder must not hide the FROM keyword.
+        // Regression for nushell sqlite.rs `format!("select * from [{table_name}]")`.
+        assert!(is_ident_pos("select * from [{table_name}]"));
+        assert!(is_ident_pos("SELECT * FROM [{}]"));
+        assert!(is_ident_pos("UPDATE [{table}] SET x = 1"));
     }
 
     #[test]

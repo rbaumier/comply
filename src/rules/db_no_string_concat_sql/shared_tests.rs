@@ -27,6 +27,21 @@ const SCENARIOS: &[Scenario] = &[
         expected_flagged: false,
         rust: r#"fn f(stderr: &[u8]) -> String { format!("failed to parse oxlint output: {}", String::from_utf8_lossy(stderr)) }"#,
     },
+    Scenario {
+        name: "SQLite bracket-quoted identifier, named capture — not flagged",
+        expected_flagged: false,
+        rust: r#"fn f(table_name: &str) { let q = format!("select * from [{table_name}]"); }"#,
+    },
+    Scenario {
+        name: "SQLite bracket-quoted identifier, positional — not flagged",
+        expected_flagged: false,
+        rust: r#"fn f(name: &str) { let q = format!("SELECT * FROM [{}]", name); }"#,
+    },
+    Scenario {
+        name: "bracket identifier plus value-position placeholder — flagged",
+        expected_flagged: true,
+        rust: r#"fn f(t: &str, id: i32) { let q = format!("SELECT * FROM [{}] WHERE id = {}", t, id); }"#,
+    },
 ];
 
 fn run_rust(src: &str) -> Vec<Diagnostic> {
