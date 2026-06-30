@@ -121,15 +121,23 @@ impl OxcCheck for Check {
             // Skip nested union/intersection — only count the outermost. A
             // union/intersection that is structurally a component of an
             // enclosing union/intersection is nested and must not be reported
-            // on its own. Walk up through transparent type containers — the
-            // `<…>` generic arguments (`TSTypeParameterInstantiation`) and the
-            // type references wrapping them (`TSTypeReference`) — so a union
-            // inside the generic argument of an enclosing intersection (e.g.
-            // `A & Partial<Record<"x" | "y", V>>`) is recognized as nested too.
+            // on its own. Walk up through transparent type containers so the
+            // nesting is recognized through them:
+            //   - the `<…>` generic arguments (`TSTypeParameterInstantiation`)
+            //     and the type references wrapping them (`TSTypeReference`), so
+            //     a union inside the generic argument of an enclosing
+            //     intersection (e.g. `A & Partial<Record<"x" | "y", V>>`) is
+            //     recognized as nested;
+            //   - parentheses (`TSParenthesizedType`), so a parenthesized
+            //     member of a union/intersection (e.g. the `(string & {})` in
+            //     `"a" | "b" | (string & {})`) is recognized as nested rather
+            //     than counted as a free-standing inline type.
             let mut ancestor = semantic.nodes().parent_node(node.id());
             while matches!(
                 ancestor.kind(),
-                AstKind::TSTypeParameterInstantiation(_) | AstKind::TSTypeReference(_)
+                AstKind::TSTypeParameterInstantiation(_)
+                    | AstKind::TSTypeReference(_)
+                    | AstKind::TSParenthesizedType(_)
             ) {
                 ancestor = semantic.nodes().parent_node(ancestor.id());
             }
@@ -564,5 +572,55 @@ mod tests {
         assert_eq!(messages.len(), 2, "two distinct canonical groups");
         assert!(messages.iter().any(|m| m.contains("`number | string`")));
         assert!(messages.iter().any(|m| m.contains("`boolean | number`")));
+    }
+
+    #[test]
+    fn no_fp_on_parenthesized_intersection_in_union() {
+        // Regression #6844 (colinhacks/zod, errors.ts) — `(string & {})` is the
+        // open-ended-string-union idiom appearing as a parenthesized member of
+        // an enclosing union. The intersection sits under a `TSParenthesizedType`
+        // wrapper, so the nesting walk must see through it and not count the
+        // intersection as a free-standing inline type. Each enclosing union is
+        // distinct, so nothing crosses the threshold.
+        let src = r#"
+            interface A {
+                readonly origin: "number" | "int" | (string & {});
+            }
+            interface B {
+                readonly origin: "bigint" | "date" | (string & {});
+            }
+            interface C {
+                readonly format: "email" | "url" | (string & {});
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_parenthesized_intersection_in_mapped_type_key() {
+        // Regression #6844 (colinhacks/zod, locales/zh-TW.ts) — `(string & {})`
+        // as a member of a mapped-type-key union (`[k in X | (string & {})]`) is
+        // still a parenthesized member of an enclosing union and must not be
+        // counted on its own.
+        let src = r#"
+            const A: { [k in "a" | "b" | (string & {})]?: string } = {};
+            const B: { [k in "c" | "d" | (string & {})]?: string } = {};
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_repeated_parenthesized_intersection_not_in_union() {
+        // Positive control for #6844 — a parenthesized intersection that is NOT
+        // a member of an enclosing union/intersection (the parens wrap the whole
+        // annotation) is still a free-standing inline type. The fix sees through
+        // the parentheses to the type annotation, not to a union, so a repeated
+        // occurrence is still flagged.
+        let src = r#"
+            function a(x: ({ a: number } & { b: string })) {}
+            function b(x: ({ a: number } & { b: string })) {}
+            function c(x: ({ a: number } & { b: string })) {}
+        "#;
+        assert!(!run(src).is_empty());
     }
 }
