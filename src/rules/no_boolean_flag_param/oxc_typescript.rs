@@ -5,10 +5,11 @@
 //! boolean-out signature is a transform over the boolean (e.g. a debounce
 //! hook), not a mode flag selecting between behaviors.
 //!
-//! A boolean parameter is also exempt when it is a pure forwarding passthrough:
-//! every reference to it is a direct positional argument of a call or `new`
-//! expression (`return parse(code, jsx)`). Such a wrapper mirrors the callee's
-//! API — the boolean is forwarded as-is, never dispatched on — so it cannot be
+//! A boolean parameter is also exempt when it is a pure passthrough: every
+//! reference to it either forwards the value as a direct positional argument of a
+//! call or `new` expression (`return parse(code, jsx)`) or stores it as the
+//! right-hand side of a plain assignment (`ref.value = value`, a setter body).
+//! The boolean is forwarded or stored as-is, never dispatched on, so it cannot be
 //! split into two functions.
 //!
 //! Finally, a boolean parameter is exempt when its enclosing function is an
@@ -127,7 +128,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if is_forwarded_passthrough_param(node, semantic) {
+        if is_passthrough_param(node, semantic) {
             return;
         }
 
@@ -228,15 +229,18 @@ fn is_boolean_transform_subject<'a>(
     }
 }
 
-/// True when the boolean param is a pure forwarding passthrough: it has at least
-/// one reference and EVERY reference is a direct positional argument of a call or
-/// `new` expression (`return wasmParse(code, flag, jsx)`). Such a wrapper mirrors
-/// the callee's API — the boolean is forwarded, never dispatched on in this
-/// function — so the "split into two functions" advice is inapplicable. A param
-/// used in any branch position (`if (flag)`, `flag ? :`, `flag && x`) or returned
-/// directly (`return flag`) or unused (empty body, zero references) is NOT a
-/// passthrough and stays flagged.
-fn is_forwarded_passthrough_param<'a>(
+/// True when the boolean param is a pure passthrough: it has at least one
+/// reference and EVERY reference merely forwards or stores the value without
+/// dispatching on it. A reference qualifies when it is a direct positional
+/// argument of a call or `new` expression (`return wasmParse(code, flag, jsx)`)
+/// or the right-hand side of a plain `=` assignment (`ref.value = value`,
+/// `this.x = value` — a setter). The boolean is forwarded or stored as-is, never
+/// branched on in this function, so the "split into two functions" advice is
+/// inapplicable. A param used in any branch position (`if (flag)`, `flag ? :`,
+/// `flag && x`), returned directly (`return flag`), used as an assignment target
+/// (`flag = …`), or unused (empty body, zero references) is NOT a passthrough and
+/// stays flagged.
+fn is_passthrough_param<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
@@ -256,13 +260,23 @@ fn is_forwarded_passthrough_param<'a>(
         saw_reference = true;
         let ref_span = nodes.kind(reference.node_id()).span();
         let parent = nodes.parent_node(reference.node_id());
-        let arguments = match parent.kind() {
-            AstKind::CallExpression(call) => &call.arguments,
-            AstKind::NewExpression(new_expr) => &new_expr.arguments,
-            _ => return false,
+        let is_passthrough = match parent.kind() {
+            // A positional ARGUMENT of a call/`new`, not the callee.
+            AstKind::CallExpression(call) => {
+                call.arguments.iter().any(|arg| arg.span() == ref_span)
+            }
+            AstKind::NewExpression(new_expr) => {
+                new_expr.arguments.iter().any(|arg| arg.span() == ref_span)
+            }
+            // The value (right-hand side) of a plain `=` assignment, never the
+            // assignment target and never a compound/logical-assign operator.
+            AstKind::AssignmentExpression(assign) => {
+                assign.operator == oxc_ast::ast::AssignmentOperator::Assign
+                    && assign.right.span() == ref_span
+            }
+            _ => false,
         };
-        // The reference must be a positional ARGUMENT, not the callee.
-        if !arguments.iter().any(|arg| arg.span() == ref_span) {
+        if !is_passthrough {
             return false;
         }
     }
@@ -481,6 +495,55 @@ mod tests {
     #[test]
     fn still_flags_boolean_in_short_circuit_arg() {
         assert_eq!(run("function f(flag: boolean) { return run(flag && other); }").len(), 1);
+    }
+
+    // Regression for #6919: a setter stores its boolean parameter as the
+    // right-hand side of an assignment and never dispatches on it. Storing a
+    // value does not select between behaviors, so the param cannot be split into
+    // two named functions. Exact reproducer shapes from varletjs/varlet.
+    #[test]
+    fn no_fp_assignment_only_passthrough_issue_6919() {
+        // arrow setter writing to a member target
+        assert!(
+            run("const handleHovering = (value: boolean) => { hovering.value = value; };")
+                .is_empty()
+        );
+        // named function writing to a closed-over binding
+        assert!(
+            run("function setAllowClose(value: boolean) { allowClose = value; }").is_empty()
+        );
+        // object-property arrow writing to a member target
+        assert!(
+            run("const o = { 'onUpdate:show': (value: boolean) => { obj.show = value; } };")
+                .is_empty()
+        );
+        // `this`-member store
+        assert!(run("function setX(value: boolean) { this.x = value; }").is_empty());
+    }
+
+    // Guard: a boolean used as a ternary test selects behavior — it stays flagged
+    // even though it never appears in an assignment.
+    #[test]
+    fn still_flags_boolean_ternary_test_issue_6919() {
+        assert_eq!(run("function g(on: boolean) { return on ? x : y; }").len(), 1);
+    }
+
+    // Guard: a param used in BOTH an assignment store AND an `if` test still
+    // dispatches on a branch, so one branch use disqualifies the passthrough
+    // exemption and it stays flagged.
+    #[test]
+    fn still_flags_boolean_assigned_and_branched_issue_6919() {
+        assert_eq!(
+            run("function f(flag: boolean) { obj.x = flag; if (flag) a(); }").len(),
+            1
+        );
+    }
+
+    // Guard: a param appearing as the assignment TARGET (reassigned, not stored
+    // from) is not a value-position passthrough — it stays flagged.
+    #[test]
+    fn still_flags_boolean_assignment_target_issue_6919() {
+        assert_eq!(run("function f(flag: boolean) { flag = true; }").len(), 1);
     }
 
     // Regression for #5639: a spreadsheet-engine dispatcher (`runFunction`)
