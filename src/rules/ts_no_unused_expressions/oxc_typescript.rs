@@ -312,9 +312,14 @@ fn has_side_effects(expr: &Expression) -> bool {
         // Always side-effectful. JSX compiles to function calls
         // (`React.createElement` / `_$createComponent`) that execute component
         // code and register reactive subscriptions, so a bare `<Component />;`
-        // statement is the side effect, not a discarded value.
+        // statement is the side effect, not a discarded value. A dynamic
+        // `import('…')` is inherently side-effectful too: it triggers module
+        // loading and executes the module's top-level code, so a bare
+        // fire-and-forget `import('…')` statement (the standard Node entry-point
+        // pattern, no `await`) is the side effect, not a discarded value.
         Expression::CallExpression(_)
         | Expression::NewExpression(_)
+        | Expression::ImportExpression(_)
         | Expression::AwaitExpression(_)
         | Expression::YieldExpression(_)
         | Expression::AssignmentExpression(_)
@@ -986,5 +991,31 @@ mod tests {
         // a namespaced `Vue.computed(...)` callee is out of scope (tracked by
         // #7028), so a bare member read inside its callback still flags.
         assert_eq!(run_on("Vue.computed(() => { foo.value; });").len(), 1);
+    }
+
+    // Regression #7021: a bare dynamic `import('…')` used as a statement is
+    // inherently side-effectful — it triggers module loading and runs the
+    // module's top-level code — so the standard fire-and-forget Node
+    // entry-point pattern (no `await`) must not be flagged.
+    #[test]
+    fn allows_bare_dynamic_import_statement_issue_7021() {
+        assert!(run_on("import('./index.js');").is_empty(), "{:?}", run_on("import('./index.js');"));
+        assert!(
+            run_on("import('../dist/cli.mjs');").is_empty(),
+            "{:?}",
+            run_on("import('../dist/cli.mjs');")
+        );
+        // The else-branch of an if/else can be a bare `import('…')` statement
+        // (slidev's vscode language-server entry point).
+        let src = "if (process.argv.includes('--version')) console.log(version); else import('./index.js');";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_dead_expression_alongside_dynamic_import_exemption_issue_7021() {
+        // The exemption is scoped to dynamic `import()`; genuinely side-effect-free
+        // expression statements must keep flagging.
+        assert_eq!(run_on("foo.bar;").len(), 1);
+        assert_eq!(run_on("1 + 1;").len(), 1);
     }
 }
