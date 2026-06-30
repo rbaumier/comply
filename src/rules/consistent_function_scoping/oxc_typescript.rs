@@ -156,6 +156,25 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
                 .as_ref()
                 .is_some_and(|arg| arg.span() == node_span)
         }
+        // A concise-body arrow (`() => (input) => {…}`) wraps its
+        // implicit-return expression in an `ExpressionStatement` inside a
+        // synthetic `FunctionBody`, so a function sitting there is the value the
+        // outer arrow produces — the same semantic as the `ReturnStatement`
+        // case above. It stays nested even when it captures nothing. A statement
+        // inside a *block*-body arrow (`expression == false`) is a genuine
+        // nested helper and is not exempt.
+        AstKind::ExpressionStatement(expr_stmt) => {
+            let node_span = nodes.kind(node_id).span();
+            if expr_stmt.expression.span() != node_span {
+                return false;
+            }
+            let body_id = nodes.parent_id(parent_id);
+            matches!(nodes.kind(body_id), AstKind::FunctionBody(_))
+                && matches!(
+                    nodes.kind(nodes.parent_id(body_id)),
+                    AstKind::ArrowFunctionExpression(arrow) if arrow.expression
+                )
+        }
         AstKind::CallExpression(call) => {
             let node_span = nodes.kind(node_id).span();
             if call.callee.span() == node_span {
@@ -459,6 +478,40 @@ mod tests {
             diags.is_empty(),
             "overload signatures must not be flagged: {diags:?}"
         );
+    }
+
+    #[test]
+    fn ignores_inner_arrow_as_expression_body_of_outer_arrow() {
+        // Regression for rbaumier/comply#6803 — a curried factory's inner arrow
+        // IS the expression body (implicit return) of the outer arrow
+        // (privatenumber/cleye formats.ts). Hoisting it would separate the
+        // produced formatter from its producing factory.
+        let src = r#"
+            export const integer = () => (input: string): number => {
+                const value = Number(input);
+                if (!Number.isInteger(value)) {
+                    throw new TypeError(`Expected an integer (got: ${input})`);
+                }
+                return value;
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_arrow_statement_in_block_body() {
+        // Negative-space guard exercising the new `ExpressionStatement` arm: a
+        // bare arrow expression-statement inside a *block*-body arrow reaches the
+        // arm but its owning arrow has `expression == false`, so it is a genuine
+        // nested helper, not an implicit return, and still flags. This pins the
+        // `arrow.expression` discriminator.
+        let src = r#"
+            const outer = () => {
+                (x: number) => x + 1;
+                return 1;
+            };
+        "#;
+        assert!(!run(src).is_empty());
     }
 
     #[test]
