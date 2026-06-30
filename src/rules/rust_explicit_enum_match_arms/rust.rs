@@ -40,13 +40,15 @@
 //! every variant turns a new upstream variant into a compile error here — does
 //! not hold across the crate boundary, so the wildcard is correct.
 //!
-//! A PascalCase-rooted arm path (`Expr::Call`) reads as a local enum type, but
-//! the type may be pulled in unqualified from a foreign crate via a `use` import
-//! (`use syn::{..., Expr, ...}`). When every enum-like arm names a qualified enum
-//! whose type resolves — through this file's own imports — to a `use` rooted at
-//! an external crate, the scrutinee enum is foreign and the same cross-crate
-//! reasoning applies: the `_` arm is upstream-driven (and compiler-mandated for
-//! `#[non_exhaustive]`), so the match is exempt.
+//! A PascalCase-rooted arm path (`Expr::Call`, `Value::Array`) reads as a local
+//! enum type, but the type may be pulled in from a foreign crate via a `use` import
+//! — either named (`use syn::{..., Expr, ...}`) or a glob (`use serde_json::*;`)
+//! rooted at an external crate. When every enum-like arm names a qualified enum
+//! whose type resolves — through this file's own imports — to such an external
+//! import, the scrutinee enum is foreign and the same cross-crate reasoning applies:
+//! the `_` arm is upstream-driven (and compiler-mandated for `#[non_exhaustive]`),
+//! so the match is exempt. A same-file `enum_item` of that name shadows a glob (and
+//! would clash with a named import), so a locally-defined enum still flags.
 //!
 //! Matches with a non-wildcard arm carrying a match guard (`pat if cond`)
 //! are exempt as a whole: a guarded arm never counts toward exhaustiveness
@@ -508,18 +510,19 @@ fn arm_path_is_externally_rooted(pattern: tree_sitter::Node, source: &[u8]) -> b
         && root.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// True if the match's scrutinee is an enum imported unqualified from an external
-/// crate (`use syn::{..., Expr, ...}`).
+/// True if the match's scrutinee is an enum whose type name is brought into scope
+/// from an external crate — either imported unqualified (`use syn::{..., Expr}`) or
+/// exposed by a glob (`use serde_json::*;`).
 ///
-/// A PascalCase-rooted arm path (`Expr::Call`) reads as a local enum type, so it
-/// escapes `arm_path_is_externally_rooted`; this complementary check resolves the
-/// type through the file's own imports. Reads the enum name from each qualified
-/// arm pattern (`Expr::Call` → `Expr`) and requires *every* enum-like arm to be
-/// qualified — a bare variant (`North`) leaves the enum unresolved. The match is
-/// exempt only when each distinct enum name is brought into scope by a `use`
-/// declaration rooted at an external crate. In valid code an externally-imported
-/// name cannot also be a same-file `enum_item` (it would be a name clash), so a
-/// match over a locally-defined enum is never exempted here and still flags.
+/// A PascalCase-rooted arm path (`Expr::Call`, `Value::Array`) reads as a local
+/// enum type, so it escapes `arm_path_is_externally_rooted`; this complementary
+/// check resolves the type through the file's own imports. Reads the enum name from
+/// each qualified arm pattern (`Value::Array` → `Value`) and requires *every*
+/// enum-like arm to be qualified — a bare variant (`North`) leaves the enum
+/// unresolved. The match is exempt only when each distinct enum name resolves, via
+/// `enum_name_is_externally_imported`, to an external import. A name that a same-file
+/// `enum_item` defines is treated as local (it shadows any glob and would clash with
+/// a named import), so a match over a locally-defined enum still flags.
 fn match_covers_externally_imported_enum(
     match_node: tree_sitter::Node,
     enum_like_arms: &[tree_sitter::Node],
@@ -544,10 +547,17 @@ fn match_covers_externally_imported_enum(
     false
 }
 
-/// True if `name` (a PascalCase enum type like `Expr`) is brought into scope by a
-/// `use` declaration rooted at an external crate. Walks every `use_declaration` in
-/// `source_file`; one whose leading segment is an external crate name and that
-/// imports a leaf identifier exactly equal to `name` means the type is foreign.
+/// True if `name` (a PascalCase enum type like `Expr` or `Value`) resolves, through
+/// this file's own imports, to an enum defined in an external crate:
+///
+/// - a named import (`use syn::Expr;`, `use syn::{Block, Expr}`) binds `name`
+///   directly; the enum is foreign iff that import is rooted at an external crate.
+///   A local-rooted named import (`use crate::ast::Expr;`) binds `name` to a
+///   same-crate type, so the match stays local and the glob fallback does not apply.
+/// - with no named import of `name`, a glob import (`use serde_json::*;`) rooted at
+///   an external crate exposes `name` through a `use_wildcard` node rather than a
+///   named leaf; the enum is foreign when such a glob exists and no same-file
+///   `enum_item` is named `name` (a local `enum <name>` shadows the glob).
 fn enum_name_is_externally_imported(
     source_file: tree_sitter::Node,
     name: &str,
@@ -557,13 +567,58 @@ fn enum_name_is_externally_imported(
     let mut stack = vec![source_file];
     while let Some(node) = stack.pop() {
         if node.kind() == "use_declaration" {
-            if use_declaration_has_external_root(node, source)
-                && use_declaration_imports_name(node, name, source)
-            {
-                return true;
+            // A named import binds `name` to one concrete source, settling the type:
+            // the enum is foreign iff that import is rooted at an external crate.
+            // Either way the name is resolved, so the glob fallback below — which
+            // only matters when nothing names the type — does not apply.
+            if use_declaration_imports_name(node, name, source) {
+                return use_declaration_has_external_root(node, source);
             }
             // A `use` tree contains no nested `use_declaration`, so stop here.
             continue;
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    // No named import resolved `name`. A glob import (`use serde_json::*;`) exposes
+    // the type through a `use_wildcard` node that `use_declaration_imports_name`
+    // cannot see — resolve `name` through an external-rooted glob instead.
+    enum_name_is_glob_imported_external(source_file, name, source)
+}
+
+/// True if `name` is exposed by an external-rooted glob import (`use serde_json::*;`)
+/// and is NOT defined by any same-file `enum_item`. A local `enum <name>` takes
+/// precedence over a glob import, so its presence keeps the match local and the `_`
+/// arm a real catch-all; only an absent local definition leaves the qualified arms
+/// resolving to the foreign enum, where the `_` arm is upstream-driven.
+fn enum_name_is_glob_imported_external(
+    source_file: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    source_file_has_external_glob_import(source_file, source)
+        && !source_file_defines_enum_named(source_file, name, source)
+}
+
+/// True if any `enum_item` in `source_file` is named `name`. Descends the whole
+/// subtree so an enum nested in a `mod` is found, mirroring the other same-file
+/// enum-definition walks.
+fn source_file_defines_enum_named(
+    source_file: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    let mut cursor = source_file.walk();
+    let mut stack = vec![source_file];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "enum_item"
+            && node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .is_some_and(|n| n == name)
+        {
+            return true;
         }
         for child in node.named_children(&mut cursor) {
             stack.push(child);
@@ -1716,6 +1771,63 @@ mod tests {
         // variants are defined in the same module) leave the scrutinee local, so
         // the `_` arm is a real catch-all and must still flag.
         let src = "fn f(x: Foo) -> i32 { match x { North => 1, South => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_on_glob_imported_external_qualified_enum() {
+        // Issue #6949: meilisearch's permissive-json-pointer. `serde_json::Value` is
+        // brought in via `use serde_json::*;` and the arms are type-qualified
+        // (`Value::Array`, `Value::Object`). The glob is rooted at the external crate
+        // `serde_json` and no same-file enum defines `Value`, so the scrutinee enum
+        // is foreign and the `_` arm is upstream-driven — it must not flag.
+        let src = "use serde_json::*;\n\
+                   fn create_value(value: Value) { match value { \
+                   Value::Array(array) => {}, Value::Object(object) => {}, _ => (), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_qualified_arms_over_local_enum_despite_external_glob() {
+        // Issue #6949 negative space: a same-file `enum Value` shadows the
+        // `use serde_json::*;` glob (local items win over glob imports), so the
+        // scrutinee is the developer-controlled local enum and the `_` arm is a real
+        // catch-all — it must still flag even with an external glob in scope.
+        let src = "use serde_json::*;\n\
+                   enum Value { Array(A), Object(O) }\n\
+                   fn f(v: Value) -> i32 { match v { Value::Array(a) => 1, _ => 0, } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_qualified_arms_with_no_external_evidence() {
+        // Issue #6949 negative space: type-qualified arms with neither a glob nor a
+        // named import of the enum type carry no external evidence, so the scrutinee
+        // is a local enum and the `_` arm must still flag.
+        let src = "fn f(v: Value) -> i32 { match v { \
+                   Value::Array(a) => 1, Value::Object(o) => 2, _ => 0, } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_qualified_arms_with_non_external_glob() {
+        // Issue #6949 negative space: a glob rooted at `crate` (or `self`/`super`) is
+        // a local import, not external, so type-qualified arms under it still flag.
+        let src = "use crate::*;\n\
+                   fn f(v: Value) -> i32 { match v { \
+                   Value::Array(a) => 1, Value::Object(o) => 2, _ => 0, } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_qualified_arms_when_enum_named_imported_locally_despite_external_glob() {
+        // Issue #6949 review: an enum imported by name from a local path
+        // (`use crate::foo::Color;`) is same-crate even when an unrelated external
+        // glob (`use serde_json::*;`) is also in scope. The named import resolves the
+        // type, so the glob is irrelevant and the `_` arm must still flag.
+        let src = "use serde_json::*;\n\
+                   use crate::foo::Color;\n\
+                   fn f(c: Color) -> i32 { match c { Color::Red => 1, _ => 0, } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
