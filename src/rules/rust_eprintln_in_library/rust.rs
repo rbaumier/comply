@@ -87,6 +87,17 @@
 //! `Box::new(…)`) is exempt. Output in a *different* closure nested inside
 //! the hook body stays flagged.
 //!
+//! An `eprintln!` / `eprint!` whose immediately-following statement in the
+//! enclosing block is an `unreachable!()` or `panic!(…)` invocation is a
+//! pre-panic diagnostic: the process unconditionally terminates on that very
+//! next statement, so the rule's premise — consumers can't redirect or
+//! capture the output — is moot, there is nothing left to redirect. This is
+//! the same category as the panic-hook exemption (output written just before
+//! the process dies). The next statement must itself be the
+//! `unreachable!`/`panic!` macro; an `eprintln!` followed by ordinary code,
+//! or one that is the last statement of its block with no panic after it,
+//! stays flagged.
+//!
 //! Output gated behind a runtime verbosity flag is opt-in diagnostics,
 //! not unconditional library noise: the consumer only sees it after
 //! turning the flag on. The guard is recognised when the `if` condition
@@ -240,6 +251,9 @@ impl AstCheck for Check {
             return;
         }
         if is_in_panic_hook_closure(node, source_bytes) {
+            return;
+        }
+        if is_pre_unreachable_diagnostic(node, source_bytes) {
             return;
         }
         if is_suppressed_by_clippy_allow(node, &["disallowed_macros"], source_bytes) {
@@ -504,6 +518,78 @@ fn callee_ends_in_set_hook(func: tree_sitter::Node, source: &[u8]) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when `node` (an `eprintln!` / `eprint!` `macro_invocation`) is the
+/// direct predecessor of a guaranteed panic in its enclosing block: the
+/// statement immediately following it is an `unreachable!()` or `panic!(…)`
+/// invocation. Such an `eprintln!` is a pre-panic diagnostic — the process
+/// terminates on the next statement, so there is nothing for a consumer to
+/// redirect or capture, the same rationale as the panic-hook exemption.
+///
+/// Resolves the statement that wraps the `eprintln!` (its ancestor that is a
+/// direct child of a `block`), then its next sibling statement, skipping
+/// comments. An `eprintln!` that is its block's last statement has no
+/// following sibling and is not exempted, so it still fires.
+fn is_pre_unreachable_diagnostic(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(stmt) = statement_in_block(node) else {
+        return false;
+    };
+    let Some(next) = next_statement(stmt) else {
+        return false;
+    };
+    macro_invocation_of(next)
+        .and_then(|mi| macro_invocation_name(mi, source))
+        .is_some_and(|name| name == "unreachable" || name == "panic")
+}
+
+/// The ancestor of `node` that is a direct child of a `block` — the statement
+/// (or trailing expression) `node` belongs to within its nearest enclosing
+/// block — or `None` when `node` is not inside a block.
+fn statement_in_block(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "block" {
+            return Some(current);
+        }
+        current = parent;
+    }
+    None
+}
+
+/// The next non-comment named sibling of `stmt`, or `None` when `stmt` is the
+/// last named child. A `line_comment` / `block_comment` between two statements
+/// is skipped so the genuinely-following statement is examined.
+fn next_statement(stmt: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut sibling = stmt.next_named_sibling();
+    while let Some(n) = sibling {
+        if n.kind() != "line_comment" && n.kind() != "block_comment" {
+            return Some(n);
+        }
+        sibling = n.next_named_sibling();
+    }
+    None
+}
+
+/// The `macro_invocation` a statement node carries: the node itself when it is
+/// a trailing-expression `macro_invocation` (`unreachable!()` with no `;`), or
+/// the sole inner macro of an `expression_statement` (`unreachable!();`). Any
+/// other statement shape yields `None`.
+fn macro_invocation_of(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    match node.kind() {
+        "macro_invocation" => Some(node),
+        "expression_statement" => node
+            .named_child(0)
+            .filter(|inner| inner.kind() == "macro_invocation"),
+        _ => None,
+    }
+}
+
+/// The final path segment of a `macro_invocation`'s name (`std::unreachable` →
+/// `unreachable`), or `None` when the `macro` field is absent.
+fn macro_invocation_name<'a>(mi: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let name = mi.child_by_field_name("macro")?.utf8_text(source).ok()?;
+    Some(name.rsplit("::").next().unwrap_or(name))
 }
 
 /// True when `cond` is a recognised runtime opt-in guard: either a
@@ -1177,6 +1263,52 @@ required-features = ["std"]
     #[test]
     fn flags_eprintln_in_non_set_hook_closure() {
         let source = "pub fn f() { with_thing(Box::new(|info| { eprintln!(\"{info}\"); })); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #6836 (nushell/nushell
+    /// `crates/nu-cmd-lang/src/core_commands/if_.rs:112`): an `eprintln!`
+    /// immediately followed by `unreachable!()` (the block's trailing
+    /// expression, no `;`) is a pre-panic diagnostic — the process terminates
+    /// on the next statement, so there is nothing to redirect. Exempt.
+    #[test]
+    fn allows_eprintln_immediately_before_unreachable() {
+        let source = "fn run(&self) { eprintln!(\"this code path should never be reached\"); unreachable!() }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The same exemption covers a following `panic!(…)` — also a guaranteed
+    /// unconditional termination on the next statement.
+    #[test]
+    fn allows_eprintln_immediately_before_panic() {
+        let source = "fn f() { eprintln!(\"fatal: bad state\"); panic!(\"bad state\"); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The terminator is matched on the macro's final path segment, so a
+    /// path-qualified `std::unreachable!()` / `core::panic!()` is recognised
+    /// too — the preceding `eprintln!` is exempt.
+    #[test]
+    fn allows_eprintln_before_path_qualified_unreachable() {
+        let source = "fn f() { eprintln!(\"x\"); std::unreachable!() }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// A bare `eprintln!` that is the last statement of its block — with no
+    /// following panic — is unconditional library output and stays flagged
+    /// (must not panic on the missing next sibling).
+    #[test]
+    fn flags_eprintln_as_last_statement_with_no_panic() {
+        let source = "fn f() { eprintln!(\"oops\"); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// An `eprintln!` whose following statement is ordinary code — not an
+    /// `unreachable!`/`panic!` — is not a pre-panic diagnostic and stays
+    /// flagged.
+    #[test]
+    fn flags_eprintln_followed_by_ordinary_statement() {
+        let source = "fn f() { eprintln!(\"oops\"); do_more(); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
