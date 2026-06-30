@@ -15,6 +15,16 @@
 //! incoming connection, where retaining the handles would require an unbounded
 //! `Vec<JoinHandle>` for no benefit — but the exemption covers any spawn in a
 //! loop body, since a handle created per iteration cannot meaningfully be held.
+//!
+//! A spawn whose task body contains a process-termination primitive
+//! (`process::exit(..)` / `process::abort(..)`) is exempt. Such a task provably
+//! never returns — the call ends the whole process — so its `JoinHandle` can
+//! never resolve and capturing it would be dead code (the ctrl-c / shutdown
+//! handler idiom).
+//!
+//! Three exemptions therefore suppress the diagnostic: a test context
+//! (`#[test]`/`#[tokio::test]`/`#[cfg(test)]`), a spawn in a loop body, and a
+//! spawned task that terminates the process.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -65,6 +75,15 @@ impl AstCheck for Check {
         if is_in_loop_body(node) {
             return;
         }
+        // A spawned task that calls a process-termination primitive
+        // (`process::exit`/`process::abort`) never returns — the call ends the
+        // whole process — so the `JoinHandle` can never resolve and capturing it
+        // would be dead code (the ctrl-c / shutdown handler idiom).
+        if let Some(arguments) = call.child_by_field_name("arguments")
+            && spawned_body_terminates_process(arguments, source_bytes)
+        {
+            return;
+        }
         let pos = call.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -95,6 +114,48 @@ fn is_tokio_spawn(text: &str, node: tree_sitter::Node, source: &[u8]) -> bool {
         return true;
     }
     text == "spawn" && !spawn_imported_from_std_thread(node, source)
+}
+
+/// True if the spawned-task argument subtree contains a call to a process-
+/// termination primitive (`process::exit(..)` / `process::abort(..)`). Such a
+/// task never returns — the call terminates the whole process — so its
+/// `JoinHandle` can never resolve and capturing it would be dead code. Walks the
+/// whole subtree (the issue's ctrl-c handler reaches the exit via a tail
+/// statement, but a conditional exit is covered too).
+fn spawned_body_terminates_process(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "call_expression" && call_terminates_process(node, source) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| spawned_body_terminates_process(child, source))
+}
+
+/// True if `call` is `process::exit(..)` or `process::abort(..)` — a
+/// `call_expression` whose `function` is a `scoped_identifier` whose final
+/// segment is `exit`/`abort` and whose preceding segment is `process`. Matching
+/// the two-segment `process::exit`/`process::abort` suffix covers
+/// `std::process::exit`, `process::exit` (via `use std::process;`), and
+/// `::std::process::abort`, while a bare `exit()` or an unrelated method
+/// (`menu.exit()`) does not match.
+fn call_terminates_process(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "scoped_identifier" {
+        return false;
+    }
+    let Ok(text) = function.utf8_text(source) else {
+        return false;
+    };
+    let mut segments = text.rsplit("::").map(str::trim);
+    let Some(last) = segments.next() else {
+        return false;
+    };
+    if last != "exit" && last != "abort" {
+        return false;
+    }
+    segments.next() == Some("process")
 }
 
 /// True when the file has a `use` declaration that brings the bare
@@ -475,6 +536,95 @@ use std::thread::spawn as thread_spawn;
 
 fn start_worker() {
     spawn(async { process().await });
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // --- #6946: spawned process-termination handler is exempt ---
+
+    #[test]
+    fn allows_spawn_that_calls_std_process_exit() {
+        // meilisearch crates/meilisearch/src/main.rs:136 — a ctrl-c handler that
+        // exits the process. The task never returns, so its JoinHandle is unusable.
+        let source = r#"
+fn main() {
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.unwrap();
+        std::process::exit(130);
+    });
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_spawn_that_calls_std_process_abort() {
+        let source = r#"
+fn main() {
+    tokio::spawn(async move {
+        watchdog().await;
+        std::process::abort();
+    });
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_spawn_with_process_exit_via_use_std_process() {
+        // `use std::process;` then a `process::exit(1)` — the two-segment suffix
+        // match covers the unqualified-module form.
+        let source = r#"
+use std::process;
+
+fn main() {
+    tokio::spawn(async move {
+        wait_for_shutdown().await;
+        process::exit(1);
+    });
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_spawn_without_termination_call() {
+        // An ordinary fire-and-forget spawn with no process-termination call is
+        // still a dropped JoinHandle.
+        let source = r#"
+fn start() {
+    tokio::spawn(async move { do_work().await; });
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_spawn_with_unrelated_exit_method_call() {
+        // `menu.exit()` is a method named `exit`, not `process::exit` — the
+        // exemption must not catch it, so the dropped handle still fires.
+        let source = r#"
+fn start() {
+    tokio::spawn(async move {
+        let menu = build_menu();
+        menu.exit();
+    });
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_spawn_with_unrelated_exit_code_method_call() {
+        // `self.exit_code()` is an unrelated method, not a process-termination
+        // primitive — still a dropped handle.
+        let source = r#"
+fn start(&self) {
+    tokio::spawn(async move {
+        let code = self.exit_code();
+        report(code).await;
+    });
 }
 "#;
         assert_eq!(run_on(source).len(), 1);
