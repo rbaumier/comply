@@ -6,9 +6,11 @@
 //! A block is flagged when it has tags but no prose description, unless every
 //! tag is self-sufficient — a type annotation (the type is the documentation)
 //! or a value annotation (`@default`/`@defaultValue`, where the value is the
-//! documentation) — or a JSX compiler pragma (`@jsx`, `@jsxImportSource`,
+//! documentation) — a JSX compiler pragma (`@jsx`, `@jsxImportSource`,
 //! `@jsxRuntime`, `@jsxFrag`), where the whole comment is a compiler directive
-//! with no prose to add.
+//! with no prose to add — or a visibility/access-control marker (`@internal`,
+//! `@private`, `@protected`, `@public`, `@ignore`, `@override`), where the tag
+//! is the complete semantic content and prose would be filler.
 //!
 //! A `@description`/`@desc` tag is itself the prose description, and a
 //! `@deprecated` tag carrying an inline reason supplies the prose, so blocks
@@ -50,6 +52,18 @@ fn is_self_sufficient_tag(tag: &str) -> bool {
 /// prose description to add.
 fn is_pragma_tag(tag: &str) -> bool {
     matches!(tag, "jsx" | "jsxImportSource" | "jsxRuntime" | "jsxFrag")
+}
+
+/// Visibility / access-control markers from the JSDoc/TSDoc taxonomy. A block
+/// whose only content is these tags is an annotation block, not a documentation
+/// block: the tag is the complete semantic content (it tells TypeDoc / API
+/// extractors / the language server the member's visibility), so there is no
+/// prose to add and forcing it produces meaningless filler.
+fn is_visibility_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "internal" | "private" | "protected" | "public" | "ignore" | "override"
+    )
 }
 
 impl OxcCheck for Check {
@@ -112,9 +126,9 @@ impl OxcCheck for Check {
 
             if !tags.is_empty()
                 && !has_description
-                && !tags
-                    .iter()
-                    .all(|tag| is_self_sufficient_tag(tag) || is_pragma_tag(tag))
+                && !tags.iter().all(|tag| {
+                    is_self_sufficient_tag(tag) || is_pragma_tag(tag) || is_visibility_tag(tag)
+                })
             {
                 let (line, column) = byte_offset_to_line_col(src, abs_start);
                 diagnostics.push(Diagnostic {
@@ -276,6 +290,90 @@ export interface ModuleOptions {
  * @see other
  */
 function thing() {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_internal_only_block() {
+        // Regression for rbaumier/comply#6909 — a `@internal`-only block is a
+        // visibility annotation, not a documentation block; the tag is the
+        // complete semantic content.
+        let source = r#"
+export class VueElement {
+  /**
+   * @internal
+   */
+  _instance: ComponentInternalInstance | null = null
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_private_only_block() {
+        // Regression for rbaumier/comply#6909.
+        let source = r#"
+/**
+ * @private
+ */
+export const withModifiers = (fn, modifiers) => fn;
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_protected_only_block() {
+        // Regression for rbaumier/comply#6909.
+        let source = r#"
+class Base {
+  /**
+   * @protected
+   */
+  state: State
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_multiple_visibility_tags_only() {
+        // Regression for rbaumier/comply#6909 — a block whose only content is
+        // visibility markers is exempt regardless of how many there are.
+        let source = r#"
+/**
+ * @internal
+ * @override
+ */
+function impl() {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_visibility_mixed_with_prose_requiring_tag() {
+        // A visibility tag alongside a non-self-sufficient tag (e.g. `@see`) and
+        // no prose still flags — only ALL-exempt blocks are exempt.
+        let source = r#"
+/**
+ * @internal
+ * @see other
+ */
+function thing() {}
+"#;
+        assert!(!run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_visibility_tag_with_prose() {
+        // A visibility tag with a real prose description is unchanged — the
+        // prose already satisfies the rule.
+        let source = r#"
+/**
+ * Resets the internal cache.
+ * @internal
+ */
+function reset() {}
 "#;
         assert!(run_on(source).is_empty());
     }
