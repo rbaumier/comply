@@ -147,6 +147,13 @@ const HTML_SVG_TAGS: &[&str] = &[
     "animate",
     "tspan",
     "marker",
+    "desc",
+    "ellipse",
+    "metadata",
+    "mpath",
+    "set",
+    "switch",
+    "view",
     // SVG camelCase handled separately below
 ];
 
@@ -573,5 +580,32 @@ mod tests {
         let d = run(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("myComponent"));
+    }
+
+    #[test]
+    fn allows_svg_ellipse() {
+        // Issue #7056: `<ellipse>` is a standard lowercase SVG basic-shape
+        // element (sibling of `<circle>`/`<rect>`), not a Vue component.
+        let src = "<template>\n  <svg>\n    <ellipse cx=\"100\" cy=\"50\" rx=\"100\" ry=\"50\" />\n  </svg>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_svg_lowercase_structural_elements() {
+        // The other standard lowercase SVG elements (`desc`, `metadata`,
+        // `mpath`, `set`, `switch`, `view`) are native SVG elements, not Vue
+        // components.
+        let src = "<template>\n  <svg>\n    <desc>A shape</desc>\n    <metadata />\n    <switch>\n      <set attributeName=\"x\" to=\"10\" />\n    </switch>\n    <view id=\"v\" />\n    <animateMotion><mpath href=\"#p\" /></animateMotion>\n  </svg>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_lowercase_custom_component_alongside_svg_ellipse() {
+        // Negative-space guard: a genuine lowercase custom component must still
+        // fire even when a standard SVG element is present.
+        let src = "<template>\n  <svg>\n    <ellipse cx=\"1\" cy=\"1\" rx=\"1\" ry=\"1\" />\n  </svg>\n  <foobar />\n</template>";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("foobar"));
     }
 }
