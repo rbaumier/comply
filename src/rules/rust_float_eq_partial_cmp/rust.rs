@@ -211,9 +211,12 @@ fn is_integer_type(name: &str) -> bool {
     )
 }
 
-/// Is `node` a float-zero literal? Covers `0.0`, `0.0f64`, `0f64`, `0.`,
-/// and a leading-minus `-0.0`. A negative zero appears as a `unary_expression`
-/// (`-` applied to the literal) in the tree-sitter grammar, so unwrap it first.
+/// Is `node` a float-zero literal? Covers `0.0`, `0.0f64`, `0.`, a
+/// leading-minus `-0.0`, and the suffixed-integer forms `0f32`/`0f64` — a zero
+/// written without a decimal point parses as an `integer_literal` (with an
+/// `f32`/`f64` suffix), not a `float_literal`, in the tree-sitter grammar. A
+/// negative zero appears as a `unary_expression` (`-` applied to the literal),
+/// so unwrap it first.
 fn operand_is_float_zero(node: tree_sitter::Node, source: &[u8]) -> bool {
     let lit = if node.kind() == "unary_expression" {
         match node.child_by_field_name("operator").and_then(|o| o.utf8_text(source).ok()) {
@@ -226,16 +229,23 @@ fn operand_is_float_zero(node: tree_sitter::Node, source: &[u8]) -> bool {
     } else {
         node
     };
-    if lit.kind() != "float_literal" {
-        return false;
-    }
     let Ok(text) = lit.utf8_text(source) else {
         return false;
     };
-    // Strip an optional `f32`/`f64` type suffix, then check the mantissa is
-    // numerically zero (`0`, `0.`, `0.0`, `0.000`, `0e0`).
-    let mantissa = text.trim_end_matches("f64").trim_end_matches("f32");
-    mantissa
+    // A float zero is either a `float_literal` (`0.0`, `0.0f32`, `0.`) or an
+    // `integer_literal` carrying an `f32`/`f64` suffix (`0f32`, `0f64`). Require
+    // the suffix for integer literals: it is what marks the token as a float —
+    // a bare `0` is an integer and must not be treated as float-zero here.
+    let is_typed_float_literal = lit.kind() == "float_literal"
+        || (lit.kind() == "integer_literal"
+            && (text.ends_with("f32") || text.ends_with("f64")));
+    if !is_typed_float_literal {
+        return false;
+    }
+    // Strip an optional `f32`/`f64` type suffix, then check the numeric part is
+    // zero (`0`, `0.`, `0.0`, `0.000`, `0e0`, `0f32`).
+    let numeric = text.trim_end_matches("f64").trim_end_matches("f32");
+    numeric
         .parse::<f64>()
         .is_ok_and(|value| value == 0.0)
 }
@@ -459,6 +469,40 @@ mod tests {
         ] {
             assert!(run_on(src).is_empty(), "should not flag: {src}");
         }
+    }
+
+    #[test]
+    fn allows_suffixed_int_zero_against_float_let_binding() {
+        // image-rs/image imageops/sample.rs: `let mut sum_norm: f32 = 0f32; if
+        // sum_norm != 0f32 { .. }`. `0f32` is a suffixed integer literal (no
+        // decimal point) but exactly-representable zero, so the guard is exact
+        // and correct — same family as the already-exempt `!= 0.0f32`.
+        for src in [
+            "fn f() { let mut sum_norm: f32 = 0f32; if sum_norm != 0f32 { let _s = sum_norm; } }",
+            "fn f() -> bool { let x: f64 = compute(); x == 0f64 }",
+        ] {
+            assert!(run_on(src).is_empty(), "should not flag: {src}");
+        }
+    }
+
+    #[test]
+    fn flags_nonzero_suffixed_int_literal() {
+        // Negative space: a non-zero suffixed integer float literal still fires —
+        // the exemption is scoped to zero only.
+        assert_eq!(
+            run_on("fn f() -> bool { let x: f32 = compute(); x != 1f32 }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_nonliteral_operand_against_float_let_binding() {
+        // Negative space: a non-literal right operand (identifier) is unchanged
+        // by the zero-exemption path and still fires.
+        assert_eq!(
+            run_on("fn f(y: f32) -> bool { let x: f32 = compute(); x != y }").len(),
+            1
+        );
     }
 
     #[test]
