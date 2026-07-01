@@ -46,10 +46,15 @@ fn canonicalize_cached(p: &Path) -> PathBuf {
 /// (`knip.ts`/`knip.js`) — the Knip tool reads its config by filename and never
 /// `import`s it, so its `default` export has no static importer. `knip.config.*`
 /// is already covered by the `*.config.*` branch. A file whose base name is
-/// exactly `config.<ext>` (e.g. `config.ts`, a VitePress locale config such as
-/// `docs/ja/config.ts`) is a framework-/tooling-consumed configuration entry
-/// point loaded by filesystem convention, never statically `import`ed, so its
-/// `default` export has no in-project importer either.
+/// exactly `config.<ext>` is a documentation-framework config entry point only
+/// under a docs-source convention location: VitePress auto-discovers the site
+/// config (`.vitepress/config.ts`) and per-locale additional configs
+/// (`docs/config.ts`, `docs/ja/config.ts`) by filesystem convention, never
+/// through a static `import`, so their `default` export has no in-project
+/// importer. A top-level `config.<ext>` with no directory prefix is likewise a
+/// root config entry point. A bare `config.<ext>` in ordinary source
+/// (`src/config.ts`) is app code whose exports are statically imported, so it
+/// stays subject to the rule.
 pub fn is_config_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -66,7 +71,15 @@ pub fn is_config_file(path: &Path) -> bool {
         name,
         "config.ts" | "config.js" | "config.mts" | "config.mjs" | "config.cjs" | "config.cts"
     ) {
-        return true;
+        // Only a top-level `config.<ext>` (no directory prefix) or one under a
+        // docs-source convention directory (VitePress `docs/`/`.vitepress/`) is
+        // a framework-consumed config entry point; a bare `config.ts` nested in
+        // application source stays flaggable.
+        let has_dir_prefix = path.parent().is_some_and(|p| !p.as_os_str().is_empty());
+        let under_docs_convention = path.components().any(|c| {
+            matches!(c.as_os_str().to_str(), Some("docs") | Some(".vitepress"))
+        });
+        return !has_dir_prefix || under_docs_convention;
     }
     false
 }
