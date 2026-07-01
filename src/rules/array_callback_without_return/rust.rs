@@ -6,9 +6,11 @@
 //! Exempt the idiomatic `Option`/`Result` side-effect form, which produces a
 //! deliberate unit return: a bare `_` wildcard parameter (explicit value
 //! discard), a `?`-suffixed map, a map whose result feeds an
-//! `Option`/`Result`-only query (`.is_some()`, `.is_ok()`, …), or a map whose
-//! immediate receiver is a macro invocation (`syscall!(...).map(...)`) — each
-//! signal proves the receiver is `Option`/`Result`, never a lazy `Iterator`.
+//! `Option`/`Result`-only query (`.is_some()`, `.is_ok()`, …), a map whose
+//! immediate receiver is a macro invocation (`syscall!(...).map(...)`), or a map
+//! whose immediate receiver is a stdlib `Option`/`Result` adapter call
+//! (`opt.as_mut().map(...)`) — each signal proves the receiver is
+//! `Option`/`Result`, never a lazy `Iterator`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -174,6 +176,50 @@ fn receiver_is_macro_invocation(call: tree_sitter::Node) -> bool {
         .is_some_and(|recv| recv.kind() == "macro_invocation")
 }
 
+/// Stdlib `Option`/`Result` adapter methods whose return type is itself an
+/// `Option`/`Result`, never a lazy `Iterator`. A `.map(...)` chained onto one of
+/// these is always the monadic `Option::map`/`Result::map`.
+const OPTION_RESULT_ADAPTER_METHODS: &[&str] = &["as_mut", "as_ref", "as_deref", "as_deref_mut"];
+
+/// True when the IMMEDIATE receiver of the `.map(...)` call is a call to a stdlib
+/// `Option`/`Result` adapter (`opt.as_mut().map(...)`).
+///
+/// `as_mut`/`as_ref`/`as_deref`/`as_deref_mut` on an `Option<T>`/`Result<T, E>`
+/// yield `Option<&mut T>`/`Option<&T>`/… — still an `Option`/`Result`, so the
+/// following `.map(|v| { side_effect(); })` is the deliberate unit-returning
+/// `Option::map`, not a forgotten `Iterator::map` return; these adapters never
+/// yield an iterator. Only the immediate receiver is inspected (mirroring
+/// `receiver_is_macro_invocation`): a chain like `xs.iter().map(...)` has the
+/// `.iter()` call as its immediate receiver and still flags. In tree-sitter-rust
+/// the receiver is the `value` of the `field_expression` that names `map`; the
+/// adapter case is that receiver being a `call_expression` whose `function` is a
+/// `field_expression` whose `field` names the adapter.
+fn receiver_is_option_adapter_call(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    let Some(recv) = func.child_by_field_name("value") else {
+        return false;
+    };
+    if recv.kind() != "call_expression" {
+        return false;
+    }
+    let Some(recv_func) = recv.child_by_field_name("function") else {
+        return false;
+    };
+    if recv_func.kind() != "field_expression" {
+        return false;
+    }
+    let Some(recv_field) = recv_func.child_by_field_name("field") else {
+        return false;
+    };
+    let name = recv_field.utf8_text(source).unwrap_or("");
+    OPTION_RESULT_ADAPTER_METHODS.contains(&name)
+}
+
 fn has_return(node: tree_sitter::Node) -> bool {
     if node.kind() == "return_expression" {
         return true;
@@ -205,13 +251,16 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Exempt the idiomatic Option/Result side-effect form, detected via
     // type-free structural signals: a bare `_` wildcard parameter (explicit
     // value discard), a `?`-suffixed map, a map whose result feeds an
-    // Option/Result-only query (`.is_some()`, `.is_ok()`, …), or a map whose
-    // immediate receiver is a macro invocation (`syscall!(...).map(...)`). Each
-    // signal proves the receiver is Option/Result, never a lazy Iterator.
+    // Option/Result-only query (`.is_some()`, `.is_ok()`, …), a map whose
+    // immediate receiver is a macro invocation (`syscall!(...).map(...)`), or a
+    // map whose immediate receiver is a stdlib Option/Result adapter call
+    // (`opt.as_mut().map(...)`). Each signal proves the receiver is
+    // Option/Result, never a lazy Iterator.
     if closure_param_is_wildcard(callback)
         || map_is_try_operand(node)
         || map_is_option_result_query_operand(node, source)
         || receiver_is_macro_invocation(node)
+        || receiver_is_option_adapter_call(node, source)
     {
         return;
     }
@@ -415,6 +464,52 @@ mod tests {
         // Guard: a plain `some_vec.iter().map(...)` has no macro receiver — a
         // classic forgotten-return Iterator bug that must still flag.
         let src = "fn f() { some_vec.iter().map(|x| { do_thing(x); }); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_map_on_as_mut_receiver() {
+        // Issue #7041: xsv stats.rs:290 — `self.online.as_mut()` yields
+        // `Option<&mut T>`, so `.map(|v| { side_effect(); })` is Option::map,
+        // not a forgotten Iterator-callback return.
+        let src = "fn f() { self.online.as_mut().map(|v| { v.add_null(); }); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_on_as_ref_receiver() {
+        // Issue #7041: `as_ref` yields `Option<&T>` — still Option::map.
+        let src = "fn f() { self.online.as_ref().map(|v| { v.observe(); }); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_on_as_deref_receiver() {
+        // Issue #7041: `as_deref` yields `Option<&U>` — still Option::map.
+        let src = "fn f() { self.name.as_deref().map(|v| { record(v); }); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_on_as_deref_mut_receiver() {
+        // Issue #7041: `as_deref_mut` yields `Option<&mut U>` — still Option::map.
+        let src = "fn f() { self.name.as_deref_mut().map(|v| { mutate(v); }); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_iterator_map_on_iter_not_adapter() {
+        // Guard: `.iter()` is NOT an Option/Result adapter — a genuine lazy
+        // Iterator map with a forgotten return must still flag.
+        let src = "fn f() { xs.iter().map(|v| { side_effect(v); }); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_iterator_map_still_flags() {
+        // Guard: a bare `xs.map(|v| { ... })` with a `;`-terminated body has no
+        // adapter receiver and must still flag.
+        let src = "fn f() { xs.map(|v| { side_effect(v); }); }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
