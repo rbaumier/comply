@@ -47,7 +47,8 @@ impl OxcCheck for Check {
 
 /// True when the try block contains a promise-returning call that creates an
 /// uncaught rejection: a floating `.then(onFulfilled)`, or a `fetch`/`axios`
-/// call, that is not `await`ed.
+/// call, that is neither `await`ed nor terminated by a chained `.catch()` that
+/// handles the rejection.
 fn body_has_unawaited_promise(
     semantic: &oxc_semantic::Semantic<'_>,
     body_span: oxc_span::Span,
@@ -60,6 +61,9 @@ fn body_has_unawaited_promise(
             return false;
         }
         if !is_unawaited_promise_call(call) {
+            return false;
+        }
+        if is_chain_caught(semantic, n.id(), call.span) {
             return false;
         }
         !has_await_ancestor_within(semantic, n.id(), body_span)
@@ -100,6 +104,59 @@ fn is_axios_method_call(member: &StaticMemberExpression, method: &str) -> bool {
         return false;
     }
     matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == "axios")
+}
+
+/// True when the promise-returning call at `call_id` is the receiver of a
+/// downstream `.catch()` in the same chain, so its rejection is handled and the
+/// surrounding try/catch is irrelevant to that path.
+///
+/// The call is chain-caught iff it is the `object` (receiver) of a
+/// `StaticMemberExpression` that is itself the `callee` of a `CallExpression`,
+/// AND either that member's method is `catch`, or the member is a further
+/// promise-chain link (`then`/`finally`) whose enclosing call is also
+/// chain-caught. Any other method may return a non-promise, so it breaks the
+/// chain and stops the walk. The receiver-position requirement at every step
+/// keeps `foo(p.then(a)).catch(b)` flagged: there the `.then()` is an argument
+/// to `foo`, so the `.catch()` handles `foo(...)`'s result, a different promise.
+fn is_chain_caught(
+    semantic: &oxc_semantic::Semantic<'_>,
+    call_id: oxc_semantic::NodeId,
+    call_span: oxc_span::Span,
+) -> bool {
+    use oxc_span::GetSpan;
+    let nodes = semantic.nodes();
+
+    let member_id = nodes.parent_id(call_id);
+    if member_id == call_id {
+        return false;
+    }
+    let AstKind::StaticMemberExpression(member) = nodes.get_node(member_id).kind() else {
+        return false;
+    };
+    // The call must be the receiver (object) of the member access, not an
+    // argument nested somewhere inside it.
+    if member.object.span() != call_span {
+        return false;
+    }
+
+    let outer_id = nodes.parent_id(member_id);
+    if outer_id == member_id {
+        return false;
+    }
+    let AstKind::CallExpression(outer) = nodes.get_node(outer_id).kind() else {
+        return false;
+    };
+    // The member must be the callee of the enclosing call (`<chain>.method(...)`),
+    // not one of its arguments.
+    if outer.callee.span() != member.span {
+        return false;
+    }
+
+    match member.property.name.as_str() {
+        "catch" => true,
+        "then" | "finally" => is_chain_caught(semantic, outer_id, outer.span),
+        _ => false,
+    }
 }
 
 /// True when an `await` lies between this node and the try block, i.e. the call
@@ -241,6 +298,50 @@ try {
     #[test]
     fn flags_axios_get_without_await_in_try() {
         let d = run("try {\n  axios.get(\"/api\");\n} catch (e) {}\n");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression for issue #7057: a single-arg `.then(onFulfilled)` whose result
+    // is immediately caught by a chained `.catch(onRejected)` handles its own
+    // rejection — the try/catch is irrelevant to that path, so it must not be
+    // flagged.
+    #[test]
+    fn allows_then_chained_with_catch_in_try() {
+        let src = "\
+try {
+  return Promise.resolve(handler(req, res))
+    .then(() => resolve(kHandled))
+    .catch((error) => reject(error));
+} catch (error) {
+  reject(error);
+}
+";
+        assert!(
+            run(src).is_empty(),
+            ".then(fulfil).catch(reject) chain handles its own rejection"
+        );
+    }
+
+    // A `.finally()` interposed between `.then()` and `.catch()` still leaves the
+    // rejection handled by the trailing `.catch()`.
+    #[test]
+    fn allows_then_finally_catch_chain_in_try() {
+        let src = "\
+try {
+  promise.then((v) => use(v)).finally(cleanup).catch((e) => log(e));
+} catch (e) {}
+";
+        assert!(run(src).is_empty());
+    }
+
+    // Receiver-position guard: here the `.then()` is an *argument* to `foo`, and
+    // the `.catch()` handles `foo(...)`'s result, not the `.then()` result — the
+    // `.then()` rejection can still escape, so the try block stays flagged.
+    #[test]
+    fn still_flags_then_as_argument_with_outer_catch() {
+        let d = run(
+            "try {\n  foo(promise.then((v) => use(v))).catch((e) => log(e));\n} catch (e) {}\n",
+        );
         assert_eq!(d.len(), 1);
     }
 }
