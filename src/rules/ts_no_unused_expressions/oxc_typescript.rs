@@ -9,8 +9,10 @@ use std::sync::Arc;
 /// reactive source read inside it changes. A bare member access in that callback
 /// is the subscription itself — the proxy getter access registers the
 /// dependency. Covers SolidJS (`createEffect`/`createMemo`/`createRenderEffect`/
-/// `createComputed`) and Vue 3 (`computed`/`watchEffect`/`watch`), matched only
-/// in the bare-identifier callee form (a namespaced `Vue.computed(…)` is not).
+/// `createComputed`) and Vue 3 (`computed`/`watchEffect`/`watch`/
+/// `watchSyncEffect`). Matched in both the bare-identifier callee form
+/// (`computed(…)`) and the namespace-qualified form (`Vue.computed(…)`, from
+/// `import * as Vue from 'vue'`), keyed on the primitive name.
 const REACTIVE_CALLBACK_PRIMITIVES: &[&str] = &[
     // SolidJS
     "createEffect",
@@ -21,6 +23,7 @@ const REACTIVE_CALLBACK_PRIMITIVES: &[&str] = &[
     "computed",
     "watchEffect",
     "watch",
+    "watchSyncEffect",
 ];
 
 /// DOM geometry properties whose read forces the browser to flush pending style
@@ -162,8 +165,10 @@ fn is_concise_arrow_body(
 /// True when `node` sits inside a callback (arrow or function) passed directly
 /// as an argument to a call whose callee is a framework reactive primitive
 /// (`createEffect`, `computed`, …). Walks up to the nearest enclosing function,
-/// then checks the call that function is an argument to. The callee must be a
-/// bare identifier; a namespaced `Vue.computed(…)` callee is not matched.
+/// then checks the call that function is an argument to. The callee matches in
+/// both the bare-identifier form (`computed(…)`) and the namespace-qualified
+/// form (`Vue.computed(…)`), keyed on the primitive name against
+/// `REACTIVE_CALLBACK_PRIMITIVES`.
 fn is_in_reactive_callback(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -175,11 +180,21 @@ fn is_in_reactive_callback(
                 found_callback = true;
             }
             AstKind::CallExpression(call) if found_callback => {
-                return matches!(
-                    &call.callee,
-                    Expression::Identifier(id)
-                        if REACTIVE_CALLBACK_PRIMITIVES.contains(&id.name.as_str())
-                );
+                return match &call.callee {
+                    // Bare identifier: `computed(…)`, `watchEffect(…)`.
+                    Expression::Identifier(id) => {
+                        REACTIVE_CALLBACK_PRIMITIVES.contains(&id.name.as_str())
+                    }
+                    // Namespace-qualified: `Vue.computed(…)` from
+                    // `import * as Vue from 'vue'`. Keyed on the property name,
+                    // not the object — the bare-identifier form does not resolve
+                    // its import source either, so matching the primitive name
+                    // keeps the two forms consistent.
+                    Expression::StaticMemberExpression(member) => {
+                        REACTIVE_CALLBACK_PRIMITIVES.contains(&member.property.name.as_str())
+                    }
+                    _ => false,
+                };
             }
             _ => {}
         }
@@ -675,6 +690,53 @@ mod tests {
         assert_eq!(d.len(), 1);
     }
 
+    // Regression #7028: a bare member-read inside a namespace-qualified reactive
+    // primitive callback (`Vue.computed(() => { ref.value; … })` from
+    // `import * as Vue from 'vue'`) registers a Vue 3 reactive subscription — the
+    // proxy getter access is the intended side effect, so the read must not be
+    // flagged, exactly as the bare-identifier `computed(…)` form is not.
+    #[test]
+    fn allows_member_read_in_namespaced_vue_computed_callback_issue_7028() {
+        let src = r#"import * as Vue from 'vue';
+const matchRoute = Vue.computed(() => {
+  routerState.value;
+  return router.matchRoute(rest, opts);
+});"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_member_read_in_namespaced_vue_watch_effect_callback_issue_7028() {
+        let src = r#"Vue.watchEffect(() => { count.value; });"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_member_read_in_watch_sync_effect_callback_issue_7028() {
+        // `watchSyncEffect` is a Vue 3 sync-flush reactive primitive; a bare
+        // member read in its callback registers a subscription and must not be
+        // flagged, in both the bare-identifier and namespace-qualified forms.
+        assert!(run_on("watchSyncEffect(() => { count.value; });").is_empty());
+        assert!(run_on("Vue.watchSyncEffect(() => { count.value; });").is_empty());
+    }
+
+    #[test]
+    fn still_flags_member_read_in_non_reactive_member_callee_issue_7028() {
+        // A member callee whose property is NOT a reactive primitive
+        // (`notVue.doThing(…)`) does not register a subscription, so a bare
+        // member read inside its callback is still an unused expression.
+        let d = run_on(r#"notVue.doThing(() => { count.value; });"#);
+        assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
+    #[test]
+    fn still_flags_member_read_in_plain_callback_issue_7028() {
+        // A bare member read inside a plain callback not passed to any reactive
+        // primitive is still an unused expression.
+        let d = run_on(r#"[1].forEach(() => { count.value; });"#);
+        assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
     // Regression #1953: reading a DOM geometry property forces a synchronous
     // layout reflow — a real side effect, not an unused expression.
     #[test]
@@ -986,11 +1048,11 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_namespaced_vue_computed_callback_issue_7022() {
-        // The reactive-callback exemption matches only a bare-identifier callee;
-        // a namespaced `Vue.computed(...)` callee is out of scope (tracked by
-        // #7028), so a bare member read inside its callback still flags.
-        assert_eq!(run_on("Vue.computed(() => { foo.value; });").len(), 1);
+    fn allows_member_read_in_namespaced_vue_computed_callback_issue_7022() {
+        // The reactive-callback exemption matches a namespace-qualified callee
+        // (`Vue.computed(...)`) via its property name, so a bare member read
+        // inside its callback registers a subscription and is not flagged.
+        assert!(run_on("Vue.computed(() => { foo.value; });").is_empty());
     }
 
     // Regression #7021: a bare dynamic `import('…')` used as a statement is
