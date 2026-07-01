@@ -40,7 +40,7 @@ impl OxcCheck for Check {
         if ctx
             .project
             .import_index()
-            .project_defines_remove_child_method()
+            .project_defines_dom_tree_method("removeChild")
         {
             return;
         }
