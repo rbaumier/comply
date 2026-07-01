@@ -94,8 +94,8 @@ use crate::rules::rust_helpers::{
     cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
     cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
-    cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
-    is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_sibling_arm_bounded, cast_operand_is_to_digit_bounded,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -233,6 +233,12 @@ impl AstCheck for Check {
         // `<recv>.min(BOUND) as uT` where the `.min()` clamp proves the value fits
         // the unsigned target — `.as_nanos().min(u64::MAX as u128) as u64` (#6174).
         if cast_operand_is_min_clamped(node, source_bytes) {
+            return;
+        }
+        // `char::to_digit(N)? as T` (and `.ok_or(_)?`/`.unwrap()`/`.expect()`
+        // chains): the digit is bounded to `0..N`, so it fits when
+        // `N - 1 <= T::MAX` (#7088).
+        if cast_operand_is_to_digit_bounded(node, source_bytes) {
             return;
         }
         if cast_feeds_from_bits(node, source_bytes) {
@@ -529,6 +535,19 @@ mod tests {
         );
         assert!(run_on("fn f(x: u64) -> u64 { x.min(u64::MAX) as u64 }").is_empty());
         assert!(run_on("fn f(v: u32) -> u8 { v.min(255) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn allows_to_digit_literal_radix_narrowing() {
+        // Issue #7088: `char::to_digit(N)` yields a value in `0..N`, so the digit
+        // cast is lossless when `N - 1 <= T::MAX`. Once `rust-no-as-numeric-cast`
+        // stops owning the span, this rule must stay silent too.
+        assert!(
+            run_on("fn f(c: char) -> u8 { (c as char).to_digit(10).ok_or_else(err)? as u8 }")
+                .is_empty()
+        );
+        assert!(run_on("fn f(c: char) -> u8 { c.to_digit(10)? as u8 }").is_empty());
+        assert!(run_on("fn f(c: char) -> u16 { c.to_digit(16).unwrap() as u16 }").is_empty());
     }
 
     #[test]

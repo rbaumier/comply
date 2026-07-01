@@ -94,8 +94,8 @@ use crate::rules::rust_helpers::{
     cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
     cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
-    cast_operand_is_sibling_arm_bounded, cast_operand_literal_value, find_identifier_type,
-    is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_sibling_arm_bounded, cast_operand_is_to_digit_bounded,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -238,6 +238,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     // `<recv>.min(BOUND) as uT` where the `.min()` clamp proves the value fits the
     // unsigned target — `.as_nanos().min(u64::MAX as u128) as u64` (#6174).
     if cast_operand_is_min_clamped(node, source_bytes) {
+        return false;
+    }
+    // `char::to_digit(N)? as T` (and `.ok_or(_)?`/`.unwrap()`/`.expect()` chains):
+    // the digit is bounded to `0..N`, so it fits when `N - 1 <= T::MAX` (#7088).
+    if cast_operand_is_to_digit_bounded(node, source_bytes) {
         return false;
     }
     if cast_feeds_from_bits(node, source_bytes) {
@@ -963,6 +968,35 @@ name = "normal_lib"
         assert_eq!(run_on("fn f(x: u128) -> u8 { x.min(u64::MAX as u128) as u8 }").len(), 1);
         // `.max()` bounds from below, not above.
         assert_eq!(run_on("fn f(x: u128) -> u64 { x.max(u64::MAX as u128) as u64 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_to_digit_literal_radix_narrowing() {
+        // Issue #7088: `char::to_digit(N)` yields a value in `0..N`, so casting the
+        // digit to a target whose max is `>= N - 1` is lossless. The bound survives
+        // through `?`, `.ok_or_else(_)?`, `.unwrap()`, `.expect(_)`.
+        assert!(
+            run_on(
+                "fn f(c: char) -> u8 { (c as char).to_digit(10).ok_or_else(err)? as u8 }"
+            )
+            .is_empty()
+        );
+        assert!(run_on("fn f(c: char) -> u8 { c.to_digit(10)? as u8 }").is_empty());
+        assert!(run_on("fn f(c: char) -> u16 { c.to_digit(16).unwrap() as u16 }").is_empty());
+        assert!(run_on("fn f(c: char) -> u8 { c.to_digit(16).expect(\"hex\") as u8 }").is_empty());
+        // A signed target's lower bound is trivially met by the non-negative digit.
+        assert!(run_on("fn f(c: char) -> i8 { c.to_digit(16)? as i8 }").is_empty());
+    }
+
+    #[test]
+    fn flags_to_digit_unbounded_or_unprovable() {
+        // `.unwrap_or(BIG)` substitutes an arbitrary fallback, so the value is no
+        // longer bounded by the radix — the cast stays flagged.
+        assert_eq!(run_on("fn f(c: char) -> u8 { c.to_digit(10).unwrap_or(999) as u8 }").len(), 1);
+        // A variable radix is not statically provable.
+        assert_eq!(run_on("fn f(c: char, base: u32) -> u8 { c.to_digit(base)? as u8 }").len(), 1);
+        // A radix whose largest digit exceeds the target still narrows.
+        assert_eq!(run_on("fn f(c: char) -> u8 { c.to_digit(300)? as u8 }").len(), 1);
     }
 
     #[test]
