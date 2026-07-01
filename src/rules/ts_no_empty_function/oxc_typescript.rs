@@ -12,6 +12,9 @@
 //! when the left operand is nullish/falsy.
 //! An empty function as a JSX attribute value (`onClick={() => {}}`) is exempt in
 //! any file: it is a deliberate no-op satisfying a required event-handler prop.
+//! Type-test / type-compilation-test files (`.test-d.` infix, `test-dts/`, … — the
+//! TS/Vue type-compilation-test conventions) are exempt entirely: they never run,
+//! so every empty body there is a type-shape stub, not a missing implementation.
 //! Other placeholder callback positions — call/new arguments — are exempt only in
 //! test files.
 
@@ -297,6 +300,19 @@ impl OxcCheck for Check {
         }
 
         if !is_empty_body(body, semantic) {
+            return;
+        }
+
+        // Type-test / type-compilation-test files (`.test-d.` infix, `test-dts/`,
+        // `type-tests/`, `.d-test.`, …) never run at runtime — they exist only to
+        // assert type relationships (`expectType`/`expectError`) — so an empty
+        // function body there is a deliberate type-shape stub, not a missing
+        // implementation. Read `ctx.path` directly (the unit-test harness injects
+        // an empty default FileCtx), mirroring the `is_test_file(ctx.path)`
+        // fallback below.
+        if crate::rules::path_utils::is_type_test_file(ctx.path)
+            || crate::rules::path_utils::is_type_compilation_test_path(ctx.path)
+        {
             return;
         }
 
@@ -779,5 +795,56 @@ mod tests {
         "#;
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_stubs_in_test_d_infix_file() {
+        // Repro #7081 (vuejs/pinia): a `.test-d.ts` type-test file's empty method /
+        // function stubs are type-shape assertions, never forgotten implementations.
+        let src = r#"
+            const useStore = defineStore('main', {
+              actions: {
+                one() {},
+              },
+            })
+
+            defineStore('withSetup', () => {
+              function one() {}
+              function two() {}
+              function three() {}
+              return { one, two, three }
+            })
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "test-dts/customizations.test-d.ts")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_empty_function_in_test_d_infix_outside_type_compilation_dir() {
+        // The `.test-d.` infix alone (tsd convention — files live beside their
+        // source, not under `test-dts/`) is enough to exempt; pins the
+        // `is_type_test_file` operand independently of `is_type_compilation_test_path`.
+        let src = r#"
+            function one() {}
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "packages/pinia/src/Component.test-d.tsx")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_empty_function_in_test_dts_directory_without_infix() {
+        // The `test-dts/` type-compilation-test directory alone (no `.test-d.`
+        // infix) is enough to exempt: files there never run at runtime.
+        let src = r#"
+            function one() {}
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "packages/pinia/test-dts/shape.ts")
+                .is_empty()
+        );
     }
 }
