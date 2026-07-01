@@ -5221,4 +5221,106 @@ mod tests {
             "an unimported export in a normal source file must still be flagged: {diags:?}"
         );
     }
+
+    // Regression for #7043 (antfu-collective/vitesse) — `src/main.ts` is the
+    // Vite application entry point: root `index.html` references it via
+    // `<script type="module" src="/src/main.ts">` and ViteSSG imports its
+    // `createApp` export by convention, so there is no static importer. The
+    // Vite `src_files` entry-point signal must exempt it.
+    #[test]
+    fn no_fp_for_export_in_vite_src_main_entry_issue_7043() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/main.ts",
+                "export const createApp = ViteSSG(App, { routes: [] }, (ctx) => {})\n",
+            ),
+            ("src/other.ts", "export const used = 1;\nused;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(
+            Some(r#"{"name":"app","devDependencies":{"vite":"^5.0.0"}}"#),
+            &files,
+            "src/main.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "an export in a Vite src/main.ts entry point must not be flagged: {diags:?}"
+        );
+    }
+
+    // #7043 — `src/index.ts` is equally a canonical Vite entry-point stem.
+    #[test]
+    fn no_fp_for_export_in_vite_src_index_entry_issue_7043() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const createApp = ViteSSG(App)\n"),
+            ("src/other.ts", "export const used = 1;\nused;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(
+            Some(r#"{"name":"app","devDependencies":{"vite":"^5.0.0"}}"#),
+            &files,
+            "src/index.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "an export in a Vite src/index.ts entry point must not be flagged: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #7043 — the exemption is gated on Vite being a
+    // detected dependency. Without Vite, `src/main.ts` is an ordinary module
+    // and an unimported export is genuinely dead.
+    #[test]
+    fn still_flags_export_in_non_vite_src_main_issue_7043() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/main.ts", "export const orphan = 1;\n"),
+            ("src/other.ts", "export const used = 1;\nused;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(
+            Some(r#"{"name":"app"}"#),
+            &files,
+            "src/main.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("orphan")),
+            "an unimported export in a non-Vite src/main.ts must still be flagged: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #7043 — the stem gate is `main`/`index` only. A
+    // Vite `src/utils.ts` is an ordinary module; an unimported export is dead.
+    #[test]
+    fn still_flags_export_in_vite_src_non_entry_stem_issue_7043() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/utils.ts", "export const orphan = 1;\n"),
+            ("src/main.ts", "export const createApp = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(
+            Some(r#"{"name":"app","devDependencies":{"vite":"^5.0.0"}}"#),
+            &files,
+            "src/utils.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("orphan")),
+            "an unimported export in a Vite src/utils.ts must still be flagged: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #7043 — the parent-dir gate is exactly
+    // `<root>/src/`. A `src/lib/main.ts` is nested one level deeper and is an
+    // ordinary module, so an unimported export is dead.
+    #[test]
+    fn still_flags_export_in_vite_nested_src_lib_main_issue_7043() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/lib/main.ts", "export const orphan = 1;\n"),
+            ("src/main.ts", "export const createApp = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(
+            Some(r#"{"name":"app","devDependencies":{"vite":"^5.0.0"}}"#),
+            &files,
+            "src/lib/main.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("orphan")),
+            "an unimported export in a Vite src/lib/main.ts must still be flagged: {diags:?}"
+        );
+    }
 }

@@ -4,6 +4,7 @@ dependencies = ["vite"]
 [entry_points]
 files = ["index.html"]
 root_files = ["vite.config"]
+src_files = ["main", "index"]
 
 [magic_exports]
 names = []

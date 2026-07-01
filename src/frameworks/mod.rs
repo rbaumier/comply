@@ -40,6 +40,15 @@ pub struct EntryPoints {
     pub files: Vec<String>,
     #[serde(default)]
     pub root_files: Vec<String>,
+    /// File stems recognized as an entry point when the file sits directly
+    /// inside the project's `<root>/src/` directory (Vite's canonical
+    /// `src/main.ts`/`src/index.ts`). The build tool imports these by
+    /// convention — root `index.html`'s `<script type="module"
+    /// src="/src/main.ts">` — so no static importer exists, yet the file is the
+    /// live application entry point. Unlike `root_files`, which matches only at
+    /// the project root itself.
+    #[serde(default)]
+    pub src_files: Vec<String>,
     #[serde(default)]
     pub file_suffixes: Vec<String>,
 }
