@@ -1,4 +1,8 @@
 //! node-global-require oxc backend — require() must be at module top level.
+//! A bare-package `require()` deferred by a lazy-load boundary (an `if`/`switch`
+//! conditional, or an expression-bodied arrow-function thunk such as
+//! `() => require("pkg")`) is exempt: hoisting it would eagerly load the package
+//! on every import.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -171,6 +175,17 @@ impl OxcCheck for Check {
                 continue;
             }
             match ancestor.kind() {
+                // A bare-package `require()` that is the body of an
+                // expression-bodied arrow thunk (`() => require("pkg")`, e.g. a
+                // `registerElement` element factory) is a lazy load: the module
+                // is fetched only when the thunk is first invoked. Hoisting it to
+                // module top level would eagerly load the package on every
+                // import, so exempt it — mirroring the if/switch conditional
+                // lazy-load below. Block-bodied arrows and regular functions are
+                // not thunks and stay flagged.
+                AstKind::ArrowFunctionExpression(arrow) if bare_pkg_arg && arrow.expression => {
+                    return;
+                }
                 AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
                     // A `require()` inside a test lifecycle-hook callback
                     // (`beforeEach`/`beforeAll`/`afterEach`/`afterAll`) is the
@@ -419,6 +434,44 @@ mod tests {
     #[test]
     fn flags_static_template_literal_module_require() {
         let d = run(r#"function f() { const fs = require(`fs`); return fs; }"#);
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression for #7010 (nativescript-vue src/nativescript/elements.ts:16): an
+    // arrow-function thunk factory lazily loads a bare package only when the
+    // element is first needed. Hoisting the require would eagerly load the module
+    // on every import.
+    #[test]
+    fn allows_arrow_thunk_bare_package_factory() {
+        let d = run(
+            r#"registerElement('AbsoluteLayout', () => require('@nativescript/core').AbsoluteLayout, {});"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    // #7010: the minimal thunk form — an expression-bodied arrow whose body is a
+    // bare-package require — is a lazy load.
+    #[test]
+    fn allows_minimal_arrow_thunk_bare_package() {
+        let d = run(r#"const f = () => require('@nativescript/core');"#);
+        assert!(d.is_empty());
+    }
+
+    // Negative space for #7010: a thunk whose require argument is a relative
+    // (non-bare) path is hoistable — the thunk defers a local module, not an
+    // optional package — so it stays flagged.
+    #[test]
+    fn flags_arrow_thunk_relative_module() {
+        let d = run(r#"const f = () => require('../local/mod');"#);
+        assert_eq!(d.len(), 1);
+    }
+
+    // Negative space for #7010: the exemption is scoped to expression-bodied arrow
+    // thunks. A block-bodied arrow callback that loads a bare package is not a
+    // thunk factory and stays flagged.
+    #[test]
+    fn flags_bare_package_require_in_block_bodied_arrow() {
+        let d = run(r#"setup(() => { const fs = require("fs"); return fs; });"#);
         assert_eq!(d.len(), 1);
     }
 }
