@@ -2,7 +2,7 @@
 //! `return expr;` with bare `return;`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, return_type_admits_void_or_undefined};
+use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens, return_type_admits_void_or_undefined};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
@@ -81,6 +81,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A function whose value paths return JSX is a React component: a bare
+        // `return;` there renders nothing (the React-18 equivalent of
+        // `return null`). Mixing it with JSX returns is the canonical
+        // "render nothing" guard, not an inconsistency.
+        if has_value && has_bare && returns_jsx(node_id, nodes) {
+            return;
+        }
+
         if has_value && has_bare {
             let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
             diagnostics.push(Diagnostic {
@@ -117,6 +125,26 @@ fn is_effect_callback(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNo
         callee_name,
         "useEffect" | "useLayoutEffect" | "useInsertionEffect"
     )
+}
+
+/// True when a value-returning `ReturnStatement` belonging directly to the
+/// function `node_id` (not a nested function) returns a JSX element or fragment.
+/// Parentheses are peeled so the multi-line `return ( <Foo/> );` form matches.
+/// Uses the same function-scoping as the `has_value` / `has_bare` collection, so
+/// JSX in a nested closure or inner component does not leak into this check.
+fn returns_jsx(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNodes) -> bool {
+    nodes.iter().any(|child| {
+        let AstKind::ReturnStatement(ret) = child.kind() else {
+            return false;
+        };
+        let Some(arg) = ret.argument.as_ref() else {
+            return false;
+        };
+        matches!(
+            peel_parens(arg),
+            Expression::JSXElement(_) | Expression::JSXFragment(_)
+        ) && nearest_function_ancestor(child.id(), nodes) == Some(node_id)
+    })
 }
 
 /// Walk up from `id` to find the nearest Function or ArrowFunctionExpression
@@ -162,6 +190,10 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    fn run_on_tsx(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
     }
 
     #[test]
@@ -428,6 +460,86 @@ function n(x): number {
 }
 "#;
         assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn allows_component_bare_return_with_jsx_return() {
+        // Regression for issue #7076 (better-auth docs/components/mdx/mermaid.tsx):
+        // a React component's bare `return;` renders nothing (equivalent to
+        // `return null`), mixed with a JSX value return.
+        let code = r#"
+export function Mermaid({ chart }) {
+    if (!mounted) return;
+    return <MermaidContent chart={chart} />;
+}
+"#;
+        assert!(run_on_tsx(code).is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_component_bare_return_with_jsx_return() {
+        let code = r#"
+const C = () => {
+    if (!x) return;
+    return <Foo />;
+};
+"#;
+        assert!(run_on_tsx(code).is_empty());
+    }
+
+    #[test]
+    fn allows_component_bare_return_with_jsx_fragment_return() {
+        let code = r#"
+function C() {
+    if (!x) return;
+    return <>hi</>;
+}
+"#;
+        assert!(run_on_tsx(code).is_empty());
+    }
+
+    #[test]
+    fn allows_component_bare_return_with_parenthesized_jsx_return() {
+        // The idiomatic multi-line component return wraps its JSX in parens; the
+        // parser preserves the `ParenthesizedExpression`, so it must be peeled.
+        let code = r#"
+function Mermaid({ chart }) {
+    if (!mounted) return;
+    return (
+        <MermaidContent chart={chart} />
+    );
+}
+"#;
+        assert!(run_on_tsx(code).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_jsx_mixed_returns_in_tsx() {
+        // A non-JSX function mixing a value return with a bare `return;` is the
+        // rule's genuine target — still flags even in a `.tsx` file.
+        let code = r#"
+function h(x) {
+    if (x) return 5;
+    return;
+}
+"#;
+        assert_eq!(run_on_tsx(code).len(), 1);
+    }
+
+    #[test]
+    fn does_not_attribute_inner_component_jsx_to_outer() {
+        // The outer function returns a plain value and has a bare `return;`; the
+        // JSX belongs to a nested component. The JSX must not exempt the outer.
+        let code = r#"
+function outer(x) {
+    const Inner = () => {
+        return <Foo />;
+    };
+    if (x) return;
+    return 5;
+}
+"#;
+        assert_eq!(run_on_tsx(code).len(), 1);
     }
 
     #[test]
