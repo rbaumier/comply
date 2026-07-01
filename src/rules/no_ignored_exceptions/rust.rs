@@ -102,6 +102,14 @@
 //!   `std::convert::Infallible`, `core::convert::Infallible`). A turbofish with a
 //!   real error type (`let _ = f::<MyError, _>(..)`) or no turbofish at all still
 //!   fires.
+//! - `let _ = macro!(var in stream)`: an output-parameter binding macro
+//!   (`syn::parenthesized!(content in input)`, `braced!`, `bracketed!`). These
+//!   parsing macros write their primary parse result into the pre-declared
+//!   `var` binding (what the caller consumes) and return only secondary
+//!   delimiter-span metadata, so `let _ =` discards the metadata, not an error.
+//!   Keyed purely on the token sequence `identifier`/`in`/`identifier` among the
+//!   macro token tree's direct children — no macro-name allowlist — so a plain
+//!   `let _ = macro!(a, b)` with no `in` binding still fires.
 //!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
@@ -162,6 +170,14 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Skip compile-fail test fixtures (`tests/.../fail/`): `let _ =` there
     // suppresses "unused result" warnings in the expected compiler output.
     if is_compile_fail_fixture(ctx.path) {
+        return;
+    }
+
+    // Skip an output-parameter binding macro `let _ = macro!(var in stream)`
+    // (e.g. `syn::parenthesized!(content in input)`): its primary parse result
+    // is written into the pre-declared `var`, and the discarded return value is
+    // only secondary delimiter metadata — not an error.
+    if macro_uses_output_param_binding(value, source) {
         return;
     }
 
@@ -384,6 +400,52 @@ fn call_is_process_exit(call: Node, source: &[u8]) -> bool {
         return false;
     }
     segments.next().map(str::trim) == Some("process")
+}
+
+/// True if `value` is a `macro_invocation` whose token tree uses the
+/// output-parameter binding syntax `<output_var> in <input_stream>` — the shape
+/// of `syn`'s parsing macros (`parenthesized!(content in input)`, `braced!`,
+/// `bracketed!`). These macros write their primary parse result into the
+/// pre-declared `output_var` (what the caller consumes) and return only
+/// secondary delimiter-span metadata, so `let _ =` discards that metadata, not
+/// an error.
+///
+/// Keyed purely on the token sequence `identifier`/`in`/`identifier` — no
+/// macro-name allowlist — so any macro using the same binding shape is exempt
+/// while a plain `let _ = macro!(a, b)` (no `in` binding) still fires. syn's
+/// parsing macros hold the binding as the SOLE content, so the match is anchored
+/// to the first three non-delimiter tokens of the token tree rather than scanned
+/// at every position: this keeps an `in` buried in some other macro body (a
+/// `for x in y` loop, a trailing `x, y in z`) from matching. The `in` token is
+/// matched on its source text rather than a fixed node kind, since inside a
+/// token tree tree-sitter may surface it as a keyword token or an identifier.
+/// Only the token tree's direct children are read, so a binding nested in a
+/// deeper `token_tree` does not match.
+fn macro_uses_output_param_binding(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "macro_invocation" {
+        return false;
+    }
+    let mut cursor = value.walk();
+    let Some(token_tree) = value
+        .children(&mut cursor)
+        .find(|child| child.kind() == "token_tree")
+    else {
+        return false;
+    };
+    // Skip the `(`/`[`/`{` … `)`/`]`/`}` delimiters; the binding's output
+    // identifier is the first remaining token.
+    let mut token_cursor = token_tree.walk();
+    let mut tokens = token_tree
+        .children(&mut token_cursor)
+        .filter(|child| !matches!(child.kind(), "(" | ")" | "[" | "]" | "{" | "}"));
+    let (Some(output_var), Some(keyword), Some(input_stream)) =
+        (tokens.next(), tokens.next(), tokens.next())
+    else {
+        return false;
+    };
+    output_var.kind() == "identifier"
+        && keyword.utf8_text(source) == Ok("in")
+        && input_stream.kind() == "identifier"
 }
 
 /// True if `value` is `Arc::from_raw(..)` / `Box::from_raw(..)` /
@@ -1363,5 +1425,35 @@ mod tests {
         let no_turbofish = "fn f() { let _ = fallible(); }";
         assert_eq!(run_on(real_error).len(), 1);
         assert_eq!(run_on(no_turbofish).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_output_param_binding_macro() {
+        // Regression for #7009: `syn`'s parsing macros use output-parameter
+        // binding (`var in stream`) — the parse result is written into the
+        // pre-declared `content`, and the discarded return value is only the
+        // delimiter-span metadata, not an error. The issue's exact tracing
+        // `tracing-attributes/src/attr.rs` examples.
+        let parenthesized =
+            "fn f(input: ParseStream) { let content; let _ = syn::parenthesized!(content in input); }";
+        let braced = "fn f() { let _ = syn::braced!(content in input); }";
+        // Unqualified, different macro name — proves the exemption keys on the
+        // `<ident> in <ident>` token sequence, not a macro-name allowlist.
+        let bracketed = "fn f() { let _ = bracketed!(inner in stream); }";
+        assert!(run_on(parenthesized).is_empty());
+        assert!(run_on(braced).is_empty());
+        assert!(run_on(bracketed).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_macro_without_in_binding() {
+        // Negative space for #7009: the exemption requires the `<ident> in
+        // <ident>` binding sequence. A macro invocation with ordinary
+        // comma-separated arguments carries no output-parameter binding, so a
+        // discarded result there genuinely swallows a potential error and fires.
+        let comma_args = "fn f() { let _ = some_macro!(a, b); }";
+        let single_arg = "fn f() { let _ = try_parse!(input); }";
+        assert_eq!(run_on(comma_args).len(), 1);
+        assert_eq!(run_on(single_arg).len(), 1);
     }
 }
