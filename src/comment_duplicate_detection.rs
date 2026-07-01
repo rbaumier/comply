@@ -713,6 +713,10 @@ const MIN_VARIANT_ROOT_SEGMENTS: usize = 3;
 /// not a copy-paste smell.
 const IMPL_QUALIFIER_SEGMENTS: &[&str] = &[
     "safe", "unsafe", "checked", "unchecked", "ptr", "slice", "simd", "scalar", "generic",
+    // Streaming/complete-mode direction qualifier: byte-parser crates (nom,
+    // winnow, …) ship the same operation twice, the `_complete` variant treating
+    // end-of-input as success rather than `Incomplete` (`parse` / `parse_complete`).
+    "complete",
 ];
 
 /// Two doc-comments document parallel API surfaces when both name a declaration
@@ -1591,6 +1595,48 @@ pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
         assert!(
             run(&[&safe, &unsafe_]).is_empty(),
             "safe/unsafe decompressor twins sharing algorithm docs must not flag"
+        );
+    }
+
+    #[test]
+    fn ignores_complete_mode_parser_twin_docs() {
+        // Regression (#7071): nom ships a streaming `parse` alongside a
+        // `parse_complete` (and `split_at_position` / `split_at_position_complete`,
+        // plus the `1` arity variant), the `_complete` twin treating end-of-input
+        // as success rather than `Incomplete`. Each twin opens its doc verbatim
+        // like its base because it performs the same operation — twin-by-design
+        // API docs, not copy-paste drift. `complete` is an impl-direction qualifier
+        // so the co-located twins reduce to the same root and stay exempt.
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\
+pub trait Parser {
+    /// A parser takes an input type and returns either the remaining input and the parsed output value or an error.
+    fn parse(&mut self, input: u8) -> u8 { input }
+
+    /// A parser takes an input type and returns either the remaining input and the parsed output value or an error.
+    fn parse_complete(&mut self, input: u8) -> u8 { input }
+}
+
+pub trait Input {
+    /// Looks for the first element of the input for which the predicate returns true and returns the input up to that position.
+    fn split_at_position(&self, _p: u8) -> u8 { 0 }
+
+    /// Looks for the first element of the input for which the predicate returns true and returns the input up to that position.
+    fn split_at_position_complete(&self, _p: u8) -> u8 { 0 }
+
+    /// Same as split_at_position but requires at least one matching element before the predicate becomes true anywhere here.
+    fn split_at_position1(&self, _p: u8) -> u8 { 0 }
+
+    /// Same as split_at_position but requires at least one matching element before the predicate becomes true anywhere here.
+    fn split_at_position1_complete(&self, _p: u8) -> u8 { 0 }
+}
+";
+        let a = write(&dir, "nom_traits.rs", content);
+        // A second file keeps the run active (a single-file run is a noop).
+        let filler = write(&dir, "filler.rs", "pub fn z() {}\n");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "streaming/complete-mode parser twin docs in one file must not flag"
         );
     }
 
