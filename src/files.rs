@@ -226,11 +226,14 @@ const EXCLUDED_DIRS: &[&str] = &[
 
 /// Hidden (dot-prefixed) directories that hold real TypeScript/JavaScript with
 /// genuine ES `import` statements: `.storybook/main.ts` imports framework
-/// presets and addons, `.vscode/` holds editor task/extension scripts. The
-/// directory walk filters hidden files by default, so these imports never reach
-/// the cross-file import index — making the packages they import look unused.
-/// Walking these well-known config dirs registers their imports as real usage.
-const SCANNED_CONFIG_DOT_DIRS: &[&str] = &[".storybook", ".vscode"];
+/// presets and addons, `.vscode/` holds editor task/extension scripts, and
+/// `.vitepress/` is the VitePress documentation-site config dir whose build-time
+/// modules (`config.ts`, `vite.config.ts`, plugins) import from project source.
+/// The directory walk filters hidden files by default, so these imports never
+/// reach the cross-file import index — making the packages and modules they
+/// import look unused. Walking these well-known config dirs registers their
+/// imports as real usage.
+const SCANNED_CONFIG_DOT_DIRS: &[&str] = &[".storybook", ".vitepress", ".vscode"];
 
 /// True if any path segment is a hidden directory that is *not* a known config
 /// dir we deliberately scan. The directory walk disables the `ignore` crate's
@@ -585,6 +588,9 @@ mod tests {
     fn walk_directory_scans_known_config_dot_dirs() {
         // Issue #1769: `.storybook/` and `.vscode/` hold real ES imports; their
         // files must be discovered so those imports register as dependency use.
+        // Issue #7058: `.vitepress/` is the VitePress docs-site config dir; its
+        // build-time modules import from project source, so a `.vitepress/`
+        // nested anywhere (e.g. `packages/.vitepress/`) must also be walked.
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path();
         std::fs::create_dir(root.join(".storybook")).unwrap();
@@ -595,6 +601,12 @@ mod tests {
         .unwrap();
         std::fs::create_dir(root.join(".vscode")).unwrap();
         std::fs::write(root.join(".vscode/tasks.ts"), "export const x = 1;").unwrap();
+        std::fs::create_dir_all(root.join("packages/.vitepress/plugins")).unwrap();
+        std::fs::write(
+            root.join("packages/.vitepress/plugins/markdownTransform.ts"),
+            "import { replacer } from '../../../scripts/utils';\nreplacer();",
+        )
+        .unwrap();
 
         let names = walked_names(root);
 
@@ -605,6 +617,10 @@ mod tests {
         assert!(
             names.contains(&"tasks.ts".to_string()),
             ".vscode files must be walked, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"markdownTransform.ts".to_string()),
+            ".vitepress files must be walked, got: {names:?}"
         );
     }
 
