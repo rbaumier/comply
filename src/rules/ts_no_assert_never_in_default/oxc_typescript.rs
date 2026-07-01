@@ -5,7 +5,9 @@
 //! `for...of` / `for...in` loop element, a binding annotated with a plain
 //! primitive type (`string`, `number`, `boolean`, ...), a binding whose
 //! initializer calls a same-file function declared to return such a primitive,
-//! or a member access `obj.prop` whose property resolves to a primitive type on
+//! a binding whose initializer is a built-in string-returning method call
+//! (`x.toLowerCase()`, `x.trim()`, ...), or a member access `obj.prop` whose
+//! property resolves to a primitive type on
 //! `obj`'s in-file declared type — or whose object type is not declared in-file
 //! (imported/global), where the property cannot be assumed to be a closed union.
 //! On those, the `default: throw` is runtime input validation, and
@@ -310,9 +312,37 @@ fn property_signature_type<'a>(
     })
 }
 
-/// True when the `let`/`const` binding has a primitive type: either an explicit
-/// primitive type annotation, or no annotation but an initializer calling a
-/// same-file function declared to return a primitive (inferred primitive).
+/// Built-in method names that yield a widened `string` on any receiver, so a
+/// binding initialized by `x.method(...)` is a plain `string` no matter what
+/// `x` is. Receiver-ambiguous names are deliberately excluded: `slice`/`concat`
+/// return arrays on `Array.prototype`, `valueOf` returns non-string on
+/// `Number`/`Boolean`/`Object.prototype`, and `at` returns `T | undefined` —
+/// without receiver type inference those don't provably yield `string`.
+const STRING_RETURNING_METHODS: &[&str] = &[
+    "toLowerCase",
+    "toUpperCase",
+    "toLocaleLowerCase",
+    "toLocaleUpperCase",
+    "trim",
+    "trimStart",
+    "trimEnd",
+    "padStart",
+    "padEnd",
+    "repeat",
+    "normalize",
+    "replace",
+    "replaceAll",
+    "substring",
+    "substr",
+    "charAt",
+    "toString",
+];
+
+/// True when the `let`/`const` binding has a primitive type: an explicit
+/// primitive type annotation, an initializer calling a same-file function
+/// declared to return a primitive (inferred primitive), or an initializer that
+/// is a built-in string-returning method call (`x.toLowerCase()`, `x.trim()`,
+/// ...) — the result is a widened `string` regardless of the receiver.
 fn declarator_is_primitive<'a>(
     decl: &oxc_ast::ast::VariableDeclarator<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -320,12 +350,19 @@ fn declarator_is_primitive<'a>(
     if let Some(ann) = decl.type_annotation.as_ref() {
         return is_primitive_type(&ann.type_annotation);
     }
-    if let Some(Expression::CallExpression(call)) = decl.init.as_ref()
-        && let Expression::Identifier(callee) = &call.callee
-    {
-        return callee_returns_primitive(callee, semantic);
+    let Some(Expression::CallExpression(call)) = decl.init.as_ref() else {
+        return false;
+    };
+    match &call.callee {
+        // `f(...)` — a same-file function declared to return a primitive.
+        Expression::Identifier(callee) => callee_returns_primitive(callee, semantic),
+        // `x.method(...)` — a built-in method returning a widened `string` on
+        // any receiver, so the binding is a plain, non-narrowable `string`.
+        Expression::StaticMemberExpression(member) => {
+            STRING_RETURNING_METHODS.contains(&member.property.name.as_str())
+        }
+        _ => false,
     }
-    false
 }
 
 /// True when `callee` resolves to a same-file function (declaration, arrow, or
@@ -577,6 +614,56 @@ mod tests {
                    case 'a': return 1;\n\
                    case 'b': return 2;\n\
                    default: throw new Error('unreachable');\n\
+                   }\n\
+                   }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #7077: the discriminant is `match[3]!.toLowerCase()` — a
+    // plain `string` from a built-in `String.prototype` method call. `const _:
+    // never = unit` would be a TypeScript error, so the `default: throw` is
+    // runtime input validation, not a stale exhaustiveness check.
+    #[test]
+    fn no_fp_builtin_string_method_call_issue_7077() {
+        let src = "function parse(value: string): number {\n\
+                   const match = /(\\d+)(\\w+)/.exec(value)!;\n\
+                   const unit = match[3]!.toLowerCase();\n\
+                   let result: number;\n\
+                   switch (unit) {\n\
+                   case \"y\": result = 1; break;\n\
+                   case \"m\": result = 2; break;\n\
+                   default: throw new TypeError(`Unknown time unit: \"${unit}\"`);\n\
+                   }\n\
+                   return result;\n\
+                   }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A `const` initialized by `x.trim()` is a plain `string`, so the switch is
+    // runtime validation and must not be flagged.
+    #[test]
+    fn no_fp_builtin_string_method_call_trim() {
+        let src = "function f(s: string) {\n\
+                   const u = s.trim();\n\
+                   switch (u) {\n\
+                   case \"a\": return 1;\n\
+                   default: throw new Error(u);\n\
+                   }\n\
+                   }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Precision control for #7077: `slice` is receiver-ambiguous (it returns an
+    // array on `Array.prototype`), so it is NOT in the string-returning method
+    // set — a binding initialized by `arr.slice(...)` stays non-exempt and the
+    // rule still fires, exactly as before the string-method exemption.
+    #[test]
+    fn still_flags_array_slice_not_string_method_issue_7077() {
+        let src = "function f(arr: string[]) {\n\
+                   const first = arr.slice(0, 1);\n\
+                   switch (first) {\n\
+                   case \"a\": return 1;\n\
+                   default: throw new Error('x');\n\
                    }\n\
                    }";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
