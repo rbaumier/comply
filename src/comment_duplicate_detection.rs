@@ -940,9 +940,13 @@ fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
 /// The name of the declaration or member a comment immediately documents, plus
 /// the owning type's name when that declaration is an enum variant, a
 /// type/interface member, or a Rust struct field. Looks at the comment's next
-/// named sibling, skipping attributes/decorators. `(None, _)` for free-floating
-/// comments (no following declaration) or declarations without a recognizable
-/// name.
+/// named sibling, skipping attributes, decorators, and intervening non-doc
+/// comments (a `// @ts-expect-error` directive, or any plain `//` note) — such a
+/// line between a doc block and its declaration must not drop the attribution. A
+/// following *doc*-comment block is not skipped: it, not the block above it,
+/// documents the declaration.
+/// `(None, _)` for free-floating comments (no following declaration) or
+/// declarations without a recognizable name.
 ///
 /// A top-level declaration or enum variant is only documented by a *doc*-comment
 /// (`///`, `/**`, …) — a plain `//` above it is incidental prose, so a
@@ -957,7 +961,10 @@ fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<St
     let Some(mut sibling) = comment.next_named_sibling() else {
         return (None, None);
     };
-    while matches!(sibling.kind(), "attribute_item" | "decorator") {
+    while matches!(sibling.kind(), "attribute_item" | "decorator")
+        || (is_comment_kind(sibling.kind())
+            && !is_doc_comment(&source[sibling.start_byte()..sibling.end_byte()]))
+    {
         let Some(next) = sibling.next_named_sibling() else {
             return (None, None);
         };
@@ -1543,6 +1550,112 @@ pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
             run(&[&safe, &unsafe_]).is_empty(),
             "safe/unsafe decompressor twins sharing algorithm docs must not flag"
         );
+    }
+
+    /// `documented_decl_name` of the first comment node in a parsed TypeScript
+    /// snippet — the direct seam the directive-comment skip lives on.
+    fn first_comment_decl_name(source: &str) -> Option<String> {
+        let mut parser = Parser::new();
+        let tree = parse_with_grammar(&mut parser, Language::TypeScript, source.as_bytes())
+            .expect("typescript grammar parses");
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+        let comment = root
+            .children(&mut cursor)
+            .find(|n| is_comment_kind(n.kind()))
+            .expect("snippet has a leading comment");
+        documented_decl_name(comment, source.as_bytes()).0
+    }
+
+    #[test]
+    fn attributes_jsdoc_to_function_through_intervening_directive() {
+        // Regression (#7045): a `// @ts-expect-error` directive between a JSDoc
+        // block and its `function` used to leave the block's next named sibling
+        // pointing at the directive comment, dropping the attribution. The doc now
+        // resolves through the directive to the declaration it documents.
+        let name = first_comment_decl_name(
+            "/**\n * Caches the resolved schema output.\n */\n// @ts-expect-error\nfunction cacheAsync() {}\n",
+        );
+        assert_eq!(name.as_deref(), Some("cacheAsync"));
+    }
+
+    #[test]
+    fn attributes_jsdoc_directly_above_function_unchanged() {
+        // Control: with no intervening directive the attribution is unchanged.
+        let name = first_comment_decl_name(
+            "/**\n * Caches the resolved schema output.\n */\nfunction cacheAsync() {}\n",
+        );
+        assert_eq!(name.as_deref(), Some("cacheAsync"));
+    }
+
+    #[test]
+    fn attributes_jsdoc_through_multiple_intervening_directives() {
+        // Several stacked directive lines between the doc block and the function
+        // are all skipped to reach the declaration.
+        let name = first_comment_decl_name(
+            "/**\n * Caches the resolved schema output.\n */\n// @ts-expect-error\n// eslint-disable-next-line\nfunction cacheAsync() {}\n",
+        );
+        assert_eq!(name.as_deref(), Some("cacheAsync"));
+    }
+
+    #[test]
+    fn does_not_skip_past_a_following_doc_block() {
+        // The skip stops at a following *doc*-comment block: the nearer block, not
+        // the one above it, documents the declaration. The earlier block stays
+        // unattributed so a stray copy-pasted lead block is never exempted.
+        let name = first_comment_decl_name(
+            "/**\n * Some earlier unrelated note block here.\n */\n/**\n * Caches the resolved schema output.\n */\nfunction cacheAsync() {}\n",
+        );
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn ignores_parallel_api_doc_with_intervening_directive() {
+        // End-to-end (#7045): parallel-API twin functions across two files share
+        // the same JSDoc by design. A `// @ts-expect-error` directive sits between
+        // the JSDoc and the function in one file; the directive skip lets the
+        // same-name parallel-API exemption still fire, so the doc is not flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/**
+ * Caches the fully-resolved output of the provided schema so repeated
+ * validations reuse the memoized dataset instead of recomputing everything.
+ */
+";
+        let sync = write(&dir, "cache.ts", &format!("{doc}function memoize() {{}}\n"));
+        let with_directive = write(
+            &dir,
+            "cacheAsync.ts",
+            &format!("{doc}// @ts-expect-error\nfunction memoize() {{}}\n"),
+        );
+        assert!(
+            run(&[&sync, &with_directive]).is_empty(),
+            "parallel-API doc must not flag when a directive separates JSDoc from its function"
+        );
+    }
+
+    #[test]
+    fn still_flags_duplicate_doc_with_directive_on_unrelated_decls() {
+        // Over-exclusion guard for #7045: the directive skip must not suppress a
+        // genuine duplicate. The same JSDoc copy-pasted onto two *differently
+        // named*, unrelated functions across files is real duplication and still
+        // flags, even with an intervening directive.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/**
+ * Caches the fully-resolved output of the provided schema so repeated
+ * validations reuse the memoized dataset instead of recomputing everything.
+ */
+";
+        let a = write(&dir, "a.ts", &format!("{doc}function buildAdminList() {{}}\n"));
+        let b = write(
+            &dir,
+            "b.ts",
+            &format!("{doc}// @ts-expect-error\nfunction buildLabSection() {{}}\n"),
+        );
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicate doc on unrelated decls still flags through a directive");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     #[test]
