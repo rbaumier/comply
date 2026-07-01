@@ -1335,6 +1335,42 @@ export const labSection = 2;
         assert!(diags[0].message.contains("Keep one comment"));
     }
 
+    // The image-rs doc-comment from issue #7060, wide enough to clear `min_words`.
+    // The trailing declaration name is filled per-file so the two copies land on
+    // unrelated (non-parallel) declarations, the way a fuzz harness inlines a
+    // renamed helper — otherwise the same-named cross-file exemption would apply.
+    const RGBA_DOC: &str = "\
+/// Write an Rgba32FImage assuming the writer is already buffered so in most
+/// cases you should wrap your writer inside a BufWriter for the best throughput.\n";
+
+    #[test]
+    fn fuzz_harness_copy_not_flagged() {
+        // Issue #7060: a fuzz harness deliberately copies the source helper and its
+        // doc-comment (image-rs `fuzz/fuzzers/fuzzer_script_exr.rs`). The fuzz dir
+        // is dropped from the corpus, so the src-side comment — whose only partner
+        // is the fuzz copy — is not flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let src = write(&dir, "src/codecs/openexr.rs", &format!("{RGBA_DOC}fn write_exr_frame() {{}}\n"));
+        let fuzz = write(
+            &dir,
+            "fuzz/fuzzers/fuzzer_script_exr.rs",
+            &format!("{RGBA_DOC}fn fuzz_harness_entry() {{}}\n"),
+        );
+        assert!(run(&[&src, &fuzz]).is_empty(), "fuzz-harness doc copies are exempt");
+    }
+
+    #[test]
+    fn duplicate_doc_across_two_src_files_still_flagged() {
+        // Control: the same copy between two real source files stays a smell. The
+        // two functions carry unrelated names so no parallel-decl exemption applies.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "src/codecs/a.rs", &format!("{RGBA_DOC}fn write_exr_frame() {{}}\n"));
+        let b = write(&dir, "src/codecs/b.rs", &format!("{RGBA_DOC}fn store_pixel_atlas() {{}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicate docs across real source files are still flagged");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
     #[test]
     fn bucket_of_three_yields_two_diagnostics() {
         // N members → N-1 diagnostics, each pointing at the earliest sibling.

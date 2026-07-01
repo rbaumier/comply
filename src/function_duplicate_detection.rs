@@ -169,9 +169,9 @@ struct FnEntry {
 
 #[must_use]
 pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
-    // Sample/example/docs/fixture dirs hold intentionally self-contained,
-    // duplicated code; generated files are machine-emitted. Drop both so a
-    // relaxed file is neither reported nor used as a canonical match.
+    // Sample/example/docs/fixture/fuzz-harness dirs hold intentionally
+    // self-contained, duplicated code; generated files are machine-emitted. Drop
+    // both so a relaxed file is neither reported nor used as a canonical match.
     let files: Vec<&SourceFile> = files
         .iter()
         .copied()
@@ -1013,6 +1013,17 @@ function toOption(e: ScopeEntity): Option {
         let a = write(&dir, "samples/a.ts", CELL_TO_STRING);
         let b = write(&dir, "samples/b.ts", CELL_TO_STRING);
         assert!(run(&[&a, &b]).is_empty(), "fixture/sample dirs are exempt");
+    }
+
+    #[test]
+    fn fuzz_harness_dir_not_flagged() {
+        // Issue #7060: a fuzz harness deliberately copies the function under test.
+        // The fuzz dir is dropped from the corpus, so the src-side function — whose
+        // only partner is the fuzz copy — is not flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let src = write(&dir, "src/util.ts", CELL_TO_STRING);
+        let fuzz = write(&dir, "fuzz/fuzz_targets/harness.ts", CELL_TO_STRING);
+        assert!(run(&[&src, &fuzz]).is_empty(), "fuzz-harness function copies are exempt");
     }
 
     #[test]

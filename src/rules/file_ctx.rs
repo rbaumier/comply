@@ -563,9 +563,11 @@ fn has_storybook_segment(normalized: &str) -> bool {
 
 /// Relaxed directory names — matched as exact path segments (between `/`
 /// delimiters) so that e.g. `documentation/` or `example-app/` is NOT relaxed.
-/// These hold demonstration scripts, fixtures, benchmarks, and docs where
-/// stricter conventions are intentionally relaxed and intentional duplication
-/// is documentation, not a smell.
+/// These hold demonstration scripts, fixtures, benchmarks, docs, and fuzz
+/// harnesses where stricter conventions are intentionally relaxed and
+/// intentional duplication is documentation, not a smell. Fuzz targets
+/// deliberately copy the code (and its doc-comments) under test, so they sit in
+/// the same aux-harness category as `benches`/`examples`.
 const RELAXED_SEGMENTS: &[&str] = &[
     "examples",
     "example",
@@ -576,6 +578,10 @@ const RELAXED_SEGMENTS: &[&str] = &[
     "__fixtures__",
     "samples",
     "docs",
+    "fuzz",
+    "fuzzing",
+    "fuzz-afl",
+    "fuzz_targets",
 ];
 
 fn has_relaxed_segment(normalized: &str) -> bool {
@@ -1400,12 +1406,24 @@ mod tests {
     }
 
     #[test]
+    fn relaxed_dirs_cover_fuzz_harness_segments() {
+        // Fuzz harnesses copy the code (and doc-comments) under test (issue #7060).
+        assert!(scan_path(&PathBuf::from("fuzz/fuzzers/fuzzer_script_exr.rs")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("fuzz/fuzz_targets/parse.rs")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("fuzzing/target.rs")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("fuzz-afl/harness.rs")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("a/b/fuzz_targets/x.rs")).is_relaxed_dir);
+    }
+
+    #[test]
     fn relaxed_dirs_do_not_match_substrings() {
         // Exact-segment match only: `example-app/` and `demonstration/` are not
         // relaxed dirs.
         assert!(!scan_path(&PathBuf::from("src/example-app/foo.ts")).is_relaxed_dir);
         assert!(!scan_path(&PathBuf::from("src/demonstration/foo.ts")).is_relaxed_dir);
         assert!(!scan_path(&PathBuf::from("src/documentation/foo.ts")).is_relaxed_dir);
+        // `fuzzball/` is not a fuzz-harness dir.
+        assert!(!scan_path(&PathBuf::from("src/fuzzball/foo.rs")).is_relaxed_dir);
     }
 
     #[test]
