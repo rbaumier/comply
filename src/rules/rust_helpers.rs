@@ -4915,6 +4915,113 @@ pub fn cast_operand_is_min_clamped(cast: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True when `cast` (a `type_cast_expression`) is `<digit> as T` where `<digit>`
+/// provably derives from `char::to_digit(N)` with a literal radix `N` — the
+/// digit-parse pattern `(c as char).to_digit(10).ok_or_else(err)? as u8`.
+///
+/// `char::to_digit(radix)` returns `Option<u32>` whose `Some` value the std
+/// contract bounds to `0..radix`, so `radix - 1` is the largest digit it can
+/// yield. The cast is lossless when `radix - 1` fits the target type's maximum;
+/// the comparison widens to `u128` so `T::MAX + 1` never overflows. Because the
+/// digit is non-negative, a signed target's lower bound is trivially met, so
+/// both signed and unsigned targets qualify.
+///
+/// The operand is peeled through a bound-PRESERVING adapter chain whose result
+/// stays equal to the `to_digit` `Some` value: transparent parentheses, the try
+/// operator `?` (`try_expression`), and the receiver of `.ok_or(_)`,
+/// `.ok_or_else(_)`, `.unwrap()`, `.expect(_)`. A `.unwrap_or(_)` /
+/// `.unwrap_or_else(_)` receiver is NOT peeled — its fallback is an arbitrary,
+/// unbounded value — so `x.to_digit(10).unwrap_or(999) as u8` stays flagged. A
+/// variable radix (`x.to_digit(base)? as u8`) is not statically provable and
+/// stays flagged.
+///
+/// Like the rest of this AST-heuristic family, this keys on the method name
+/// `to_digit` with a literal argument; a user type that shadows `to_digit` with
+/// a divergent contract is out of scope. Shared by `rust-no-lossy-as-cast` and
+/// `rust-no-as-numeric-cast`.
+pub fn cast_operand_is_to_digit_bounded(cast: Node, source: &[u8]) -> bool {
+    let Some(target_max) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .and_then(int_type_max_u128)
+    else {
+        return false;
+    };
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    let Some(radix) = to_digit_radix_literal(value, source) else {
+        return false;
+    };
+    // The largest possible digit is `radix - 1`; a radix of 0 has no digits, so
+    // `checked_sub` leaves that degenerate shape flagged rather than exempted.
+    radix
+        .checked_sub(1)
+        .is_some_and(|max_digit| max_digit <= target_max)
+}
+
+/// The literal radix `N` of a `char::to_digit(N)` call reached from `value`
+/// through a bound-preserving adapter chain, or `None`.
+///
+/// Peels, innermost-out, only adapters whose result IS the `to_digit` `Some`
+/// value: transparent parentheses, the try operator `?` (`try_expression`), and
+/// the receiver of `.ok_or(_)`, `.ok_or_else(_)`, `.unwrap()`, `.expect(_)`. A
+/// `.unwrap_or(_)` / `.unwrap_or_else(_)` receiver is deliberately excluded — its
+/// fallback breaks the bound. The chain must bottom out at `<recv>.to_digit(N)`
+/// whose sole argument is an `integer_literal`; a variable radix yields `None`.
+fn to_digit_radix_literal(value: Node, source: &[u8]) -> Option<u128> {
+    let mut node = value;
+    loop {
+        match node.kind() {
+            "parenthesized_expression" | "try_expression" => {
+                node = node.named_child(0)?;
+            }
+            "call_expression" => {
+                let function = node.child_by_field_name("function")?;
+                if function.kind() != "field_expression" {
+                    return None;
+                }
+                let method = function.child_by_field_name("field")?.utf8_text(source).ok()?;
+                match method {
+                    "to_digit" => return to_digit_arg_literal(node, source),
+                    "ok_or" | "ok_or_else" | "unwrap" | "expect" => {
+                        node = function.child_by_field_name("value")?;
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// The value of `call`'s sole argument when it is a single `integer_literal`
+/// (`to_digit(10)` → `10`), or `None` for a non-literal or multi-argument list.
+fn to_digit_arg_literal(call: Node, source: &[u8]) -> Option<u128> {
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let positional: Vec<Node> = args.named_children(&mut cursor).collect();
+    let [only] = positional.as_slice() else {
+        return None;
+    };
+    if only.kind() != "integer_literal" {
+        return None;
+    }
+    parse_int_literal(*only, source)
+}
+
+/// The maximum representable value of an integer type name as `u128` — `u8` →
+/// `255`, `i8` → `127`, `u128` → `u128::MAX` — or `None` for a float or
+/// non-numeric type. Signed maxima use `bits - 1` (the sign bit); the shift
+/// never overflows because `bits <= 128`.
+fn int_type_max_u128(type_text: &str) -> Option<u128> {
+    if let Some(bits) = unsigned_int_bits(type_text) {
+        return Some(if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 });
+    }
+    let bits = signed_int_bits(type_text)?;
+    Some((1u128 << (bits - 1)) - 1)
+}
+
 /// The value of a `.min()` clamp bound when its *type* is a provably unsigned
 /// integer and its value is statically known — the proof that the bound's receiver
 /// (sharing the type through `Ord::min`'s `Self`) is non-negative. Recognized
