@@ -48,7 +48,17 @@ impl OxcCheck for Check {
         let max_params = ctx.config.threshold("max-params", "max", ctx.lang);
 
         let (count, name, span) = match node.kind() {
-            AstKind::Function(func) => (count_params(&func.params), func_name(func), func.span()),
+            AstKind::Function(func) => {
+                // A bodyless `Function` node is a type-level declaration with no
+                // executable body (overload signature, `declare function`, or an
+                // abstract/ambient method declaration) whose arity is dictated by
+                // the implementation it types, not chosen by the developer.
+                // Enforce max-params on implementations only.
+                if func.body.is_none() {
+                    return;
+                }
+                (count_params(&func.params), func_name(func), func.span())
+            }
             AstKind::ArrowFunctionExpression(arrow) => {
                 (count_params(&arrow.params), "<anonymous>", arrow.span())
             }
@@ -272,5 +282,60 @@ mod oxc_tests {
             });
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ts_overload_signature_issue_7091() {
+        // Regression for rbaumier/comply#7091 — TanStack/db `pipe()` overload
+        // signatures are bodyless type-level declarations whose arity is
+        // dictated by the variadic implementation, not chosen by the developer.
+        // The 5-param signature is over max=4 but must not be flagged; only the
+        // implementation is enforced.
+        let src = r#"
+            export function pipe<T, T2, T3, T4, T5, O>(
+                o1: PipedOperator<T, T2>,
+                o2: PipedOperator<T2, T3>,
+                o3: PipedOperator<T3, T4>,
+                o4: PipedOperator<T4, T5>,
+                o5: PipedOperator<T5, O>,
+            ): PipedOperator<T, O>;
+            export function pipe(...fns: Array<Function>): Function {
+                return (x: unknown) => fns.reduce((v, f) => f(v), x);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_declare_function_over_max_issue_7091() {
+        // A `declare function` is a bodyless type-level declaration and must
+        // not be counted for max-params, even with 5 params (over max=4).
+        let src = "declare function foo(a: number, b: number, c: number, d: number, e: number): void;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bodyless_class_method_overload_issue_7091() {
+        // TanStack/db `caseWhen()` class-method overloads bottom out at a
+        // bodyless `Function` node too — the 5-param signature is over max=4
+        // but must not be flagged; only the implementation is enforced.
+        let src = r#"
+            class QueryBuilder {
+                caseWhen(a: A, b: B, c: C, d: D, e: E): Ret;
+                caseWhen(...args: unknown[]): Ret {
+                    return this.build(args);
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_implementation_over_max_issue_7091() {
+        // Control: a real implementation (with a body) over max=4 is still
+        // flagged. The bodyless-skip must not weaken enforcement on functions
+        // that actually execute.
+        let src = "function bar(a: number, b: number, c: number, d: number, e: number) { return a; }";
+        assert_eq!(run(src).len(), 1);
     }
 }
