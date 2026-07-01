@@ -359,6 +359,32 @@ impl ImportIndex {
                         imp.source_path = Some(resolved);
                     }
                 }
+                // Expand each `import.meta.glob(pattern)` into namespace-import
+                // edges. Vite eager-imports every project module matching the
+                // pattern and exposes its namespace, so each matched file is
+                // consumed as a whole module — the same edge shape as
+                // `import * as ns`, which marks all of the target's exports live.
+                if !is_rust && !extract.glob_imports.is_empty() {
+                    let glob_edges: Vec<ImportedSymbol> = extract
+                        .glob_imports
+                        .iter()
+                        .flat_map(|(pattern, line)| {
+                            resolve_glob_import_targets(&path, pattern, &known_paths)
+                                .into_iter()
+                                .map(move |target| ImportedSymbol {
+                                    local_name: String::new(),
+                                    imported_name: "*".into(),
+                                    kind: ImportKind::Namespace,
+                                    specifier: pattern.clone(),
+                                    source_path: Some(target),
+                                    line: *line,
+                                    is_type_only: false,
+                                    is_runtime_value: true,
+                                })
+                        })
+                        .collect();
+                    extract.imports.extend(glob_edges);
+                }
                 // Resolve each template-literal dynamic-import directory prefix
                 // against the importer's directory into a canonical directory.
                 let dyn_dirs: Vec<PathBuf> = extract
@@ -1260,6 +1286,13 @@ struct FileExtract {
     /// computed, so it cannot resolve to one file; resolution treats the whole
     /// directory as referenced. Resolved to absolute dirs in `ImportIndex::build`.
     dynamic_dirs: Vec<String>,
+    /// Raw `import.meta.glob` / `import.meta.globEager` patterns (Vite's
+    /// build-time glob import) paired with the 1-based line of the call. Vite
+    /// eager-imports every project module whose path matches the pattern —
+    /// resolved against this file's directory — and exposes each as a namespace,
+    /// so `ImportIndex::build` turns every matched file into a namespace-import
+    /// edge (all its exports live). Empty for Rust.
+    glob_imports: Vec<(String, usize)>,
     /// Rust-only: names of file-backed submodules declared by this file via
     /// `mod foo;` (both `pub mod` and private `mod`). A `mod foo;` pulls
     /// `foo.rs` / `foo/mod.rs` into the crate's compilation but is not a `use`
@@ -1319,6 +1352,7 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
                 imports,
                 calls: Vec::new(),
                 dynamic_dirs: Vec::new(),
+                glob_imports: Vec::new(),
                 mod_decls,
                 module_augmentations: Vec::new(),
                 dom_tree_methods: DomTreeMethods::default(),
@@ -1370,6 +1404,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
     let mut imports = Vec::new();
     let mut calls = Vec::new();
     let mut dynamic_dirs = Vec::new();
+    let mut glob_imports = Vec::new();
     let mut has_setup = false;
 
     for block in &blocks {
@@ -1385,6 +1420,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
         let imp_start = imports.len();
         let exp_start = exports.len();
         let call_start = calls.len();
+        let glob_start = glob_imports.len();
         walk_tree(&tree, |node| match node.kind() {
             "import_statement" => extract_import(node, source_bytes, &mut imports),
             "export_statement" => extract_export(node, source_bytes, &mut exports),
@@ -1400,6 +1436,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
                 } else {
                     extract_require(node, source_bytes, &mut imports);
                     extract_call(node, source_bytes, CallKind::Call, &mut calls);
+                    extract_glob_import(node, source_bytes, &mut glob_imports);
                 }
             }
             _ => {}
@@ -1412,6 +1449,9 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
         }
         for call in &mut calls[call_start..] {
             call.line += row_offset;
+        }
+        for glob in &mut glob_imports[glob_start..] {
+            glob.1 += row_offset;
         }
     }
 
@@ -1437,6 +1477,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             imports,
             calls,
             dynamic_dirs,
+            glob_imports,
             mod_decls: Vec::new(),
             module_augmentations: Vec::new(),
             dom_tree_methods: DomTreeMethods::default(),
@@ -2044,6 +2085,66 @@ fn extract_require(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
     });
 }
 
+/// Capture `import.meta.glob(pattern)` / `import.meta.globEager(pattern)` glob
+/// patterns from a tree-sitter TS/JS `call_expression` (Vue SFC scripts and the
+/// differential-parity path). Vite's build-time glob import pulls in every
+/// project module matching `pattern`, so the string-literal pattern(s) are
+/// collected here and resolved to namespace-import edges in `ImportIndex::build`.
+/// A leading type argument (`import.meta.glob<T>('./x/*.ts')`) sits in the
+/// call's `type_arguments`, not `arguments`, so the value string is reached
+/// directly. Both the single-string and array-of-strings argument forms are
+/// handled. Mirrors [`oxc_extract_glob_import`].
+fn extract_glob_import(node: Node, source: &[u8], out: &mut Vec<(String, usize)>) {
+    let Some(callee) = node.child_by_field_name("function") else {
+        return;
+    };
+    // Match the whole `import.meta.glob` member chain by text — robust to how the
+    // grammar nests `import.meta` — never an arbitrary `something.glob(...)`. Type
+    // arguments (`import.meta.glob<T>(...)`) are a separate call field, so the
+    // callee text stays exactly the member chain.
+    let callee_text = text_of(callee, source);
+    if callee_text != "import.meta.glob" && callee_text != "import.meta.globEager" {
+        return;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return;
+    };
+    // Only the first value argument is the pattern; any 2nd argument is the
+    // options object (`{ eager: true }`), matching Vite's `glob(pattern, options)`
+    // signature and the oxc path's `call.arguments.first()`.
+    let mut cursor = args.walk();
+    let Some(pattern_arg) = args.named_children(&mut cursor).next() else {
+        return;
+    };
+    let line = node.start_position().row + 1;
+    match pattern_arg.kind() {
+        "string" => push_glob_pattern(&glob_string_literal(pattern_arg, source), line, out),
+        "array" => {
+            let mut inner = pattern_arg.walk();
+            for el in pattern_arg.named_children(&mut inner) {
+                if el.kind() == "string" {
+                    push_glob_pattern(&glob_string_literal(el, source), line, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The unquoted text of a tree-sitter `string` node.
+fn glob_string_literal(node: Node, source: &[u8]) -> String {
+    text_of(node, source)
+        .trim_matches(|c| c == '\'' || c == '"' || c == '`')
+        .to_string()
+}
+
+/// Record a non-empty glob pattern with the 1-based line of its call site.
+fn push_glob_pattern(pattern: &str, line: usize, out: &mut Vec<(String, usize)>) {
+    if !pattern.is_empty() {
+        out.push((pattern.to_string(), line));
+    }
+}
+
 /// Extract (imported_name, local_name) from an `import_specifier`. Handles
 /// both `{ a }` (both names equal) and `{ a as b }` (imported=a, local=b).
 fn import_specifier_names(spec: Node, source: &[u8]) -> (String, String) {
@@ -2555,6 +2656,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
     let mut imports = Vec::new();
     let mut calls = Vec::new();
     let mut dynamic_dirs = Vec::new();
+    let mut glob_imports = Vec::new();
     let mut module_augmentations: Vec<ModuleAugmentation> = Vec::new();
     let mut dom_tree_methods = DomTreeMethods::default();
     let lines = oxc_line_starts(source);
@@ -2637,6 +2739,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
             AstKind::CallExpression(call) => {
                 oxc_extract_require(&lines, call, &mut imports);
                 oxc_extract_call_call(&lines, call, &mut calls);
+                oxc_extract_glob_import(&lines, call, &mut glob_imports);
             }
             AstKind::ImportExpression(import_expr) => {
                 oxc_extract_dynamic_import(&lines, import_expr, &mut imports, &mut dynamic_dirs);
@@ -2704,6 +2807,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         imports,
         calls,
         dynamic_dirs,
+        glob_imports,
         mod_decls: Vec::new(),
         module_augmentations,
         dom_tree_methods,
@@ -3617,6 +3721,51 @@ fn oxc_extract_require(
     });
 }
 
+/// Capture `import.meta.glob(pattern)` / `import.meta.globEager(pattern)` glob
+/// patterns from an oxc `CallExpression`. Vite's build-time glob import replaces
+/// the call with a map of every project module matching `pattern` (relative to
+/// the calling file) and eager-imports each, so the string-literal pattern(s)
+/// are collected here and resolved to namespace-import edges in
+/// `ImportIndex::build`. A leading type argument
+/// (`import.meta.glob<{ x: T }>('./x/*.ts')`) lives in `call.type_arguments`,
+/// not `call.arguments`, so the first value argument is the pattern. Both the
+/// single-string and array-of-strings argument forms are handled. Mirrors
+/// [`extract_glob_import`].
+fn oxc_extract_glob_import(
+    lines: &[usize],
+    call: &oxc_ast::ast::CallExpression,
+    out: &mut Vec<(String, usize)>,
+) {
+    use oxc_ast::ast::{Argument, ArrayExpressionElement, Expression};
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return;
+    };
+    let prop = member.property.name.as_str();
+    if prop != "glob" && prop != "globEager" {
+        return;
+    }
+    // The object must be `import.meta` (a `MetaProperty`), never an arbitrary
+    // `something.glob(...)`.
+    if !matches!(&member.object, Expression::MetaProperty(_)) {
+        return;
+    }
+    let Some(first) = call.arguments.first() else {
+        return;
+    };
+    let line = oxc_line_at(lines, call.span.start as usize);
+    match first {
+        Argument::StringLiteral(lit) => push_glob_pattern(lit.value.as_str(), line, out),
+        Argument::ArrayExpression(arr) => {
+            for el in &arr.elements {
+                if let ArrayExpressionElement::StringLiteral(lit) = el {
+                    push_glob_pattern(lit.value.as_str(), line, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Capture `import X = require("pkg")` (TypeScript CommonJS interop) as an
 /// import edge for `pkg`. Skips the in-scope alias forms (`import X = Foo` /
 /// `import X = Foo.Bar`), which reference an existing binding rather than a
@@ -3675,6 +3824,71 @@ fn resolve_dynamic_dir(importer: &Path, rel: &str) -> Option<PathBuf> {
     let base_dir = importer.parent()?;
     let joined = base_dir.join(rel);
     Some(std::fs::canonicalize(&joined).unwrap_or_else(|_| lexical_normalize(&joined)))
+}
+
+/// Resolve an `import.meta.glob` pattern declared in `importer` to the set of
+/// indexed project files it matches. Vite resolves the pattern against the
+/// calling module's directory, so the pattern's leading literal segments (up to
+/// the first glob metacharacter) fix a base directory under `importer`'s parent,
+/// and the remaining `*` / `**` segments are matched against each candidate's
+/// path relative to that base. `literal_separator` keeps `*` within a single
+/// path segment while `**` crosses segments — matching Vite's fast-glob
+/// semantics, so `./modules/*.ts` matches the direct `.ts` children of
+/// `modules/` but not nested ones. Bare / absolute patterns name no relative
+/// project file and resolve to nothing.
+fn resolve_glob_import_targets(
+    importer: &Path,
+    pattern: &str,
+    known: &FxHashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    use globset::GlobBuilder;
+    if !pattern.starts_with('.') {
+        return Vec::new();
+    }
+    let Some(base_dir) = importer.parent() else {
+        return Vec::new();
+    };
+    let (static_prefix, remainder) = split_glob_pattern(pattern);
+    // Canonicalize the base so it matches the canonical `known` paths even when a
+    // directory in the static prefix is a symlink; fall back to lexical
+    // normalization for synthetic paths that don't exist on disk (mirrors
+    // `resolve_dynamic_dir`).
+    let joined = base_dir.join(static_prefix);
+    let resolved_base =
+        std::fs::canonicalize(&joined).unwrap_or_else(|_| lexical_normalize(&joined));
+    let Ok(glob) = GlobBuilder::new(remainder).literal_separator(true).build() else {
+        return Vec::new();
+    };
+    let matcher = glob.compile_matcher();
+    known
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .strip_prefix(&resolved_base)
+                .is_ok_and(|rel| matcher.is_match(rel))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Split a relative glob into its static directory prefix (the leading segments
+/// containing no glob metacharacter) and the glob remainder matched against a
+/// candidate's path relative to that prefix. `./modules/*.ts` → (`./modules`,
+/// `*.ts`); `../a/**/b.ts` → (`../a`, `**/b.ts`). A pattern whose first segment
+/// already globs has no static directory, returned as `.`.
+fn split_glob_pattern(pattern: &str) -> (&str, &str) {
+    let mut last_sep: Option<usize> = None;
+    for (i, b) in pattern.bytes().enumerate() {
+        match b {
+            b'*' | b'?' | b'[' | b'{' => break,
+            b'/' => last_sep = Some(i),
+            _ => {}
+        }
+    }
+    match last_sep {
+        Some(idx) => (&pattern[..idx], &pattern[idx + 1..]),
+        None => (".", pattern),
+    }
 }
 
 /// Probe an absolute path (without or with extension) against the known set,
@@ -6449,6 +6663,50 @@ mod tests {
         );
     }
 
+    // #7042: `import.meta.glob('./modules/*.ts')` registers a namespace-import
+    // edge to every project file the pattern matches (all their exports live),
+    // resolved relative to the calling file. `*` stays within one path segment,
+    // so nested files are not matched.
+    #[test]
+    fn import_meta_glob_registers_namespace_edges() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src/modules/nested")).unwrap();
+        let main = dir.path().join("src/main.ts");
+        fs::write(
+            &main,
+            "const m = import.meta.glob('./modules/*.ts', { eager: true });\n",
+        )
+        .unwrap();
+        let a = dir.path().join("src/modules/a.ts");
+        fs::write(&a, "export const x = 1;\n").unwrap();
+        let b = dir.path().join("src/modules/b.ts");
+        fs::write(&b, "export const y = 1;\n").unwrap();
+        let nested = dir.path().join("src/modules/nested/c.ts");
+        fs::write(&nested, "export const z = 1;\n").unwrap();
+
+        let sources = [
+            SourceFile { path: main, language: Language::TypeScript },
+            SourceFile { path: a.clone(), language: Language::TypeScript },
+            SourceFile { path: b.clone(), language: Language::TypeScript },
+            SourceFile { path: nested.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+
+        assert!(
+            index.is_namespace_imported(&fs::canonicalize(&a).unwrap()),
+            "a.ts is matched by the glob"
+        );
+        assert!(
+            index.is_namespace_imported(&fs::canonicalize(&b).unwrap()),
+            "b.ts is matched by the glob"
+        );
+        assert!(
+            !index.is_namespace_imported(&fs::canonicalize(&nested).unwrap()),
+            "nested c.ts must not be matched by single-segment `*.ts`"
+        );
+    }
+
     // =======================================================================
     // Differential test: the oxc extractor must produce a byte-exact
     // `FileExtract` (same elements, same order, same line/column/offset) as the
@@ -6474,6 +6732,7 @@ mod tests {
         let mut imports = Vec::new();
         let mut calls = Vec::new();
         let mut dynamic_dirs = Vec::new();
+        let mut glob_imports = Vec::new();
         let mut dom_tree_methods = DomTreeMethods::default();
         walk_tree(&tree, |node| match node.kind() {
             "import_statement" => extract_import(node, bytes, &mut imports),
@@ -6497,6 +6756,7 @@ mod tests {
                 } else {
                     extract_require(node, bytes, &mut imports);
                     extract_call(node, bytes, CallKind::Call, &mut calls);
+                    extract_glob_import(node, bytes, &mut glob_imports);
                 }
             }
             _ => {}
@@ -6506,6 +6766,7 @@ mod tests {
             imports,
             calls,
             dynamic_dirs,
+            glob_imports,
             mod_decls: Vec::new(),
             module_augmentations: Vec::new(),
             dom_tree_methods,
@@ -6584,6 +6845,15 @@ mod tests {
         // the static directory prefix into `dynamic_dirs`, not into `imports`.
         "const d = import(`./locales/${lang}.ts`);",
         "const e = import(`../../compositions/src/${scope}/${name}`);",
+        // `import.meta.glob` (Vite eager glob import): both extractors record the
+        // string-literal pattern(s) into `glob_imports`. Type arguments precede
+        // the value pattern and must be skipped; the array form lists patterns.
+        "const g1 = import.meta.glob('./mods/*.ts', { eager: true });",
+        "const g2 = import.meta.glob<{ x: number }>('./mods/*.ts');",
+        "const g3 = import.meta.globEager('./mods/*.ts');",
+        "const g4 = import.meta.glob(['./a/*.ts', './b/*.ts']);",
+        // a non-`import.meta` `.glob(...)` member call must be ignored by both.
+        "const g5 = fg.glob('./mods/*.ts');",
         // --- exports ---
         "export * from './m';",
         "export * as ns from './m';",

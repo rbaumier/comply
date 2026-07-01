@@ -1741,6 +1741,57 @@ mod tests {
     }
 
     #[test]
+    fn allows_exports_consumed_via_import_meta_glob_issue_7042() {
+        // Regression for #7042 (vitesse): every `src/modules/*.ts` `install`
+        // export is consumed by the `import.meta.glob('./modules/*.ts', { eager:
+        // true })` call in `src/main.ts`. Vite eager-imports each matched module
+        // and accesses it dynamically (`i.install?.()`), so none is dead.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/main.ts",
+                "Object.values(import.meta.glob<{ install: UserModule }>('./modules/*.ts', { eager: true }))\n\
+                 .forEach(i => i.install?.(ctx));\n",
+            ),
+            ("src/modules/nprogress.ts", "export const install = () => {};\n"),
+            ("src/modules/pinia.ts", "export const install = () => {};\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/modules/nprogress.ts");
+        assert!(diags.is_empty(), "install in a globbed module is live: {diags:?}");
+        // The glob matches every module, not merely the first.
+        let (_dir2, diags2) = run_on_project(&files, "src/modules/pinia.ts");
+        assert!(
+            diags2.is_empty(),
+            "glob matches every matching module: {diags2:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_export_not_matched_by_import_meta_glob_issue_7042() {
+        // The `import.meta.glob` exemption is keyed on the file's path matching a
+        // real glob pattern from a call site. An unused export in a file OUTSIDE
+        // the globbed directory, and one nested deeper than the single-segment
+        // `*` reaches, are both still flagged dead.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/main.ts",
+                "Object.values(import.meta.glob('./modules/*.ts', { eager: true }))\n\
+                 .forEach(i => i.install?.(ctx));\n",
+            ),
+            ("src/modules/nprogress.ts", "export const install = () => {};\n"),
+            ("src/helpers/orphan.ts", "export const orphan = () => {};\n"),
+            ("src/modules/nested/deep.ts", "export const deep = () => {};\n"),
+        ];
+        let (_d0, matched) = run_on_project(&files, "src/modules/nprogress.ts");
+        assert!(matched.is_empty(), "globbed module stays live: {matched:?}");
+        let (_d1, outside) = run_on_project(&files, "src/helpers/orphan.ts");
+        assert_eq!(outside.len(), 1, "orphan outside glob dir is dead: {outside:?}");
+        assert!(outside[0].message.contains("orphan"));
+        let (_d2, nested) = run_on_project(&files, "src/modules/nested/deep.ts");
+        assert_eq!(nested.len(), 1, "`*.ts` must not match nested files: {nested:?}");
+        assert!(nested[0].message.contains("deep"));
+    }
+
+    #[test]
     fn allows_export_imported_elsewhere() {
         let files: Vec<(&str, &str)> = vec![
             ("tax.ts", "export function computeTax() {}"),
