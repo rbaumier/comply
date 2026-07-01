@@ -3,6 +3,8 @@
 mod oxc_typescript;
 mod rust;
 
+pub(crate) use oxc_typescript::has_boolean_predicate_prefix;
+
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::RuleDef;
