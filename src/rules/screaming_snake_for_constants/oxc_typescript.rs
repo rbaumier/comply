@@ -108,6 +108,21 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // A boolean-literal constant whose name uses a predicate prefix
+            // (`isServer`, `hasPluginAdapters`, `shouldRetry`) is a boolean
+            // sentinel following the JS/TS `is*`/`has*` predicate convention that
+            // comply's own `boolean-naming` rule mandates (camelCase predicate
+            // prefix). Requiring `SCREAMING_SNAKE_CASE` here would contradict
+            // `boolean-naming`, so such constants are exempt. The predicate prefix
+            // (shared with `boolean-naming`) plus a boolean literal is the
+            // structural proof — not a name allowlist. Non-boolean inits
+            // (`isAdminCount = 42`) and non-boundary names (`island`) still flag.
+            if is_boolean_literal_init(declarator)
+                && crate::rules::boolean_naming::has_boolean_predicate_prefix(name)
+            {
+                continue;
+            }
+
             if super::is_screaming_snake(name) {
                 continue;
             }
@@ -235,6 +250,14 @@ fn imports_local_from_node_builtin(program: &oxc_ast::ast::Program, local_name: 
         }
     }
     false
+}
+
+/// True when the declarator's initializer is a boolean literal (`true` / `false`).
+fn is_boolean_literal_init(declarator: &oxc_ast::ast::VariableDeclarator) -> bool {
+    matches!(
+        &declarator.init,
+        Some(oxc_ast::ast::Expression::BooleanLiteral(_))
+    )
 }
 
 fn is_primitive_init(declarator: &oxc_ast::ast::VariableDeclarator) -> bool {
@@ -368,9 +391,12 @@ mod tests {
 
     #[test]
     fn flags_annotationless_camelcase_const() {
-        // No `typeof` annotation: a bare camelCase boolean still requires
-        // SCREAMING_SNAKE_CASE.
-        assert_eq!(run_ts("export const isMaster = true;").len(), 1);
+        // No `typeof` annotation: a bare camelCase constant still requires
+        // SCREAMING_SNAKE_CASE — the `typeof`-of-a-`node:*`-import gate (not the
+        // name) grants #6704's exemption. `debugMode` is not a predicate name, so
+        // it flags (a predicate-prefixed boolean like `isMaster` is exempt under
+        // the boolean-naming cross-rule guard, see `_issue_7029`).
+        assert_eq!(run_ts("export const debugMode = true;").len(), 1);
     }
 
     #[test]
@@ -452,5 +478,40 @@ mod tests {
         assert_eq!(run_on("const kCH = 1;").len(), 1);
         assert_eq!(run_on("const p = 134.034;").len(), 1);
         assert_eq!(run_on("const d0 = 1.6295e-11;").len(), 1);
+    }
+
+    #[test]
+    fn _issue_7029() {
+        // Boolean sentinel constants named with an `is*`/`has*`/`should*`
+        // predicate prefix follow the camelCase convention that `boolean-naming`
+        // mandates; requiring SCREAMING_SNAKE_CASE would contradict it, so they
+        // are exempt.
+        assert!(run_ts("export const isServer = false;").is_empty());
+        assert!(run_ts("export const hasPluginAdapters = false;").is_empty());
+        assert!(run_on("const shouldRetry = true;").is_empty());
+    }
+
+    #[test]
+    fn flags_predicate_prefix_with_non_boolean_init() {
+        // The exemption is scoped to boolean literals: a predicate-prefixed name
+        // with a numeric init (`isAdminCount = 42`) is an ordinary constant and
+        // still requires SCREAMING_SNAKE_CASE.
+        assert_eq!(run_on("const isAdminCount = 42;").len(), 1);
+    }
+
+    #[test]
+    fn flags_boolean_literal_without_word_boundary_prefix() {
+        // `island` shares `is`'s opening letters but the prefix is not followed by
+        // an uppercase word boundary, so it is not a predicate name and still
+        // flags — the same CamelCase boundary rule `boolean-naming` uses.
+        assert_eq!(run_on("const island = false;").len(), 1);
+    }
+
+    #[test]
+    fn flags_ordinary_camel_case_literal_constant() {
+        // A non-predicate literal constant (`maxRetries = 3`) still requires
+        // SCREAMING_SNAKE_CASE — the exemption does not broaden to arbitrary
+        // camelCase constants.
+        assert_eq!(run_on("const maxRetries = 3;").len(), 1);
     }
 }

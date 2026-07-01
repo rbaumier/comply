@@ -119,6 +119,24 @@ fn is_screaming_case(name: &str) -> bool {
     has_letter
 }
 
+/// True when `name` begins with a boolean-predicate prefix (`is`/`has`/`should`/
+/// `can`/…) at a camelCase word boundary: the prefix is either the whole name or
+/// is immediately followed by an uppercase letter. `isServer` matches; `island`
+/// does not (`is` is followed by the lowercase `l`), so noun names sharing a
+/// prefix's opening letters still lack a predicate.
+///
+/// This is the single definition of the predicate-prefix convention, consumed
+/// both here and by `screaming-snake-for-constants`: a boolean-literal constant
+/// whose name follows this convention would violate `boolean-naming` if renamed
+/// to SCREAMING_SNAKE_CASE, so that rule exempts it.
+pub(crate) fn has_boolean_predicate_prefix(name: &str) -> bool {
+    VALID_PREFIXES.iter().any(|&prefix| {
+        name.strip_prefix(prefix).is_some_and(|rest| {
+            rest.is_empty() || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        })
+    })
+}
+
 /// Return a short problem description if the name doesn't match the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
     // A leading underscore is a convention marker (private/internal state,
@@ -145,11 +163,8 @@ fn classify_name(name: &str) -> Option<&'static str> {
     if has_flag_suffix(name) {
         return None;
     }
-    for &prefix in VALID_PREFIXES {
-        if let Some(rest) = name.strip_prefix(prefix)
-            && (rest.is_empty() || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())) {
-                return None;
-            }
+    if has_boolean_predicate_prefix(name) {
+        return None;
     }
     // A `<subject>Is<Descriptor>` compound (`nextIsSingle`) embeds the predicate
     // as a capitalized infix word, the same intent signal as a leading `is*`
