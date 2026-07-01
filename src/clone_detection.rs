@@ -485,9 +485,12 @@ fn contains_word(text: &str, word: &str) -> bool {
 }
 
 /// Returns true when two paths are in the same directory and their stems form
-/// a known complement pair (e.g. `deactivate-product` / `reactivate-product`).
-/// Such pairs implement symmetric domain operations and intentionally share
-/// query structure — their shared block must not be flagged as a clone.
+/// a symmetric twin pair whose shared block is intentional API mirroring, not a
+/// copy-paste clone. Two shapes qualify: a known complement pair
+/// (e.g. `deactivate-product` / `reactivate-product`), or a sync/async twin
+/// where one stem is exactly the other with a camelCase `Async`/`Sync` suffix
+/// appended (`looseTuple` / `looseTupleAsync`, `parse` / `parseSync`) — the JS/TS
+/// convention for the async mirror of a synchronous operation.
 fn are_symmetric_name_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
     if a.parent() != b.parent() {
         return false;
@@ -517,6 +520,17 @@ fn are_symmetric_name_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
     for &(x, y) in PAIRS {
         if (contains_word(&stem_a, x) && contains_word(&stem_b, y))
             || (contains_word(&stem_a, y) && contains_word(&stem_b, x))
+        {
+            return true;
+        }
+    }
+    // Sync/async twins: one stem is exactly the other with a camelCase `Async`
+    // or `Sync` suffix appended (`parse` / `parseAsync`). Compared on the already
+    // lowercased stems as a strict append, so a non-append near-miss like
+    // `asyncHandler` / `handler` (a prefix, not a suffix) never pairs.
+    for suffix in ["async", "sync"] {
+        if stem_a.strip_suffix(suffix) == Some(stem_b.as_str())
+            || stem_b.strip_suffix(suffix) == Some(stem_a.as_str())
         {
             return true;
         }
@@ -1748,6 +1762,53 @@ mod tests {
             lint_files(&[&fa, &fb]).is_empty(),
             "symmetric sibling handlers should not be flagged as clones"
         );
+    }
+
+    #[test]
+    fn camelcase_async_sync_suffix_twins_are_symmetric_pairs() {
+        // Regression test for issue #7047.
+        // Same-directory sync/async twin schema files (valibot convention) share
+        // the validation block, differing only in `await`/`Promise` insertions.
+        // The camelCase `Async`/`Sync` suffix makes one stem a strict append of
+        // the other, so they must be recognized as a symmetric twin pair.
+        let dir = std::path::Path::new("library/src/schemas/looseTuple");
+        assert!(are_symmetric_name_pair(
+            &dir.join("looseTuple.ts"),
+            &dir.join("looseTupleAsync.ts"),
+        ));
+        assert!(are_symmetric_name_pair(
+            &std::path::Path::new("s/union").join("unionAsync.ts"),
+            &std::path::Path::new("s/union").join("union.ts"),
+        ));
+        assert!(are_symmetric_name_pair(
+            &std::path::Path::new("s/intersect").join("intersect.ts"),
+            &std::path::Path::new("s/intersect").join("intersectAsync.ts"),
+        ));
+        // The `Sync` suffix is handled symmetrically with `Async`.
+        assert!(are_symmetric_name_pair(
+            &std::path::Path::new("s").join("parse.ts"),
+            &std::path::Path::new("s").join("parseSync.ts"),
+        ));
+    }
+
+    #[test]
+    fn non_twin_names_are_not_symmetric_pairs() {
+        // Unrelated stems sharing a block have no suffix relationship — still a clone.
+        assert!(!are_symmetric_name_pair(
+            &std::path::Path::new("s").join("foo.ts"),
+            &std::path::Path::new("s").join("bar.ts"),
+        ));
+        // Non-append near-miss: `handler` + `async` != `asyncHandler` (the suffix
+        // is a prefix here), so the pair must not be suppressed.
+        assert!(!are_symmetric_name_pair(
+            &std::path::Path::new("s").join("asyncHandler.ts"),
+            &std::path::Path::new("s").join("handler.ts"),
+        ));
+        // Same-directory gate: a twin split across directories is not paired here.
+        assert!(!are_symmetric_name_pair(
+            &std::path::Path::new("a").join("foo.ts"),
+            &std::path::Path::new("b").join("fooAsync.ts"),
+        ));
     }
 
     #[test]
