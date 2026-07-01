@@ -40,9 +40,15 @@ impl OxcCheck for Check {
         };
 
         // Tagged templates (`` tag`bar` ``) carry meaning in the tag and are
-        // never reducible to a string literal — skip them.
+        // never reducible to a string literal — skip them. A template literal
+        // whose parent is a `TSLiteralType` sits in a TypeScript type position
+        // (`` type T = `insert` ``, generic constraints, field types) — a
+        // type-level declaration, not a runtime value, so leave it alone.
         let parent = semantic.nodes().parent_node(node.id());
-        if matches!(parent.kind(), AstKind::TaggedTemplateExpression(_)) {
+        if matches!(
+            parent.kind(),
+            AstKind::TaggedTemplateExpression(_) | AstKind::TSLiteralType(_)
+        ) {
             return;
         }
 
@@ -203,5 +209,28 @@ mod tests {
     #[test]
     fn allows_template_with_trailing_literal_newline() {
         assert!(run("var foo = `something \nelse`;").is_empty());
+    }
+
+    // ── Template literals in TypeScript type positions — none may flag ────
+
+    #[test]
+    fn allows_template_literal_in_type_alias() {
+        assert!(run("type JoinType = `inner` | `left` | `right`;").is_empty());
+    }
+
+    #[test]
+    fn allows_template_literal_in_interface_field_type() {
+        assert!(run("interface Config { type: `insert` | `update` }").is_empty());
+    }
+
+    #[test]
+    fn allows_template_literal_in_generic_constraint() {
+        assert!(run("function pipe<T extends `a` | `b`>(arg: T): T { return arg }").is_empty());
+    }
+
+    #[test]
+    fn flags_value_position_no_interpolation_alongside_types() {
+        // A value-position template literal still flags even next to type-level ones.
+        assert_eq!(run("type J = `left`;\nconst name = `hello`;").len(), 1);
     }
 }
