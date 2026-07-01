@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{PropertyKey, TSSignature};
+use oxc_ast::ast::{PropertyKey, TSMethodSignatureKind, TSSignature};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -29,12 +29,20 @@ fn report_method_signatures<'a>(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // Only shorthand method signatures (`foo(): T`) carry the bivariant-parameter
+    // hazard this rule targets. Accessor signatures (`get x(): T` / `set x(v: U)`)
+    // express distinct read/write type contracts that a single property signature
+    // can't represent, so they are never candidates and are excluded throughout.
+    //
     // A method whose key appears on several signatures within this body is an
     // overload; overloads can't be rewritten as a single property signature, so
     // they are left alone. Count keys first, then flag only keys seen once.
     let mut key_counts: HashMap<&str, usize> = HashMap::new();
     for sig in members {
         if let TSSignature::TSMethodSignature(method) = sig {
+            if method.kind != TSMethodSignatureKind::Method {
+                continue;
+            }
             if let Some(key) = stable_key(&method.key) {
                 *key_counts.entry(key).or_insert(0) += 1;
             }
@@ -43,6 +51,9 @@ fn report_method_signatures<'a>(
 
     for sig in members {
         let TSSignature::TSMethodSignature(method) = sig else { continue };
+        if method.kind != TSMethodSignatureKind::Method {
+            continue;
+        }
         if let Some(key) = stable_key(&method.key) {
             if key_counts.get(key).copied().unwrap_or(0) > 1 {
                 continue;
@@ -213,5 +224,63 @@ mod tests {
             };
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_getter_accessor_signature() {
+        // Regression rbaumier/comply#7079 (vuejs/pinia, playground main.ts) — a
+        // getter accessor signature is not method shorthand; its read type can't
+        // be collapsed into a property signature, so it is not flagged.
+        let src = r#"
+            interface I {
+                get route(): RouteLocationNormalized;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_setter_accessor_signature() {
+        // Regression rbaumier/comply#7079 — a setter accessor signature is not
+        // method shorthand and is not flagged.
+        let src = r#"
+            interface I {
+                set route(value: RouteLocationNormalizedLoaded | Ref<RouteLocationNormalizedLoaded>);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_get_set_accessor_pair() {
+        // Regression rbaumier/comply#7079 — the reported `declare module`
+        // interface pairs a getter and setter of different types, which no single
+        // property signature can express; neither accessor is flagged.
+        let src = r#"
+            declare module 'pinia' {
+                export interface PiniaCustomProperties {
+                    set route(
+                        value: RouteLocationNormalizedLoaded | Ref<RouteLocationNormalizedLoaded>
+                    );
+                    get route(): RouteLocationNormalized;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn accessor_signatures_do_not_suppress_sibling_method() {
+        // The accessor skip is scoped to Get/Set kinds only: a sibling method
+        // shorthand signature in the same interface is still flagged.
+        let src = r#"
+            interface I {
+                get route(): RouteLocationNormalized;
+                reset(): void;
+            }
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`reset(...)`"));
     }
 }
