@@ -284,6 +284,40 @@ fn is_this_parameter_annotation(
     false
 }
 
+// `void extends T ? A : B` — `void` as the check type (the left-hand side of
+// `extends`) of a conditional type is valid TypeScript: it is a purely
+// type-level position used to detect whether a type parameter is assignable
+// from `void` (e.g. to branch on void-returning types). Scoped via span
+// containment to the nearest enclosing conditional's `check_type`, so a `void`
+// in the `extends_type`, `true_type`, or `false_type` branch is not exempted
+// here. A function/parameter boundary crossed before the conditional
+// disqualifies it (so `((x: void) => number) extends F ? ...` still fires on
+// the parameter).
+fn is_conditional_check_type(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    void_start: u32,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::TSConditionalType(cond) => {
+                let check_span = cond.check_type.span();
+                return void_start >= check_span.start && void_start < check_span.end;
+            }
+            AstKind::FormalParameter(_)
+            | AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSMethodSignature(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Class(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSVoidKeyword]
@@ -322,6 +356,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_this_parameter_annotation(node, semantic) {
+            return;
+        }
+        if is_conditional_check_type(node, semantic, kw.span.start) {
             return;
         }
 
@@ -601,6 +638,58 @@ mod tests {
         // Negative space: the `this: void` exemption is scoped to the synthetic
         // `this` pseudo-parameter — a real `(value: void)` parameter still fires.
         let src = "const f = (value: void) => value;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_void_as_conditional_check_type() {
+        // Regression for rbaumier/comply#7055 — unjs/h3 InferEventInput:
+        // `void extends T` uses `void` as the check type (LHS of `extends`) of a
+        // conditional type, a type-level position for detecting void-returning
+        // types.
+        let src = "type InferEventInput<Key, Event, T> = void extends T ? Event : T;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_as_conditional_check_type_simple() {
+        let src = "type IsVoid<T> = void extends T ? true : false;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_void_in_conditional_true_branch() {
+        // Negative space: the conditional exemption is scoped to the `check_type`
+        // (LHS of `extends`) — a bare `void` in the `true_type` branch still fires.
+        let src = "type X<T, U> = T extends U ? void : never;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_void_in_conditional_extends_branch() {
+        // Negative space: a `void` in the `extends_type` (RHS of `extends`) is not
+        // the check type and still fires.
+        let src = "type X<T> = T extends void ? 1 : 2;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_void_in_conditional_false_branch() {
+        // Negative space: a bare `void` in the `false_type` branch still fires.
+        let src = "type X<T, U> = T extends U ? 1 : void;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_void_param_in_conditional_check_type_function() {
+        // Negative space: the check-type exemption is type-position-scoped — a
+        // `void` parameter of a function type nested inside the check type still
+        // fires.
+        let src = "type T = ((x: void) => number) extends F ? 1 : 2;";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
