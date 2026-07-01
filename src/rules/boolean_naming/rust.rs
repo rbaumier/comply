@@ -87,7 +87,7 @@ fn check_node(node: tree_sitter::Node, ctx: &CheckCtx) -> Option<Diagnostic> {
     if is_std_net_toggle_setter_param(node, name, source) {
         return None;
     }
-    if is_toggle_enable_setter_param(node, name, source) {
+    if is_property_setter_value_param(node, name, source) {
         return None;
     }
     if is_setter_value_placeholder_param(node, name, source) {
@@ -212,29 +212,32 @@ fn method_has_self_receiver(function_item: tree_sitter::Node) -> bool {
         .any(|child| child.kind() == "self_parameter")
 }
 
-/// True for the GPU/Vulkan toggle-setter convention: a `bool` parameter named
-/// exactly `enable`/`disable` on a `set_*_<verb>` method with a `self` receiver
-/// (`set_depth_bias_enable(&mut self, enable: bool)`). The method name already
-/// ends with the toggle verb the parameter performs, so the parameter is the
-/// imperative state argument the function records; `is_enable` would be
-/// grammatically wrong and diverge the parameter from the method it mirrors.
+/// True for the Rust property-setter convention: a `bool` parameter whose name is
+/// the exact trailing property segment of the enclosing `set_<property>` method —
+/// the value to assign to that property — on a method with a `self` receiver
+/// (`fn set_resizable(&self, resizable: bool)`, `fn set_auto_resize(&self,
+/// auto_resize: bool)`, `fn set_depth_bias_enable(&mut self, enable: bool)`). The
+/// method name already declares the property; the parameter is the new value, so
+/// `is_resizable` would misname it (it names the value to set, not a predicate on
+/// current state) and diverge the parameter from the method it mirrors.
 ///
-/// Anchored on four AST signals so it cannot widen into a name allowlist: the
-/// node is a `parameter` whose name is `enable`/`disable`, its directly-enclosing
-/// function definition's `name` field both starts with `set_` and ends with
-/// `_<name>` (so the method's own name declares this very toggle), and that
-/// function's `parameters` declare a `self_parameter` receiver. A `bool` param
-/// named `enable` in a free function, a method whose name does not end with the
-/// param verb, or any other unprefixed boolean is unaffected and still flags.
-/// The walk stops at the first `closure_expression` boundary so a closure
-/// callback param named `enable`/`disable` nested inside such a method is not
-/// exempted.
-fn is_toggle_enable_setter_param(
+/// Anchored on three AST signals so it cannot widen into a name allowlist: the node
+/// is a `parameter`, its directly-enclosing function definition's `name` field both
+/// starts with `set_` and ends with `_<param_name>` (so the method's own name
+/// declares this very property), and that function's `parameters` declare a
+/// `self_parameter` receiver. The `_` word boundary is required, so
+/// `set_data(&self, compressed: bool)` does NOT match (`"set_data"` has no
+/// `_compressed` suffix) and `set_enabled(&self, abled: bool)` does not match a
+/// partial-word suffix. A `bool` param in a free function, a non-`set_*` method, or
+/// any other unprefixed boolean is unaffected and still flags. The walk stops at the
+/// first `closure_expression` boundary so a closure callback param nested inside such
+/// a method is judged by its own scope.
+fn is_property_setter_value_param(
     node: tree_sitter::Node,
     name: &str,
     source: &[u8],
 ) -> bool {
-    if node.kind() != "parameter" || (name != "enable" && name != "disable") {
+    if node.kind() != "parameter" {
         return false;
     }
     let mut cursor = node;
@@ -243,7 +246,7 @@ fn is_toggle_enable_setter_param(
             return false;
         }
         if is_function_definition(parent) {
-            let name_is_toggle_setter = parent
+            let name_is_property_setter = parent
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source).ok())
                 .is_some_and(|fn_name| {
@@ -252,7 +255,7 @@ fn is_toggle_enable_setter_param(
                             .strip_suffix(name)
                             .is_some_and(|prefix| prefix.ends_with('_'))
                 });
-            return name_is_toggle_setter && method_has_self_receiver(parent);
+            return name_is_property_setter && method_has_self_receiver(parent);
         }
         cursor = parent;
     }
@@ -1272,6 +1275,74 @@ mod tests {
             run_on("impl X { fn set_blend_enable(&self) { let f = |enable: bool| {}; } }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("'enable'"));
+    }
+
+    #[test]
+    fn allows_property_name_setter_param() {
+        // Rust property-setter convention: `set_<property>(&self, <property>: bool)`
+        // where the param name is the exact property the method sets, so the value is
+        // named after the property, not a predicate. `is_resizable` would misname it
+        // (it names the value to set, not current state). (Closes #7026)
+        for src in [
+            "impl W { fn set_resizable(&self, resizable: bool) -> Result<()> { Ok(()) } }",
+            "impl W { fn set_auto_resize(&self, auto_resize: bool) {} }",
+            "impl W { fn set_visible(&self, visible: bool) {} }",
+            "impl W { pub fn set_fullscreen(&mut self, fullscreen: bool) {} }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_setter_param_not_matching_property_suffix() {
+        // The param name must be the exact trailing property segment of the method
+        // name; `set_data`'s `compressed` is not a `_compressed` suffix, so it is an
+        // ordinary boolean and still requires a predicate prefix.
+        let diags = run_on("impl X { fn set_data(&self, compressed: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'compressed'"));
+    }
+
+    #[test]
+    fn still_flags_setter_param_matching_only_partial_word() {
+        // The `_` word boundary is required: `set_enabled`'s `abled` matches only a
+        // partial word (`"set_enabled".strip_suffix("abled")` is `"set_en"`, which
+        // does not end with `_`), so it still flags.
+        let diags = run_on("impl X { fn set_enabled(&self, abled: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'abled'"));
+    }
+
+    #[test]
+    fn still_flags_property_name_in_free_function() {
+        // The exemption is structural, not a name allowlist: the same `resizable`
+        // name in a free function (no `set_` prefix, no `self` receiver) still flags.
+        assert_eq!(run_on("fn configure(resizable: bool) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unrelated_bool_param_on_self_method() {
+        // A plain bool param unrelated to a `set_<property>` method still requires a
+        // predicate prefix; the exemption does not leak to ordinary methods.
+        let diags = run_on("impl X { fn run(&self, verbose: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'verbose'"));
+    }
+
+    #[test]
+    fn still_flags_property_name_setter_param_without_self_receiver() {
+        // The `self` receiver is required: a `set_<property>` associated fn whose
+        // param name matches the property but which has no receiver is not a
+        // property setter, so `resizable` still flags.
+        assert_eq!(run_on("impl X { fn set_resizable(resizable: bool) {} }").len(), 1);
+    }
+
+    #[test]
+    fn allows_property_name_setter_param_in_trait_signature() {
+        // A trait method signature (no body) is a `function_signature_item`, which
+        // exposes the same `name`/`parameters` fields, so the property-setter value
+        // param is exempt there too.
+        assert!(run_on("trait W { fn set_resizable(&self, resizable: bool); }").is_empty());
     }
 
     #[test]
