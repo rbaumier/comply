@@ -1186,10 +1186,10 @@ pub fn has_vendored_source_banner(source: &str) -> bool {
     })
 }
 
-/// True when `path` matches a framework entry point via FILES, SUFFIXES, or
-/// ROOT_FILES only — does NOT check dirs. Used by `dead-export` to bail out
-/// for framework-specific files even when the user has configured additional
-/// entrypoints (which disables the dirs bail-out).
+/// True when `path` matches a framework entry point via FILES, SUFFIXES,
+/// ROOT_FILES, or SRC_FILES only — does NOT check dirs. Used by `dead-export`
+/// to bail out for framework-specific files even when the user has configured
+/// additional entrypoints (which disables the dirs bail-out).
 ///
 /// Consults both the root-detected frameworks and the framework owning `path`
 /// via its nearest `package.json`: in a monorepo the framework dependency may be
@@ -1227,14 +1227,28 @@ pub fn is_framework_specific_entry_point(path: &Path, project: &ProjectCtx) -> b
     let Some(parent) = path.parent() else {
         return false;
     };
-    let canon_parent = canonicalize_cached(parent);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let canon_root = canonicalize_cached(root);
-    if canon_parent != canon_root {
-        return false;
+
+    // A framework's ROOT_FILES stem (Vite's `vite.config`) directly at the
+    // project root.
+    if canonicalize_cached(parent) == canon_root {
+        return project.framework_root_files().any(|entry| entry == stem);
     }
 
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    project.framework_root_files().any(|entry| entry == stem)
+    // A framework's SRC_FILES stem (Vite's `src/main.ts`/`src/index.ts`)
+    // sitting directly inside the project's `<root>/src/` directory. The build
+    // tool imports it by convention — root `index.html`'s
+    // `<script type="module" src="/src/main.ts">` — so no static importer
+    // exists, yet the file is the live application entry point.
+    if parent.file_name().is_some_and(|n| n == "src")
+        && let Some(grandparent) = parent.parent()
+        && canonicalize_cached(grandparent) == canon_root
+    {
+        return project.framework_src_files().any(|entry| entry == stem);
+    }
+
+    false
 }
 
 /// True when `path` lives under a framework entry_points.dirs directory.

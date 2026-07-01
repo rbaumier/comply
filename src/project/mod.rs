@@ -3253,6 +3253,12 @@ impl ProjectCtx {
             .flat_map(|f| f.entry_points.root_files.iter().map(String::as_str))
     }
 
+    pub fn framework_src_files(&self) -> impl Iterator<Item = &str> {
+        self.detected_frameworks
+            .iter()
+            .flat_map(|f| f.entry_points.src_files.iter().map(String::as_str))
+    }
+
     pub fn framework_magic_exports(&self) -> impl Iterator<Item = &str> {
         self.detected_frameworks
             .iter()
