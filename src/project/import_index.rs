@@ -280,13 +280,14 @@ pub struct ImportIndex {
     /// never declares it. `import-named` folds these into the module's export
     /// set before checking a named import.
     augmented_exports: FxHashMap<PathBuf, FxHashSet<String>>,
-    /// `true` when any indexed TS/JS/TSX file declares a class method named
-    /// `removeChild`. Signals the project owns a tree type whose nodes are
-    /// detached via `parent.removeChild(child)` rather than the DOM `Node` API,
-    /// so `prefer-dom-node-remove` must not suggest the DOM-only
-    /// `child.remove()` anywhere in the project (the call site and the class
-    /// definition routinely live in different files).
-    defines_remove_child_method: bool,
+    /// The DOM tree-mutation method names any indexed TS/JS/TSX file declares as
+    /// class methods, unioned across the project. A project-defined `appendChild`
+    /// / `removeChild` signals the project owns a tree type whose nodes are
+    /// mutated via that method rather than the DOM `Node` API, so
+    /// `prefer-dom-node-append` / `prefer-dom-node-remove` must not suggest the
+    /// DOM-only `parent.append()` / `child.remove()` anywhere in the project (the
+    /// call site and the class definition routinely live in different files).
+    dom_tree_methods: DomTreeMethods,
 }
 
 impl ImportIndex {
@@ -387,10 +388,10 @@ impl ImportIndex {
             .collect();
 
         let mut dynamic_import_dirs: Vec<PathBuf> = Vec::new();
-        let mut defines_remove_child_method = false;
+        let mut dom_tree_methods = DomTreeMethods::default();
         let mut augmented_exports: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
         for (path, extract, dyn_dirs, augmentations) in resolved {
-            defines_remove_child_method |= extract.defines_remove_child;
+            dom_tree_methods.merge(extract.dom_tree_methods);
             exports.insert(path.clone(), extract.exports);
             imports.insert(path.clone(), extract.imports);
             file_calls.insert(path, extract.calls);
@@ -557,15 +558,16 @@ impl ImportIndex {
             dynamic_import_dirs,
             mod_edges,
             augmented_exports,
-            defines_remove_child_method,
+            dom_tree_methods,
         }
     }
 
-    /// `true` when any indexed file declares a class method named `removeChild`.
-    /// See [`ImportIndex::defines_remove_child_method`].
+    /// `true` when any indexed file declares a class method named `name`, where
+    /// `name` is one of the tracked DOM tree-mutation methods (`appendChild` /
+    /// `removeChild`). See [`ImportIndex::dom_tree_methods`].
     #[must_use]
-    pub fn project_defines_remove_child_method(&self) -> bool {
-        self.defines_remove_child_method
+    pub fn project_defines_dom_tree_method(&self, name: &str) -> bool {
+        self.dom_tree_methods.contains(name)
     }
 
     /// Exports declared in `path`, or empty slice if the file isn't indexed.
@@ -1198,6 +1200,52 @@ fn scc_has_runtime_edge(
     false
 }
 
+/// Which DOM tree-mutation method names a file (or, once unioned, the whole
+/// project) declares as class methods. A project-defined `appendChild` /
+/// `removeChild` marks a custom tree type (HTML/XML AST, vdom, scene graph, …)
+/// whose nodes are mutated via `parent.appendChild(child)` /
+/// `parent.removeChild(child)` rather than the DOM `Node` API. The matching
+/// `prefer-dom-node-append` / `prefer-dom-node-remove` rule must then stay
+/// silent across the project, because the DOM-only replacement
+/// (`parent.append()` / `child.remove()`) does not exist on the custom type and
+/// would throw at runtime.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DomTreeMethods {
+    append_child: bool,
+    remove_child: bool,
+}
+
+impl DomTreeMethods {
+    /// Record a class-method name, ignoring any name outside the tracked set.
+    fn record(&mut self, name: &str) {
+        match name {
+            "appendChild" => self.append_child = true,
+            "removeChild" => self.remove_child = true,
+            _ => {}
+        }
+    }
+
+    /// Fold another file's findings into this set.
+    fn merge(&mut self, other: Self) {
+        self.append_child |= other.append_child;
+        self.remove_child |= other.remove_child;
+    }
+
+    /// `true` when `name` (one of the tracked DOM tree-mutation methods) is
+    /// declared. An untracked name would silently disable the caller's guard, so
+    /// it is a caller bug rather than a legitimate lookup.
+    fn contains(self, name: &str) -> bool {
+        match name {
+            "appendChild" => self.append_child,
+            "removeChild" => self.remove_child,
+            other => {
+                debug_assert!(false, "untracked DOM tree method: {other}");
+                false
+            }
+        }
+    }
+}
+
 /// Raw per-file extract before cross-file resolution.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct FileExtract {
@@ -1226,12 +1274,9 @@ struct FileExtract {
     /// of one of them resolves even though the target file's own source never
     /// declares it. Resolved to the augmented file in `ImportIndex::build`.
     module_augmentations: Vec<ModuleAugmentation>,
-    /// `true` when this file declares a class method named `removeChild`. A
-    /// user-defined `removeChild` means the project has its own tree type whose
-    /// nodes are removed via `parent.removeChild(child)`, not the DOM `Node`
-    /// API — so `prefer-dom-node-remove` (which suggests the DOM-only
-    /// `child.remove()`) must not fire anywhere in the project.
-    defines_remove_child: bool,
+    /// The DOM tree-mutation method names this file declares as class methods.
+    /// See [`DomTreeMethods`].
+    dom_tree_methods: DomTreeMethods,
 }
 
 /// A `declare module '<specifier>' { … }` augmentation declared in a file.
@@ -1276,7 +1321,7 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
                 dynamic_dirs: Vec::new(),
                 mod_decls,
                 module_augmentations: Vec::new(),
-                defines_remove_child: false,
+                dom_tree_methods: DomTreeMethods::default(),
             },
         ));
     }
@@ -1394,7 +1439,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             dynamic_dirs,
             mod_decls: Vec::new(),
             module_augmentations: Vec::new(),
-            defines_remove_child: false,
+            dom_tree_methods: DomTreeMethods::default(),
         },
     ))
 }
@@ -2511,7 +2556,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
     let mut calls = Vec::new();
     let mut dynamic_dirs = Vec::new();
     let mut module_augmentations: Vec<ModuleAugmentation> = Vec::new();
-    let mut defines_remove_child = false;
+    let mut dom_tree_methods = DomTreeMethods::default();
     let lines = oxc_line_starts(source);
 
     // Pre-order over `nodes().iter()` (NodeId order == SemanticBuilder visit
@@ -2596,18 +2641,18 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
             AstKind::ImportExpression(import_expr) => {
                 oxc_extract_dynamic_import(&lines, import_expr, &mut imports, &mut dynamic_dirs);
             }
-            // A class method named `removeChild` marks a project-defined tree
-            // type (HTML/XML AST, vdom, scene graph, …). See
-            // `FileExtract::defines_remove_child`.
+            // A class method named `appendChild` / `removeChild` marks a
+            // project-defined tree type (HTML/XML AST, vdom, scene graph, …).
+            // See `FileExtract::dom_tree_methods`.
             AstKind::MethodDefinition(method) => {
                 use oxc_ast::ast::PropertyKey;
-                let is_remove_child = match &method.key {
-                    PropertyKey::StaticIdentifier(id) => id.name.as_str() == "removeChild",
-                    PropertyKey::StringLiteral(s) => s.value.as_str() == "removeChild",
-                    _ => false,
+                let name = match &method.key {
+                    PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+                    PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+                    _ => None,
                 };
-                if is_remove_child {
-                    defines_remove_child = true;
+                if let Some(name) = name {
+                    dom_tree_methods.record(name);
                 }
             }
             _ => {}
@@ -2661,7 +2706,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         dynamic_dirs,
         mod_decls: Vec::new(),
         module_augmentations,
-        defines_remove_child,
+        dom_tree_methods,
     })
 }
 
@@ -6429,19 +6474,18 @@ mod tests {
         let mut imports = Vec::new();
         let mut calls = Vec::new();
         let mut dynamic_dirs = Vec::new();
-        let mut defines_remove_child = false;
+        let mut dom_tree_methods = DomTreeMethods::default();
         walk_tree(&tree, |node| match node.kind() {
             "import_statement" => extract_import(node, bytes, &mut imports),
             "export_statement" => extract_export(node, bytes, &mut exports),
             "new_expression" => extract_call(node, bytes, CallKind::New, &mut calls),
             "method_definition" => {
-                if node
+                if let Some(name) = node
                     .child_by_field_name("name")
                     .and_then(|n| n.utf8_text(bytes).ok())
                     .map(|n| n.trim_matches(['\'', '"', '`']))
-                    == Some("removeChild")
                 {
-                    defines_remove_child = true;
+                    dom_tree_methods.record(name);
                 }
             }
             "call_expression" => {
@@ -6464,7 +6508,7 @@ mod tests {
             dynamic_dirs,
             mod_decls: Vec::new(),
             module_augmentations: Vec::new(),
-            defines_remove_child,
+            dom_tree_methods,
         }
     }
 
@@ -6559,9 +6603,12 @@ mod tests {
         "export function destructured({ a, b }, [c], ...rest) { return a; }",
         "export class Klass {}",
         "export abstract class AbstractK {}",
-        // a class method named `removeChild` sets `defines_remove_child` on both
-        // extractors (custom tree type — `prefer-dom-node-remove` must not fire)
+        // a class method named `removeChild` / `appendChild` records the matching
+        // DOM tree-mutation method in `dom_tree_methods` on both extractors
+        // (custom tree type — `prefer-dom-node-remove` / `prefer-dom-node-append`
+        // must not fire)
         "export class Node { removeChild(c) { this.children.splice(0, 1); } }",
+        "export class Node { appendChild(c) { this.children.push(c); return c; } }",
         "export const single = 1;",
         "export const a1 = 1, b1 = 2, c1 = 3;",
         "export let mutable = 0;",

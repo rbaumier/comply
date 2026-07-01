@@ -1,4 +1,11 @@
 //! prefer-dom-node-append
+//!
+//! Flags `parentNode.appendChild(childNode)` and suggests the DOM-only
+//! `parentNode.append(childNode)`. Because `.append()` exists solely on the DOM
+//! `ParentNode` interface, the rule stays silent across the whole project when
+//! any file declares a class method named `appendChild` — that marks a
+//! project-owned tree type (HTML/XML AST, vdom, scene graph, …) whose nodes
+//! have no `.append()`, where the suggestion would throw at runtime.
 
 mod oxc_typescript;
 
