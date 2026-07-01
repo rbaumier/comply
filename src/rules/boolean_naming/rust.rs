@@ -151,6 +151,17 @@ fn has_boolean_type_or_value(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `node` is a function definition whose signature the parameter
+/// exemptions inspect: a concrete `function_item` (with a body) or a
+/// `function_signature_item` (a trait method declaration without a body, e.g.
+/// `fn resizable(self, resizable: bool) -> Self;`). Both node kinds expose the
+/// same `name`, `parameters`, and `return_type` named fields, so a parameter in
+/// a trait method signature is judged by the identical structural conditions as
+/// one in a concrete method.
+fn is_function_definition(node: tree_sitter::Node) -> bool {
+    matches!(node.kind(), "function_item" | "function_signature_item")
+}
+
 /// True for a `bool` parameter named exactly `on`/`off` on a `set_*` method
 /// with a `self` receiver — the std::net toggle-setter convention
 /// (`UdpSocket::set_broadcast(&self, on: bool)`, `set_multicast_loop_v4`, …).
@@ -159,7 +170,7 @@ fn has_boolean_type_or_value(node: tree_sitter::Node, source: &[u8]) -> bool {
 ///
 /// Anchored on three AST signals so it cannot widen into a name allowlist:
 /// the node is a `parameter` whose name is `on`/`off`, its directly-enclosing
-/// `function_item` `name` field starts with `set_`, and that function's
+/// function definition's `name` field starts with `set_`, and that function's
 /// `parameters` declare a `self_parameter` receiver. A `bool` param named `on`
 /// in a free function, a non-`set_*` method, or any other unprefixed boolean
 /// is unaffected and still flags. The walk stops at the first
@@ -178,7 +189,7 @@ fn is_std_net_toggle_setter_param(
         if parent.kind() == "closure_expression" {
             return false;
         }
-        if parent.kind() == "function_item" {
+        if is_function_definition(parent) {
             let starts_with_set = parent
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source).ok())
@@ -210,7 +221,7 @@ fn method_has_self_receiver(function_item: tree_sitter::Node) -> bool {
 ///
 /// Anchored on four AST signals so it cannot widen into a name allowlist: the
 /// node is a `parameter` whose name is `enable`/`disable`, its directly-enclosing
-/// `function_item` `name` field both starts with `set_` and ends with
+/// function definition's `name` field both starts with `set_` and ends with
 /// `_<name>` (so the method's own name declares this very toggle), and that
 /// function's `parameters` declare a `self_parameter` receiver. A `bool` param
 /// named `enable` in a free function, a method whose name does not end with the
@@ -231,7 +242,7 @@ fn is_toggle_enable_setter_param(
         if parent.kind() == "closure_expression" {
             return false;
         }
-        if parent.kind() == "function_item" {
+        if is_function_definition(parent) {
             let name_is_toggle_setter = parent
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source).ok())
@@ -264,8 +275,8 @@ fn is_toggle_enable_setter_param(
 /// universal idioms.
 ///
 /// Anchored on AST signals so it cannot widen into a name allowlist: the node is a
-/// `parameter` named exactly `value`/`val`, its directly-enclosing `function_item`
-/// declares a `self_parameter` receiver, and its `name` field either starts with
+/// `parameter` named exactly `value`/`val`, its directly-enclosing function
+/// definition declares a `self_parameter` receiver, and its `name` field starts with
 /// `set_` (with this as the single non-self parameter) or starts with `record_`
 /// (with this and a leading `field` selector as its two non-self parameters).
 /// A meaningful boolean param (`emit`, `drop`, `disabled`) is unaffected — only the
@@ -288,7 +299,7 @@ fn is_setter_value_placeholder_param(
         if parent.kind() == "closure_expression" {
             return false;
         }
-        if parent.kind() == "function_item" {
+        if is_function_definition(parent) {
             if !method_has_self_receiver(parent) {
                 return false;
             }
@@ -324,7 +335,7 @@ fn is_setter_value_placeholder_param(
 ///
 /// Anchored on four AST signals so it cannot widen into a name allowlist: the
 /// node is a `parameter` named exactly `yes`/`no`, its directly-enclosing
-/// `function_item` declares a `self_parameter` receiver, has exactly one non-self
+/// function definition declares a `self_parameter` receiver, has exactly one non-self
 /// parameter (this one), and returns a builder shape (see
 /// [`method_returns_builder_shape`]). A method returning a primitive
 /// (`-> bool`/`-> u32`) or one that borrows `&self` while returning a fresh value
@@ -348,7 +359,7 @@ fn is_toggle_yes_no_placeholder_param(node: tree_sitter::Node, source: &[u8]) ->
         if parent.kind() == "closure_expression" {
             return false;
         }
-        if parent.kind() == "function_item" {
+        if is_function_definition(parent) {
             return method_has_self_receiver(parent)
                 && method_non_self_param_count(parent) == 1
                 && method_returns_builder_shape(parent, source);
@@ -460,7 +471,7 @@ fn method_non_self_param_count(function_item: tree_sitter::Node) -> usize {
 /// method it mirrors.
 ///
 /// Anchored on three AST signals so it cannot widen into a name allowlist: the
-/// node is a `parameter` whose name equals the enclosing `function_item`'s
+/// node is a `parameter` whose name equals the enclosing function definition's
 /// `name` field (or that name with a leading `with_` removed), that function has
 /// a `self` receiver, and it returns a builder shape (see
 /// [`method_returns_builder_shape`]). A free function, a setter that returns
@@ -482,7 +493,7 @@ fn is_builder_setter_field_param(
         if parent.kind() == "closure_expression" {
             return false;
         }
-        if parent.kind() == "function_item" {
+        if is_function_definition(parent) {
             let name_matches_method = parent
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source).ok())
@@ -574,13 +585,13 @@ fn impl_self_type_name<'a>(
 ///
 /// Anchored on the param name AND a structural test/assertion context, so it
 /// cannot widen into a name allowlist. The node must be a `parameter` named
-/// exactly `expected`/`actual`, and the enclosing `function_item` must be a
+/// exactly `expected`/`actual`, and the enclosing function definition must be a
 /// test/assertion helper — established by ANY of:
 /// - `is_in_test_context` (a `#[cfg(test)]` module or test-attribute ancestor,
 ///   covering helpers inside a `#[cfg(test)] mod` in a normal `src` file);
-/// - the enclosing `function_item` name begins with `assert`/`expect`/`check`/
+/// - the enclosing function definition name begins with `assert`/`expect`/`check`/
 ///   `test` (assertion-helper naming); or
-/// - the enclosing `function_item` body contains an assertion macro invocation
+/// - the enclosing function definition body contains an assertion macro invocation
 ///   (`assert*!`/`debug_assert*!`), which is the issue's shape: a helper named
 ///   `case` whose body is `assert_eq!(expected, …)`.
 ///
@@ -600,7 +611,7 @@ fn is_assertion_value_param(node: tree_sitter::Node, name: &str, source: &[u8]) 
         if parent.kind() == "closure_expression" {
             return false;
         }
-        if parent.kind() == "function_item" {
+        if is_function_definition(parent) {
             return fn_name_is_assertion_helper(parent, source)
                 || fn_body_contains_assertion(parent, source);
         }
@@ -1906,6 +1917,61 @@ mod tests {
         // No `self` receiver — a free function named after its param is not a
         // builder setter; the param still flags.
         assert_eq!(run_on("fn scale(scale: bool) -> Self { }").len(), 1);
+    }
+
+    #[test]
+    fn allows_builder_setter_field_param_in_trait_signature() {
+        // tauri's `WindowBuilder` trait: the classic builder-setter pattern
+        // (fn-name == param-name, `self` receiver, `-> Self`) declared as trait
+        // method signatures without a body. In tree-sitter these are
+        // `function_signature_item` nodes, which expose the same
+        // `name`/`parameters`/`return_type` fields as a concrete `function_item`,
+        // so the exemption applies under identical conditions. (Closes #7025)
+        let src = "pub trait WindowBuilder {\n\
+                   #[must_use]\n\
+                   fn resizable(self, resizable: bool) -> Self;\n\
+                   #[must_use]\n\
+                   fn fullscreen(self, fullscreen: bool) -> Self;\n\
+                   #[must_use]\n\
+                   fn maximizable(self, maximizable: bool) -> Self;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_param_exemptions_in_trait_signatures() {
+        // The shared `function_signature_item` fix covers every parameter
+        // exemption, not just the builder-setter one: each pattern is exempt when
+        // declared as a bodyless trait method signature exactly as it is in a
+        // concrete `impl` method.
+        for src in [
+            "trait T { fn set_broadcast(&self, on: bool); }", // std::net toggle
+            "trait T { fn set_blend_enable(&mut self, enable: bool) -> R; }", // Vulkan toggle-enable
+            "trait T { fn set_flag(&self, value: bool); }",  // setter value placeholder
+            "trait T { fn case_insensitive(self, yes: bool) -> Config; }", // yes/no toggle
+            "trait T { fn check_it(expected: bool); }",      // assertion value (helper name)
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_non_exempt_bool_param_in_trait_signature() {
+        // Strictness preserved: a trait method signature whose `bool` param
+        // matches no exemption (not the fn name, no `-> Self`) still requires a
+        // predicate prefix.
+        let diags = run_on("trait T { fn configure(&self, disabled: bool); }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'disabled'"));
+    }
+
+    #[test]
+    fn still_flags_builder_signature_when_param_differs_from_method() {
+        // Name strictness preserved inside trait signatures: the builder-setter
+        // exemption requires param-name == method-name; a differently-named param
+        // in the same `self -> Self` shape still flags.
+        let diags = run_on("trait T { fn resizable(self, disabled: bool) -> Self; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'disabled'"));
     }
 
     const PROC_MACRO_TOML: &str =
