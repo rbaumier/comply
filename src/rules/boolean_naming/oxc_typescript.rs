@@ -137,6 +137,31 @@ pub(crate) fn has_boolean_predicate_prefix(name: &str) -> bool {
     })
 }
 
+/// True if `name` contains a negation word (`Not`, `Isnt`, `Cannot`, `Cant`,
+/// `Shouldnt`) at a camelCase word boundary. Each entry begins with an uppercase
+/// letter, so it starts a camelCase word; it must also *end* one — the character
+/// right after the match is absent (end of name) or another uppercase letter that
+/// opens the next word. `valueIsNotSet` (the `S` of `Set` follows `Not`) is a
+/// negation; `abortNotified` (`Not` followed by lowercase `i`, the past
+/// participle of "notify") is not. This is the camelCase counterpart of the
+/// `_not_` snake_case word boundary in the rule's Rust backend.
+fn contains_negative_word(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    NEGATIVE_SUBSTRINGS.iter().any(|neg| {
+        let mut search_from = 0;
+        while let Some(rel) = name[search_from..].find(neg) {
+            let start = search_from + rel;
+            let after = start + neg.len();
+            let ends_word = bytes.get(after).is_none_or(|c| c.is_ascii_uppercase());
+            if ends_word {
+                return true;
+            }
+            search_from = start + 1;
+        }
+        false
+    })
+}
+
 /// Return a short problem description if the name doesn't match the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
     // A leading underscore is a convention marker (private/internal state,
@@ -157,7 +182,7 @@ fn classify_name(name: &str) -> Option<&'static str> {
     if is_screaming_case(name) {
         return None;
     }
-    if NEGATIVE_SUBSTRINGS.iter().any(|neg| name.contains(neg)) {
+    if contains_negative_word(name) {
         return Some("is negatively phrased — use the positive form with `!`");
     }
     if has_flag_suffix(name) {
@@ -851,6 +876,36 @@ mod tests {
         let diags = run("function f(valueIsNotSet: boolean) {}");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("negatively phrased"));
+    }
+
+    #[test]
+    fn no_negation_flag_on_not_infix_within_word() {
+        // `Not` inside a longer word (`Notified`, the past participle of
+        // "notify") is not a negation. With a valid prefix these are not flagged
+        // at all; the raw issue name `abortNotified` may still trigger the
+        // separate missing-prefix diagnostic, but never "negatively phrased".
+        // (Closes #7027)
+        assert!(run("let isNotified = false;").is_empty());
+        assert!(run("let hasNotifiedListeners = false;").is_empty());
+        let diags = run("let abortNotified = false;");
+        assert!(!diags.iter().any(|d| d.message.contains("negatively phrased")));
+    }
+
+    #[test]
+    fn still_flags_negation_at_camelcase_word_boundary() {
+        // Strictness preserved: `Not`/`Cannot` at a camelCase word boundary (the
+        // next character is uppercase or end-of-name) is a genuine negation and
+        // still flags as negatively phrased.
+        for src in [
+            "let isNotSet = false;",
+            "let valueIsNotFound = false;",
+            "let abortNotReady = false;",
+            "let valueCannotProceed = false;",
+        ] {
+            let diags = run(src);
+            assert_eq!(diags.len(), 1, "{src}");
+            assert!(diags[0].message.contains("negatively phrased"), "{src}");
+        }
     }
 
     #[test]
