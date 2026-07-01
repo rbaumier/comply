@@ -728,7 +728,9 @@ const IMPL_QUALIFIER_SEGMENTS: &[&str] = &[
 /// and the names are either identical or analogous variants: one a clean
 /// `_`-boundary prefix of the other (`ignore_invalid_headers` ⊂
 /// `ignore_invalid_headers_in_responses`, the server/client builder twins that
-/// differ only by a `_in_responses` suffix). The shared root must span at least
+/// differ only by a `_in_responses` suffix), a Rust impl-direction qualifier twin
+/// (`read_integer` / `read_integer_ptr`), or a camelCase sync/async twin
+/// (`parse` / `parseAsync`). The shared root must span at least
 /// `MIN_VARIANT_ROOT_SEGMENTS` segments so a short generic prefix never collapses
 /// two unrelated copy-pasted docs into one exempt pair.
 fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
@@ -741,6 +743,7 @@ fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
     is_variant_suffix_of(a, b)
         || is_variant_suffix_of(b, a)
         || are_impl_qualifier_twins(a, b)
+        || are_async_sync_twins(a, b)
 }
 
 /// Two inline comments share an enclosing API surface when both sit inside a
@@ -803,6 +806,35 @@ fn strip_impl_qualifier(name: &str) -> &str {
             return root;
         }
         if let Some(root) = name.strip_prefix(q).and_then(|r| r.strip_prefix('_')) {
+            return root;
+        }
+    }
+    name
+}
+
+/// Two declaration names are sync/async twins when they reduce to the same base
+/// after stripping a trailing camelCase `Async` or `Sync` suffix — the
+/// JavaScript/TypeScript convention for exposing one operation in both
+/// synchronous and asynchronous form (`parse` / `parseAsync`,
+/// `safeParse` / `safeParseAsync`, `parseSync` / `parseAsync`). Both variants
+/// carry the same JSDoc because they describe the same operation, so the
+/// repetition is intentional. This is the camelCase counterpart of the
+/// `_async` / `_sync` `_`-boundary handling `strip_impl_qualifier` gives Rust
+/// names. Because the names *differ*, at least one must carry the suffix, so two
+/// unrelated non-suffixed names can never pair.
+fn are_async_sync_twins(a: &str, b: &str) -> bool {
+    a != b && strip_async_sync_suffix(a) == strip_async_sync_suffix(b)
+}
+
+/// `name` with a trailing camelCase `Async` or `Sync` suffix removed, when that
+/// suffix starts at an uppercase word boundary and leaves a non-empty prefix
+/// (`parseAsync` → `parse`, `safeParseSync` → `safeParse`). Returns `name`
+/// unchanged otherwise: the uppercase `A`/`S` is the word boundary, so a name
+/// ending in lowercase `async` / `sync` (`resync`) never strips, and a bare
+/// `Async` / `Sync` (empty prefix) is left intact.
+fn strip_async_sync_suffix(name: &str) -> &str {
+    for suffix in ["Async", "Sync"] {
+        if let Some(root) = name.strip_suffix(suffix).filter(|r| !r.is_empty()) {
             return root;
         }
     }
@@ -1007,6 +1039,15 @@ fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<St
             return (None, None);
         };
         sibling = next;
+    }
+    // A TS/JS `export function parse() {}` nests the `function_declaration` under
+    // an `export_statement`; descend into the exported declaration so the name is
+    // read from `parse`, not lost at the wrapper.
+    if sibling.kind() == "export_statement" {
+        let Some(decl) = sibling.child_by_field_name("declaration") else {
+            return (None, None);
+        };
+        sibling = decl;
     }
     if is_named_member(sibling.kind()) {
         return (member_name(sibling, source), enclosing_named_type(sibling, source));
@@ -1819,6 +1860,26 @@ pub trait Input {
     }
 
     #[test]
+    fn camel_case_async_sync_suffix_pairs_are_twins() {
+        // The JS/TS sync/async convention: one base plus a camelCase `Async`/`Sync`
+        // suffix. `parse` / `parseAsync`, either order, and the `safeParse` twin.
+        assert!(are_async_sync_twins("parse", "parseAsync"));
+        assert!(are_async_sync_twins("parseAsync", "parse"));
+        assert!(are_async_sync_twins("safeParse", "safeParseAsync"));
+        // Both variants suffixed: `parseSync` / `parseAsync` share the `parse` base.
+        assert!(are_async_sync_twins("parseSync", "parseAsync"));
+        // The uppercase `A`/`S` is the word boundary: a lowercase `async`/`sync`
+        // ending (`resync`) is not a suffix, so it never pairs with a bare prefix.
+        assert!(!are_async_sync_twins("resync", "re"));
+        assert!(!are_async_sync_twins("myasync", "my"));
+        // A bare suffix leaves an empty prefix, so it is left intact and never
+        // collapses two unrelated names onto one empty root.
+        assert!(!are_async_sync_twins("Async", "Sync"));
+        // Different bases after stripping stay distinct (`render` vs `parse`).
+        assert!(!are_async_sync_twins("render", "parseAsync"));
+    }
+
+    #[test]
     fn endianness_be_le_prefix_pairs_are_impl_qualifier_twins() {
         // `be_`/`le_` are big-/little-endian direction qualifiers: for a 1-byte
         // integer both directions read identically, so the pair reduces to one
@@ -2020,6 +2081,67 @@ let x = 1;
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "identical doc on differently-named decls is a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_camel_case_async_sync_twin_jsdoc() {
+        // Regression (#7044): valibot ships sync/async twin functions (`parse` /
+        // `parseAsync`, `safeParse` / `safeParseAsync`) in sibling files, each
+        // carrying identical JSDoc because it describes the same operation — the
+        // JS/TS counterpart of Rust's `_async`/`_sync` twins, not a copy-paste.
+        let dir = tempfile::tempdir().unwrap();
+        let parse_doc = "\
+/**
+ * Parses an unknown input based on the schema and returns the fully typed parsed output value.
+ */\n";
+        let safe_doc = "\
+/**
+ * Safely parses an unknown input based on the schema and returns a typed result without throwing here.
+ */\n";
+        let parse = write(&dir, "parse.ts", &format!("{parse_doc}export function parse() {{}}\n"));
+        let parse_async = write(
+            &dir,
+            "parseAsync.ts",
+            &format!("{parse_doc}export async function parseAsync() {{}}\n"),
+        );
+        let safe = write(&dir, "safeParse.ts", &format!("{safe_doc}export function safeParse() {{}}\n"));
+        let safe_async = write(
+            &dir,
+            "safeParseAsync.ts",
+            &format!("{safe_doc}export async function safeParseAsync() {{}}\n"),
+        );
+        assert!(
+            run(&[&parse, &parse_async, &safe, &safe_async]).is_empty(),
+            "camelCase sync/async twin functions sharing JSDoc must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_duplicate_doc_on_non_async_sync_twin_decls() {
+        // The camelCase twin exemption stays surgical: two functions whose bases
+        // differ after stripping an `Async`/`Sync` suffix (`render` vs `parseAsync`),
+        // or whose name merely ends in lowercase `sync` with no word boundary
+        // (`resync` vs `re`), are unrelated, so identical docs are real duplication.
+        let dir = tempfile::tempdir().unwrap();
+        let render_doc = "\
+/**
+ * Renders an unknown input based on the schema and returns the fully typed rendered output here now.
+ */\n";
+        let sync_doc = "\
+/**
+ * Rebuilds the shared pagination defaults derived from the canonical schema so every listing view stays consistent.
+ */\n";
+        let render = write(&dir, "render.ts", &format!("{render_doc}export function render() {{}}\n"));
+        let parse_async = write(
+            &dir,
+            "parse-async.ts",
+            &format!("{render_doc}export async function parseAsync() {{}}\n"),
+        );
+        let resync = write(&dir, "resync.ts", &format!("{sync_doc}export function resync() {{}}\n"));
+        let re = write(&dir, "re.ts", &format!("{sync_doc}export function re() {{}}\n"));
+        let diags = run(&[&render, &parse_async, &resync, &re]);
+        assert_eq!(diags.len(), 2, "non-twin decls sharing identical docs are real duplication");
+        assert!(diags.iter().all(|d| d.message.contains("Near-duplicate comment")));
     }
 
     #[test]
