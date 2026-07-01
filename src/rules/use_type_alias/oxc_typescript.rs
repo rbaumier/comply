@@ -90,12 +90,17 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // Type-test files (`.test-d.` infix, `test-d/`, `test-dts/`, …) assert
+        // the exact inferred type at each `expectType<T>()`; repeating an inline
+        // type there is intentional, and extracting a shared alias would change
+        // what is tested (an alias is a new nominal type in conditional checks).
         let path_str = ctx.path.to_string_lossy();
         if path_str.contains(".test.")
             || path_str.contains(".spec.")
             || path_str.contains("__tests__")
             || path_str.contains("_test.")
-            || path_str.contains("test-d/")
+            || crate::rules::path_utils::is_type_test_file(ctx.path)
+            || crate::rules::path_utils::is_type_compilation_test_path(ctx.path)
         {
             return vec![];
         }
@@ -347,6 +352,32 @@ mod tests {
             type B = { x: number } & { y: string };
         "#;
         assert!(run_with_path(src, "test-d/foo.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_in_test_dts_dir() {
+        // Regression #7080 (vuejs/pinia) — repeated inline type in a Vue-ecosystem
+        // `test-dts/` type-compilation-test file is intentional (each expectType
+        // asserts the exact inferred type) and must not fire.
+        let src = r#"
+            expectType<{ light: ComputedRef<'off' | 'on'> }>(a());
+            expectType<{ light: ComputedRef<'off' | 'on'> }>(b());
+            expectType<{ light: ComputedRef<'off' | 'on'> }>(c());
+        "#;
+        assert!(run_with_path(src, "packages/pinia/test-dts/store.ts").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_test_d_infix_file() {
+        // Regression #7080 (vuejs/pinia) — a `.test-d.` filename infix (living
+        // beside its source, not under a test-d/ directory) is the tsd type-test
+        // convention and must not fire.
+        let src = r#"
+            expectType<{ light: ComputedRef<'off' | 'on'> }>(a());
+            expectType<{ light: ComputedRef<'off' | 'on'> }>(b());
+            expectType<{ light: ComputedRef<'off' | 'on'> }>(c());
+        "#;
+        assert!(run_with_path(src, "packages/pinia/src/mapHelpers.test-d.ts").is_empty());
     }
 
     #[test]
