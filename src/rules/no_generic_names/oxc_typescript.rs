@@ -381,10 +381,11 @@ fn matched_banned_prefix(name: &str) -> Option<&'static str> {
             if prefix == "run" && name[plen..].starts_with("With") {
                 continue;
             }
-            // A `run`-prefixed compound whose suffix names *what* is run with
-            // ≥2 capitalized words (`runBeforeUnload`, `runNpmAudit`) is
-            // self-documenting; only single-word fillers (`runTask`) stay generic.
-            if prefix == "run" && capitalized_word_count(&name[plen..]) >= 2 {
+            // A banned-verb compound whose suffix names *what* is acted on with
+            // ≥2 capitalized words (`processImageFile`, `executeQueryAsync`,
+            // `runBeforeUnload`) is self-documenting; only single-word fillers
+            // (`processOrder`, `runTask`) stay generic.
+            if capitalized_word_count(&name[plen..]) >= 2 {
                 continue;
             }
             // A domain-identifying suffix (`runId`, `RunStatus`) makes the
@@ -2368,6 +2369,34 @@ mod tests {
             function runJob() {}
             function runStuff() {}
             function runProcess() {}
+        "#;
+        assert_eq!(run(src).len(), 4);
+    }
+
+    #[test]
+    fn no_fp_banned_prefix_compound_with_specific_multiword_suffix_issue_7093() {
+        // Regression for #7093 — the ≥2-capitalized-word-suffix exemption
+        // applies to every banned prefix, not just `run`. A compound whose
+        // suffix names *what* is acted on with two or more capitalized words is
+        // self-documenting (elk-zone/elk `processImageFile`).
+        let src = r#"
+            async function processImageFile(file) { return file; }
+            function executeQueryAsync() {}
+            function performBatchUpdate() {}
+            function doFinalCleanup() {}
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_banned_prefix_single_word_suffix_issue_7093() {
+        // Negative: a single-word suffix stays a generic filler across every
+        // banned prefix — the suffix names no specific target.
+        let src = r#"
+            function processOrder() {}
+            function runTask() {}
+            function executeQuery() {}
+            function doSomething() {}
         "#;
         assert_eq!(run(src).len(), 4);
     }
