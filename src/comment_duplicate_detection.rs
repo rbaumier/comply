@@ -408,8 +408,8 @@ struct CommentGroup {
     decl_owner: Option<String>,
     /// Name of the function/method whose body encloses this block, if any.
     enclosing_decl_name: Option<String>,
-    /// Any line of the block documents a `#[cfg(...)]`-gated item or sits in a
-    /// `cfg_if!` arm (see `RawComment::cfg_conditional`).
+    /// Any line of the block has its repetition forced by its enclosing
+    /// construct (see `RawComment::cfg_conditional`).
     cfg_conditional: bool,
 }
 
@@ -429,11 +429,19 @@ struct RawComment {
     /// walking up to the nearest `function_item` / `function_declaration` /
     /// `method_definition` ancestor (see `enclosing_decl_name`).
     enclosing_decl_name: Option<String>,
-    /// The documented item compiles only under a `#[cfg(...)]` predicate — the
-    /// comment sits inside a `cfg_if!` macro arm or directly precedes a
-    /// `#[cfg(...)]`-gated item. Such doc-comments are necessarily identical
-    /// across the mutually-exclusive branches that define the same item, so the
-    /// repetition is conditional-compilation boilerplate, not copy-paste drift.
+    /// The comment's repetition is forced by its enclosing construct, so it is
+    /// skipped from duplicate detection. Two shapes:
+    ///
+    /// 1. the documented item compiles only under a `#[cfg(...)]` predicate — the
+    ///    comment sits inside a `cfg_if!` macro arm or directly precedes a
+    ///    `#[cfg(...)]`-gated item, so the doc is necessarily identical across the
+    ///    mutually-exclusive branches that define the same item
+    ///    (see `is_cfg_conditional_comment`);
+    /// 2. the comment sits inside a `macro_rules!` body — a doc *template* stamped
+    ///    onto every item the macro expands, identical by construction and unable
+    ///    to be lifted into a canonical doc (see `is_in_macro_definition`).
+    ///
+    /// Either way the repetition is boilerplate, not copy-paste drift.
     cfg_conditional: bool,
 }
 
@@ -461,6 +469,25 @@ fn is_cfg_conditional_comment(node: tree_sitter::Node, source: &[u8]) -> bool {
         ancestor = n.parent();
     }
     next_named_sibling_is_cfg_attr(node, source)
+}
+
+/// True when a comment sits inside a `macro_rules!` definition body — any
+/// ancestor is a `macro_definition`. A doc-comment there is a documentation
+/// *template* stamped onto every item the macro expands, so it is necessarily
+/// identical across every expansion and across an identical macro in a parallel
+/// module (nom's `character/streaming.rs` and `complete.rs` each define the same
+/// `ints!` macro). It cannot be lifted into a canonical doc or pointed at from
+/// elsewhere — it must live inline in the macro arm — so the "keep one, cite the
+/// rest" remedy is structurally inapplicable and the repetition is not a smell.
+fn is_in_macro_definition(node: tree_sitter::Node) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(n) = ancestor {
+        if n.kind() == "macro_definition" {
+            return true;
+        }
+        ancestor = n.parent();
+    }
+    false
 }
 
 /// The next named sibling, skipping further comments, is a `#[cfg(...)]` /
@@ -1088,7 +1115,11 @@ fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComme
                 decl_name,
                 decl_owner,
                 enclosing_decl_name: enclosing_decl_name(node, source),
-                cfg_conditional: is_cfg_conditional_comment(node, source),
+                // A doc-comment inside a `macro_rules!` body is a template that
+                // cannot be lifted out, so it is skipped through the same guard
+                // as conditionally-compiled docs (see `cfg_conditional`).
+                cfg_conditional: is_cfg_conditional_comment(node, source)
+                    || is_in_macro_definition(node),
             });
         }
         if cursor.goto_first_child() {
@@ -2442,6 +2473,53 @@ type Clock = MacClock;
         let b = write(&dir, "b.rs", &format!("{doc}#[inline]\npub fn two() {{}}\n"));
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "duplicated docs on non-cfg items are still a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_doc_comment_templates_inside_macro_rules_body_issue_7072() {
+        // Regression (#7072): nom defines the same `ints!` macro in
+        // `character/streaming.rs` and `character/complete.rs`; the doc-comment
+        // inside each `macro_rules!` body is a template stamped onto every
+        // function the macro expands. It must live inline in the macro arm — it
+        // cannot be lifted into a canonical doc — so the identical template across
+        // the two parallel files is not a copy-paste smell. The doc is long and
+        // distinctive enough to clear the word and entropy gates (it flags outside
+        // a macro in the sibling test), so only the macro-body skip keeps it out.
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\
+#[doc(hidden)]
+macro_rules! ints {
+    ($($t:tt)+) => {
+        $(
+        /// Builds the canonical pagination defaults derived from the shared schema so every list stays consistent everywhere.
+        pub fn $t() {}
+        )+
+    }
+}
+";
+        let a = write(&dir, "streaming.rs", content);
+        let b = write(&dir, "complete.rs", content);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "doc-comment templates inside macro_rules! bodies must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_duplicate_doc_outside_macro_in_file_with_macros_issue_7072() {
+        // Over-exclusion guard for #7072: the macro-body skip is structural (an
+        // ancestor is `macro_definition`), not a whole-file exemption. The same
+        // doc used as a template above still flags when copy-pasted onto two
+        // differently-named top-level functions OUTSIDE any macro — even in a file
+        // that also defines a macro.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "/// Builds the canonical pagination defaults derived from the shared schema so every list stays consistent everywhere.\n";
+        let macro_def = "macro_rules! noop { () => {}; }\n";
+        let a = write(&dir, "a.rs", &format!("{macro_def}{doc}pub fn build_admin_list() {{}}\n"));
+        let b = write(&dir, "b.rs", &format!("{macro_def}{doc}pub fn build_lab_section() {{}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a duplicate doc outside the macro must still flag");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
