@@ -939,9 +939,10 @@ fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
 
 /// The name of the declaration or member a comment immediately documents, plus
 /// the owning type's name when that declaration is an enum variant, a
-/// type/interface member, or a Rust struct field. Looks at the comment's next
-/// named sibling, skipping attributes, decorators, and intervening non-doc
-/// comments (a `// @ts-expect-error` directive, or any plain `//` note) — such a
+/// type/interface member, a Rust struct field, or a Rust trait-body item (an
+/// associated type or trait method, owned by its enclosing `trait`). Looks at the
+/// comment's next named sibling, skipping attributes, decorators, and intervening
+/// non-doc comments (a `// @ts-expect-error` directive, or any plain `//` note) — such a
 /// line between a doc block and its declaration must not drop the attribution. A
 /// following *doc*-comment block is not skipped: it, not the block above it,
 /// documents the declaration.
@@ -953,10 +954,11 @@ fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
 /// copy-pasted one is still a smell. Object/type members and Rust struct fields
 /// are an exception: their docs are conventionally a plain `//` above the field,
 /// so a plain `//` above a member still names it. The owner is returned for enum
-/// variants, TS interface/type members, and Rust struct fields; it lets the
-/// caller treat same-named members of *different* owners as parallel API surfaces
-/// while a botched copy-paste within one owner (impossible — member names are
-/// unique per owner) cannot slip through.
+/// variants, TS interface/type members, Rust struct fields, and Rust trait-body
+/// items (via `enclosing_named_type`, which yields `None` for a top-level
+/// declaration); it lets the caller treat same-named members of *different* owners
+/// as parallel API surfaces while a botched copy-paste within one owner
+/// (impossible — member names are unique per owner) cannot slip through.
 fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<String>, Option<String>) {
     let Some(mut sibling) = comment.next_named_sibling() else {
         return (None, None);
@@ -988,7 +990,11 @@ fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<St
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .map(str::to_owned);
-    (name, None)
+    // A trait-body item (associated type / method) is owned by its enclosing
+    // `trait`; every top-level declaration transits to an unnamed container and
+    // resolves to `None`, so same-named items in two different traits become a
+    // parallel-owned pair while a top-level copy-paste stays owner-less.
+    (name, enclosing_named_type(sibling, source))
 }
 
 /// The name of the `enum_item` enclosing a variant node, via its
@@ -1006,24 +1012,29 @@ fn enclosing_enum_name(variant: tree_sitter::Node, source: &[u8]) -> Option<Stri
 }
 
 /// The name of the TS `interface_declaration` / `type_alias_declaration` or the
-/// Rust `struct_item` whose body holds `member`, walking up past the intervening
-/// `object_type` / `interface_body` / `field_declaration_list`. `None` for a
-/// member that has no stable named owner — an object-literal `pair`, or a type
-/// literal nested inline rather than bound to a named type alias. Without a named
-/// owner two same-named members cannot be proven parallel, so they stay eligible
-/// to flag (the cross-file member exemption still covers the named-prop-API-mirror
-/// case separately).
+/// Rust `struct_item` / `trait_item` whose body holds `member`, walking up past
+/// the intervening `object_type` / `interface_body` / `field_declaration_list` /
+/// `declaration_list`. `None` for a member that has no stable named owner — an
+/// object-literal `pair`, a type literal nested inline rather than bound to a
+/// named type alias, or a `declaration_list` item whose container is unnamed: an
+/// `impl_item` / `mod_item` is not in the named-owner arm, so its members transit
+/// the `declaration_list` and then resolve to `None`. Without a named owner two
+/// same-named members cannot be proven parallel, so they stay eligible to flag
+/// (the cross-file member exemption still covers the named-prop-API-mirror case
+/// separately).
 fn enclosing_named_type(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut node = member.parent();
     while let Some(n) = node {
         match n.kind() {
-            "interface_declaration" | "type_alias_declaration" | "struct_item" => {
+            "interface_declaration" | "type_alias_declaration" | "struct_item" | "trait_item" => {
                 return n
                     .child_by_field_name("name")
                     .and_then(|name| name.utf8_text(source).ok())
                     .map(str::to_owned);
             }
-            "object_type" | "interface_body" | "field_declaration_list" => node = n.parent(),
+            "object_type" | "interface_body" | "field_declaration_list" | "declaration_list" => {
+                node = n.parent();
+            }
             _ => return None,
         }
     }
@@ -2077,6 +2088,85 @@ pub trait ErrorType {
         let b = write(&dir, "b.rs", &format!("pub trait B {{\n{head}    fn write(&mut self) -> u8;\n}}\n"));
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "identical doc on differently-named trait methods is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_same_named_associated_type_docs_across_traits_issue_7073() {
+        // Regression (#7073): nom's `Input::Item` and `ExtendInto::Item` are the
+        // same-named associated type in two *different* traits, each carrying the
+        // same doc because it describes the same concept (the element type of a
+        // sequence). A same member name under distinct trait owners is a parallel
+        // API surface, mirroring the struct-field and interface-member exemptions,
+        // not a copy-paste smell.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "    /// The current input type is a sequence of that item type, so every element the parser consumes is one of these.\n";
+        let content = format!(
+            "pub trait Input {{\n{doc}    type Item;\n}}\n\
+             pub trait ExtendInto {{\n{doc}    type Item;\n}}\n"
+        );
+        let a = write(&dir, "traits.rs", &content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "same-named associated type's doc on distinct traits must not flag"
+        );
+    }
+
+    #[test]
+    fn ignores_same_named_trait_method_docs_across_traits_in_one_file() {
+        // The same owner-tracking fix covers trait methods: a same-named
+        // `function_signature_item` declared in two *different* traits in one file,
+        // each documented identically, is a parallel trait-API surface once the
+        // method inherits its enclosing trait as owner.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "    /// Process the pending record and flush every derived side effect before the next batch of work begins here.\n";
+        let content = format!(
+            "pub trait Reader {{\n{doc}    fn process(&self);\n}}\n\
+             pub trait Writer {{\n{doc}    fn process(&self);\n}}\n"
+        );
+        let a = write(&dir, "io.rs", &content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "same-named trait method's doc on distinct traits must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_intra_trait_copy_pasted_associated_type_docs_issue_7073() {
+        // Over-exclusion guard for #7073: two *differently named* associated types
+        // of the *same* trait carrying the same copy-pasted doc is real duplication.
+        // The shared trait owner keeps the parallel-member exemption from firing.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "    /// The current input type is a sequence of that item type, so every element the parser consumes is one of these.\n";
+        let content =
+            format!("pub trait Input {{\n{doc}    type Item;\n{doc}    type Chunk;\n}}\n");
+        let a = write(&dir, "traits.rs", &content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "copy-pasted doc on two associated types of one trait is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn impl_associated_type_docs_stay_owner_less_no_wrong_attribution() {
+        // Guard for the added `declaration_list` transit: it is also an `impl` /
+        // `mod` body, but neither is a named owner. Two impls of *different* types
+        // declaring a same-named associated type with an identical doc must still
+        // flag — the impl members resolve to no owner, so the parallel-member
+        // exemption cannot misattribute them to the impl target and wrongly suppress
+        // a genuine duplicate.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "    /// The concrete element type this adapter yields on every step of the walk is fixed once here for callers.\n";
+        let content = format!(
+            "impl Iterator for Foo {{\n{doc}    type Item = u8;\n}}\n\
+             impl Iterator for Bar {{\n{doc}    type Item = u8;\n}}\n"
+        );
+        let a = write(&dir, "impls.rs", &content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicate doc on impl associated types has no named owner and still flags");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
