@@ -717,6 +717,11 @@ const IMPL_QUALIFIER_SEGMENTS: &[&str] = &[
     // winnow, …) ship the same operation twice, the `_complete` variant treating
     // end-of-input as success rather than `Incomplete` (`parse` / `parse_complete`).
     "complete",
+    // Big-endian / little-endian direction qualifier: binary-parsing crates (nom,
+    // byteorder, bytes) ship the same byte parser twice as `be_`/`le_` variants;
+    // for a 1-byte integer both directions read identically, so their docs match
+    // by design (`be_u8` / `le_u8`, `be_i8` / `le_i8`).
+    "be", "le",
 ];
 
 /// Two doc-comments document parallel API surfaces when both name a declaration
@@ -1778,6 +1783,22 @@ pub trait Input {
     }
 
     #[test]
+    fn endianness_be_le_prefix_pairs_are_impl_qualifier_twins() {
+        // `be_`/`le_` are big-/little-endian direction qualifiers: for a 1-byte
+        // integer both directions read identically, so the pair reduces to one
+        // root and shares a doc by design (nom's `be_u8` / `le_u8`).
+        assert!(are_impl_qualifier_twins("be_u8", "le_u8"));
+        assert!(are_impl_qualifier_twins("be_i8", "le_i8"));
+        // Same endianness, different width is not a twin — the roots differ.
+        assert!(!are_impl_qualifier_twins("be_u8", "be_i8"));
+        // The qualifier only strips a full `_`-delimited leading segment, so a
+        // single-segment name that merely starts with the letters be/le never
+        // collapses onto another one.
+        assert!(!are_impl_qualifier_twins("beacon", "ledger"));
+        assert!(!are_impl_qualifier_twins("alpha", "beta"));
+    }
+
+    #[test]
     fn ignores_try_fallible_variant_twin_docs() {
         // Regression (#6263): tokio-rs/bytes ships ~27 infallible/fallible method
         // twins in one trait (`get_u8` / `try_get_u8`, `copy_to_slice` /
@@ -1858,6 +1879,56 @@ pub fn decode() {}
         let filler = write(&dir, "filler.rs", "pub fn z() {}\n");
         let diags = run(&[&a, &filler]);
         assert_eq!(diags.len(), 1, "intra-file copy-paste on non-twin decls is real duplication");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_be_le_endianness_twin_docs() {
+        // Regression (#7070): nom ships `be_u8`/`le_u8` and `be_i8`/`le_i8` byte
+        // parsers side by side in one module. For a 1-byte integer big- and
+        // little-endian read identically, so each `le_` variant opens its doc
+        // verbatim like its `be_` twin — parallel endianness-direction API
+        // documentation, not copy-paste drift. The two width pairs carry distinct
+        // docs so each stays paired with its own endianness twin.
+        let dir = tempfile::tempdir().unwrap();
+        let unsigned = "\
+/// Recognizes an unsigned 1 byte integer parsed directly from the input stream returning the parsed value.\n";
+        let signed = "\
+/// Recognizes a signed 1 byte integer decoded straight out of the provided buffer returning the decoded value.\n";
+        let content = format!(
+            "{unsigned}pub fn be_u8(i: u8) -> u8 {{ i }}\n\n{unsigned}pub fn le_u8(i: u8) -> u8 {{ i }}\n\n\
+             {signed}pub fn be_i8(i: i8) -> i8 {{ i }}\n\n{signed}pub fn le_i8(i: i8) -> i8 {{ i }}\n"
+        );
+        let a = write(&dir, "number.rs", &content);
+        // A second file keeps the run active (a single-file run is a noop).
+        let filler = write(&dir, "filler.rs", "pub fn z() {}\n");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "be_/le_ endianness twins sharing byte-parser docs must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_be_le_prefixed_single_segment_non_twins() {
+        // The endianness exemption strips `be`/`le` only as a full `_`-delimited
+        // segment, so single-segment names that merely start with those letters
+        // (`beacon` / `ledger`) are not twins and a copy-pasted doc on both is
+        // real duplication that must still flag.
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\
+/// Builds the canonical pagination defaults derived from the shared schema so
+/// every list view stays consistent across the whole admin surface everywhere.
+pub fn beacon() {}
+
+/// Builds the canonical pagination defaults derived from the shared schema so
+/// every list view stays consistent across the whole admin surface everywhere.
+pub fn ledger() {}
+";
+        let a = write(&dir, "misc.rs", content);
+        // A second file keeps the run active (a single-file run is a noop).
+        let filler = write(&dir, "filler.rs", "pub fn z() {}\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "be/le are not qualifiers unless a full leading segment");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
