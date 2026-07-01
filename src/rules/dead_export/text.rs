@@ -1465,6 +1465,109 @@ mod tests {
         (dir, diags)
     }
 
+    /// Like `run_on_project` but routes through real file discovery
+    /// (`crate::files::discover`) instead of a hand-built file list, so the
+    /// `SCANNED_CONFIG_DOT_DIRS` walk filter is exercised: a consumer under an
+    /// unscanned hidden dir is never discovered nor indexed, exactly as in a
+    /// real scan — which a hand-built file list would bypass.
+    fn run_on_discovered_project(
+        files: &[(&str, &str)],
+        target_rel: &str,
+    ) -> (TempDir, Vec<Diagnostic>) {
+        let dir = TempDir::new().unwrap();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+        }
+        let config = Config::default();
+        let discovered =
+            crate::files::discover(&crate::cli::ScanMode::All(dir.path().to_path_buf()))
+                .expect("discover");
+        let refs: Vec<&SourceFile> = discovered.iter().collect();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path: PathBuf = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: crate::files::Language::TypeScript,
+        };
+        (dir, Check.check(&ctx))
+    }
+
+    #[test]
+    fn no_fp_when_export_consumed_from_vitepress_config_dir_issue_7058() {
+        // vueuse/vueuse #7058: `scripts/utils.ts` exports `replacer`, consumed
+        // only from `packages/.vitepress/plugins/markdownTransform.ts`.
+        // `.vitepress` is a scanned config dot-dir, so its importer is discovered
+        // and indexed, keeping `replacer` live. `src/index.ts` is an unrelated
+        // always-discovered export so the two-file floor holds with or without
+        // the fix — isolating `.vitepress` discovery as the single variable.
+        let files = &[
+            ("scripts/utils.ts", "export function replacer() {}\n"),
+            ("src/index.ts", "export const anchor = 1;\n"),
+            (
+                "packages/.vitepress/plugins/markdownTransform.ts",
+                "import { replacer } from '../../../scripts/utils';\nreplacer();\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_discovered_project(files, "scripts/utils.ts");
+        assert!(
+            diags.is_empty(),
+            "replacer is consumed from .vitepress and must not be dead: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_genuinely_dead_export_via_discovery_issue_7058() {
+        // Control for #7058: with no consumer anywhere, `replacer` is genuinely
+        // dead and must still be flagged — the fix must not blanket-suppress.
+        let files = &[
+            ("scripts/utils.ts", "export function replacer() {}\n"),
+            ("src/index.ts", "export const anchor = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_discovered_project(files, "scripts/utils.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an unconsumed export must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("replacer"));
+    }
+
+    #[test]
+    fn still_dead_when_consumed_only_from_unscanned_dot_dir_issue_7058() {
+        // Control for #7058: only `.vitepress` joined the scanned config
+        // dot-dirs. A consumer under an arbitrary hidden dir (`.randomcache/`)
+        // is still skipped by the walk, so its import never registers and
+        // `replacer` stays dead — proving the fix is narrow, not "scan every
+        // hidden dir".
+        let files = &[
+            ("scripts/utils.ts", "export function replacer() {}\n"),
+            ("src/index.ts", "export const anchor = 1;\n"),
+            (
+                ".randomcache/consumer.ts",
+                "import { replacer } from '../scripts/utils';\nreplacer();\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_discovered_project(files, "scripts/utils.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            ".randomcache is not a scanned config dir, so replacer stays dead: {diags:?}"
+        );
+        assert!(diags[0].message.contains("replacer"));
+    }
+
     #[test]
     fn no_fp_when_nearest_package_json_is_marker_only_issue_1823() {
         // Regression for #1823 (mswjs/msw) — `src/core/index.ts`'s nearest
