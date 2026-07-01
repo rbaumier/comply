@@ -804,15 +804,29 @@ pub fn has_non_react_jsx_import_source_pragma(source: &str) -> bool {
 /// [`is_non_react_jsx_file`] — which lumps Solid in with Vue/Preact/Qwik/Stencil
 /// to *exempt* React-specific rules — this is a **positive** Solid signal, for
 /// rules that must fire only on Solid. Detected three ways: a Solid framework
-/// import (`solid-js`, `@solidjs/`, `solid-start`, `@tanstack/solid-router`), a
-/// `@jsxImportSource solid-js` pragma, or the nearest `package.json` declaring
-/// `solid-js`. Source checks are memoized per file via [`source_contains`].
+/// import in an ESM `import ... from` or CommonJS `require(...)` context
+/// (`solid-js` and its subpaths, the `@solidjs/*` scope, `solid-start`,
+/// `@tanstack/solid-router`), a `@jsxImportSource solid-js` pragma, or the
+/// nearest `package.json` declaring `solid-js`. Requiring the import context —
+/// not a bare substring — keeps a Solid package name that appears only in a URL
+/// string, comment, or data literal from marking a non-Solid file as Solid. The
+/// `solid-js` / `@solidjs/` import check reuses [`imports_solid`]; all source
+/// checks are memoized per file via [`source_contains`].
 #[must_use]
 pub fn is_solid_file(source: &str, project: &crate::project::ProjectCtx, path: &Path) -> bool {
-    source_contains(source, "solid-js")
-        || source_contains(source, "@solidjs/")
-        || source_contains(source, "solid-start")
-        || source_contains(source, "@tanstack/solid-router")
+    imports_solid(source)
+        || source_contains(source, "from \"solid-start\"")
+        || source_contains(source, "from 'solid-start'")
+        || source_contains(source, "from \"solid-start/")
+        || source_contains(source, "from 'solid-start/")
+        || source_contains(source, "require(\"solid-start")
+        || source_contains(source, "require('solid-start")
+        || source_contains(source, "from \"@tanstack/solid-router\"")
+        || source_contains(source, "from '@tanstack/solid-router'")
+        || source_contains(source, "from \"@tanstack/solid-router/")
+        || source_contains(source, "from '@tanstack/solid-router/")
+        || source_contains(source, "require(\"@tanstack/solid-router")
+        || source_contains(source, "require('@tanstack/solid-router")
         || jsx_import_source_pragma_value(source).is_some_and(|value| value == "solid-js")
         || project
             .nearest_package_json(path)
@@ -5325,6 +5339,37 @@ mod oxc_helpers_tests {
         assert!(!source_imports_db_library("import { ref } from 'vue';"));
         // A bare `pg` outside quotes (an identifier or prose) must not match.
         assert!(!source_imports_db_library("const pgClient = makePg();"));
+    }
+
+    fn is_solid(src: &str) -> bool {
+        let project = crate::project::ProjectCtx::for_test_with_files(&[]);
+        super::is_solid_file(src, &project, std::path::Path::new("t.tsx"))
+    }
+
+    #[test]
+    fn is_solid_file_detects_import_context() {
+        assert!(is_solid("import { render } from \"solid-js\";"));
+        assert!(is_solid("import { render } from 'solid-js';"));
+        assert!(is_solid("import { render } from \"solid-js/web\";"));
+        assert!(is_solid("import { createStore } from \"solid-js/store\";"));
+        assert!(is_solid("import { Router } from \"@solidjs/router\";"));
+        assert!(is_solid("import { StartServer } from \"@solidjs/start\";"));
+        assert!(is_solid("import { createRouteAction } from \"solid-start\";"));
+        assert!(is_solid("import { redirect } from \"solid-start/server\";"));
+        assert!(is_solid("import { Link } from \"@tanstack/solid-router\";"));
+        assert!(is_solid("const s = require('solid-js');"));
+        assert!(is_solid("/** @jsxImportSource solid-js */\nlet C = () => <div/>;"));
+    }
+
+    #[test]
+    fn is_solid_file_rejects_non_import_mentions() {
+        // Issue #7075: a Solid package name that appears only inside a URL path
+        // string, comment, or data literal is not an import and must not mark a
+        // non-Solid (React/Next) file as Solid.
+        assert!(!is_solid("const links = [{ href: \"/docs/integrations/solid-start\" }];"));
+        assert!(!is_solid("// see the solid-js docs for @solidjs/router details"));
+        assert!(!is_solid("const label = \"Built with solid-js\";"));
+        assert!(!is_solid("import { useState } from \"react\";"));
     }
 
     #[test]

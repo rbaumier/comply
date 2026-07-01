@@ -272,4 +272,23 @@ mod tests {
         let d = crate::rules::test_helpers::run_rule(&Check, src, "t.tsx");
         assert_eq!(d.len(), 1, "solid-js pragma should fire: {d:?}");
     }
+
+    #[test]
+    fn solid_start_url_string_does_not_fire() {
+        // Issue #7075: "solid-start" appears only inside a URL path string, not
+        // an import, so this React/Next file must not be treated as Solid.
+        let src = "const links = [{ href: \"/docs/integrations/solid-start\" }];\n\
+                   let Component = (props) => <ol>{links.map(l => <li>{l.href}</li>)}</ol>;";
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.tsx");
+        assert!(d.is_empty(), "solid-start URL string must not fire: {d:?}");
+    }
+
+    #[test]
+    fn solid_start_import_fires() {
+        // A genuine `solid-start` import is a real Solid signal and still fires.
+        let src = "import { createRouteAction } from \"solid-start\";\n\
+                   let Component = (props) => <ol>{props.data.map(d => <li>{d.text}</li>)}</ol>;";
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "t.tsx");
+        assert_eq!(d.len(), 1, "genuine solid-start import should fire: {d:?}");
+    }
 }
