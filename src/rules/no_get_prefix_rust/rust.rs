@@ -1,5 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_in_trait_definition, is_in_trait_impl};
+use crate::rules::rust_helpers::{
+    has_outer_attribute_path, is_in_test_context, is_in_trait_definition, is_in_trait_impl,
+};
 
 crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return };
@@ -13,6 +15,15 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // path-based `skip_in_test_dir` exemption for Cargo integration tests under
     // `tests/`, extending it to inline test modules declared inside src files.
     if is_in_test_context(node, source) { return; }
+
+    // A `#[deprecated]` method's name is a frozen public-API commitment: the
+    // attribute keeps the old name working during a migration window, and its
+    // note already points callers to the replacement. Renaming it would break
+    // every caller and defeat the deprecation, so RFC 344's "drop the `get_`"
+    // rename is inapplicable — the same structural rationale as the trait-impl
+    // exemption below. Matches both the bare `#[deprecated]` and the argument
+    // form `#[deprecated(since = "…", note = "…")]` via the attribute's path.
+    if has_outer_attribute_path(node, source, &["deprecated"]) { return; }
 
     // `get_and_<verb>` (e.g. `get_and_reset`, `get_and_clear`, `get_and_take`)
     // is a compound read-modify-write operation — atomically read the value AND
@@ -740,6 +751,40 @@ mod tests {
         // The test-context exemption must not relax production code: a `get_*`
         // accessor outside any `#[cfg(test)]`/`#[test]` block still flags.
         let src = "impl Foo {\n    pub fn get_foo(&self) -> &str { &self.foo }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_get_prefix_on_deprecated_method_issue_7144() {
+        // A `#[deprecated]` method's name is a frozen public-API commitment kept
+        // for backward compatibility; renaming it would break callers, so the
+        // rename suggestion is inapplicable. Argument form of the attribute.
+        let src = "impl EngineState {\n\
+            #[deprecated(since = \"0.92.3\", note = \"use cwd() instead\")]\n\
+            pub fn get_cwd(&self) -> String { String::new() }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_prefix_on_bare_deprecated_method_issue_7144() {
+        // The bare `#[deprecated]` form (no arguments) exempts the method too.
+        let src = "impl Foo {\n    #[deprecated]\n    fn get_x(&self) -> u32 { 0 }\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_without_deprecated_issue_7144() {
+        // The same accessor without `#[deprecated]` is the rule's genuine target.
+        let src = "impl EngineState {\n    pub fn get_cwd(&self) -> String { String::new() }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_get_prefix_with_unrelated_attribute_issue_7144() {
+        // An unrelated attribute (`#[inline]`) is not a deprecation and must not
+        // exempt the accessor — only `#[deprecated]` does.
+        let src = "impl Foo {\n    #[inline]\n    pub fn get_x(&self) -> u32 { 0 }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
