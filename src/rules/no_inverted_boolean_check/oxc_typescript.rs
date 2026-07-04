@@ -38,6 +38,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `!!x === y` is boolean coercion, not the `!a === b` precedence bug: a
+        // nested `!` on the argument means the author deliberately coerced to a
+        // boolean, so skip it.
+        if matches!(
+            &unary.argument,
+            Expression::UnaryExpression(inner) if inner.operator == UnaryOperator::LogicalNot
+        ) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, bin.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -48,5 +58,65 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_not_a_strict_equals_b() {
+        assert_eq!(run_on("const r = !a === b;").len(), 1);
+    }
+
+    #[test]
+    fn flags_not_a_strict_not_equals_b() {
+        assert_eq!(run_on("const r = !a !== b;").len(), 1);
+    }
+
+    #[test]
+    fn allows_double_negation_coercion() {
+        assert!(run_on("const r = !!x === y ? x : false;").is_empty());
+    }
+
+    #[test]
+    fn allows_double_negation_member_coercion() {
+        assert!(
+            run_on(
+                "const r = !!options.value.disabled === options.value.disabled ? options.value.disabled : false;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_normal_comparison() {
+        assert!(run_on("const r = a === b;").is_empty());
+    }
+
+    #[test]
+    fn allows_negated_result() {
+        assert!(run_on("const r = !(a === b);").is_empty());
     }
 }
