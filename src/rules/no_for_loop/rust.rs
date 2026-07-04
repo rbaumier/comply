@@ -10,6 +10,11 @@
 //! index — there is no local index to convert to a `for` binding — so it is
 //! not flagged; likewise a body that only mutates a different target.
 //!
+//! The index must advance by exactly one at every mutation site (`i += 1`,
+//! `i = i + 1`). A non-unit or mixed stride (`cursor += 2` beside `cursor += 1`,
+//! `i += 3`, a `-=` decrement, `i = i + 2`) is not a 1:1 element iteration and
+//! has no `for`/`.iter().enumerate()` rewrite, so it is exempt.
+//!
 //! Index loops that remove elements from the indexed collection during
 //! traversal (`vec.remove(i)` / `vec.swap_remove(i)`) are exempt: removal
 //! shifts the remaining elements, so a `for`/iterator rewrite is impossible.
@@ -46,11 +51,23 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Check the body for `i += 1` pattern.
     let Some(body) = node.child_by_field_name("body") else { return };
-    let Ok(body_text) = body.utf8_text(source) else { return };
 
-    if !body_text.contains("+= 1") && !body_text.contains("= i + 1") {
+    // The loop must have a bare-identifier index variable (`i < x.len()`). A
+    // persistent field cursor (`self.index < …`) has a `field_expression` index
+    // — there is no local index to convert to a `for` binding — so
+    // `index_variable` returns None and the loop is exempt.
+    let Some(index_var) = index_variable(condition, source) else {
+        return;
+    };
+
+    // The body must advance the index by exactly one at every mutation site. A
+    // `for`/`.iter().enumerate()` rewrite steps the index by one per element, so
+    // a non-unit or mixed stride (`cursor += 2` beside `cursor += 1`, `i += 3`,
+    // `i -= 1`, `i = i + 2`) has no iterator equivalent and is exempt. This also
+    // requires the index to be mutated at all — a body that only touches a
+    // different target is not a traversal to convert.
+    if !index_advances_by_unit_stride(body, index_var, source) {
         return;
     }
 
@@ -66,9 +83,7 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     // so the index is advanced conditionally and no `for`/iterator rewrite is
     // possible. The argument must be the loop's index variable — a `remove`
     // on an unrelated collection (e.g. `map.remove(&key)`) does not exempt.
-    if let Some(index_var) = index_variable(condition, source)
-        && body_removes_at_index(body, index_var, source)
-    {
+    if body_removes_at_index(body, index_var, source) {
         return;
     }
 
@@ -76,21 +91,7 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     // mutated inside the body (`old_idx += 1`, `new_idx += 1`), the indices
     // advance at different rates and the traversal cannot be expressed as a
     // single `for`/iterator rewrite.
-    let mutated = mutated_index_variables(body, source);
-    if mutated.len() >= 2 {
-        return;
-    }
-
-    // The loop must have a bare-identifier index variable (`i < x.len()`) that
-    // the body actually increments. A persistent field cursor (`self.index <
-    // … ; self.index += 1`) has a `field_expression` index — there is no local
-    // index to convert to a `for` binding — so `index_variable` returns None
-    // and the cursor is never in `mutated`. (This also drops conditional
-    // field-cursor search loops.)
-    let Some(index_var) = index_variable(condition, source) else {
-        return;
-    };
-    if !mutated.contains(index_var) {
+    if mutated_index_variables(body, source).len() >= 2 {
         return;
     }
 
@@ -173,6 +174,94 @@ fn mutated_index_variables<'a>(body: tree_sitter::Node, source: &'a [u8]) -> FxH
         }
     }
     vars
+}
+
+/// True if `index_var` is mutated in `body` and every mutation site advances it
+/// by exactly one (`index += 1`, `index = index + 1`, `index = 1 + index`).
+/// Returns false when the index is never mutated, or when any site uses a
+/// non-unit or mixed stride (`cursor += 2`, `i -= 1`, `i = i + 2`, `i = other`):
+/// such a traversal is not 1:1 element iteration and has no `for`/iterator
+/// rewrite. Only bare-identifier writes to `index_var` count — an index
+/// expression (`v[i] = …`) or field write is a different target.
+fn index_advances_by_unit_stride(body: tree_sitter::Node, index_var: &str, source: &[u8]) -> bool {
+    let mut found = false;
+    let mut stack = vec![body];
+    while let Some(cur) = stack.pop() {
+        if matches!(cur.kind(), "compound_assignment_expr" | "assignment_expression")
+            && let Some(left) = cur.child_by_field_name("left")
+            && left.kind() == "identifier"
+            && left.utf8_text(source) == Ok(index_var)
+        {
+            if !is_unit_increment(cur, index_var, source) {
+                return false;
+            }
+            found = true;
+        }
+        let mut cursor = cur.walk();
+        for child in cur.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    found
+}
+
+/// True if `node` — a `compound_assignment_expr` or `assignment_expression`
+/// whose left side is `index_var` — advances the index by exactly one:
+/// `index += 1`, `index = index + 1`, or `index = 1 + index`.
+fn is_unit_increment(node: tree_sitter::Node, index_var: &str, source: &[u8]) -> bool {
+    let Some(right) = node.child_by_field_name("right") else {
+        return false;
+    };
+    match node.kind() {
+        "compound_assignment_expr" => {
+            operator_text(node, source) == Some("+=") && is_literal_one(right, source)
+        }
+        "assignment_expression" => {
+            right.kind() == "binary_expression"
+                && operator_text(right, source) == Some("+")
+                && is_index_plus_one(right, index_var, source)
+        }
+        _ => false,
+    }
+}
+
+/// True if `binary` adds the index variable and an integer-literal `1` in either
+/// operand order (`index + 1` or `1 + index`).
+fn is_index_plus_one(binary: tree_sitter::Node, index_var: &str, source: &[u8]) -> bool {
+    let (Some(left), Some(right)) = (
+        binary.child_by_field_name("left"),
+        binary.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    let is_index = |n: tree_sitter::Node| {
+        n.kind() == "identifier" && n.utf8_text(source) == Ok(index_var)
+    };
+    (is_index(left) && is_literal_one(right, source))
+        || (is_literal_one(left, source) && is_index(right))
+}
+
+/// Text of `node`'s `operator` field, if any (`+=`, `+`, …).
+fn operator_text<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    node.child_by_field_name("operator")
+        .and_then(|op| op.utf8_text(source).ok())
+}
+
+/// True if `node` is an `integer_literal` whose value is exactly one, ignoring a
+/// type suffix (`1`, `1usize`).
+fn is_literal_one(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "integer_literal" {
+        return false;
+    }
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
+    let digits: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '_')
+        .filter(|c| *c != '_')
+        .collect();
+    digits == "1"
 }
 
 /// True if `node` contains a `.len()` method call anywhere in its subtree.
@@ -466,6 +555,40 @@ mod tests {
         let src = "fn f(arr: &[i32], sum: &mut i32) { \
                    let mut i = 0; \
                    while i < arr.len() { *sum += arr[i]; i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_variable_stride_scanner_issue_7210() {
+        // Byron/gitoxide from_bytes: `cursor` advances by 2 on `\r\n` and by 1
+        // on `\n`. A mixed / non-unit stride is not 1:1 element iteration and has
+        // no `for`/`.iter().enumerate()` rewrite.
+        let src = "fn f(input: &[u8]) { \
+                   let mut cursor = 0usize; \
+                   while cursor < input.len() { \
+                   if input[cursor..].starts_with(b\"\\r\\n\") { cursor += 2; } \
+                   else if input[cursor] == b'\\n' { cursor += 1; } \
+                   else { break; } \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_single_non_unit_stride_issue_7210() {
+        // A single `i += 3` stride skips elements; no `for`/iterator rewrite.
+        let src = "fn f(v: &[i32]) { \
+                   let mut i = 0; \
+                   while i < v.len() { use_it(v[i]); i += 3; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unit_stride_index_loop_issue_7210() {
+        // Control: a genuine unit-stride index loop is the rule's target, so a
+        // `+= 1` advance still fires even after the stride guard.
+        let src = "fn f(v: &[i32]) { \
+                   let mut i = 0; \
+                   while i < v.len() { use_it(v[i]); i += 1; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
