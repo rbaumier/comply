@@ -1,404 +1,123 @@
 //! explicit-length-check — OXC backend.
-//! Scans line-by-line for implicit `.length`/`.size` boolean coercion.
-//! This rule is text-based (no AST nodes needed), so we use `run_on_semantic`
-//! to iterate lines, matching the tree-sitter backend's behaviour.
+//! Flags a bare `.length`/`.size` member access that is coerced to boolean
+//! (`if (arr.length)`, `!arr.length`) so the author writes an explicit numeric
+//! comparison instead. The coercion-vs-value distinction is read from the AST
+//! parent chain of the member access, so it holds regardless of how the base
+//! expression wraps across source lines.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
+use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
 
-/// Returns true if the `.length`/`.size` access starting at `prop_pos` in `trimmed`
-/// is the direct argument of an `expect(...)` call (Vitest/Jest matcher form),
-/// in which case the matcher (`.toBe`, `.toBeGreaterThan`, ...) performs the
-/// explicit comparison and the rule should not flag.
-fn is_inside_expect_argument(trimmed: &str, prop_pos: usize) -> bool {
-    let bytes = trimmed.as_bytes();
-    let mut i = prop_pos;
-    let mut depth: i32 = 0;
-    while i > 0 {
-        i -= 1;
-        let c = bytes[i];
-        match c {
-            b')' | b']' => depth += 1,
-            b'(' | b'[' => {
-                if depth == 0 {
-                    if c == b'[' {
-                        return false;
-                    }
-                    let mut j = i;
-                    while j > 0
-                        && (bytes[j - 1].is_ascii_alphanumeric()
-                            || bytes[j - 1] == b'_'
-                            || bytes[j - 1] == b'$')
-                    {
-                        j -= 1;
-                    }
-                    if &trimmed[j..i] == "expect" {
-                        return true;
-                    }
-                    // Not `expect` — keep walking outward past this call.
-                    // depth stays 0; continue the outer loop.
-                } else {
-                    depth -= 1;
-                }
+/// True when the `.length`/`.size` member access at `node` sits in a boolean
+/// coercion position — its value is implicitly tested for truthiness rather than
+/// consumed as a number — determined by walking up the AST parent chain.
+///
+/// Coercion positions (flagged): the test of an `if`/`while`/`do-while`/`for`,
+/// the test of a conditional expression, the operand of logical-NOT `!`, or an
+/// operand that itself reaches such a position through `&&`/`||`, parentheses, or
+/// an optional chain. Every other parent — a variable initializer, assignment
+/// right-hand side, call/`new` argument, arithmetic/comparison operand,
+/// `return`/property value, template interpolation, or `??` operand — is a value
+/// position and is not flagged. `&&`/`||` operands coerce only when the logical
+/// expression's own result lands in a boolean context (`if (a.length && b)`), so
+/// the walk continues upward through them.
+fn is_boolean_coercion_position(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::{LogicalOperator, UnaryOperator};
+
+    let nodes = semantic.nodes();
+    let mut child_span = node.kind().span();
+    let mut cur = node.id();
+    loop {
+        let parent_id = nodes.parent_id(cur);
+        if parent_id == cur {
+            // Reached the program root with no boolean-test ancestor.
+            return false;
+        }
+        match nodes.kind(parent_id) {
+            AstKind::IfStatement(_)
+            | AstKind::WhileStatement(_)
+            | AstKind::DoWhileStatement(_) => return true,
+            AstKind::ForStatement(for_stmt) => {
+                // Only the `for (…; test; …)` condition slot is a coercion; the
+                // init/update slots are value positions.
+                return for_stmt
+                    .test
+                    .as_ref()
+                    .is_some_and(|test| test.span() == child_span);
             }
-            // Structural boundaries at depth 0 mean we left the expression.
-            b',' | b';' | b'{' | b'}' if depth == 0 => return false,
-            b'=' if depth == 0 => {
-                // `==`, `!=`, `>=`, `<=` are comparisons, not assignments.
-                if i + 1 < bytes.len()
-                    && (bytes[i + 1] == b'=' || bytes[i + 1] == b'>')
-                {
-                    // comparison operator — not a boundary
-                } else if i > 0
-                    && (bytes[i - 1] == b'!' || bytes[i - 1] == b'<' || bytes[i - 1] == b'>')
-                {
-                    // part of !=, <=, >= — not a boundary
-                } else {
+            AstKind::UnaryExpression(unary) => {
+                return unary.operator == UnaryOperator::LogicalNot;
+            }
+            AstKind::ConditionalExpression(cond) => {
+                if cond.test.span() == child_span {
+                    return true;
+                }
+                // A consequent/alternate branch is a value the ternary yields; its
+                // context is the ternary's own, so keep walking up.
+            }
+            AstKind::LogicalExpression(logical) => {
+                // `??` selects a value, never a boolean coercion.
+                if logical.operator == LogicalOperator::Coalesce {
                     return false;
                 }
             }
-            _ => {}
+            AstKind::ParenthesizedExpression(_) | AstKind::ChainExpression(_) => {
+                // Transparent wrappers — the wrapped value keeps its position.
+            }
+            _ => return false,
         }
+        child_span = nodes.kind(parent_id).span();
+        cur = parent_id;
     }
-    false
-}
-
-/// True when the `(` at byte index `open` in `trimmed` opens a function *call* —
-/// its callee sits immediately to the left — rather than a grouping / test paren
-/// such as `if (...)`, `while (...)`, or `(a) ? b : c`. A call paren is preceded,
-/// after skipping whitespace, by `)`, `]`, or an identifier that is not a
-/// control-flow / expression keyword; those keywords introduce a parenthesised
-/// sub-expression, so a `.length` inside stays a boolean coercion and must keep
-/// flagging.
-fn is_call_open_paren(trimmed: &str, open: usize) -> bool {
-    let bytes = trimmed.as_bytes();
-    let mut k = open;
-    while k > 0 && bytes[k - 1] == b' ' {
-        k -= 1;
-    }
-    if k == 0 {
-        return false;
-    }
-    let prev = bytes[k - 1];
-    // `foo()(x)` / `arr[i](x)` — calling the result of a call or index access.
-    if prev == b')' || prev == b']' {
-        return true;
-    }
-    if !(prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$') {
-        return false;
-    }
-    // The callee word ends at `k`; walk back to its start (ASCII-only, so byte
-    // indices are char boundaries).
-    let mut w = k;
-    while w > 0
-        && (bytes[w - 1].is_ascii_alphanumeric() || bytes[w - 1] == b'_' || bytes[w - 1] == b'$')
-    {
-        w -= 1;
-    }
-    !matches!(
-        &trimmed[w..k],
-        "if" | "while"
-            | "for"
-            | "switch"
-            | "return"
-            | "do"
-            | "else"
-            | "in"
-            | "of"
-            | "typeof"
-            | "await"
-            | "yield"
-            | "case"
-    )
-}
-
-/// True when the `.length`/`.size` whose `.` is at `prop_pos` is consumed as a
-/// numeric value rather than coerced to boolean. Shapes:
-///   * right-hand operand of a comparison — `found.length !== other.length`
-///     (`prefix.length` reached after a `===`/`!==`/`<`/`>`/`<=`/`>=`);
-///   * any positional call argument — `substring(prefix.length)` (sole/first
-///     argument, base preceded by the call's `(`) or `slice(0, prefix.length)`
-///     (later argument, base preceded by a `,`); a call argument is always a
-///     value position. A `(` counts only when it opens a call
-///     (`is_call_open_paren`), never an `if`/`while` grouping/test paren.
-///   * a ternary branch — `cond ? arr.length : 0` / `cond ? 0 : arr.length`
-///     (the base is preceded by `?` or `:`), or an object-property value
-///     (`{ k: arr.length }`); both are value positions, never boolean coercion.
-///   * the right operand of a binary arithmetic expression — `30 + name.length`,
-///     `total / sizes.length`, `(i + 1) % options.length` (the base is preceded
-///     by `+`/`-`/`*`/`/`/`%`); arithmetic produces a number, so `.length` is a
-///     numeric operand, never a boolean coercion.
-///   * a computed-member index or array-literal element — `input[base.length]`,
-///     `[base.length]` (the base is preceded by `[`); the length is a positional
-///     index / array value, never a boolean coercion.
-/// A plain `=` assignment RHS (`x = arr.length`) is also a value position.
-fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
-    let bytes = trimmed.as_bytes();
-    // Walk left over the base expression (identifier / member / bracket / call
-    // chain), balancing any `]`/`)` we pass through.
-    let mut i = prop_pos;
-    let mut depth: i32 = 0;
-    while i > 0 {
-        let c = bytes[i - 1];
-        if depth > 0 {
-            match c {
-                b')' | b']' => depth += 1,
-                b'(' | b'[' => depth -= 1,
-                _ => {}
-            }
-            i -= 1;
-            continue;
-        }
-        match c {
-            b')' | b']' => {
-                depth += 1;
-                i -= 1;
-            }
-            _ if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c == b'.' => {
-                i -= 1;
-            }
-            _ => break,
-        }
-    }
-    // Skip whitespace immediately to the left of the base expression.
-    let mut j = i;
-    while j > 0 && bytes[j - 1] == b' ' {
-        j -= 1;
-    }
-    if j == 0 {
-        return false;
-    }
-    // Comparison RHS (`===`, `!==`, `==`, `<`, `>`, `<=`, `>=`) or `=` assignment
-    // RHS, a non-leading argument separated by `,`, a ternary branch /
-    // object-property value preceded by `?`/`:`, or the right operand of a
-    // binary arithmetic operator (`+`, `-`, `*`, `/`, `%`).
-    match bytes[j - 1] {
-        b'=' | b'<' | b'>' | b',' | b':' | b'+' | b'-' | b'*' | b'/' | b'%' => true,
-        // `?` is a ternary delimiter only when not part of optional chaining:
-        // `obj?.length` puts a `?` immediately left of the base chain too, but
-        // there it is followed by `.` (`?.`) and the access stays a boolean
-        // coercion. A ternary `?` is followed by whitespace/the value.
-        b'?' => bytes[j] != b'.',
-        // `(` left of the base opens the call the base is an argument of —
-        // `substring(token.raw.length)`, a value position — but only when it is a
-        // call paren, not an `if`/`while` grouping/test paren (`if ((arr.length))`).
-        b'(' => is_call_open_paren(trimmed, j - 1),
-        // `[` left of the base opens a computed-member index (`input[base.length]`)
-        // or an array-literal element (`[base.length]`) — a positional index /
-        // array value, never a boolean coercion. A `[` *inside* the base (e.g.
-        // `arr[i].length`) is balanced away by the walk above, so this arm only
-        // matches when `[` is the operand's immediate left neighbour.
-        b'[' => true,
-        _ => false,
-    }
-}
-
-/// True when the `.length`/`.size` whose `.` is at `prop_pos` is the value of a
-/// template-literal interpolation `${ <base>.length }` — a numeric value being
-/// string-formatted, not a boolean coercion. Walks left over the base expression
-/// (balancing `]`/`)`), skips whitespace, and checks the base is immediately
-/// preceded by `${`.
-fn is_template_interpolation_value(trimmed: &str, prop_pos: usize) -> bool {
-    let bytes = trimmed.as_bytes();
-    // Walk left over the base expression (identifier/member/bracket/call chain),
-    // balancing brackets — mirror the loop in `length_is_numeric_operand`.
-    let mut i = prop_pos;
-    let mut depth: i32 = 0;
-    while i > 0 {
-        let c = bytes[i - 1];
-        if depth > 0 {
-            match c {
-                b')' | b']' => depth += 1,
-                b'(' | b'[' => depth -= 1,
-                _ => {}
-            }
-            i -= 1;
-            continue;
-        }
-        match c {
-            b')' | b']' => {
-                depth += 1;
-                i -= 1;
-            }
-            _ if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c == b'.' => {
-                i -= 1;
-            }
-            _ => break,
-        }
-    }
-    // Skip whitespace to the left of the base.
-    let mut j = i;
-    while j > 0 && bytes[j - 1] == b' ' {
-        j -= 1;
-    }
-    // The base must be immediately preceded by `${`.
-    j >= 2 && bytes[j - 1] == b'{' && bytes[j - 2] == b'$'
-}
-
-/// Check if a line has a bare `.length`/`.size` in a boolean context
-/// (no explicit comparison like `> 0`, `=== 0`, `!== 0`, etc.).
-fn has_implicit_length_check(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('*') {
-        return false;
-    }
-
-    for prop in &[".length", ".size"] {
-        let mut search_from = 0;
-        while let Some(pos) = trimmed[search_from..].find(prop) {
-            let abs_pos = search_from + pos;
-            let after_prop = abs_pos + prop.len();
-
-            if abs_pos == 0 {
-                search_from = after_prop;
-                continue;
-            }
-            let before_char = trimmed.as_bytes()[abs_pos - 1];
-            if !before_char.is_ascii_alphanumeric()
-                && before_char != b'_'
-                && before_char != b'$'
-                && before_char != b']'
-                && before_char != b')'
-            {
-                search_from = after_prop;
-                continue;
-            }
-
-            if after_prop < trimmed.len() {
-                let after_char = trimmed.as_bytes()[after_prop];
-                if after_char.is_ascii_alphanumeric() || after_char == b'_' {
-                    search_from = after_prop;
-                    continue;
-                }
-            }
-
-            let rest = trimmed[after_prop..].trim_start();
-
-            if rest.starts_with("> ")
-                || rest.starts_with(">= ")
-                || rest.starts_with("< ")
-                || rest.starts_with("<= ")
-                || rest.starts_with("=== ")
-                || rest.starts_with("== ")
-                || rest.starts_with("!== ")
-                || rest.starts_with("!= ")
-            {
-                search_from = after_prop;
-                continue;
-            }
-
-            if rest.starts_with('+')
-                || rest.starts_with('-')
-                || rest.starts_with('*')
-                || rest.starts_with('/')
-                || rest.starts_with('%')
-                || rest.starts_with('=')
-                || rest.starts_with('[')
-                || rest.starts_with('.')
-            {
-                search_from = after_prop;
-                continue;
-            }
-
-            // A trailing `,` always means a value position (argument, array
-            // element, object property value, declarator) — never a boolean
-            // coercion — so it is deliberately not a flagging context.
-            if rest.is_empty()
-                || rest.starts_with(')')
-                || rest.starts_with("&&")
-                || rest.starts_with("||")
-                || rest.starts_with('?')
-                || rest.starts_with(';')
-                || rest.starts_with('}')
-                || rest.starts_with(']')
-            {
-                if (trimmed.starts_with("return ") || trimmed.starts_with("yield "))
-                    && (rest.starts_with(';') || rest.is_empty())
-                {
-                    search_from = after_prop;
-                    continue;
-                }
-
-                if (trimmed.starts_with("const ")
-                    || trimmed.starts_with("let ")
-                    || trimmed.starts_with("var "))
-                    && (rest.starts_with(';') || rest.is_empty())
-                {
-                    search_from = after_prop;
-                    continue;
-                }
-
-                let before = trimmed[..abs_pos].trim_end();
-                if before.ends_with('=')
-                    && !before.ends_with("==")
-                    && !before.ends_with("!=")
-                    && !before.ends_with(">=")
-                    && !before.ends_with("<=")
-                {
-                    search_from = after_prop;
-                    continue;
-                }
-
-                // `${ base.length }` — the `.length` is the entire interpolated
-                // value (closed by `}`), a numeric value being string-formatted,
-                // not a boolean coercion. A ternary condition inside an
-                // interpolation (`${arr.length ? a : b}`) is followed by `?`, not
-                // `}`, so it stays a genuine coercion and still flags.
-                if rest.starts_with('}') && is_template_interpolation_value(trimmed, abs_pos) {
-                    search_from = after_prop;
-                    continue;
-                }
-
-                if is_inside_expect_argument(trimmed, abs_pos) {
-                    search_from = after_prop;
-                    continue;
-                }
-
-                if length_is_numeric_operand(trimmed, abs_pos) {
-                    search_from = after_prop;
-                    continue;
-                }
-
-                return true;
-            }
-
-            search_from = after_prop;
-        }
-    }
-
-    false
 }
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[]
+        &[AstType::StaticMemberExpression]
     }
 
-    fn run_on_semantic<'a>(
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&[".length", ".size"])
+    }
+
+    fn run<'a>(
         &self,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for (idx, line) in ctx.source.lines().enumerate() {
-            if has_implicit_length_check(line) {
-                diagnostics.push(Diagnostic {
-                    path: Arc::clone(&ctx.path_arc),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: "Use explicit length comparison: `arr.length > 0` instead of \
-                              `arr.length`, or `arr.length === 0` instead of `!arr.length`."
-                        .into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-            }
+        semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::StaticMemberExpression(member) = node.kind() else {
+            return;
+        };
+        let prop = member.property.name.as_str();
+        if prop != "length" && prop != "size" {
+            return;
         }
-        diagnostics
+        if !is_boolean_coercion_position(node, semantic) {
+            return;
+        }
+
+        let (line, column) = byte_offset_to_line_col(ctx.source, member.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: "Use explicit length comparison: `arr.length > 0` instead of \
+                      `arr.length`, or `arr.length === 0` instead of `!arr.length`."
+                .into(),
+            severity: Severity::Warning,
+            span: None,
+        });
     }
 }
 
@@ -543,17 +262,17 @@ mod tests {
         assert!(run_on("{ k: arr.length }").is_empty());
     }
 
-    // Optional chaining in a boolean test MUST STILL FLAG: the `?` allow-list
-    // addition is gated on the next char not being `.`, so `obj?.length`'s
-    // optional-chaining `?` is not mistaken for a ternary delimiter.
+    // Optional chaining in a boolean test MUST STILL FLAG: the optional-chain
+    // wrapper is transparent, so `obj?.b.length` in an `if` test is still a
+    // coercion, while as a call argument it stays a value position.
     #[test]
     fn still_flags_optional_chain_length_in_if_issue_3914() {
         assert_eq!(run_on("if (a?.b.length) {}").len(), 1);
     }
 
     #[test]
-    fn still_flags_optional_chain_length_as_call_arg_issue_3914() {
-        assert_eq!(run_on("notExpect(a?.b.length);").len(), 1);
+    fn allows_optional_chain_length_as_call_arg_issue_3914() {
+        assert_eq!(run_on("notExpect(a?.b.length);").len(), 0);
     }
 
     // Regression #3785 — `.length`/`.size` as the value of a template-literal
@@ -580,14 +299,14 @@ mod tests {
     }
 
     // A ternary condition inside an interpolation IS a genuine boolean coercion
-    // (`.length` is followed by `?`, not `}`) and must still flag.
+    // (`.length` is the ternary test) and must still flag.
     #[test]
     fn still_flags_length_as_ternary_condition_in_interpolation_issue_3785() {
         assert_eq!(run_on("`${arr.length ? 'a' : 'b'}`").len(), 1);
     }
 
-    // Regression #3788 — `.length`/`.size` as the right operand of a binary
-    // arithmetic expression is a numeric operand, not a boolean coercion.
+    // Regression #3788 — `.length`/`.size` as an operand of a binary arithmetic
+    // expression is a numeric operand, not a boolean coercion.
     #[test]
     fn allows_length_after_addition_issue_3788() {
         assert!(run_on("const buf = Buffer.allocUnsafe(30 + nameBytes.length);").is_empty());
@@ -636,8 +355,8 @@ mod tests {
         assert!(run_on("indexOf(s.length);").is_empty());
     }
 
-    // Soundness guard for #6247: a grouping/test paren is NOT a call paren, so a
-    // `.length` parenthesised inside a boolean test still flags.
+    // Soundness guard for #6247: a grouping/test paren is NOT a value position, so
+    // a `.length` parenthesised inside a boolean test still flags.
     #[test]
     fn still_flags_parenthesised_length_in_if_issue_6247() {
         assert_eq!(run_on("if ((arr.length)) {}").len(), 1);
@@ -667,17 +386,49 @@ mod tests {
     }
 
     // The array-literal-element form (`[base.length]`, base at the start of the
-    // brackets) is the same `[`-preceded value position as a computed index.
+    // brackets) is the same value position as a computed index.
     #[test]
     fn allows_length_as_array_literal_element_issue_6475() {
         assert!(run_on("const dims = [rows.length];").is_empty());
     }
 
-    // Soundness guard for #6475: a `[` *inside* the base expression
-    // (`arr[i].length`) is balanced away by the leftward walk, so a genuine
-    // boolean coercion of `(arr[i]).length` in a test position still flags.
+    // Soundness guard for #6475: a computed index inside the base
+    // (`arr[i].length`) is walked past, so a genuine boolean coercion of
+    // `arr[i].length` in a test position still flags.
     #[test]
     fn still_flags_indexed_base_length_in_if_issue_6475() {
         assert_eq!(run_on("if (arr[i].length) {}").len(), 1);
+    }
+
+    // Regression #7202 — `.length` whose base call spans multiple lines is still a
+    // variable-initializer value position: the `const … =` establishing the value
+    // context sits two physical lines above the `).length;` line, out of a
+    // line-local scanner's reach, but the AST parent (a `VariableDeclarator`) is
+    // unambiguous.
+    #[test]
+    fn allows_length_on_multiline_filter_assignment_issue_7202() {
+        let src = "const auditCount = this.audits.filter(\n\
+                   \t(audit) => getAuditCategory(audit.rule) === category.code,\n\
+                   ).length;";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Control for #7202: the same value-position classification holds for a bare
+    // `return` and for `.length` as the left operand of arithmetic.
+    #[test]
+    fn allows_bare_length_in_return_issue_7202() {
+        assert!(run_on("return arr.length;").is_empty());
+    }
+
+    #[test]
+    fn allows_length_plus_one_issue_7202() {
+        assert!(run_on("const x = arr.length + 1;").is_empty());
+    }
+
+    // Control for #7202: a bare `.length` in a `while` test is still a coercion
+    // and must still flag — the AST migration must not lose true positives.
+    #[test]
+    fn still_flags_bare_length_in_while_issue_7202() {
+        assert_eq!(run_on("while (arr.length) {}").len(), 1);
     }
 }
