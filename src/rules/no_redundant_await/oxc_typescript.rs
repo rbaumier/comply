@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, VariableDeclarationKind};
 use std::sync::Arc;
 
 pub struct Check;
@@ -56,6 +56,61 @@ fn is_inside_try_body(
     false
 }
 
+/// Return `true` when the function enclosing the return statement contains a
+/// `using` / `await using` declaration. There the trailing `await` in
+/// `return await x` is load-bearing: per TC39 Explicit Resource Management the
+/// declaration's resource is disposed when the enclosing block scope exits, so
+/// dropping the `await` would dispose it before the returned promise settles —
+/// an observable behavior change, the same disposal-ordering concern that
+/// exempts `return await` inside a `try` block.
+///
+/// The search is bounded to the enclosing function's span. Any using-kind
+/// declaration within that span suppresses the flag; this over-approximates
+/// toward NOT flagging (a `using` in a nested closure also suppresses), the
+/// false-positive-safe direction.
+fn enclosing_function_contains_using(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // Walk up to the nearest enclosing function to bound the search.
+    let mut func_span = None;
+    let mut current_id = node_id;
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            break;
+        }
+        match nodes.kind(parent_id) {
+            AstKind::Function(f) => {
+                func_span = Some(f.span);
+                break;
+            }
+            AstKind::ArrowFunctionExpression(f) => {
+                func_span = Some(f.span);
+                break;
+            }
+            _ => {}
+        }
+        current_id = parent_id;
+    }
+    let Some(span) = func_span else {
+        return false;
+    };
+
+    nodes.iter().any(|n| {
+        let AstKind::VariableDeclaration(decl) = n.kind() else {
+            return false;
+        };
+        matches!(
+            decl.kind,
+            VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing
+        ) && decl.span.start >= span.start
+            && decl.span.end <= span.end
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::ReturnStatement]
@@ -85,7 +140,9 @@ impl OxcCheck for Check {
             return;
         };
 
-        if is_inside_try_body(node.id(), semantic, ret.span.start, ret.span.end) {
+        if is_inside_try_body(node.id(), semantic, ret.span.start, ret.span.end)
+            || enclosing_function_contains_using(node.id(), semantic)
+        {
             return;
         }
 
@@ -170,6 +227,42 @@ mod tests {
              }",
         );
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_return_await_with_using_declaration() {
+        // #7126: a `using` declaration disposes its resource when the function
+        // scope exits, so the `await` orders disposal after the returned
+        // promise settles — dropping it disposes prematurely.
+        let d = run_on(
+            "async function withTimeout(): Promise<string> {\n\
+               using r = openResource();\n\
+               return await computeResult();\n\
+             }",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_return_await_with_await_using_declaration() {
+        let d = run_on(
+            "async function withTimeout(): Promise<string> {\n\
+               await using r = openResource();\n\
+               return await computeResult();\n\
+             }",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_return_await_when_using_is_in_a_different_function() {
+        // The search is bounded to the enclosing function, so a `using` in a
+        // sibling function must not suppress the flag here.
+        let d = run_on(
+            "function withResource() { using r = open(); doStuff(); }\n\
+             async function redundant(): Promise<string> { return await compute(); }",
+        );
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
