@@ -2097,6 +2097,10 @@ pub struct CargoManifest {
     /// A derive-based error-handling library (`thiserror`, `snafu`, `miette`,
     /// `derive_more`, `error-stack`) is declared in any dependency section.
     error_derive_crate: bool,
+    /// `[package.metadata] cargo-fuzz = true`, or a fuzzing-runtime dependency
+    /// (`libfuzzer-sys`, `afl`, `honggfuzz`) is declared in any dependency
+    /// section — the crate is a fuzz harness.
+    fuzz_crate: bool,
     /// `[package].links` is set — the crate declares it links a native library.
     /// Cargo allows exactly one crate per native library to set this key, so its
     /// presence marks a dedicated native-binding crate.
@@ -2123,6 +2127,10 @@ impl CargoManifest {
     /// as async.
     const ASYNC_RUNTIMES: &'static [&'static str] =
         &["tokio", "async-std", "async_std", "futures"];
+
+    /// Fuzzing runtimes whose presence in any dependency section marks the crate
+    /// as a fuzz harness (cargo-fuzz `libfuzzer-sys`, AFL `afl`, honggfuzz).
+    const FUZZ_RUNTIMES: &'static [&'static str] = &["libfuzzer-sys", "afl", "honggfuzz"];
 
     /// Parse a `Cargo.toml`'s raw text. `manifest_dir` is the directory holding
     /// the manifest (kept for the `src/lib.rs` filesystem check). Returns `None`
@@ -2183,6 +2191,18 @@ impl CargoManifest {
             .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
             .any(|table| table.keys().any(|dep| is_error_derive_crate_name(dep)));
 
+        let fuzz_metadata = value
+            .get("package")
+            .and_then(|package| package.get("metadata"))
+            .and_then(|metadata| metadata.get("cargo-fuzz"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false);
+        let fuzz_runtime_dep = ["dependencies", "dev-dependencies", "build-dependencies"]
+            .iter()
+            .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
+            .any(|table| Self::FUZZ_RUNTIMES.iter().any(|rt| table.contains_key(*rt)));
+        let fuzz_crate = fuzz_metadata || fuzz_runtime_dep;
+
         let no_std_category = value
             .get("package")
             .and_then(|package| package.get("categories"))
@@ -2224,6 +2244,7 @@ impl CargoManifest {
             no_std_category,
             testing_crate,
             error_derive_crate,
+            fuzz_crate,
             links_native_library,
             rust_version,
         })
@@ -2303,6 +2324,18 @@ impl CargoManifest {
     /// reporting and `.unwrap()` are idiomatic.
     pub fn is_testing_crate(&self) -> bool {
         self.testing_crate
+    }
+
+    /// True when the crate is a fuzz harness, identified by
+    /// `[package.metadata] cargo-fuzz = true` or a dependency on a fuzzing
+    /// runtime (`libfuzzer-sys`, `afl`, `honggfuzz`). A fuzz harness feeds
+    /// arbitrary bytes to a call and deliberately discards the `Result` — only
+    /// a panic/crash matters — so `let _ = f(input)` and `panic!` are the
+    /// idiomatic crash-signaling mechanisms, regardless of the harness's
+    /// directory layout (cargo-fuzz `fuzz/fuzzers/`, AFL
+    /// `fuzz-afl/{fuzzers,reproducers}/`, or the classic `fuzz_targets/`).
+    pub fn is_fuzz_crate(&self) -> bool {
+        self.fuzz_crate
     }
 
     /// True when a derive-based error-handling library is declared in any
@@ -4548,6 +4581,18 @@ impl ProjectCtx {
             map.entry(manifest_dir).or_insert_with(|| Arc::clone(&arc));
         }
         Some(arc)
+    }
+
+    /// True when `path` belongs to a fuzz harness: it sits under a
+    /// `fuzz_targets/` directory, or its nearest `Cargo.toml` is a fuzz crate
+    /// ([`CargoManifest::is_fuzz_crate`]). In a fuzz harness `let _ = f(input)`
+    /// and `panic!` are the deliberate crash-signaling idioms, so the
+    /// discard/panic rules exempt these files across all standard fuzz layouts.
+    pub fn in_fuzz_crate(&self, path: &Path) -> bool {
+        crate::rules::path_utils::is_fuzz_targets_path(path)
+            || self
+                .nearest_cargo_manifest(path)
+                .is_some_and(|m| m.is_fuzz_crate())
     }
 
     /// True when `path` is a Rust source file inside an mdBook documentation

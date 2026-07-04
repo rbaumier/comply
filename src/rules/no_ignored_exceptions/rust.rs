@@ -14,12 +14,15 @@
 //! (`FileCtx::in_benchmark_dir`) are exempt too: in a Criterion `b.iter(|| { let
 //! _ = f(black_box(..)) })` closure the discard is the idiomatic way to run a
 //! call for its timing without consuming the result, and benchmark code never
-//! ships to production. cargo-fuzz harness files (a `fuzz_targets/` directory
-//! segment, via `FileCtx::path_segments.in_fuzz_targets`) are exempt
-//! for the same reason: `let _ = f(fuzzer_input)` is the canonical idiom for
-//! exercising a function under fuzzing — success vs. failure is deliberately
-//! ignored, only "does not panic" matters, and fuzz harnesses never ship to
-//! production.
+//! ships to production. Fuzz-harness files (via `ProjectCtx::in_fuzz_crate`:
+//! a `fuzz_targets/` directory segment, or a fuzz crate identified by its
+//! `Cargo.toml` — `[package.metadata] cargo-fuzz = true` or a `libfuzzer-sys`/
+//! `afl`/`honggfuzz` dependency) are exempt for the same reason: `let _ =
+//! f(fuzzer_input)` is the canonical idiom for exercising a function under
+//! fuzzing — success vs. failure is deliberately ignored, only "does not panic"
+//! matters, and fuzz harnesses never ship to production. Keying on the manifest
+//! covers non-`fuzz_targets/` layouts (cargo-fuzz `fuzz/fuzzers/`, AFL
+//! `fuzz-afl/{fuzzers,reproducers}/`).
 //!
 //! Four non-error idioms are also exempted:
 //! - `let _ = expr?`: the `?` operator already propagates any `Err`/`None` to
@@ -155,14 +158,15 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // (`#[kani::proof]`/`#[kani::proof_for_contract]`), a file under a `tests/`
     // directory (plain helper fns there are test infrastructure), benchmark files
     // (`benches/`, `_bench.rs`) where a Criterion `b.iter` closure discards the
-    // result to time the call, and cargo-fuzz harness files (a `fuzz_targets/`
-    // directory segment) where `let _ = f(fuzzer_input)` exercises a call only
-    // to assert it does not panic.
+    // result to time the call, and fuzz-harness files (a `fuzz_targets/`
+    // directory segment or a fuzz crate identified by its `Cargo.toml`, via
+    // `ProjectCtx::in_fuzz_crate`) where `let _ = f(fuzzer_input)` exercises a
+    // call only to assert it does not panic.
     if is_in_test_context(node, source)
         || is_in_kani_proof(node, source)
         || is_under_tests_dir(ctx.path)
         || ctx.file.in_benchmark_dir()
-        || ctx.file.path_segments.in_fuzz_targets
+        || ctx.project.in_fuzz_crate(ctx.path)
     {
         return;
     }
@@ -1278,6 +1282,112 @@ mod tests {
         // fire — confirming the fixture path drives the `in_fuzz_targets` flag.
         let prod = run_on_path(src, "src/lib.rs");
         assert_eq!(prod.len(), 1);
+    }
+
+    /// Run a rule on `rel_src` written next to `cargo_toml`, so the manifest
+    /// (`is_fuzz_crate` exemption) resolves via `nearest_cargo_manifest`.
+    fn run_on_with_cargo(cargo_toml: &str, source: &str, rel_src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(&Check, cargo_toml, source, rel_src)
+    }
+
+    const CARGO_FUZZ_CARGO_TOML: &str = r#"
+[package]
+name = "image-fuzz"
+version = "0.0.0"
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+"#;
+
+    const AFL_FUZZ_CARGO_TOML: &str = r#"
+[package]
+name = "image-fuzz-afl"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+afl = "0.15"
+"#;
+
+    const HONGGFUZZ_CARGO_TOML: &str = r#"
+[package]
+name = "hfuzz-target"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+honggfuzz = "0.5"
+"#;
+
+    const NORMAL_LIB_CARGO_TOML: &str = r#"
+[package]
+name = "normal-lib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "normal_lib"
+"#;
+
+    #[test]
+    fn allows_let_underscore_in_cargo_fuzz_crate() {
+        // Closes #7169: a cargo-fuzz crate (`[package.metadata] cargo-fuzz =
+        // true`, dep `libfuzzer-sys`) places harnesses under `fuzz/fuzzers/`,
+        // NOT `fuzz_targets/`, so the exemption must key on the manifest.
+        let src = r#"
+            fuzz_target!(|data: &[u8]| {
+                let _ = image::load_from_memory(data);
+            });
+        "#;
+        let harness = run_on_with_cargo(CARGO_FUZZ_CARGO_TOML, src, "fuzzers/fuzz_webp.rs");
+        assert!(harness.is_empty(), "cargo-fuzz harness discard must not flag");
+    }
+
+    #[test]
+    fn allows_let_underscore_in_afl_fuzz_crate() {
+        // Closes #7169: an AFL crate (dep `afl`) places harnesses under
+        // `fuzz-afl/{fuzzers,reproducers}/`. The issue's exact image-rs snippet.
+        let src = r#"
+            fn main() {
+                afl::fuzz(true, |data| {
+                    let _ = webp_decode(data);
+                });
+            }
+        "#;
+        let fuzzer = run_on_with_cargo(AFL_FUZZ_CARGO_TOML, src, "fuzzers/fuzz_webp.rs");
+        let reproducer =
+            run_on_with_cargo(AFL_FUZZ_CARGO_TOML, src, "reproducers/reproduce_webp.rs");
+        assert!(fuzzer.is_empty(), "AFL fuzzer discard must not flag");
+        assert!(reproducer.is_empty(), "AFL reproducer discard must not flag");
+    }
+
+    #[test]
+    fn flags_let_underscore_in_normal_crate_not_fuzz() {
+        // Negative control: the SAME discarded fallible call in a normal crate
+        // (no fuzz metadata/deps, no `fuzz_targets/` path) genuinely swallows
+        // the error and must fire — the exemption keys on the manifest fact.
+        let src = "pub fn cleanup() { let _ = fallible(); }";
+        let diagnostics = run_on_with_cargo(NORMAL_LIB_CARGO_TOML, src, "src/lib.rs");
+        assert_eq!(diagnostics.len(), 1, "discard in a normal crate must still flag");
+    }
+
+    #[test]
+    fn manifest_detects_fuzz_crate() {
+        // The manifest fact the exemption keys on: `[package.metadata]
+        // cargo-fuzz = true` or a fuzzing-runtime dependency parses to
+        // `is_fuzz_crate()`; a plain `[lib]` manifest does not.
+        use crate::project::CargoManifest;
+        use std::path::PathBuf;
+        for toml in [CARGO_FUZZ_CARGO_TOML, AFL_FUZZ_CARGO_TOML, HONGGFUZZ_CARGO_TOML] {
+            let manifest = CargoManifest::parse(toml, PathBuf::from("/c")).unwrap();
+            assert!(manifest.is_fuzz_crate(), "fuzz manifest must parse to is_fuzz_crate");
+        }
+        let normal = CargoManifest::parse(NORMAL_LIB_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(!normal.is_fuzz_crate(), "a plain lib manifest is not a fuzz crate");
     }
 
     #[test]
