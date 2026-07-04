@@ -17,7 +17,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TSTypeAliasDeclaration(alias) = node.kind() else {
@@ -98,6 +98,32 @@ impl OxcCheck for Check {
         // primitive branch is the base case. A naked `T[keyof T]`, where the index
         // is not a mapped key, carries no such guarantee and is still flagged.
         if recurses_on_mapped_key_index(&alias.type_annotation, name) {
+            return;
+        }
+
+        // Exempt tuple-shrinking-utility recursion: a conditional whose base case
+        // is the empty tuple (`T extends readonly []` / `T extends []`) and whose
+        // recursive call passes `F<T>` — a single-level application of a named
+        // same-file utility `F` to the unchanged primary type parameter `T`, where
+        // `F` destructures off ≥1 tuple element and returns only the remaining rest
+        // (`X extends readonly [...infer R, unknown] ? readonly [...R] : ...`). The
+        // empty-tuple base makes a growing recursion impossible for valid
+        // TypeScript, and the element-stripping utility proves `T` shrinks each
+        // step, so the recursion is bounded by the tuple's length without a numeric
+        // depth counter. Same structural-termination category as
+        // `recurses_on_infer_binding`, one application removed.
+        if let Some(primary_param) = alias
+            .type_parameters
+            .as_ref()
+            .and_then(|tp| tp.params.first())
+            .map(|p| p.name.name.as_str())
+            && recurses_on_tuple_shrinking_utility(
+                &alias.type_annotation,
+                name,
+                primary_param,
+                semantic,
+            )
+        {
             return;
         }
 
@@ -703,6 +729,270 @@ fn recurses_on_mapped_key_index(annotation: &oxc_ast::ast::TSType, alias_name: &
     found
 }
 
+/// Return true if `annotation` contains a conditional whose base case is the
+/// empty tuple and whose recursive call passes `F<T>` — a named same-file utility
+/// `F` applied to the unchanged primary type parameter — where `F`'s body strips a
+/// tuple element. Both structural signals plus the shrink proof are required.
+fn recurses_on_tuple_shrinking_utility<'a>(
+    annotation: &'a oxc_ast::ast::TSType<'a>,
+    alias_name: &str,
+    primary_param: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    any_conditional(annotation, &|cond| {
+        conditional_is_empty_base_tuple_shrink(cond, alias_name, primary_param, semantic)
+    })
+}
+
+/// Return true if any conditional type reachable through conditional branches,
+/// unions, intersections, parentheses, or type operators satisfies `pred`.
+fn any_conditional<'a>(
+    ty: &'a oxc_ast::ast::TSType<'a>,
+    pred: &impl Fn(&'a oxc_ast::ast::TSConditionalType<'a>) -> bool,
+) -> bool {
+    use oxc_ast::ast::TSType;
+    match ty {
+        TSType::TSConditionalType(cond) => {
+            pred(cond)
+                || any_conditional(&cond.check_type, pred)
+                || any_conditional(&cond.extends_type, pred)
+                || any_conditional(&cond.true_type, pred)
+                || any_conditional(&cond.false_type, pred)
+        }
+        TSType::TSUnionType(u) => u.types.iter().any(|t| any_conditional(t, pred)),
+        TSType::TSIntersectionType(i) => i.types.iter().any(|t| any_conditional(t, pred)),
+        TSType::TSParenthesizedType(paren) => any_conditional(&paren.type_annotation, pred),
+        TSType::TSTypeOperatorType(op) => any_conditional(&op.type_annotation, pred),
+        _ => false,
+    }
+}
+
+/// Return true if `cond` is `T extends readonly [] ? <base> : ...F<T>...`: the
+/// check is the bare primary parameter, the `extends` clause is the empty tuple,
+/// and the false branch has a self-call whose argument is a shrinking `F<T>`.
+fn conditional_is_empty_base_tuple_shrink<'a>(
+    cond: &'a oxc_ast::ast::TSConditionalType<'a>,
+    alias_name: &str,
+    primary_param: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    if !is_bare_ref_to(&cond.check_type, primary_param) {
+        return false;
+    }
+    if !is_empty_tuple_type(&cond.extends_type) {
+        return false;
+    }
+    let mut found = false;
+    visit_self_call_args(&cond.false_type, alias_name, &[], &mut |arg, _mapped_keys| {
+        if let Some(utility) = utility_wrapped_param(arg, primary_param, alias_name)
+            && utility_strips_tuple_element(utility, semantic)
+        {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Return true if `ty` is the empty tuple `[]` or `readonly []`, looking through
+/// the `readonly` type operator and parentheses.
+fn is_empty_tuple_type(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeOperatorOperator};
+    match ty {
+        TSType::TSTupleType(tuple) => tuple.element_types.is_empty(),
+        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
+            is_empty_tuple_type(&op.type_annotation)
+        }
+        TSType::TSParenthesizedType(paren) => is_empty_tuple_type(&paren.type_annotation),
+        _ => false,
+    }
+}
+
+/// If `arg` is `F<T>` — a named type reference `F` (other than the recursive
+/// alias itself) applied to exactly one argument that is the bare primary
+/// parameter `T` — return `F`'s name. `T`, `T[K]`, `T & X`, or a multi-argument
+/// application are not matched.
+fn utility_wrapped_param<'a>(
+    arg: &'a oxc_ast::ast::TSType<'a>,
+    primary_param: &str,
+    alias_name: &str,
+) -> Option<&'a str> {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSTypeReference(tref) = arg else {
+        return None;
+    };
+    let TSTypeName::IdentifierReference(id) = &tref.type_name else {
+        return None;
+    };
+    let utility = id.name.as_str();
+    if utility == alias_name {
+        return None;
+    }
+    let args = tref.type_arguments.as_ref()?;
+    if args.params.len() != 1 || !is_bare_ref_to(&args.params[0], primary_param) {
+        return None;
+    }
+    Some(utility)
+}
+
+/// Return true if a same-file type alias named `utility` is a tuple-element-
+/// stripping conditional — its `extends` clause destructures off ≥1 fixed element
+/// into an `infer R` rest and its true branch returns only that rest (`? readonly
+/// [...R] :` / `? R :`), so `utility<X>` is strictly shorter than `X`.
+fn utility_strips_tuple_element<'a>(
+    utility: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_ast::ast::TSType;
+    for node in semantic.nodes().iter() {
+        let AstKind::TSTypeAliasDeclaration(alias) = node.kind() else {
+            continue;
+        };
+        if alias.id.name.as_str() != utility {
+            continue;
+        }
+        if let TSType::TSConditionalType(cond) = &alias.type_annotation
+            && conditional_strips_tuple_element(cond)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Return true if `cond` both destructures off ≥1 fixed element into an `infer R`
+/// rest in its `extends` clause and returns only that rest in its true branch —
+/// e.g. `X extends readonly [...infer R, unknown] ? readonly [...R] : never`.
+/// Checking the true branch (not just the `extends` pattern) is what proves the
+/// result is strictly shorter: a body that destructures the rest but re-adds an
+/// element (`? readonly [...R, unknown] :`) preserves the length and is rejected.
+fn conditional_strips_tuple_element<'a>(cond: &'a oxc_ast::ast::TSConditionalType<'a>) -> bool {
+    match extends_strip_rest_name(&cond.extends_type) {
+        Some(rest_name) => true_branch_returns_only_rest(&cond.true_type, rest_name),
+        None => false,
+    }
+}
+
+/// If `ty` is a tuple that strips exactly one *wildcard* element alongside a single
+/// `...infer R` rest — `[...infer R, unknown]`, `[unknown, ...infer R]`, or an
+/// `infer L` element — return the rest binding name `R`. Looks through the
+/// `readonly` operator and parentheses. Exactly one fixed, non-optional element is
+/// required, and that element must be a wildcard (`unknown` / `any` / `infer`) so
+/// the pattern matches *every* non-empty tuple and removes one element: then `F<T>`
+/// shrinks `T` by one for all non-empty `T` and the recursion reaches the
+/// empty-tuple base in `|T|` steps. A strip of two or more (`[...infer R, X, Y]`),
+/// an optional element, or a *narrowing* fixed element (`string`, a literal, a
+/// union, a type parameter) matches only some tuples, so `F` would fall through its
+/// unchecked `: T` false branch and recurse forever — all rejected.
+fn extends_strip_rest_name<'a>(ty: &'a oxc_ast::ast::TSType<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::{TSTupleElement, TSType, TSTypeOperatorOperator};
+    let tuple = match ty {
+        TSType::TSTupleType(tuple) => tuple,
+        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
+            return extends_strip_rest_name(&op.type_annotation);
+        }
+        TSType::TSParenthesizedType(paren) => {
+            return extends_strip_rest_name(&paren.type_annotation);
+        }
+        _ => return None,
+    };
+    let mut rest_name = None;
+    let mut fixed_count = 0u32;
+    let mut fixed_is_wildcard = false;
+    for el in &tuple.element_types {
+        match el {
+            TSTupleElement::TSRestType(rest) => {
+                let TSType::TSInferType(infer) = &rest.type_annotation else {
+                    // A rest over a concrete type binds no reusable shrunk tuple.
+                    return None;
+                };
+                if rest_name.is_some() {
+                    // A second rest is not a single-element strip.
+                    return None;
+                }
+                rest_name = Some(infer.type_parameter.name.name.as_str());
+            }
+            // An optional element makes the pattern match the shorter tuple without
+            // it, so the rest could capture the whole input — no guaranteed strip.
+            TSTupleElement::TSOptionalType(_) => return None,
+            other => {
+                fixed_count += 1;
+                fixed_is_wildcard = is_wildcard_element(other);
+            }
+        }
+    }
+    match rest_name {
+        Some(name) if fixed_count == 1 && fixed_is_wildcard => Some(name),
+        _ => None,
+    }
+}
+
+/// Return true if `el` is a wildcard tuple element — `unknown`, `any`, or an
+/// `infer` binding — which matches any single element. A narrowing element
+/// (`string`, a literal, a union, a type reference) matches only some elements, so
+/// a `[...infer R, X]` pattern with a narrowing `X` does not match every non-empty
+/// tuple. Looks through a non-optional named tuple member (`last: unknown`).
+fn is_wildcard_element(el: &oxc_ast::ast::TSTupleElement) -> bool {
+    use oxc_ast::ast::{TSTupleElement, TSType};
+    let ty = match el {
+        TSTupleElement::TSNamedTupleMember(member) if !member.optional => {
+            member.element_type.as_ts_type()
+        }
+        TSTupleElement::TSNamedTupleMember(_) => None,
+        other => other.as_ts_type(),
+    };
+    matches!(
+        ty,
+        Some(TSType::TSUnknownKeyword(_) | TSType::TSAnyKeyword(_) | TSType::TSInferType(_))
+    )
+}
+
+/// Return true if `ty` reconstructs the tuple from only the `...infer R` rest
+/// binding `rest_name`: a bare reference to `R`, or a tuple (through `readonly` /
+/// parens) whose sole content is at most one `...R` rest spread with no fixed
+/// element. A re-added fixed element or a spread of anything other than `R` means
+/// the result is not strictly shorter, so it is not matched.
+fn true_branch_returns_only_rest(ty: &oxc_ast::ast::TSType, rest_name: &str) -> bool {
+    use oxc_ast::ast::{TSTupleElement, TSType, TSTypeOperatorOperator};
+    match ty {
+        TSType::TSTypeReference(_) => is_bare_ref_to(ty, rest_name),
+        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
+            true_branch_returns_only_rest(&op.type_annotation, rest_name)
+        }
+        TSType::TSParenthesizedType(paren) => {
+            true_branch_returns_only_rest(&paren.type_annotation, rest_name)
+        }
+        TSType::TSTupleType(tuple) => {
+            let mut rest_count = 0u32;
+            for el in &tuple.element_types {
+                let TSTupleElement::TSRestType(rest) = el else {
+                    // A fixed element re-adds length.
+                    return false;
+                };
+                if !is_bare_ref_to(&rest.type_annotation, rest_name) {
+                    return false;
+                }
+                rest_count += 1;
+            }
+            rest_count <= 1
+        }
+        _ => false,
+    }
+}
+
+/// Return true if `ty` is a bare type reference (no type arguments) to `name`.
+fn is_bare_ref_to(ty: &oxc_ast::ast::TSType, name: &str) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    matches!(
+        ty,
+        TSType::TSTypeReference(tref)
+            if tref.type_arguments.is_none()
+                && matches!(
+                    &tref.type_name,
+                    TSTypeName::IdentifierReference(id) if id.name.as_str() == name
+                )
+    )
+}
+
 /// Return true if `arg` is `T[K]`: an indexed access whose object is a bare type
 /// reference and whose index is a bare type reference naming one of
 /// `mapped_keys` — the key variables of the enclosing mapped types. `T[K]` reads
@@ -1200,6 +1490,139 @@ type Loop<S extends string[]> = S extends [...infer L, infer R]
 type Loop<S extends string[]> = S extends [...infer L, infer R]
   ? Loop<L extends string[] ? L : S>
   : never;
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_tuple_prefixes_dropping_last_element() {
+        // TuplePrefixes recurses on `DropLast<T>` with a `T extends readonly []`
+        // base case; DropLast strips the last tuple element, so `T` shrinks by one
+        // each step and the empty-tuple base terminates the recursion.
+        let src = r#"
+type DropLast<T extends ReadonlyArray<unknown>> = T extends readonly [...infer R, unknown]
+  ? readonly [...R]
+  : never;
+type TuplePrefixes<T extends ReadonlyArray<unknown>> = T extends readonly []
+  ? readonly []
+  : TuplePrefixes<DropLast<T>> | T;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_tuple_shrink_non_readonly_empty_base() {
+        // Same pattern with the non-readonly `[]` base case and a non-readonly
+        // element-stripping utility.
+        let src = r#"
+type DropLast<T extends unknown[]> = T extends [...infer R, unknown] ? [...R] : never;
+type Prefixes<T extends unknown[]> = T extends [] ? [] : Prefixes<DropLast<T>> | T;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_tuple_shrink_without_empty_base() {
+        // The base case checks `readonly [infer H]` (a one-element tuple), not the
+        // empty tuple, so the empty-tuple-base signal is absent and the recursion
+        // stays flagged.
+        let src = r#"
+type DropLast<T extends ReadonlyArray<unknown>> = T extends readonly [...infer R, unknown] ? readonly [...R] : never;
+type Loop<T extends ReadonlyArray<unknown>> = T extends readonly [infer H] ? H : Loop<DropLast<T>>;
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_base_but_recursive_arg_is_bare_param() {
+        // Empty-tuple base case present, but the recursive argument is `T`
+        // unchanged (not a shrinking `F<T>` application), so it never shrinks.
+        let src = "type Loop<T extends ReadonlyArray<unknown>> = T extends readonly [] ? readonly [] : Loop<T> | T;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_base_but_recursive_arg_is_intersection() {
+        // The recursive argument `T & object` is not a single named application of
+        // the type parameter, so the tuple-shrink signal is absent.
+        let src = "type Loop<T extends ReadonlyArray<unknown>> = T extends readonly [] ? readonly [] : Loop<T & object> | T;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_base_but_utility_grows_tuple() {
+        // Grow<T> appends an element instead of stripping one (its body is not even
+        // a tuple-stripping conditional), so the same-file shrink proof fails and
+        // the recursion stays flagged.
+        let src = r#"
+type Grow<T extends ReadonlyArray<unknown>> = readonly [...T, unknown];
+type Loop<T extends ReadonlyArray<unknown>> = T extends readonly [] ? readonly [] : Loop<Grow<T>> | T;
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_base_but_conditional_utility_does_not_strip() {
+        // Grow<T>'s body is a conditional, but its `extends` clause has no
+        // `...infer R` rest binding a stripped element, so it does not prove
+        // shrinkage and the recursion stays flagged.
+        let src = r#"
+type Grow<T extends ReadonlyArray<unknown>> = T extends readonly [] ? readonly [unknown] : readonly [...T, unknown];
+type Loop<T extends ReadonlyArray<unknown>> = T extends readonly [] ? readonly [] : Loop<Grow<T>> | T;
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_utility_strips_pattern_but_return_grows() {
+        // MapLast destructures `[...infer R, infer L]` (matching the strip pattern)
+        // but its true branch re-adds an element (`[...R, L]`), so the tuple length
+        // is preserved, the empty-tuple base is never reached, and the recursion
+        // stays flagged. Guards that the shrink proof checks the true-branch return,
+        // not just the `extends` pattern.
+        let src = r#"
+type MapLast<T extends readonly unknown[]> = T extends readonly [...infer R, infer L] ? readonly [...R, L] : never;
+type Loop<T extends readonly unknown[]> = T extends readonly [] ? readonly [] : Loop<MapLast<T>> | T;
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_drop_last_returning_rest_binding_directly() {
+        // DropLast returns the `infer R` rest binding directly (`? R :`) rather
+        // than re-wrapping it as `[...R]`; both denote the shrunk tuple, so the
+        // recursion is still bounded and exempt.
+        let src = r#"
+type DropLast<T extends readonly unknown[]> = T extends readonly [...infer R, unknown] ? R : never;
+type Prefixes<T extends readonly unknown[]> = T extends readonly [] ? readonly [] : Prefixes<DropLast<T>> | T;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_strip_by_two_utility() {
+        // DropLastPair strips two elements (`[...infer R, unknown, unknown]`), so it
+        // fails to match a length-1 tuple and falls through to its false branch
+        // (`: T`), returning the input unchanged — `Loop<[a]>` never shrinks past
+        // length 1 and recurses forever. Requiring an exactly-one-element strip keeps
+        // this flagged.
+        let src = r#"
+type DropLastPair<T extends readonly unknown[]> = T extends readonly [...infer R, unknown, unknown] ? R : T;
+type Loop<T extends readonly unknown[]> = T extends readonly [] ? readonly [] : Loop<DropLastPair<T>> | T;
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_narrowing_trailing_element_utility() {
+        // DropTrailingString strips a trailing `string` — a narrowing element, not a
+        // wildcard — so it matches only tuples ending in `string`. On any other
+        // input (`[number]`) the pattern fails and F falls through to its `: T` false
+        // branch, returning the input unchanged, so the recursion never shrinks.
+        // Requiring the stripped element to be a wildcard keeps this flagged.
+        let src = r#"
+type DropTrailingString<T extends readonly unknown[]> = T extends readonly [...infer R, string] ? R : T;
+type Loop<T extends readonly unknown[]> = T extends readonly [] ? readonly [] : Loop<DropTrailingString<T>> | T;
 "#;
         assert_eq!(run_on(src).len(), 1);
     }
