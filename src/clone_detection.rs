@@ -240,6 +240,7 @@ fn merge_and_emit(
         last_rstart: usize,
         rline: usize,
         cfi: usize,
+        last_cstart: usize,
         cline: usize,
     }
 
@@ -270,7 +271,7 @@ fn merge_and_emit(
             .as_ref()
             .is_some_and(|ft| has_enough_distinct_texts(ft, rstart, last_rstart));
         if keep {
-            spans.push(Span { rfi, rstart, last_rstart, rline, cfi, cline });
+            spans.push(Span { rfi, rstart, last_rstart, rline, cfi, last_cstart, cline });
         }
         i = j;
     }
@@ -280,7 +281,7 @@ fn merge_and_emit(
     }
 
     // Phase 2 — suppress symmetric sibling pairs.
-    // Ten suppression criteria, any one is sufficient:
+    // Eleven suppression criteria, any one is sufficient:
     //
     // A) Small-gap: the tokens NOT covered by any matching window in the
     //    reporter file are few (> 0, ≤ SYMMETRIC_SIBLING_GAP_THRESHOLD).  A
@@ -365,6 +366,17 @@ fn merge_and_emit(
     //    package root (same `package.json`) keeps intra-package duplication
     //    flagged. Files with no enclosing `package.json` resolve to `None` and are
     //    never suppressed here.
+    //
+    // K) Rust inline-test-module clone: BOTH endpoints of the span resolve to an
+    //    AST node inside a Rust `#[cfg(test)]` module (or `#[test]` fn). This is
+    //    criterion E's structural analogue for Rust's idiomatic inline
+    //    `#[cfg(test)] mod tests` layout, which the filename-based `.test.`/
+    //    `.spec.` convention cannot see: sibling test modules intentionally carry
+    //    their own assertion macros / fixtures (e.g. an `assert_pixels_eq!`
+    //    duplicated across two modules' tests) to stay self-contained, so their
+    //    shared blocks are not shippable duplication. Decided per span so a clone
+    //    with one endpoint in production code — even in the same file pair — still
+    //    flags; only spans whose every occurrence is test-only are suppressed.
     let mut suppressed = FxHashSet::<usize>::default();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
@@ -374,6 +386,11 @@ fn merge_and_emit(
         let mut crate_root_memo: FxHashMap<usize, Option<std::path::PathBuf>> =
             FxHashMap::default();
         let mut package_root_memo: FxHashMap<usize, Option<std::path::PathBuf>> =
+            FxHashMap::default();
+        // Criterion K: re-parsed Rust trees for the test-context check, memoized
+        // per file index — a file recurs across many pairs, so it is parsed once.
+        let mut rust_parser = Parser::new();
+        let mut rust_tree_memo: FxHashMap<usize, Option<tree_sitter::Tree>> =
             FxHashMap::default();
         for ((rfi, cfi), idxs) in &by_pair {
             let total = file_data[*rfi].as_ref().map_or(0, |ft| ft.tokens.len());
@@ -413,6 +430,39 @@ fn merge_and_emit(
                 || cross_npm
             {
                 suppressed.extend(idxs);
+            } else if files[*rfi].language == Language::Rust
+                && files[*cfi].language == Language::Rust
+            {
+                // Criterion K — per-span: suppress only spans whose reporter AND
+                // canonical endpoints both sit inside a Rust `#[cfg(test)]`
+                // context. Probe the LAST covered token of each side, not the
+                // first: a matched window can begin on trailing punctuation of a
+                // preceding production item (identical `}`/`;`/`)` tokens leak
+                // into the window head), so the span's end is the reliable probe —
+                // it sits inside the substantive duplicated body. `last_rstart` /
+                // `last_cstart` are the final matched window-starts on each side.
+                for &idx in idxs {
+                    let s = &spans[idx];
+                    let r_last = s.last_rstart + MIN_TOKENS - 1;
+                    let c_last = s.last_cstart + MIN_TOKENS - 1;
+                    if endpoint_in_rust_test_context(
+                        s.rfi,
+                        r_last,
+                        file_data,
+                        files,
+                        &mut rust_parser,
+                        &mut rust_tree_memo,
+                    ) && endpoint_in_rust_test_context(
+                        s.cfi,
+                        c_last,
+                        file_data,
+                        files,
+                        &mut rust_parser,
+                        &mut rust_tree_memo,
+                    ) {
+                        suppressed.insert(idx);
+                    }
+                }
             }
         }
     }
@@ -439,6 +489,39 @@ fn merge_and_emit(
             }
         })
         .collect()
+}
+
+/// True when the clone endpoint starting at token index `tok` in Rust file `fi`
+/// resolves to an AST node inside a `#[cfg(test)]` module or `#[test]` function.
+///
+/// Backs criterion K (Rust inline-test-module clones). The file's tree is
+/// re-parsed on first use and memoized in `tree_memo` by file index, so a file
+/// shared across many candidate pairs is parsed at most once. Only reached for
+/// `.rs` endpoints of already-detected pairs — never in the hot scanning path.
+fn endpoint_in_rust_test_context(
+    fi: usize,
+    tok: usize,
+    file_data: &[Option<FileTokens>],
+    files: &[&SourceFile],
+    parser: &mut Parser,
+    tree_memo: &mut FxHashMap<usize, Option<tree_sitter::Tree>>,
+) -> bool {
+    let Some(ft) = file_data[fi].as_ref() else {
+        return false;
+    };
+    let Some(token) = ft.tokens.get(tok) else {
+        return false;
+    };
+    let offset = token.start_byte;
+    let tree = tree_memo
+        .entry(fi)
+        .or_insert_with(|| parsing::parse_with_grammar(parser, files[fi].language, &ft.source));
+    let Some(tree) = tree.as_ref() else {
+        return false;
+    };
+    tree.root_node()
+        .descendant_for_byte_range(offset, offset)
+        .is_some_and(|node| crate::rules::rust_helpers::is_in_test_context(node, &ft.source))
 }
 
 fn clone_line_span(
@@ -1285,6 +1368,42 @@ mod tests {
             .join("\n")
     }
 
+    /// A `macro_rules!` whose transcriber body carries `n` distinct statements —
+    /// enough tokens and distinct trigrams to be clone-detectable. Mirrors the
+    /// `assert_pixels_eq!` helper that issue #7170's two files duplicate.
+    fn rust_test_macro(n: usize) -> String {
+        String::from("macro_rules! assert_pixels_eq {\n    ($a:expr, $b:expr) => {{\n")
+            + &large_rust_block(n)
+            + "\n    }};\n}"
+    }
+
+    /// A production function whose body is unique to `tag`, so two files carrying
+    /// distinct-`tag` copies do NOT clone on it. Sizes the reporter's uncovered
+    /// token gap past the symmetric-sibling threshold, isolating criterion K from
+    /// the small-gap carve-out (A).
+    fn distinct_prod_fn(tag: &str, n: usize) -> String {
+        let body = (1..=n)
+            .map(|i| format!("    let {tag}_{i} = build_{tag}({i}, \"{tag}_{i}\");"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("pub fn run_{tag}() {{\n{body}\n}}")
+    }
+
+    fn write_rust_pair(
+        dir: &tempfile::TempDir,
+        content_a: &str,
+        content_b: &str,
+    ) -> (SourceFile, SourceFile) {
+        let pa = dir.path().join("colorops.rs");
+        let pb = dir.path().join("affine.rs");
+        std::fs::write(&pa, content_a).unwrap();
+        std::fs::write(&pb, content_b).unwrap();
+        (
+            SourceFile { path: pa, language: Language::Rust },
+            SourceFile { path: pb, language: Language::Rust },
+        )
+    }
+
     #[test]
     fn no_clones_with_single_file() {
         let f = make_file("/tmp/a.ts", Language::TypeScript);
@@ -1839,6 +1958,74 @@ mod tests {
             diags.is_empty(),
             "expected no clones for low-entropy boilerplate, got {}: {:?}",
             diags.len(),
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn rust_cfg_test_module_clone_not_flagged_issue7170() {
+        // Issue #7170: image-rs/image duplicates an `assert_pixels_eq!` macro
+        // across `colorops.rs` and `affine.rs`, each occurrence living inside a
+        // `#[cfg(test)] mod test { … }`. Both endpoints are test-only, so no
+        // clone must be reported — Rust's inline-test-module analogue of the
+        // JS/TS test-spec-sibling carve-out. The distinct production functions
+        // keep the reporter's uncovered gap large, so the small-gap carve-out
+        // (A) does not apply and criterion K is what does the suppression.
+        let dir = tempfile::tempdir().unwrap();
+        let shared = rust_test_macro(30);
+        let content_a =
+            format!("{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n", distinct_prod_fn("colorops", 14));
+        let content_b =
+            format!("{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n", distinct_prod_fn("affine", 14));
+        let (fa, fb) = write_rust_pair(&dir, &content_a, &content_b);
+        let diags = lint_files(&[&fa, &fb]);
+        assert!(
+            diags.is_empty(),
+            "a test-only macro duplicated across two #[cfg(test)] modules must not flag, got {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn rust_production_clone_still_flagged() {
+        // Control: the SAME macro duplicated across two files in PRODUCTION
+        // modules (no `#[cfg(test)]`) is genuine shippable duplication and must
+        // still flag. Also proves the block is clone-detectable, so the FP
+        // test's silence is due to criterion K, not non-detection.
+        let dir = tempfile::tempdir().unwrap();
+        let shared = rust_test_macro(30);
+        let content_a =
+            format!("{}\n\nmod shared_helpers {{\n{shared}\n}}\n", distinct_prod_fn("colorops", 14));
+        let content_b =
+            format!("{}\n\nmod shared_helpers {{\n{shared}\n}}\n", distinct_prod_fn("affine", 14));
+        let (fa, fb) = write_rust_pair(&dir, &content_a, &content_b);
+        let diags = lint_files(&[&fa, &fb]);
+        assert_eq!(
+            diags.len(),
+            1,
+            "production duplication must still flag, got {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn rust_mixed_test_and_production_clone_still_flagged() {
+        // Control: one endpoint in a `#[cfg(test)]` module, the other in a
+        // production module. Not EVERY occurrence is test-only, so the block is
+        // genuine production duplication and must still flag — criterion K
+        // requires BOTH endpoints in test context.
+        let dir = tempfile::tempdir().unwrap();
+        let shared = rust_test_macro(30);
+        let content_a =
+            format!("{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n", distinct_prod_fn("colorops", 14));
+        let content_b =
+            format!("{}\n\nmod shared_helpers {{\n{shared}\n}}\n", distinct_prod_fn("affine", 14));
+        let (fa, fb) = write_rust_pair(&dir, &content_a, &content_b);
+        let diags = lint_files(&[&fa, &fb]);
+        assert_eq!(
+            diags.len(),
+            1,
+            "mixed test/production duplication must still flag, got {:?}",
             diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
         );
     }
