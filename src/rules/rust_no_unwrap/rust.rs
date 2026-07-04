@@ -649,6 +649,37 @@ name = "normal_lib"
     }
 
     #[test]
+    fn allows_unwrap_in_name_tests_file() {
+        // zellij-org/zellij: `.unwrap()` in a co-located `_tests.rs` unit file
+        // is idiomatic test code (#7121).
+        let source = "fn t() { let x = y.unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "zellij-server/src/panes/tiled_panes/unit/stacked_panes_tests.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unwrap_in_normal_source_sibling() {
+        // A production source file next to a `_tests.rs` sibling still flags:
+        // its stem carries no `test`/`tests` token.
+        let source = "pub fn z() { let x = y.unwrap(); }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "zellij-server/src/panes/tiled_panes.rs"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
     fn flags_unwrap_in_ordinary_src_file() {
         let source = "pub fn z() { let x = y.unwrap(); }";
         assert_eq!(

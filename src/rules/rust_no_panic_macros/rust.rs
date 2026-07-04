@@ -604,6 +604,37 @@ categories = ["development-tools::testing"]
     }
 
     #[test]
+    fn allows_unimplemented_in_name_tests_file() {
+        // zellij-org/zellij: a `MockPane` stub in a co-located `_tests.rs` unit
+        // file uses `unimplemented!()` for unexercised trait methods (#7121).
+        let source = "impl Pane for MockPane { fn x(&self) -> usize { unimplemented!() } }";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "zellij-server/src/panes/tiled_panes/unit/stacked_panes_tests.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unimplemented_in_normal_source_sibling() {
+        // A production source file next to a `_tests.rs` sibling still flags:
+        // its stem carries no `test`/`tests` token.
+        let source = "fn f() { unimplemented!() }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "zellij-server/src/panes/tiled_panes.rs"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
     fn flags_panic_in_non_exact_testing_name() {
         let source = r#"pub fn m() { panic!("boom"); }"#;
         assert_eq!(
