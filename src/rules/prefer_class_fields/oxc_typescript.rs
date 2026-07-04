@@ -17,8 +17,11 @@ fn is_literal(expr: &Expression) -> bool {
             | Expression::NumericLiteral(_)
             | Expression::BooleanLiteral(_)
             | Expression::NullLiteral(_)
-            | Expression::TemplateLiteral(_)
     ) || matches!(expr, Expression::Identifier(id) if id.name == "undefined")
+        // An interpolated template (`${…}`) is a runtime-dynamic value that
+        // cannot become a class-field initializer; only substitution-free
+        // templates are static.
+        || matches!(expr, Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty())
 }
 
 impl OxcCheck for Check {
@@ -90,5 +93,63 @@ impl OxcCheck for Check {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn allows_interpolated_template() {
+        // #7092: an interpolated template depends on a constructor param and
+        // cannot be a class-field initializer → dynamic, not flagged.
+        let src = "class Foo { name: string; constructor(prefix: string) { this.name = `${prefix}Error`; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_static_template() {
+        let src = "class Foo { name: string; constructor() { this.name = `StaticValue`; } }";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "prefer-class-fields");
+    }
+
+    #[test]
+    fn flags_string_literal() {
+        let d = run_on("class Foo { constructor() { this.x = \"literal\"; } }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_numeric_literal() {
+        let d = run_on("class Foo { constructor() { this.x = 5; } }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_function_call() {
+        assert!(run_on("class Foo { constructor() { this.x = someFn(); } }").is_empty());
     }
 }
