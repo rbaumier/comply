@@ -63,13 +63,15 @@ impl AstCheck for Check {
         if !BANNED_MACROS.contains(&macro_name) {
             return;
         }
-        // Dual-read: the unit-test harness injects an empty default FileCtx, so
-        // `in_fuzz_targets` is false in tests — fall back to the pure path
-        // predicate, which reads `ctx.path` directly.
+        // A fuzz harness signals a crash via `panic!`/`abort` — the fuzzer
+        // catches it — so the panic-family macros are the deliberate mechanism.
+        // `ProjectCtx::in_fuzz_crate` recognizes both a `fuzz_targets/` path
+        // segment and a fuzz crate identified by its `Cargo.toml`
+        // (`[package.metadata] cargo-fuzz = true` or a `libfuzzer-sys`/`afl`/
+        // `honggfuzz` dependency), covering non-`fuzz_targets/` layouts.
         if is_in_test_context(node, source_bytes)
             || is_under_tests_dir(ctx.path)
-            || ctx.file.path_segments.in_fuzz_targets
-            || crate::rules::path_utils::is_fuzz_targets_path(ctx.path)
+            || ctx.project.in_fuzz_crate(ctx.path)
         {
             return;
         }
@@ -293,6 +295,19 @@ name = "tracing-mock"
 version = "0.1.0"
 edition = "2021"
 categories = ["development-tools::testing"]
+"#;
+
+    const FUZZ_CARGO_TOML: &str = r#"
+[package]
+name = "image-fuzz"
+version = "0.0.0"
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
 "#;
 
     #[test]
@@ -735,6 +750,22 @@ categories = ["development-tools::testing"]
             run_on_with_cargo(LIB_CARGO_TOML, r#"fn bad() { panic!("boom"); }"#).len(),
             1,
             "panic! in a crate without the testing category must still flag"
+        );
+    }
+
+    /// Closes #7169: a fuzz crate signals a crash via `panic!`/`abort`, which
+    /// the fuzzer catches. A cargo-fuzz manifest (`[package.metadata] cargo-fuzz
+    /// = true`, dep `libfuzzer-sys`) places harnesses outside `fuzz_targets/`,
+    /// so the exemption keys on the manifest fact via `in_fuzz_crate`.
+    #[test]
+    fn allows_panic_family_in_fuzz_crate() {
+        assert!(
+            run_on_with_cargo(FUZZ_CARGO_TOML, r#"fn main() { panic!("crash"); }"#).is_empty(),
+            "panic! in a fuzz crate must not flag"
+        );
+        assert!(
+            run_on_with_cargo(FUZZ_CARGO_TOML, "fn f() { unreachable!(); }").is_empty(),
+            "unreachable! in a fuzz crate must not flag"
         );
     }
 
