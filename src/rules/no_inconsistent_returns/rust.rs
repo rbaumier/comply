@@ -9,6 +9,10 @@
 //!
 //! A `return_expression` with at least one named child returns a value;
 //! otherwise it is bare.
+//!
+//! A `function_item` that returns unit (`-> ()` or no `return_type`) is exempt:
+//! its `return <expr>;` is always a unit-typed early return, so the value/bare
+//! mix is not an inconsistency.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -39,10 +43,34 @@ fn return_has_value(ret: tree_sitter::Node) -> bool {
     ret.named_child_count() > 0
 }
 
+/// True when `node` is a `function_item` that returns unit `()` — either it has
+/// no `return_type` field (implicit `()`) or an explicit unit type (`-> ()`).
+/// In such a function the compiler forbids `return non_unit;`, so every
+/// `return <expr>;` is a unit-typed early return, semantically identical to a
+/// bare `return;`. The value-vs-bare distinction is then spurious and the
+/// inconsistency check is skipped. Closures are excluded — they rarely annotate
+/// a return type, so the same structural signal is unavailable.
+fn returns_unit(node: tree_sitter::Node) -> bool {
+    if node.kind() != "function_item" {
+        return false;
+    }
+    match node.child_by_field_name("return_type") {
+        None => true,
+        Some(ty) => ty.kind() == "unit_type",
+    }
+}
+
 crate::ast_check! { on ["function_item", "closure_expression"] => |node, _source, ctx, diagnostics|
     // Body location: function_item has a "body" field (block);
     // closure_expression has a "body" field (block or expression).
     let Some(body) = node.child_by_field_name("body") else { return };
+
+    // A unit-returning `function_item` (`-> ()` or no return type) can only hold
+    // unit-typed `return <expr>;` — the compiler rejects any other value there —
+    // so a value/bare mix carries no inconsistency.
+    if returns_unit(node) {
+        return;
+    }
 
     let mut returns: Vec<tree_sitter::Node> = Vec::new();
     collect_returns(body, &mut returns);
@@ -162,6 +190,55 @@ fn outer() {
         }
         return x + 1;
     };
+}
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn allows_unit_fn_with_tail_call_return() {
+        // Regression for issue #7224 (pola-rs/polars `zip_outer_validity`): a fn
+        // with no declared return type returns `()`; the tail-recursive
+        // `return self.zip(other);` is a unit-typed early return, not a value.
+        let code = r#"
+pub fn zip(&mut self, other: &S) {
+    if a {
+        return;
+    }
+    if b {
+        self.rechunk_mut();
+        return self.zip(other);
+    }
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_explicit_unit_return_type() {
+        // Explicit `-> ()` is likewise unit-returning: `return bar();` where
+        // `bar() -> ()` is a unit early return, mixed with bare `return;`.
+        let code = r#"
+fn foo(a: bool) -> () {
+    if a {
+        return;
+    }
+    return bar();
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_unit_return_type_with_bare_return() {
+        // An explicit non-unit return type (`-> Option<i32>`) mixing a value
+        // return with a bare `return;` is a genuine inconsistency: still flags.
+        let code = r#"
+fn foo(a: bool) -> Option<i32> {
+    if a {
+        return Some(1);
+    }
+    return;
 }
 "#;
         assert_eq!(run_on(code).len(), 1);
