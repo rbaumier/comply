@@ -24,6 +24,14 @@
 //! and a try-flavored macro can expand to an early `return`/`?`, so any macro in
 //! the push argument is conservatively assumed to affect control flow.
 //!
+//! A push argument whose value flows through a block, `if`, or `match` arm that
+//! runs a `;`-terminated statement (an `expression_statement`, e.g. a nested
+//! `other.push(...);`) drives external side effects per element — a
+//! parallel-collection / struct-of-arrays build. Lifting those statements into a
+//! `map` closure makes the transform impure, so the loop is not a pure
+//! `extend(...map(...))` and is not flagged. A `let` declaration and the block's
+//! tail expression stay pure, so `dst.push({ let y = f(x); y })` still flags.
+//!
 //! `.push` exists on many non-`Vec` types (`VecDeque`, crossbeam `Worker`,
 //! `Injector`, custom queues), none of which `extend`s the same way, so we
 //! only flag when the receiver is an in-scope `let` whose initializer is
@@ -112,6 +120,18 @@ impl AstCheck for Check {
         {
             return;
         }
+        // A push argument whose value is produced by a block / `if` / `match` arm
+        // that runs a `;`-terminated statement (an `expression_statement`, e.g. a
+        // nested `other.push(...);`) drives external side effects per element — a
+        // parallel-collection / struct-of-arrays build. Lifting those statements
+        // into a `map` closure makes the transform impure, so the loop is not a
+        // pure `extend(...map(...))`. Skip it. `let` declarations and the tail
+        // expression carry no discarded-value statement, so they still flag.
+        if let Some(arguments) = call.child_by_field_name("arguments")
+            && arg_contains_side_effect_statement(arguments)
+        {
+            return;
+        }
         // Only flag when the receiver is a plain local identifier we can
         // resolve to a confirmable `Vec`. A field access (`self.q.push`) or
         // method chain receiver can't be checked, so it is left untouched.
@@ -168,6 +188,23 @@ fn arg_contains_early_exit(node: tree_sitter::Node) -> bool {
     }
     let mut cursor = node.walk();
     node.children(&mut cursor).any(arg_contains_early_exit)
+}
+
+/// Whether the subtree rooted at `node` contains an `expression_statement` — a
+/// `;`-terminated discarded-value statement (e.g. a nested `other.push(...);`)
+/// run only for its side effect. Used on the `push` argument: when the pushed
+/// value is produced by a block / `if` / `match` arm that runs such statements
+/// before its tail expression, the loop drives external side effects per element
+/// (a parallel-collection / struct-of-arrays build), so it is not a pure
+/// `extend(...map(...))`. A `let_declaration` and the block's tail expression are
+/// not `expression_statement`s, so they do not trip this guard.
+fn arg_contains_side_effect_statement(node: tree_sitter::Node) -> bool {
+    if node.kind() == "expression_statement" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(arg_contains_side_effect_statement)
 }
 
 /// True if any `identifier` in the push-argument subtree equals the receiver
@@ -400,6 +437,32 @@ mod tests {
     #[test]
     fn flags_underscore_prefixed_binding_issue_6671() {
         let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for _x in src { dst.push(g(_x)); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // The push value is an `if let` whose arms push to a *second* collection
+    // (`validity`) before producing the tail value — a parallel-array / SoA build.
+    // Those `;`-terminated statements can't be lifted into a pure `map` closure,
+    // so the loop is not `extend(...map(...))`.
+    #[test]
+    fn allows_side_effecting_if_let_arms_issue_7225() {
+        let src = "fn f(strings: Vec<Option<u32>>) { let mut cat_ids = Vec::with_capacity(strings.len()); let mut validity = Vec::new(); for opt_s in strings { cat_ids.push(if let Some(cat) = f(opt_s) { validity.push(true); g(cat) } else { validity.push(false); h() }); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // A push value produced by a block that runs a side-effecting statement
+    // before its tail expression is not a pure `map`.
+    #[test]
+    fn allows_side_effecting_block_push_issue_7225() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push({ side_effect(x); compute(x) }); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative control: a block with only a `let` binding and a tail expression
+    // has no discarded-value statement, so it stays a pure `map` and still flags.
+    #[test]
+    fn flags_let_then_tail_block_push_issue_7225() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push({ let y = f(x); y }); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
