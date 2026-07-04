@@ -70,6 +70,20 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // confusing, so the prefix is the only sensible name.
     if is_rust_primitive_type_name(&name[4..]) { return; }
 
+    // Stripping `get_` from e.g. `get_404_output_file` yields `404_output_file`,
+    // which is empty or begins with a digit — not a lexically valid Rust
+    // identifier (an identifier must start with `_` or an `XID_Start` char,
+    // never a digit). The rename `fn 404_output_file(&self)` does not compile,
+    // so the prefix is forced — the same impossible-rename class as the
+    // keyword/primitive guards above. (`get_` is 4 ASCII bytes, so `name[4..]`
+    // is always a valid char boundary.)
+    {
+        let bare = &name[4..];
+        if bare.is_empty() || bare.starts_with(|c: char| c.is_ascii_digit()) {
+            return;
+        }
+    }
+
     // A method named exactly like one of the standard library's `get_`-prefixed
     // indexed/unsafe accessors mirrors that established std API by name; a custom
     // type implementing the same contract must keep the exact name, and stripping
@@ -785,6 +799,31 @@ mod tests {
         // An unrelated attribute (`#[inline]`) is not a deprecation and must not
         // exempt the accessor — only `#[deprecated]` does.
         let src = "impl Foo {\n    #[inline]\n    pub fn get_x(&self) -> u32 { 0 }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_get_prefix_digit_leading_remainder_issue_7188() {
+        // Stripping `get_` yields `404_output_file`, which begins with a digit —
+        // not a valid Rust identifier, so `fn 404_output_file(&self)` does not
+        // compile. The rename is impossible, so the prefix is forced.
+        let src = "impl HtmlConfig {\n    pub fn get_404_output_file(&self) -> String { String::new() }\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_prefix_digit_leading_2fa_remainder_issue_7188() {
+        // `get_2fa_token` strips to `2fa_token`, also digit-leading and thus an
+        // invalid identifier — exempt for the same reason.
+        let src = "impl Auth {\n    pub fn get_2fa_token(&self) -> u32 { 0 }\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_valid_remainder_alongside_digit_leading_issue_7188() {
+        // `get_output_file` strips to `output_file`, a valid identifier — the
+        // digit guard must not relax the ordinary getter, which still flags.
+        let src = "impl HtmlConfig {\n    pub fn get_output_file(&self) -> String { String::new() }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
