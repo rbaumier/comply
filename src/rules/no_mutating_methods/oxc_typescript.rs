@@ -66,16 +66,22 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Mutation of a fresh array produced by a chained array-returning call
-        // is not externally observable: `children.slice(0, n).reverse()`,
-        // `items.filter(...).sort(...)`, `xs.map(...).reverse()` mutate the
-        // just-allocated array that the preceding call returned — nothing else
-        // holds a reference to it. This is the canonical "reverse/sort a copy"
-        // idiom. A receiver whose method is not a fresh-array producer
-        // (`obj.getList().reverse()`) may return a shared array, so it stays
-        // flagged.
-        if matches!(&member.object, Expression::CallExpression(_))
-            && is_array_evident_initializer(&member.object)
+        // Mutation of a fresh array with no pre-existing reference is not
+        // externally observable. Two receiver shapes qualify:
+        // - an inline array literal (`[...referencedColumns].sort(...)`,
+        //   `[a, b].reverse()`, `[...x].splice(0, 1)`): the receiver is the
+        //   just-allocated literal itself;
+        // - a chained array-returning call (`children.slice(0, n).reverse()`,
+        //   `items.filter(...).sort(...)`, `xs.map(...).reverse()`): the
+        //   receiver is the array the preceding call just allocated.
+        // In both cases nothing else holds a reference to the array — the
+        // canonical "sort/reverse a copy" idiom. A receiver whose call is not a
+        // fresh-array producer (`obj.getList().reverse()`) may return a shared
+        // array, so it stays flagged.
+        if matches!(
+            &member.object,
+            Expression::ArrayExpression(_) | Expression::CallExpression(_)
+        ) && is_array_evident_initializer(&member.object)
         {
             return;
         }
@@ -769,6 +775,62 @@ mod tests {
         let src = r#"
             function flip(obj) {
                 obj.getList().reverse();
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_sort_on_inline_array_literal_receiver() {
+        // Regression for rbaumier/comply#7227 — `[...referencedColumns].sort(...)`
+        // (typeorm) sorts the freshly-allocated array literal that the spread
+        // just created; nothing else references it, so the mutation is not
+        // observable. The direct form of the "sort a copy" idiom.
+        let src = r#"
+            function ordered(referencedColumns, orderMap) {
+                return [...referencedColumns].sort(
+                    (a, b) => (orderMap.get(a) ?? Infinity) - (orderMap.get(b) ?? Infinity),
+                );
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_reverse_on_inline_array_literal_receiver() {
+        // #7227 — `[a, b, c].reverse()` reverses an inline literal in place.
+        assert!(run("const r = [a, b, c].reverse();").is_empty());
+    }
+
+    #[test]
+    fn ignores_splice_on_inline_array_literal_receiver() {
+        // #7227 — `[...x].splice(0, 1)` splices a fresh spread copy.
+        assert!(run("const s = [...x].splice(0, 1);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_sort_on_member_property_receiver() {
+        // Negative space for #7227 — `this.items.sort()` mutates shared object
+        // state; the receiver is a member access, not an inline array literal.
+        let src = r#"
+            class Store {
+                items: number[] = [];
+                order() {
+                    this.items.sort();
+                }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_sort_on_plain_array_identifier() {
+        // Negative space for #7227 — `arr.sort()` on a parameter array may reorder
+        // the caller's array, so it stays flagged; only a direct array-literal
+        // receiver is exempt.
+        let src = r#"
+            function order(arr: number[]) {
+                arr.sort();
             }
         "#;
         assert_eq!(run(src).len(), 1);
