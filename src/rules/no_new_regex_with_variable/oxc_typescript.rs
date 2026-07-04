@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{Argument, BinaryOperator, Expression, VariableDeclarationKind};
 use std::sync::Arc;
 
 pub struct Check;
@@ -21,7 +21,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::NewExpression(new_expr) = node.kind() else { return };
@@ -39,11 +39,19 @@ impl OxcCheck for Check {
         // the object to a const regex literal — the security rule
         // `security-detect-non-literal-regexp` enforces that tighter check. A bare
         // variable (`new RegExp(pattern)`) is still flagged — only `.source` is exempt.
+        //
+        // A `+`-concatenation whose operands are all constant strings (string
+        // literals and `const`-bound string literals) is fixed at authoring time —
+        // `is_constant_string_expr` recognizes it as constant, so
+        // `new RegExp('a' + CONST + 'b')` carries no runtime input and is safe like
+        // the bare literal arms above.
         let is_safe_first_arg = match first_arg {
             Argument::StringLiteral(_) | Argument::TemplateLiteral(_) => true,
             Argument::StaticMemberExpression(member) => member.property.name.as_str() == "source",
             _ => false,
-        };
+        } || first_arg
+            .as_expression()
+            .is_some_and(|expr| is_constant_string_expr(expr, semantic, &mut Vec::new()));
         if is_safe_first_arg {
             return;
         }
@@ -63,6 +71,88 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when `expr` is a compile-time-constant string — its value is fixed at
+/// authoring time, so it carries no runtime/attacker input and no ReDoS surface:
+/// - a string literal;
+/// - a template literal with no `${}` interpolation slots (an interpolated
+///   template is not constant in this const-fold context);
+/// - a `+` concatenation whose both operands are themselves constant strings;
+/// - an identifier bound by a `const` whose initializer is itself a constant
+///   string expression (resolved via `reference_id` → symbol → declarator).
+///
+/// This is the same author-fixed-pattern signal the rule already grants a bare
+/// template literal, so a strictly-more-static literal concatenation is safe too.
+///
+/// `visited` carries the symbols currently being resolved so a cyclic `const`
+/// chain (`const a = a`, `const a = b; const b = a`) terminates instead of
+/// recursing forever.
+fn is_constant_string_expr(
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic,
+    visited: &mut Vec<oxc_semantic::SymbolId>,
+) -> bool {
+    match expr {
+        Expression::StringLiteral(_) => true,
+        Expression::TemplateLiteral(tpl) => tpl.expressions.is_empty(),
+        Expression::BinaryExpression(bin) => {
+            bin.operator == BinaryOperator::Addition
+                && is_constant_string_expr(&bin.left, semantic, visited)
+                && is_constant_string_expr(&bin.right, semantic, visited)
+        }
+        Expression::Identifier(ident) => is_const_string_binding(ident, semantic, visited),
+        _ => false,
+    }
+}
+
+/// True when `ident` resolves to a `const` binding whose initializer is itself a
+/// constant string expression. A `let`/`var` binding can be reassigned and a
+/// function parameter (or an unresolved global/import) is runtime input, so none
+/// qualifies. Resolves the binding via `reference_id` → symbol → declaration node.
+fn is_const_string_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    visited: &mut Vec<oxc_semantic::SymbolId>,
+) -> bool {
+    use oxc_ast::AstKind as OxcAstKind;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    // Stop the walk at the binding's own declaration boundary — a `FormalParameter`
+    // is not a `const`, so it (like any non-`VariableDeclarator`) is rejected rather
+    // than climbing to an enclosing declarator.
+    let Some(OxcAstKind::VariableDeclarator(decl)) = std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find(|kind| {
+            matches!(
+                kind,
+                OxcAstKind::VariableDeclarator(_) | OxcAstKind::FormalParameter(_)
+            )
+        })
+    else {
+        return false;
+    };
+    if decl.kind != VariableDeclarationKind::Const {
+        return false;
+    }
+    let Some(init) = &decl.init else {
+        return false;
+    };
+    if visited.contains(&sym_id) {
+        return false;
+    }
+    visited.push(sym_id);
+    let is_constant = is_constant_string_expr(init, semantic, visited);
+    visited.pop();
+    is_constant
 }
 
 #[cfg(test)]
@@ -146,5 +236,104 @@ mod tests {
     fn flags_plain_variable_not_source() {
         // Negative control: a plain variable (not `.source`) is still flagged.
         assert_eq!(run("const r = new RegExp(someStringVar);").len(), 1);
+    }
+
+    #[test]
+    fn allows_constant_string_concat_of_const_binding() {
+        // Issue #7237 (sveltejs/svelte mapped_code.js): every operand of the `+`
+        // concatenation is a string literal or `r_in`, a const bound to a string
+        // literal — the whole pattern is fixed at authoring time, no ReDoS surface.
+        let src = r#"
+            const r_in = '[#@]\s*sourceMappingURL\s*=\s*(\S*)';
+            const regex = new RegExp('(?://' + r_in + ')|(?:/\*' + r_in + '\s*\*/)$');
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_simple_const_concat() {
+        // `'a' + r_in + 'b'` where `r_in` is a const bound to a string literal.
+        let src = r#"
+            const r_in = 'x';
+            const r = new RegExp('a' + r_in + 'b');
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_bound_string_identifier() {
+        // A bare identifier bound by a const to a string literal is a fixed pattern.
+        let src = r#"
+            const p = 'static';
+            const r = new RegExp(p);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_literal_only_concat() {
+        // A concatenation of pure string literals folds to a fixed pattern.
+        assert!(run(r#"const r = new RegExp('^' + 'foo' + '$');"#).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_template_literal() {
+        // A bare template literal stays safe (existing behavior).
+        assert!(run("const r = new RegExp(`^tpl$`);").is_empty());
+    }
+
+    #[test]
+    fn flags_param_binding() {
+        // A function parameter is runtime input — still flagged.
+        let src = r#"
+            function build(userInput: string): RegExp {
+                return new RegExp(userInput);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_concat_with_let_operand() {
+        // `q` is a `let` bound to a runtime call — a non-const operand keeps the
+        // concatenation dynamic, so it stays flagged.
+        let src = r#"
+            let q = getQuery();
+            const r = new RegExp('^' + q + '$');
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_repeated_const_operand() {
+        // The same const used twice in one concatenation stays constant — the
+        // cycle-guard backtracks per resolution branch, it does not over-reject.
+        let src = r#"
+            const p = 'x';
+            const r = new RegExp(p + p);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_self_referential_const() {
+        // `const a = a` is a cyclic initializer — resolution must terminate (no
+        // stack overflow) and, being non-constant, the pattern stays flagged.
+        let src = r#"
+            const a = a;
+            const r = new RegExp(a);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_mutually_recursive_const() {
+        // A two-hop const cycle must also terminate and stay flagged.
+        let src = r#"
+            const a = b;
+            const b = a;
+            const r = new RegExp(a);
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
