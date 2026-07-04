@@ -181,9 +181,20 @@ impl OxcCheck for Check {
             return;
         }
 
-        // [].concat(...) — only when receiver is an array literal
+        // [].concat(...) — only when the receiver AND every argument are array
+        // literals. `Array#concat` follows IsConcatSpreadable: an array argument
+        // is flattened in, a non-array argument is appended as a single element,
+        // so `[].concat(existing, value)` normalizes a mix of arrays and scalars.
+        // Spread is a behavior-preserving rewrite only when every operand is a
+        // known array (`[...3]` throws, `[...(/re/)]` throws, `[...'ab']` splits
+        // the string); a scalar/unknown argument has no spread equivalent.
         if prop == "concat" {
-            if matches!(&member.object, Expression::ArrayExpression(_)) {
+            let all_args_are_array_literals = call.arguments.iter().all(|arg| {
+                matches!(arg.as_expression(), Some(Expression::ArrayExpression(_)))
+            });
+            if matches!(&member.object, Expression::ArrayExpression(_))
+                && all_args_are_array_literals
+            {
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, call.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -268,6 +279,25 @@ mod tests {
     #[test]
     fn allows_concat_identifier() {
         assert!(run_on("const combined = arr.concat(other);").is_empty());
+    }
+
+    #[test]
+    fn allows_concat_array_literal_with_identifier_args() {
+        // `[].concat(existing, value)` is the polymorphic array-normalization
+        // idiom; the args may be scalars, so spread is not equivalent.
+        assert!(run_on("const m = [].concat(existing, value);").is_empty());
+    }
+
+    #[test]
+    fn allows_concat_array_literal_with_mixed_scalar_arg() {
+        // A non-array-literal argument (`3`) is appended as a single element by
+        // concat; `[...3]` would throw, so spread is not equivalent.
+        assert!(run_on("const m = [].concat([1, 2], 3);").is_empty());
+    }
+
+    #[test]
+    fn allows_concat_array_literal_receiver_with_identifier_arg() {
+        assert!(run_on("const m = [1, 2].concat(other);").is_empty());
     }
 
     #[test]
