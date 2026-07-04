@@ -12,14 +12,15 @@
 //! only the `element` argument are exempt: passing them directly is identical to
 //! wrapping them in an arrow. A `this.method` reference is likewise exempt when
 //! `method` is an arrow-function class property (auto-bound to `this`) declaring
-//! at most one parameter.
+//! at most one parameter. An argument that resolves to a `for...in` loop
+//! variable is exempt too: such a key is always a `string`, never a function.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    ClassElement, Expression, FormalParameters, StaticMemberExpression, TSSignature, TSType,
-    TSTypeAnnotation, TSTypeName,
+    ClassElement, Expression, ForStatementLeft, FormalParameters, StaticMemberExpression,
+    TSSignature, TSType, TSTypeAnnotation, TSTypeName,
 };
 use std::sync::Arc;
 
@@ -147,6 +148,23 @@ fn is_low_arity_local<'a>(
     let nodes = semantic.nodes();
     match nodes.kind(decl_node_id) {
         AstKind::VariableDeclarator(decl) => {
+            // A `for...in` loop variable (`for (const key in obj) arr.map(key)`)
+            // is, per the ECMAScript spec, always a `string` — never a function
+            // reference — so passing it bare cannot be the `arr.map(parseInt)`
+            // footgun. Its binding is a `VariableDeclarator` whose
+            // `VariableDeclaration` is the `left` head of a `ForInStatement` —
+            // matched by span so a `var` in an unbraced loop body does not
+            // qualify. A `for...of` element binding is excluded: it can
+            // legitimately hold a function reference.
+            let var_decl_node = nodes.parent_node(decl_node_id);
+            if let AstKind::VariableDeclaration(var_decl) = var_decl_node.kind()
+                && let AstKind::ForInStatement(for_in) =
+                    nodes.parent_node(var_decl_node.id()).kind()
+                && let ForStatementLeft::VariableDeclaration(head) = &for_in.left
+                && head.span == var_decl.span
+            {
+                return true;
+            }
             if let Some(ann) = decl.type_annotation.as_ref()
                 && is_low_arity_function_type(&ann.type_annotation)
             {
@@ -753,6 +771,51 @@ mod tests {
                 "class M { private _f = (a: number, b: number): number => a + b; run(arr: number[]) { return arr.map(this._f); } }"
             )
             .len(),
+            1
+        );
+    }
+
+    // #7187 repro (remult/remult `sort.ts`): `key` is a `for...in` loop variable
+    // — always a `string`, never a function — so `entityDefs.fields.find(key)` is
+    // a field lookup by name, not the callback footgun. Must not flag.
+    #[test]
+    fn allows_for_in_loop_variable_argument() {
+        assert!(run_on(
+            "for (const key in orderBy) { const field = entityDefs.fields.find(key); }"
+        )
+        .is_empty());
+    }
+
+    // #7187: a `for...in` key passed to `.map`/`.filter` is likewise exempt.
+    #[test]
+    fn allows_for_in_loop_variable_map_filter() {
+        assert!(run_on("for (const k in obj) { arr.map(k); }").is_empty());
+        assert!(run_on("for (const k in obj) { arr.filter(k); }").is_empty());
+    }
+
+    // #7187 negative space: a `for...of` element binding can legitimately hold a
+    // function reference, so it must stay flagged.
+    #[test]
+    fn flags_for_of_element_binding_argument() {
+        assert_eq!(
+            run_on("for (const fn of callbacks) { arr.map(fn); }").len(),
+            1
+        );
+    }
+
+    // #7187 negative space: the genuine `arr.map(parseInt)` footgun is unaffected.
+    #[test]
+    fn flags_parse_int_alongside_for_in_fix() {
+        assert_eq!(run_on("const x = arr.map(parseInt);").len(), 1);
+    }
+
+    // #7187 negative space: a `var` declared in an unbraced `for...in` body is a
+    // normal binding (not the loop key), so it must stay flagged — the exemption
+    // matches only the loop's `left` head, not any declaration under it.
+    #[test]
+    fn flags_var_in_unbraced_for_in_body() {
+        assert_eq!(
+            run_on("for (const k in obj) var fn = getCb(); const x = arr.map(fn);").len(),
             1
         );
     }
