@@ -4463,11 +4463,14 @@ fn ident_resolves_to_type_parameter(
     matches!(semantic.nodes().kind(decl), AstKind::TSTypeParameter(_))
 }
 
-/// True when `t` references at least one enclosing-scope type parameter, looking
-/// through union/intersection members and into generic type arguments (so
-/// `ReturnType<CallFunction>` and `CTEBuilderCallback<N>` are both seen to
-/// reference their parameter). Such a type is instantiation-dependent: its
-/// concrete form is deferred to whatever the parameter is bound to per call.
+/// True when `t` references at least one enclosing-scope type parameter, or the
+/// polymorphic `this` type, looking through union/intersection members,
+/// parentheses, generic type arguments, conditional types, and indexed accesses
+/// (so `ReturnType<CallFunction>`, `CTEBuilderCallback<N>`,
+/// `T extends A ? T['x'] : string`, and `this['_']['data']` are all seen to
+/// reference their parameter or `this`). Such a type is instantiation-dependent:
+/// its concrete form is deferred to whatever the parameter (or `this`) is bound
+/// to per call, so it cannot be lifted to a module-level alias.
 #[must_use]
 pub fn type_references_enclosing_type_parameter(
     t: &oxc_ast::ast::TSType,
@@ -4495,6 +4498,30 @@ pub fn type_references_enclosing_type_parameter(
             .types
             .iter()
             .any(|m| type_references_enclosing_type_parameter(m, semantic)),
+        // A conditional type (`T extends A ? B : C`) is instantiation-dependent
+        // when its test, constraint, or either branch references an enclosing
+        // type parameter (or `this`); recurse into all four so a fully-concrete
+        // conditional still resolves to `false` and stays extractable.
+        TSType::TSConditionalType(c) => {
+            type_references_enclosing_type_parameter(&c.check_type, semantic)
+                || type_references_enclosing_type_parameter(&c.extends_type, semantic)
+                || type_references_enclosing_type_parameter(&c.true_type, semantic)
+                || type_references_enclosing_type_parameter(&c.false_type, semantic)
+        }
+        // An indexed access (`this['_']['data']`, `T['data']`) inherits scope
+        // dependence from its object or index type; recurse into both.
+        TSType::TSIndexedAccessType(a) => {
+            type_references_enclosing_type_parameter(&a.object_type, semantic)
+                || type_references_enclosing_type_parameter(&a.index_type, semantic)
+        }
+        // The polymorphic `this` type is bound to its enclosing class/interface
+        // scope and is invalid at module scope, so it can never be hoisted.
+        TSType::TSThisType(_) => true,
+        // Unwrap parentheses so the walk reaches the inner type of a
+        // parenthesized member (`(T extends A ? B : C) | SQL`).
+        TSType::TSParenthesizedType(p) => {
+            type_references_enclosing_type_parameter(&p.type_annotation, semantic)
+        }
         _ => false,
     }
 }

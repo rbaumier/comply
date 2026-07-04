@@ -654,4 +654,58 @@ mod tests {
         "#;
         assert!(!run(src).is_empty());
     }
+
+    #[test]
+    fn no_fp_on_this_indexed_conditional_union() {
+        // Regression #7107 (drizzle-team/drizzle-orm, column-builder.ts) — a
+        // union whose member is a conditional over `this['_']` references the
+        // polymorphic `this` type (via an indexed access), which is invalid at
+        // module scope and cannot be lifted to a type alias.
+        let src = r#"
+            class ColumnBuilder {
+                default(value: (this['_'] extends { $type: infer U } ? U : this['_']['data']) | SQL) {}
+                $defaultFn(fn: () => (this['_'] extends { $type: infer U } ? U : this['_']['data']) | SQL) {}
+                $onUpdateFn(fn: () => (this['_'] extends { $type: infer U } ? U : this['_']['data']) | SQL) {}
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_function_type_param_conditional_union() {
+        // Regression #7107 (drizzle-team/drizzle-orm, aggregate.ts) — the
+        // conditional `T extends AnyColumn ? T['_']['data'] : string` references
+        // the function type parameter `T`; each instantiation is a distinct
+        // concrete type, so it must not be flagged for extraction.
+        let src = r#"
+            function max<T>(expression: T): SQL<(T extends AnyColumn ? T['_']['data'] : string) | null> { return null as any; }
+            function min<T>(expression: T): SQL<(T extends AnyColumn ? T['_']['data'] : string) | null> { return null as any; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_fully_concrete_conditional_union() {
+        // Control for #7107 — a conditional with no enclosing type parameter or
+        // `this` anywhere inside is fully concrete and extractable, so the
+        // recursion must still let a repeated occurrence flag (not blanket-exempt
+        // every conditional).
+        let src = r#"
+            function a(x: (string extends number ? 1 : 2) | boolean) {}
+            function b(x: (string extends number ? 1 : 2) | boolean) {}
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_concrete_indexed_access_union() {
+        // Control for #7107 — an indexed access on a concrete type (`Foo` is not
+        // an enclosing type parameter) is extractable; the indexed-access
+        // recursion must resolve to `false` here and still flag the repetition.
+        let src = r#"
+            function a(x: Foo['bar'] | string) {}
+            function b(x: Foo['bar'] | string) {}
+        "#;
+        assert!(!run(src).is_empty());
+    }
 }
