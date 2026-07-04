@@ -6,7 +6,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     FormalParameters, PropertyKey, TSCallSignatureDeclaration, TSLiteral, TSSignature,
-    TSType, TSTypeAnnotation,
+    TSType, TSTypeAnnotation, TSTypeParameterDeclaration,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashSet;
@@ -15,11 +15,12 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// The parameter list and declared return type of an overload signature, the only
-/// two facets that determine whether a group of overloads can be merged. Lets the
-/// unifiability heuristics treat call signatures and named method signatures
-/// uniformly.
+/// The type parameters, parameter list, and declared return type of an overload
+/// signature — the facets that determine whether a group of overloads can be
+/// merged. Lets the unifiability heuristics treat call signatures and named method
+/// signatures uniformly.
 struct SigShape<'a> {
+    type_params: Option<&'a TSTypeParameterDeclaration<'a>>,
     params: &'a FormalParameters<'a>,
     return_type: Option<&'a TSTypeAnnotation<'a>>,
 }
@@ -70,6 +71,16 @@ fn return_type_text<'a>(shape: &SigShape<'a>, source: &'a str) -> Option<&'a str
 /// e.g. `(pinia: Pinia | undefined)`.
 fn params_text<'a>(shape: &SigShape<'a>, source: &'a str) -> &'a str {
     &source[shape.params.span.start as usize..shape.params.span.end as usize]
+}
+
+/// The source text of a signature's type-parameter list (including the angle
+/// brackets), e.g. `<$Output extends AsyncIterable<any, void, any>>`, or `None`
+/// when the signature declares none. Two overloads whose parameter lists are
+/// textually identical can still be distinguished by their type-parameter
+/// constraints, so this is part of a signature's input identity.
+fn type_params_text<'a>(shape: &SigShape<'a>, source: &'a str) -> Option<&'a str> {
+    let decl = shape.type_params?;
+    Some(&source[decl.span.start as usize..decl.span.end as usize])
 }
 
 /// The source text of the type annotation of the parameter at `index`, or `None`
@@ -128,6 +139,25 @@ fn signatures_narrow_return_type<'a>(shapes: &[SigShape<'a>], source: &'a str) -
     true
 }
 
+/// Whether every signature in the group declares the same return type text (all
+/// annotated with equal text, or all unannotated).
+fn all_returns_identical<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
+    let first = return_type_text(&shapes[0], source);
+    shapes[1..]
+        .iter()
+        .all(|s| return_type_text(s, source) == first)
+}
+
+/// Whether every signature in the group declares the same type-parameter list text
+/// (all equal, or all absent). Distinguishes overloads whose parameter lists read
+/// identically but whose method-level generic constraints differ.
+fn all_type_params_identical<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
+    let first = type_params_text(&shapes[0], source);
+    shapes[1..]
+        .iter()
+        .all(|s| type_params_text(s, source) == first)
+}
+
 /// Whether a group of overload signatures could be merged into one with a union
 /// or optional trailing parameter.
 ///
@@ -144,12 +174,20 @@ fn signatures_narrow_return_type<'a>(shapes: &[SigShape<'a>], source: &'a str) -
 ///   vs `innerJoin(table, callback)` idiom) would force a union at an internal
 ///   position, over-permitting combinations the overloads reject.
 /// * When the counts are equal the merge unions a single parameter's type. This is
-///   unsafe — so the group is not unifiable — when either the signatures form an
+///   unsafe — so the group is not unifiable — when the signatures form an
 ///   overloaded-narrowing group (distinct parameter lists each mapping to a
-///   distinct, narrower return) or they differ at two or more parameter positions
-///   (the EventEmitter idiom, where a string-literal event and its narrowed
-///   listener both differ from the catch-all overload; a per-position union would
-///   admit listener/event combinations the overloads reject).
+///   distinct, narrower return), or their return types are not all identical *while*
+///   the inputs differ (a differing parameter position or type-parameter
+///   constraint), because then each overload narrows the return conditionally on its
+///   input — the trpc `subscription<$Output extends AsyncIterable>: SubscriptionProcedure`
+///   vs `subscription<$Output extends Observable>: LegacyObservableSubscriptionProcedure`
+///   idiom — which a single union return cannot express, or they differ at two or
+///   more parameter positions (the EventEmitter idiom, where a string-literal event
+///   and its narrowed listener both differ from the catch-all overload; a
+///   per-position union would admit listener/event combinations the overloads
+///   reject). Overloads with identical inputs but differing returns are a redundant
+///   duplicate whose only merge — a union return — is itself the smell, so they
+///   still fire.
 fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
     let mut counts = shapes.iter().map(|s| s.params.items.len());
     let Some(first) = counts.next() else {
@@ -167,11 +205,16 @@ fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> boo
         if signatures_narrow_return_type(shapes, source) {
             return false;
         }
-        return differing_param_positions(shapes, min, source) < 2;
+        let differing = differing_param_positions(shapes, min, source);
+        if !all_returns_identical(shapes, source)
+            && (differing > 0 || !all_type_params_identical(shapes, source))
+        {
+            return false;
+        }
+        return differing < 2;
     }
 
-    let first_return = return_type_text(&shapes[0], source);
-    if shapes[1..].iter().any(|s| return_type_text(s, source) != first_return) {
+    if !all_returns_identical(shapes, source) {
         return false;
     }
     differing_param_positions(shapes, min, source) == 0
@@ -199,6 +242,7 @@ fn collect_signatures<'a>(
                 let group = seen.entry("[[call]]".to_string()).or_default();
                 group.offsets.push(call.span.start);
                 group.shapes.push(SigShape {
+                    type_params: call.type_parameters.as_deref(),
                     params: &call.params,
                     return_type: call.return_type.as_deref(),
                 });
@@ -213,6 +257,7 @@ fn collect_signatures<'a>(
                 let group = seen.entry(name).or_default();
                 group.offsets.push(method.span.start);
                 group.shapes.push(SigShape {
+                    type_params: method.type_parameters.as_deref(),
                     params: &method.params,
                     return_type: method.return_type.as_deref(),
                 });
@@ -518,6 +563,43 @@ mod tests {
                 "interface SelectQueryBuilder<DB, TB, O> {\n  \
                  innerJoin<TE extends TableExpression<DB, TB>, K1 extends JoinReferenceExpression<DB, TB, TE>, K2 extends JoinReferenceExpression<DB, TB, TE>>(table: TE, k1: K1, k2: K2): SelectQueryBuilderWithInnerJoin<DB, TB, O, TE>\n  \
                  innerJoin<TE extends TableExpression<DB, TB>, const FN extends JoinCallbackExpression<DB, TB, TE>>(table: TE, callback: FN): SelectQueryBuilderWithInnerJoin<DB, TB, O, TE>\n}"
+            )
+            .is_empty()
+        );
+    }
+
+    // Regression #7117 (Case 1): trpc `subscription` — two equal-arity method
+    // overloads with textually-identical parameters but different method-level
+    // generic constraints and different return types. The params compare as 0
+    // differing positions, but the returns differ, so each overload narrows its
+    // return conditionally on `$Output`'s constraint — a single union-parameter
+    // signature cannot express that. Not unifiable.
+    #[test]
+    fn allows_equal_arity_overloads_with_differing_return_types() {
+        assert!(
+            run_on(
+                "interface ProcedureBuilder<TContext> {\n  \
+                 subscription<$Output extends AsyncIterable<any, void, any>>(resolver: ProcedureResolver<TContext, $Output>): SubscriptionProcedure<$Output>;\n  \
+                 subscription<$Output extends Observable<any, any>>(resolver: ProcedureResolver<TContext, $Output>): LegacyObservableSubscriptionProcedure<$Output>;\n}"
+            )
+            .is_empty()
+        );
+    }
+
+    // Regression #7117 (Case 2): trpc `useTRPCInfiniteQuery` — three equal-arity
+    // call signatures whose returns are mixed (overload 1 returns
+    // `DefinedUseInfiniteQueryResult`, overloads 2–3 share `UseInfiniteQueryResult`).
+    // The returns are neither all-distinct (so the narrowing exemption does not
+    // apply) nor all-identical, so the group conditionally narrows the return on the
+    // `opts` shape, which a union `opts` parameter cannot replicate. Not unifiable.
+    #[test]
+    fn allows_equal_arity_call_signatures_with_mixed_return_types() {
+        assert!(
+            run_on(
+                "interface useTRPCInfiniteQuery<TDef> {\n  \
+                 <TData>(input: TInput, opts: DefinedInitialDataInfiniteOptions<TData>): DefinedUseInfiniteQueryResult<TData>;\n  \
+                 <TData>(input: TInput, opts?: UndefinedInitialDataInfiniteOptions<TData>): UseInfiniteQueryResult<TData>;\n  \
+                 <TData>(input: TInput, opts?: UseInfiniteQueryOptions<TData>): UseInfiniteQueryResult<TData>;\n}"
             )
             .is_empty()
         );
