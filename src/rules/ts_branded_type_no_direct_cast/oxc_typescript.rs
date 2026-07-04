@@ -4,7 +4,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{PropertyKey, TSSignature, TSType, TSTypeName, TSTypeOperatorOperator};
+use oxc_ast::ast::{
+    Expression, PropertyKey, TSSignature, TSType, TSTypeName, TSTypeOperatorOperator,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -17,6 +19,29 @@ fn is_branded_name(name: &str) -> bool {
         || name.ends_with("UUID")
         || name.ends_with("Token")
         || name.ends_with("Hash")
+}
+
+/// True when the cast operand (peeling parentheses) is a `Symbol(...)` or
+/// `Symbol.<method>(...)` call — e.g. `Symbol.for(key)`. Casting the result to a
+/// `unique symbol` TypeId brand is the canonical, and only possible, construction
+/// of that symbol marker: the brand has exactly one inhabitant — the symbol itself
+/// — so there is nothing to validate. The signal is the built-in `Symbol`
+/// constructor call, read locally without type resolution; an arbitrary data-brand
+/// cast (`'' as UserId`, `raw as EntityId`) never routes through `Symbol`.
+fn operand_is_symbol_construction(operand: &Expression) -> bool {
+    match operand {
+        Expression::ParenthesizedExpression(p) => operand_is_symbol_construction(&p.expression),
+        Expression::CallExpression(call) => match &call.callee {
+            // `Symbol(key)` — the global constructor.
+            Expression::Identifier(id) => id.name.as_str() == "Symbol",
+            // `Symbol.for(key)` and other `Symbol.<method>(...)` calls.
+            Expression::StaticMemberExpression(member) => {
+                matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == "Symbol")
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// Generic helpers from the common branded-type libraries whose instantiation
@@ -267,6 +292,14 @@ impl OxcCheck for Check {
         let type_text = &ctx.source[type_span.start as usize..type_span.end as usize];
         let base_name = type_text.split('<').next().unwrap_or(type_text).trim();
         if !is_branded_name(base_name) {
+            return;
+        }
+
+        // A symbol value cast to a symbol-typed brand is the canonical
+        // `unique symbol` TypeId construction (`Symbol.for(key) as X.TypeId`): the
+        // brand has exactly one inhabitant — the symbol itself — so the cast IS the
+        // construction, not a validation bypass.
+        if operand_is_symbol_construction(&as_expr.expression) {
             return;
         }
 
@@ -528,5 +561,44 @@ function makeLoop(raw: string): Loop {
 const v = raw as Schemas.ColorSchemeId;"#;
         let diags = run_rule_gated(&Check, src, "src/components/select.tsx");
         assert!(diags.is_empty(), "cast to a qualified local union alias must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_symbol_for_cast_to_unique_symbol_typeid_brand() {
+        // Issue #7171 — effect-ts constructs a nominal `unique symbol` TypeId by
+        // casting `Symbol.for(key)` to the brand. The brand has exactly one
+        // inhabitant (the symbol itself), so the cast IS the construction, not a
+        // validation bypass. Both the wrapped multi-line form and the one-line form.
+        let src = r#"const FiberSymbolKey = "effect/Fiber";
+export const FiberTypeId: Fiber.FiberTypeId = Symbol.for(
+  FiberSymbolKey
+) as Fiber.FiberTypeId;
+const HashMapSymbolKey = "effect/HashMap";
+const HashMapTypeId: HM.TypeId = Symbol.for(HashMapSymbolKey) as HM.TypeId;"#;
+        let diags = run_rule_gated(&Check, src, "packages/effect/src/internal/fiber.ts");
+        assert!(diags.is_empty(), "Symbol.for(key) cast to a unique-symbol TypeId brand must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_global_symbol_cast_to_typeid_brand() {
+        // The global `Symbol(...)` constructor is the same unique-symbol
+        // construction as `Symbol.for(...)`; casting its result to the brand is exempt.
+        let src = r#"const X = Symbol("k") as Y.TypeId;"#;
+        let diags = run_rule_gated(&Check, src, "src/internal/x.ts");
+        assert!(diags.is_empty(), "global Symbol(...) cast to a TypeId brand must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_data_brand_cast_of_arbitrary_value() {
+        // Negative space: the operand exemption is keyed on a `Symbol()`/`Symbol.*()`
+        // call, not on the brand name. Casting an arbitrary runtime value — a string
+        // literal, or a member/identifier read — to a data brand still bypasses the
+        // validator and must fire, including when the target is a `*.TypeId`.
+        let src = r#"const u = '' as UserId;
+const e = options.executionId as EntityId;
+const m = raw as MachineId;
+const t = raw as HM.TypeId;"#;
+        let diags = run_rule_gated(&Check, src, "src/domain/ids.ts");
+        assert_eq!(diags.len(), 4, "arbitrary-value data-brand casts must still fire, got: {diags:?}");
     }
 }
