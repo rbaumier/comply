@@ -351,8 +351,10 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
 ///
 /// The operand resolves to `usize`/`isize` either by an explicit annotation
 /// (`let n: usize = …`) — via [`find_identifier_type`] — or, when no annotation
-/// exists, by [`inferred_binding_pins_pointer_width`] for an inferred `?`-bound
-/// value that flows into the enclosing function's `usize`/`isize` success slot.
+/// exists, by [`inferred_binding_pins_pointer_width`]: an inferred `?`-bound
+/// value flowing into the enclosing function's `usize`/`isize` success slot, or
+/// an inferred `let n = <expr>.len()` binding (every std collection's `.len()`
+/// returns `usize`) widened to `u64`/`u128`.
 fn cast_is_pointer_sized_widening(node: tree_sitter::Node, source: &[u8], target: &str) -> bool {
     let Some(value) = node.child_by_field_name("value") else {
         return false;
@@ -377,7 +379,14 @@ fn cast_is_pointer_sized_widening(node: tree_sitter::Node, source: &[u8], target
 /// type is provably `usize` (for a `u64`/`u128` target) or `isize` (for an
 /// `i64`/`i128` target).
 ///
-/// For an inferred `let name = <expr>?;`, `name`'s type is the `Ok`-type of
+/// **`.len()`-initializer case.** `name`'s unique binder is a `let name =
+/// <expr>.len();` whose initializer's final method is `len`. Every standard-
+/// library collection's `.len()` returns `usize`, so `name` is `usize` and a
+/// widening cast to `u64`/`u128` is lossless — scoped to those widening targets,
+/// so a narrowing `usize as u32` is not exempt here.
+///
+/// **`?`-propagation case.** For an inferred `let name = <expr>?;`, `name`'s
+/// type is the `Ok`-type of
 /// `<expr>`, which is *not* the enclosing function's declared success type in
 /// general: `let x = parse_i64()?;` in a `-> io::Result<usize>` fn makes
 /// `x: i64`, so `x as u64` is a genuine sign/width hazard that must stay flagged.
@@ -407,6 +416,11 @@ fn inferred_binding_pins_pointer_width(
     let Some(func) = enclosing_function_item(node) else {
         return false;
     };
+    // `let name = <expr>.len();` binds `name` to `usize` (every std collection's
+    // `.len()` returns `usize`), so a widening cast to `u64`/`u128` is lossless.
+    if matches!(target, "u64" | "u128") && unique_len_binding(func, name, source) {
+        return true;
+    }
     let Some(ok_type) = function_result_ok_type(func, source) else {
         return false;
     };
@@ -454,23 +468,71 @@ fn function_result_ok_type(func: tree_sitter::Node, source: &[u8]) -> Option<Str
     Some(ok_arg.utf8_text(source).ok()?.trim().to_string())
 }
 
-/// True when `name` has exactly one binder in `func` (not descending into nested
-/// functions/closures) and that binder is a `let` declaration whose initializer
-/// is a `try_expression` (`let name = <expr>?;`).
+/// True when `name`'s [unique binder](unique_binder) in `func` is a `let`
+/// declaration whose initializer is a `try_expression` (`let name = <expr>?;`).
+fn unique_try_binding(func: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    unique_binder(func, name, source).is_some_and(|binder| {
+        binder.kind() == "let_declaration"
+            && binder
+                .child_by_field_name("value")
+                .is_some_and(|value| value.kind() == "try_expression")
+    })
+}
+
+/// True when `name`'s [unique binder](unique_binder) in `func` is a `let`
+/// declaration whose initializer is a method call whose final method is `len`
+/// (`let name = <expr>.len();`). Every standard-library collection's `.len()`
+/// returns `usize`, so `name` is `usize`; the caller scopes the exemption to
+/// widening (`u64`/`u128`) targets, which keeps the cast lossless.
+fn unique_len_binding(func: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    unique_binder(func, name, source).is_some_and(|binder| {
+        binder.kind() == "let_declaration"
+            && binder
+                .child_by_field_name("value")
+                .is_some_and(|value| call_final_method_is_len(value, source))
+    })
+}
+
+/// True when `value` is a method-call expression whose outermost (final) method
+/// is `len` — `x.len()`, `x.foo().len()`. In tree-sitter-rust a method call is a
+/// `call_expression` whose `function` field is a `field_expression`; that field
+/// expression's `field` names the method.
+fn call_final_method_is_len(value: tree_sitter::Node, source: &[u8]) -> bool {
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    value
+        .child_by_field_name("function")
+        .filter(|function| function.kind() == "field_expression")
+        .and_then(|function| function.child_by_field_name("field"))
+        .and_then(|field| field.utf8_text(source).ok())
+        .map(str::trim)
+        == Some("len")
+}
+
+/// The single binder of `name` in `func` (not descending into nested
+/// functions/closures), or `None` when `name` has zero or multiple binders.
 ///
 /// A *binder* is any construct that introduces `name` into scope: a
 /// `let_declaration`, a `parameter`, a `for_expression`/`let_condition`/
 /// `match_arm` pattern. Counting every binder — not just `let` — is what rules
-/// out shadowing: a `for name in …` / `if let Some(name)` / `match … { Some(name)
-/// => … }` binding of the same name elsewhere in the function makes the cast
-/// operand and the `Ok(name)` return potentially denote different values, so the
-/// success return no longer pins the cast operand's type and the exemption must
-/// not apply.
-fn unique_try_binding(func: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+/// out shadowing: a second binder of the same name (a `for name in …` /
+/// `if let Some(name)` / `match … { Some(name) => … }`) elsewhere in the function
+/// makes the cast operand and the inspected binding potentially denote different
+/// values, so the binding no longer pins the cast operand's type.
+fn unique_binder<'a>(
+    func: tree_sitter::Node<'a>,
+    name: &str,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
     let mut count = 0usize;
-    let mut single_is_try_let = false;
-    count_name_binders(func, name, source, &mut count, &mut single_is_try_let);
-    count == 1 && single_is_try_let
+    let mut single = None;
+    count_name_binders(func, name, source, &mut count, &mut single);
+    if count == 1 {
+        single
+    } else {
+        None
+    }
 }
 
 /// The node kinds that bind a pattern via a `pattern` field: a `let` declaration,
@@ -485,12 +547,12 @@ const NAME_BINDER_KINDS: &[&str] = &[
     "match_arm",
 ];
 
-fn count_name_binders(
-    node: tree_sitter::Node,
+fn count_name_binders<'a>(
+    node: tree_sitter::Node<'a>,
     name: &str,
     source: &[u8],
     count: &mut usize,
-    single_is_try_let: &mut bool,
+    single_binder: &mut Option<tree_sitter::Node<'a>>,
 ) {
     if NAME_BINDER_KINDS.contains(&node.kind())
         && node
@@ -498,17 +560,14 @@ fn count_name_binders(
             .is_some_and(|pattern| pattern_binds_name(pattern, name, source))
     {
         *count += 1;
-        *single_is_try_let = node.kind() == "let_declaration"
-            && node
-                .child_by_field_name("value")
-                .is_some_and(|value| value.kind() == "try_expression");
+        *single_binder = Some(node);
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if matches!(child.kind(), "function_item" | "closure_expression") {
             continue;
         }
-        count_name_binders(child, name, source, count, single_is_try_let);
+        count_name_binders(child, name, source, count, single_binder);
     }
 }
 
@@ -2279,6 +2338,47 @@ name = "normal_lib"
         let src = "fn f() -> io::Result<usize> { \
                    let inc = read()?; if done() { let _ = inc as u64; return Ok(inc); } Ok(0) }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_7145_inferred_len_binding_as_u64_not_flagged() {
+        // Issue #7145 (nushell byte_stream.rs): `let len = string.len();` is an
+        // inferred `usize` (no annotation). `String::len()`/`Vec::len()` return
+        // `usize`, so `len as u64` is a lossless pointer-width widening —
+        // `u64::from(usize)` is not in stable Rust. The function does not return a
+        // `Result`, so this is distinct from the #6366 `?`-propagation case.
+        assert!(
+            run_on("fn f(string: String) -> Self { let len = string.len(); g(Some(len as u64)) }")
+                .is_empty()
+        );
+        assert!(
+            run_on("fn f(bytes: Vec<u8>) -> Self { let len = bytes.len(); g(len as u128) }")
+                .is_empty()
+        );
+        // A chained call whose final method is `.len()` still resolves to `usize`.
+        assert!(
+            run_on("fn f(map: Map) -> u64 { let len = map.keys().len(); len as u64 }").is_empty()
+        );
+    }
+
+    #[test]
+    fn repro_7145_inferred_len_binding_narrowing_still_flagged() {
+        // The exemption is scoped to widening targets: `usize` can exceed `u32`,
+        // so a narrowing `len as u32` stays flagged even from a `.len()` binding.
+        assert_eq!(
+            run_on("fn f(v: Vec<u8>) -> u32 { let len = v.len(); len as u32 }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn repro_7145_inferred_non_len_binding_still_flagged() {
+        // A `let` whose initializer is not a `.len()` call carries no `usize`
+        // proof — the source type is unknown, so `x as u64` stays flagged.
+        assert_eq!(
+            run_on("fn f() -> u64 { let x = compute(); x as u64 }").len(),
+            1
+        );
     }
 
     #[test]
