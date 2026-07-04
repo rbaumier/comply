@@ -295,6 +295,26 @@ pub fn result_ok_type<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
     Some(positional[0])
 }
 
+/// True when `node` is a `generic_type` used as the qualifier of an
+/// expression-position turbofish path — `Type::<Args>::Variant(...)` as a value,
+/// e.g. `Result::<_, String>::Ok(v)`. Here `node` (`Result::<_, String>`) is the
+/// `path` of a `scoped_identifier` whose final segment (`Ok`) names the
+/// constructed variant. Turbofish (`::<>`) is expression-only syntax, and a
+/// type-position path uses `scoped_type_identifier`, so this matches solely the
+/// value-construction case.
+///
+/// The `Args` in such a construction are phantom type arguments written only to
+/// let the compiler infer a surrounding generic call's parameters; they are not
+/// a declared error type on any API surface. Error-type rules keyed on the
+/// second `Result` argument (`rust-string-as-error`, `rust-unit-error-result`)
+/// must skip these, since no `Err`-typed value is produced here.
+pub fn is_expression_turbofish(node: Node) -> bool {
+    node.parent().is_some_and(|parent| {
+        parent.kind() == "scoped_identifier"
+            && parent.child_by_field_name("path") == Some(node)
+    })
+}
+
 /// True when the file containing `node` declares a local `type Result<…> = …`
 /// alias that shadows `std::result::Result`.
 ///
