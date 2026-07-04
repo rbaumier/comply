@@ -965,31 +965,44 @@ pub fn has_adjacent_safety_comment(node: Node, source: &str) -> bool {
 /// True if a comment line carries a safety marker. Two forms are
 /// accepted:
 ///
-///  - a `safety` keyword (any case) immediately followed by `:` or
-///    `.` — covers `// SAFETY:`, `// Safety:`, `// safety:`,
-///    `// safety.`, whose casing and terminator vary across projects;
+///  - the `safety` keyword (any case) as the leading token of the comment
+///    body: after stripping the comment sigil (`//`, `///`, `//!`, `/*`,
+///    `/**`) and leading whitespace, the body begins with `safety` standing
+///    alone — followed by a non-alphanumeric boundary (`:`, `.`, `,`, `-`,
+///    whitespace, or end-of-comment). Covers `// SAFETY:`, `// Safety:`,
+///    `// safety.`, `// SAFETY,`, `//SAFETY - …`, and `// SAFETY we are …`,
+///    whose casing and terminator vary across projects;
 ///  - the rustdoc `# Safety` heading (`/// # Safety`), where the
 ///    keyword stands alone after a `#` with no terminator.
 ///
-/// The `safety` keyword itself is always required, so an arbitrary
-/// comment that merely contains the word in prose
-/// (`// the safety of this depends on X`) does not count.
+/// The `safety` keyword must lead the comment, so a comment that merely
+/// mentions the word in prose (`// the safety of this depends on X`) or
+/// embeds it in a longer word (`// safetycheck: …`) does not count.
 pub fn is_safety_marker(trimmed: &str) -> bool {
     let lower = trimmed.to_ascii_lowercase();
     // `# Safety` rustdoc heading: a `#` heading whose sole word is `safety`.
     if lower.split_once('#').is_some_and(|(_, after)| after.trim() == "safety") {
         return true;
     }
-    // `safety` immediately followed by a `:` or `.` terminator.
-    let mut from = 0;
-    while let Some(rel) = lower[from..].find("safety") {
-        let after = from + rel + "safety".len();
-        if matches!(lower[after..].chars().next(), Some(':' | '.')) {
-            return true;
-        }
-        from = after;
-    }
-    false
+    // `safety` as the leading token once the comment sigil and any leading
+    // whitespace are stripped, so a genuine SAFETY-documentation comment is
+    // recognized regardless of the punctuation that terminates the keyword.
+    let body = lower
+        .strip_prefix("///")
+        .or_else(|| lower.strip_prefix("//!"))
+        .or_else(|| lower.strip_prefix("//"))
+        .or_else(|| lower.strip_prefix("/**"))
+        .or_else(|| lower.strip_prefix("/*!"))
+        .or_else(|| lower.strip_prefix("/*"))
+        .unwrap_or(&lower)
+        .trim_start();
+    let Some(rest) = body.strip_prefix("safety") else {
+        return false;
+    };
+    // The keyword stands alone: the next character (if any) is a
+    // word boundary, so a longer identifier such as `safetycheck` or
+    // `safety_check` does not match (`_` is part of a word, not a boundary).
+    rest.chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_')
 }
 
 /// True if `item` carries a `#[doc(hidden)]` outer attribute as a preceding

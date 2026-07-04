@@ -410,6 +410,61 @@ mod tests {
     }
 
     #[test]
+    fn allows_comma_terminated_safety_comment_issue_7226() {
+        // Issue #7226 (polars chunked_array/mod.rs): `// SAFETY,` — comma
+        // terminator after a leading SAFETY marker.
+        let source = "fn f(p: *const u8) {\n\
+                      // SAFETY, we will not swap the PrimitiveArray.\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_dash_terminated_safety_comment_issue_7226() {
+        // Issue #7226 (polars sort/arg_sort.rs): `//SAFETY -` — no space
+        // after the sigil, dash terminator.
+        let source = "fn f(p: *const u8) {\n\
+                      //SAFETY - we allocated enough\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_space_terminated_safety_comment_issue_7226() {
+        // Issue #7226: a bare `SAFETY` keyword followed by prose with no
+        // punctuation terminator.
+        let source = "fn f(p: *const u8) {\n\
+                      // SAFETY we are within bounds\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_safety_embedded_in_longer_word_issue_7226() {
+        // `safety` embedded in a longer word is not a leading SAFETY marker
+        // (the boundary after `safety` must be non-alphanumeric).
+        let source = "fn f(p: *const u8) {\n\
+                      // safetycheck: run before deref\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_safety_underscore_identifier_issue_7226() {
+        // `safety_check` is a longer identifier, not a bare `safety` token:
+        // `_` is part of the word, so it is not a leading SAFETY marker.
+        let source = "fn f(p: *const u8) {\n\
+                      // safety_check: run before deref\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
     fn exempt_inline_test_fn_issue_3890() {
         // Issue #3890: an inline `#[test] fn` in a src/ file with a bare
         // unsafe block (no SAFETY comment) must not be flagged.
