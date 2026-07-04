@@ -22,6 +22,147 @@ const LAYOUT_READ_PROPS: &[&str] = &[
     "getClientRects",
 ];
 
+/// CSS `element.style.<prop>` properties whose write invalidates layout
+/// geometry, so a subsequent layout read (`getBoundingClientRect`,
+/// `offsetWidth`, …) is forced to flush a synchronous reflow. This is the
+/// write-side mirror of `LAYOUT_READ_PROPS`: only a write to one of these can
+/// thrash. Paint-only properties (`cursor`, `color`, `background*`,
+/// `visibility`, `opacity`, `boxShadow`, `outline`, `filter`, `pointerEvents`,
+/// `zIndex`, `borderRadius`, `borderColor`, …) repaint without reflowing and
+/// are intentionally absent. Names are the camelCase DOM `style` identifiers.
+const LAYOUT_WRITE_PROPS: &[&str] = &[
+    // Box sizing.
+    "width",
+    "height",
+    "minWidth",
+    "minHeight",
+    "maxWidth",
+    "maxHeight",
+    "boxSizing",
+    "aspectRatio",
+    // Position offsets.
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "inset",
+    "position",
+    // Margin.
+    "margin",
+    "marginTop",
+    "marginRight",
+    "marginBottom",
+    "marginLeft",
+    // Padding.
+    "padding",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    // Border box — width and style change geometry (color/radius do not).
+    "border",
+    "borderWidth",
+    "borderStyle",
+    "borderTop",
+    "borderRight",
+    "borderBottom",
+    "borderLeft",
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+    "borderTopStyle",
+    "borderRightStyle",
+    "borderBottomStyle",
+    "borderLeftStyle",
+    // Flow / display.
+    "display",
+    "float",
+    "cssFloat",
+    "clear",
+    "overflow",
+    "overflowX",
+    "overflowY",
+    "verticalAlign",
+    // Flexbox.
+    "flex",
+    "flexBasis",
+    "flexGrow",
+    "flexShrink",
+    "flexDirection",
+    "flexWrap",
+    "flexFlow",
+    "alignItems",
+    "alignContent",
+    "alignSelf",
+    "justifyContent",
+    "justifyItems",
+    "justifySelf",
+    "order",
+    "gap",
+    "rowGap",
+    "columnGap",
+    // Grid.
+    "grid",
+    "gridTemplate",
+    "gridTemplateColumns",
+    "gridTemplateRows",
+    "gridTemplateAreas",
+    "gridAutoColumns",
+    "gridAutoRows",
+    "gridAutoFlow",
+    "gridColumn",
+    "gridRow",
+    "gridColumnStart",
+    "gridColumnEnd",
+    "gridRowStart",
+    "gridRowEnd",
+    "gridArea",
+    "gridGap",
+    "gridColumnGap",
+    "gridRowGap",
+    // Multi-column.
+    "columns",
+    "columnWidth",
+    "columnCount",
+    // Table layout.
+    "tableLayout",
+    "borderCollapse",
+    "borderSpacing",
+    "captionSide",
+    // Text / font — change line-box geometry, forcing reflow.
+    "font",
+    "fontSize",
+    "fontFamily",
+    "fontWeight",
+    "fontStyle",
+    "fontVariant",
+    "fontStretch",
+    "lineHeight",
+    "letterSpacing",
+    "wordSpacing",
+    "whiteSpace",
+    "textAlign",
+    "textIndent",
+    "textTransform",
+    "direction",
+    "writingMode",
+    "tabSize",
+    "wordBreak",
+    "wordWrap",
+    "overflowWrap",
+    "hyphens",
+    "listStyle",
+    "listStyleType",
+    "listStylePosition",
+    // Transform — reflected by `getBoundingClientRect`.
+    "transform",
+    "transformOrigin",
+    "translate",
+    "scale",
+    "rotate",
+];
+
 #[derive(Clone, Copy, PartialEq)]
 enum Op {
     Read,
@@ -110,7 +251,19 @@ impl OxcCheck for Check {
                         && let Expression::StaticMemberExpression(obj_member) = &left.object
                         && obj_member.property.name.as_str() == "style"
                     {
-                        ops.push((assign.span, Op::Write));
+                        // A `.style.<prop>` write only forces a subsequent
+                        // layout read to flush a synchronous reflow when <prop>
+                        // is layout-affecting; paint-only writes (`cursor`,
+                        // `color`, `opacity`, …) repaint without invalidating
+                        // geometry. `cssText` sets the whole declaration block
+                        // (opaque — may include layout properties), so it always
+                        // counts. Other opaque forms (computed `style[expr]`,
+                        // `setProperty`, `Object.assign(style, …)`) are not
+                        // `.style.<staticProp> =` assignments and are unaffected.
+                        let prop = left.property.name.as_str();
+                        if prop == "cssText" || LAYOUT_WRITE_PROPS.contains(&prop) {
+                            ops.push((assign.span, Op::Write));
+                        }
                     }
                 }
                 _ => {}
@@ -216,6 +369,63 @@ function bump() {
   el.scrollTop += 5;
   el.style.top = "0px";
   el.scrollTop += 5;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_paint_only_cursor_writes_with_layout_read() {
+        // Every `.style.*` write assigns `cursor` (paint-only), so no write
+        // invalidates geometry and the interleaved `getBoundingClientRect`
+        // read cannot force a reflow. (element-plus event-helper.ts, #7238.)
+        let src = r#"
+const handleMouseMove = (event, column) => {
+  const cursor = dragging ? 'col-resize' : '';
+  target.style.cursor = cursor;
+  caret.style.cursor = cursor;
+  const rect = target.getBoundingClientRect();
+  document.body.style.cursor = cursor;
+  target.style.cursor = cursor;
+};
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_paint_only_color_opacity_writes_with_layout_read() {
+        let src = r#"
+function fade() {
+  el.style.color = 'red';
+  el.style.opacity = '0.5';
+  el.offsetHeight;
+  el.style.color = 'blue';
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_layout_affecting_write_interleaved_with_read() {
+        let src = r#"
+function thrashLayout() {
+  el.style.width = '100px';
+  const r = el.getBoundingClientRect();
+  el.style.height = '50px';
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_opaque_csstext_write_interleaved_with_read() {
+        // `cssText` may set layout properties, so it stays conservatively
+        // counted as a layout-invalidating write.
+        let src = r#"
+function opaque() {
+  el.style.cssText = 'width: 100px';
+  const r = el.getBoundingClientRect();
+  el.style.cssText = 'width: 200px';
 }
 "#;
         assert_eq!(run(src).len(), 1);
