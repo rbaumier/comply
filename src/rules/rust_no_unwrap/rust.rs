@@ -24,8 +24,10 @@
 //! keeps them concise instead of obscuring the demonstrated feature with error
 //! plumbing.
 //!
-//! Lock operations are exempted — `.read().unwrap()`, `.write().unwrap()`,
-//! `.lock().unwrap()` are idiomatic for std::sync::{Mutex,RwLock} poisoning.
+//! Lock operations are exempted — `.read()`, `.write()`, `.lock()`,
+//! `.try_lock()`, `.try_read()`, `.try_write()` followed by either `.unwrap()`
+//! or `.expect(...)` are idiomatic for std::sync::{Mutex,RwLock} poisoning
+//! propagation.
 //!
 //! Fixed-size-key delegation is exempted — `Self::new_from_slice(key).unwrap()`
 //! where `key` is a parameter typed `&Key<…>` (a RustCrypto `GenericArray`
@@ -185,8 +187,9 @@ impl AstCheck for Check {
         if let Some((method, inner_func)) =
             inner_method_call(function.child_by_field_name("value"), source_bytes)
         {
-            // .read()/.write()/.lock()/.try_lock() unwrap is idiomatic.
-            if field_text == "unwrap"
+            // .read()/.write()/.lock()/.try_lock() unwrap/expect is idiomatic
+            // for std::sync::{Mutex,RwLock} poisoning propagation.
+            if (field_text == "unwrap" || field_text == "expect")
                 && matches!(
                     method,
                     "read" | "write" | "lock" | "try_lock" | "try_read" | "try_write"
@@ -580,6 +583,46 @@ name = "normal_lib"
     #[test]
     fn still_flags_non_lock_unwrap() {
         assert_eq!(run_on("fn f() { let x = y.unwrap(); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_expect_on_mutex_lock() {
+        // #7143: `.lock().expect("reason")` is the same mutex-poisoning idiom as
+        // the already-exempt `.lock().unwrap()`. The fn returns `Result`, so the
+        // non-Result-return `.expect()` carve-out does not apply — only the lock
+        // exemption keeps this from flagging.
+        let source =
+            r#"fn f(m: &Mutex<u32>) -> Result<u32, E> { Ok(*m.lock().expect("lock should succeed")) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_on_rwlock_read() {
+        let source = r#"fn f(l: &RwLock<u8>) -> Result<u8, E> { Ok(*l.read().expect("read")) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_on_rwlock_write() {
+        let source =
+            r#"fn f(l: &RwLock<u8>) -> Result<(), E> { *l.write().expect("write") = 1; Ok(()) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_on_try_lock() {
+        let source =
+            r#"fn f(m: &Mutex<u8>) -> Result<u8, E> { Ok(*m.try_lock().expect("try_lock")) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_expect_on_non_lock_method_in_result_fn() {
+        // #7143 scope guard: broadening the outer call to `.expect()` applies ONLY
+        // when the inner receiver is a lock method. A non-lock `.foo().expect()` in
+        // a Result-returning fn (where `?` is possible) still flags.
+        let source = r#"fn f(x: &X) -> Result<u8, E> { Ok(x.foo().expect("nope")) }"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
