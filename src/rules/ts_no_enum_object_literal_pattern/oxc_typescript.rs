@@ -2,11 +2,12 @@
 //! Flags `Color[someVar]` where `Color` is declared `as const`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BindingPattern, Expression, IdentifierReference, TSTupleElement, TSType, TSTypeOperatorOperator,
-    TSTypeQueryExprName, VariableDeclarationKind,
+    BindingPattern, CallExpression, Expression, FormalParameters, FunctionBody,
+    IdentifierReference, Statement, TSTupleElement, TSType, TSTypeAnnotation, TSTypeOperatorOperator,
+    TSTypeParameterDeclaration, TSTypeQueryExprName, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -72,6 +73,17 @@ fn keyof_typeof_target<'a>(ty: &'a TSType<'a>) -> Option<&'a str> {
     }
 }
 
+/// If `ty` is `keyof X` where `X` is a bare type reference (e.g. a generic type
+/// parameter), return `X`'s name. Distinct from `keyof_typeof_target`, which
+/// handles `keyof typeof X`.
+fn keyof_type_param_target<'a>(ty: &'a TSType<'a>) -> Option<&'a str> {
+    let TSType::TSTypeOperatorType(op) = ty else { return None };
+    if op.operator != TSTypeOperatorOperator::Keyof {
+        return None;
+    }
+    type_ref_name(&op.type_annotation)
+}
+
 /// True when `ty` is `keyof typeof obj_name`, either directly or through a
 /// type alias that resolves to it.
 fn type_keys_obj(ty: &TSType, obj_name: &str, aliases: &FxHashMap<&str, &str>) -> bool {
@@ -133,6 +145,25 @@ fn skip_parens<'r, 'a>(mut ty: &'r TSType<'a>) -> &'r TSType<'a> {
         ty = &p.type_annotation;
     }
     ty
+}
+
+/// The element type of an array type annotation: `E` from `E[]` (a
+/// `TSArrayType`) or from `Array<E>` (a `TSTypeReference` to `Array` with a
+/// single type argument). `None` for any other shape.
+fn array_type_element<'r, 'a>(ty: &'r TSType<'a>) -> Option<&'r TSType<'a>> {
+    match ty {
+        TSType::TSArrayType(arr) => Some(skip_parens(&arr.element_type)),
+        TSType::TSTypeReference(r) => {
+            let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &r.type_name else {
+                return None;
+            };
+            if id.name.as_str() != "Array" {
+                return None;
+            }
+            r.type_arguments.as_ref()?.params.first().map(skip_parens)
+        }
+        _ => None,
+    }
 }
 
 /// True when `expr` is a `TSAsExpression` casting to `(keyof typeof obj_name)[]`
@@ -275,11 +306,153 @@ fn tuple_element_keys_obj(
     }
 }
 
+/// The element type of the array a function/arrow returns: from an explicit
+/// `: Array<E>` / `: E[]` return annotation, or from a trailing `... as Array<E>`
+/// / `... as E[]` cast in the body — a concise-body arrow's implicit-return
+/// expression (`expression_body`) or a `return <expr> as ...` statement.
+fn return_array_element_type<'a>(
+    return_type: Option<&'a TSTypeAnnotation<'a>>,
+    body: Option<&'a FunctionBody<'a>>,
+    expression_body: bool,
+) -> Option<&'a TSType<'a>> {
+    if let Some(rt) = return_type
+        && let Some(el) = array_type_element(&rt.type_annotation)
+    {
+        return Some(el);
+    }
+    let body = body?;
+    for stmt in &body.statements {
+        let returned = match stmt {
+            Statement::ExpressionStatement(es) if expression_body => &es.expression,
+            Statement::ReturnStatement(rs) => match &rs.argument {
+                Some(arg) => arg,
+                None => continue,
+            },
+            _ => continue,
+        };
+        if let Expression::TSAsExpression(as_expr) = peel_parens(returned)
+            && let Some(el) = array_type_element(&as_expr.type_annotation)
+        {
+            return Some(el);
+        }
+    }
+    None
+}
+
+/// True when `elem_ty` is `keyof T` with `T` a generic parameter of the callee
+/// (`type_params`), and the call argument at the position of the parameter
+/// annotated `: T` is the identifier `obj_name`. `T` is then instantiated as
+/// `typeof obj_name`, so each returned element is a known key of `obj_name`.
+///
+/// `T` must be one of the callee's own type parameters: for a concrete `T` the
+/// `arr: T` parameter would not bind `T` to the argument's type, so `keyof T`
+/// would be unrelated to `obj_name`.
+fn call_elem_binds_obj(
+    type_params: Option<&TSTypeParameterDeclaration>,
+    params: &FormalParameters,
+    elem_ty: Option<&TSType>,
+    call: &CallExpression,
+    obj_name: &str,
+) -> bool {
+    let Some(elem_ty) = elem_ty else { return false };
+    let Some(tp_name) = keyof_type_param_target(elem_ty) else { return false };
+    let Some(type_params) = type_params else { return false };
+    if !type_params.params.iter().any(|tp| tp.name.name.as_str() == tp_name) {
+        return false;
+    }
+    let Some(arg_index) = params.items.iter().position(|p| {
+        p.type_annotation
+            .as_ref()
+            .is_some_and(|a| type_ref_name(&a.type_annotation) == Some(tp_name))
+    }) else {
+        return false;
+    };
+    matches!(
+        call.arguments.get(arg_index).and_then(|a| a.as_expression()),
+        Some(Expression::Identifier(id)) if id.name.as_str() == obj_name
+    )
+}
+
+/// True when `call` invokes a generic helper whose declared return element type
+/// is `keyof T`, where `T` is bound (through the `arr: T` parameter) to the
+/// argument `obj_name`. Each element the call yields is then a known key of
+/// `obj_name`, so indexing `obj_name` with such an element is key-narrow-safe.
+fn call_yields_obj_keys<'a>(
+    call: &'a CallExpression<'a>,
+    obj_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(callee) = &call.callee else { return false };
+    let Some(ref_id) = callee.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        let (type_params, params, elem_ty) = match kind {
+            AstKind::Function(f) => (
+                f.type_parameters.as_deref(),
+                &f.params,
+                return_array_element_type(f.return_type.as_deref(), f.body.as_deref(), false),
+            ),
+            AstKind::VariableDeclarator(d) => match d.init.as_ref() {
+                Some(Expression::ArrowFunctionExpression(a)) => (
+                    a.type_parameters.as_deref(),
+                    &a.params,
+                    return_array_element_type(
+                        a.return_type.as_deref(),
+                        Some(a.body.as_ref()),
+                        a.expression,
+                    ),
+                ),
+                Some(Expression::FunctionExpression(f)) => (
+                    f.type_parameters.as_deref(),
+                    &f.params,
+                    return_array_element_type(f.return_type.as_deref(), f.body.as_deref(), false),
+                ),
+                _ => return false,
+            },
+            _ => continue,
+        };
+        return call_elem_binds_obj(type_params, params, elem_ty, call, obj_name);
+    }
+    false
+}
+
+/// True when the array-method receiver `object` yields elements that are known
+/// keys of `obj_name`, so the callback's first parameter is inferred as `keyof
+/// typeof obj_name`. Three receiver shapes qualify:
+///   - an identifier bound to a `T[]` / `[T, ...T[]]` declared type whose element
+///     resolves to `keyof typeof obj_name`;
+///   - an inline `... as (keyof typeof obj_name)[]` / `... as Array<keyof typeof
+///     obj_name>` cast (e.g. `(Object.keys(obj) as (keyof typeof obj)[]).forEach`);
+///   - a call to a generic helper returning `Array<keyof T>` / `(keyof T)[]` whose
+///     `T`-bound argument is `obj_name` itself (e.g. the `keysOf(obj)` helper).
+fn receiver_element_keys_obj<'a>(
+    object: &'a Expression<'a>,
+    obj_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    aliases: &FxHashMap<&str, &str>,
+) -> bool {
+    if binding_declared_type(object, semantic)
+        .is_some_and(|ty| array_or_tuple_element_keys_obj(ty, obj_name, aliases))
+    {
+        return true;
+    }
+    match peel_parens(object) {
+        Expression::TSAsExpression(as_expr) => array_type_element(&as_expr.type_annotation)
+            .is_some_and(|el| type_keys_obj(el, obj_name, aliases)),
+        Expression::CallExpression(call) => call_yields_obj_keys(call, obj_name, semantic),
+        _ => false,
+    }
+}
+
 /// True when the un-annotated formal parameter at `param_node_id` is the first
 /// parameter of a callback passed as the first argument to
 /// `.map()`/`.forEach()`/`.filter()`/`.some()`/`.every()`, whose array-method
-/// receiver is a binding declared `T[]` or `[T, ...T[]]` with `T` resolving to
-/// `keyof typeof obj_name`. TypeScript then infers the parameter's type as
+/// receiver yields elements resolving to `keyof typeof obj_name` (see
+/// `receiver_element_keys_obj`). TypeScript then infers the parameter's type as
 /// `keyof typeof obj_name`, so the lookup is as key-narrow-safe as an explicit
 /// annotation.
 fn param_inferred_from_typed_array_receiver<'a>(
@@ -314,8 +487,7 @@ fn param_inferred_from_typed_array_receiver<'a>(
         if call.arguments.first().map(|a| a.span()) != Some(anc.kind().span()) {
             return false;
         }
-        return binding_declared_type(&m.object, semantic)
-            .is_some_and(|ty| array_or_tuple_element_keys_obj(ty, obj_name, aliases));
+        return receiver_element_keys_obj(&m.object, obj_name, semantic, aliases);
     }
     false
 }
@@ -705,6 +877,75 @@ mod tests {
         let src = "const HASH_LENGTHS = { md5: 32, sha1: 40 } as const;\n\
                    type HashType = keyof typeof HASH_LENGTHS;\n\
                    function f(types: HashType[]) { return types.reduce((type) => HASH_LENGTHS[type]); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_forEach_over_call_returning_keyof_array_arrow_cast() {
+        // Regression for issue #7239: `keysOf` returns `Array<keyof T>` via a
+        // trailing `as` cast in its concise body, so `keysOf(states)` has element
+        // type `keyof typeof states` and the `.forEach` callback key is a known key.
+        let src = "const keysOf = <T extends object>(arr: T) => Object.keys(arr) as Array<keyof T>;\n\
+                   const states = { a: 1, b: 2 } as const;\n\
+                   keysOf(states).forEach((key) => { states[key]; });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_forEach_over_call_with_explicit_keyof_array_return_type() {
+        // The return element type is read from the explicit `: Array<keyof T>`
+        // annotation.
+        let src = "const states = { a: 1, b: 2 } as const;\n\
+                   function keysOf<T extends object>(arr: T): Array<keyof T> { return Object.keys(arr) as Array<keyof T>; }\n\
+                   keysOf(states).forEach((key) => { states[key]; });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_forEach_over_call_returning_keyof_array_block_return_cast() {
+        // `(keyof T)[]` element form, read from a `return … as (keyof T)[]` cast
+        // in a block body with no return-type annotation.
+        let src = "const states = { a: 1, b: 2 } as const;\n\
+                   function keysOf<T extends object>(arr: T) { return Object.keys(arr) as (keyof T)[]; }\n\
+                   keysOf(states).forEach((key) => { states[key]; });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_forEach_over_call_to_function_expression_helper() {
+        // Same resolution for a `const f = function <T>(…)` helper.
+        let src = "const states = { a: 1, b: 2 } as const;\n\
+                   const keysOf = function <T extends object>(arr: T): Array<keyof T> { return Object.keys(arr) as Array<keyof T>; };\n\
+                   keysOf(states).forEach((key) => { states[key]; });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_forEach_over_inline_keyof_typeof_array_cast_receiver() {
+        // The receiver is itself an inline `... as (keyof typeof states)[]` cast.
+        let src = "const states = { a: 1, b: 2 } as const;\n\
+                   (Object.keys(states) as (keyof typeof states)[]).forEach((key) => { states[key]; });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_forEach_over_call_returning_string_array() {
+        // `getKeys` returns `string[]` (not `keyof T`), so its elements are
+        // arbitrary strings — indexing `states` with one is not key-narrow.
+        let src = "const getKeys = <T extends object>(arr: T): string[] => Object.keys(arr) as string[];\n\
+                   const states = { a: 1, b: 2 } as const;\n\
+                   getKeys(states).forEach((key) => { states[key]; });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_forEach_over_call_keying_a_different_object() {
+        // `keysOf(other)` yields keys of `other`, not `states`, so `states[key]`
+        // stays unsafe.
+        let src = "const keysOf = <T extends object>(arr: T) => Object.keys(arr) as Array<keyof T>;\n\
+                   const states = { a: 1, b: 2 } as const;\n\
+                   const other = { c: 3 } as const;\n\
+                   keysOf(other).forEach((key) => { states[key]; });";
         assert_eq!(run(src).len(), 1);
     }
 }
