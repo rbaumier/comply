@@ -135,6 +135,15 @@ impl AstCheck for Check {
         if has_clippy_allow(node, source_bytes, "missing_debug_implementations") {
             return;
         }
+        // A prost-generated protobuf message type derives `::prost::Message`, and
+        // prost's codegen intentionally omits `Debug` — these `.rs` files are
+        // regenerated from `.proto` schemas, so `Debug` can only be added by
+        // changing the generation pipeline, not the Rust source. The
+        // `prost::Message` derive path is the unambiguous structural marker
+        // (prost is the sole crate using this trait path).
+        if has_prost_message_derive(node, source_bytes) {
+            return;
+        }
         if has_raw_pointer_field(node) {
             return;
         }
@@ -222,6 +231,76 @@ fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
         sibling = s.prev_named_sibling();
     }
     false
+}
+
+/// True when a preceding `#[derive(...)]` sibling lists a `prost::Message` entry.
+///
+/// Walks the preceding `attribute_item` siblings exactly like `has_debug_derive`
+/// (skipping interleaved comments), and for each `#[derive(...)]` attribute
+/// tests whether one of its derive-list entries is a path resolving to
+/// `prost::Message`. The check is scoped to the derive attribute's argument
+/// list, so a field named `message`, a `#[prost(uint32, tag = "1")]` field
+/// attribute, or a comment never triggers it.
+fn has_prost_message_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if derive_lists_prost_message(s, source) {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `attribute_item` is `#[derive(...)]` and one of its top-level derive
+/// entries is a path resolving to `prost::Message`. Reads the `derive` path via
+/// the AST (not raw text), then splits the `arguments` token tree into
+/// entries with the shared derive/macro-argument idiom.
+fn derive_lists_prost_message(attribute_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    if path.utf8_text(source) != Ok("derive") {
+        return false;
+    }
+    let Some(arguments) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+    let Ok(args_text) = arguments.utf8_text(source) else {
+        return false;
+    };
+    let Some(body) = macro_body(args_text) else {
+        return false;
+    };
+    split_top_level_args(body)
+        .iter()
+        .any(|entry| path_is_prost_message(entry.trim()))
+}
+
+/// True if `path` is a derive entry resolving to `prost::Message`: its final
+/// `::` segment is `Message` and one of its segments is `prost`. Matches
+/// `prost::Message` and `::prost::Message`; a bare `Message` or any unrelated
+/// `*::Message` does not match, since prost is the sole owner of this path.
+fn path_is_prost_message(path: &str) -> bool {
+    let segments: Vec<&str> = path
+        .split("::")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    segments.last() == Some(&"Message") && segments.iter().any(|&s| s == "prost")
 }
 
 /// True when the file contains a hand-written `Debug` impl for `name`.
@@ -1544,6 +1623,76 @@ name = "anyhow_like"
             run_on(source).len(),
             1,
             "a macro with no Debug impl in its body must not exempt its argument"
+        );
+    }
+
+    /// Closes #7122 (issue repro): a prost-generated protobuf message type
+    /// derives `::prost::Message`; prost's codegen intentionally omits `Debug`
+    /// (adding it requires changing the `.proto` generation, not the Rust
+    /// source), so it must not be flagged. The prost-specific
+    /// `#[allow(clippy::derive_partial_eq_without_eq)]` on these files is *not*
+    /// the missing-debug allow — the derive path is what exempts them.
+    #[test]
+    fn suppresses_prost_message_derive() {
+        let source = "#[allow(clippy::derive_partial_eq_without_eq)]\n\
+                      #[derive(Clone, PartialEq, ::prost::Message)]\n\
+                      pub struct Size { pub cols: u32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "a ::prost::Message-derived type must not be flagged for missing Debug"
+        );
+    }
+
+    /// The unqualified `prost::Message` derive path is the same structural marker
+    /// and must also be exempted.
+    #[test]
+    fn suppresses_unqualified_prost_message_derive() {
+        let source = "#[derive(prost::Message)]\npub struct Foo { pub x: u32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "a prost::Message-derived type must not be flagged for missing Debug"
+        );
+    }
+
+    /// Load-bearing negative: a public type with no `prost::Message` derive is the
+    /// rule's genuine target and must still be flagged.
+    #[test]
+    fn still_flags_plain_pub_struct_without_prost() {
+        assert_eq!(
+            run_on("pub struct Bar { pub x: u32 }").len(),
+            1,
+            "a public type without a prost::Message derive must still flag"
+        );
+    }
+
+    /// Load-bearing negative: deriving unrelated traits (`Clone`,
+    /// `serde::Serialize`) with no `Debug` and no `prost::Message` must still
+    /// flag — the exemption keys on the `prost::Message` derive path, not on
+    /// merely having a derive list.
+    #[test]
+    fn still_flags_non_prost_derive() {
+        assert_eq!(
+            run_on("#[derive(Clone, serde::Serialize)]\npub struct Baz { pub x: u32 }").len(),
+            1,
+            "a non-prost derive list with no Debug must still flag"
+        );
+    }
+
+    /// Load-bearing precision: a `#[prost(...)]` *field* attribute and a field
+    /// literally named `message`, with NO `prost::Message` *derive*, must still
+    /// flag — the guard is scoped to the derive attribute's entries, not field
+    /// attributes or field names.
+    #[test]
+    fn still_flags_prost_field_attr_without_message_derive() {
+        let source = "#[derive(Clone)]\n\
+                      pub struct Bar {\n\
+                      \x20   #[prost(uint32, tag = \"1\")]\n\
+                      \x20   pub message: u32,\n\
+                      }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a #[prost(...)] field attr / `message` field without a prost::Message derive must still flag"
         );
     }
 }
