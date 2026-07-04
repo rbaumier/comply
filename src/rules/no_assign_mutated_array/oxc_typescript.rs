@@ -95,6 +95,13 @@ fn is_fresh_array(expr: &Expression) -> bool {
             {
                 return true;
             }
+            // An in-place mutator (`sort`/`reverse`/`fill`) returns its receiver
+            // by identity, so freshness propagates through the chain:
+            // `[...arr].sort()` is as fresh as `[...arr]`. Recurse to keep the
+            // chain rooted at a genuine fresh producer.
+            if MUTATING_METHODS.contains(&method) {
+                return is_fresh_array(&member.object);
+            }
             matches!(
                 method,
                 "slice" | "filter" | "map" | "concat" | "flat" | "flatMap"
@@ -308,5 +315,28 @@ mod oxc_tests {
         // GUARD: a non-`Object` receiver — `keys` is not a fresh-array method,
         // so freshness is unprovable and the mutation is still flagged.
         assert_eq!(run("const k = obj.keys().sort();").len(), 1);
+    }
+
+    // === issue #7246: freshness propagates through chained mutating methods ===
+
+    #[test]
+    fn allows_spread_sort_then_reverse_chain() {
+        // `[...arr].sort()` returns the fresh spread copy by identity, so the
+        // chained `.reverse()` still mutates only that unaliased array.
+        assert!(run("const sortedPaths = [...UNSET_BATCH].sort().reverse();").is_empty());
+    }
+
+    #[test]
+    fn allows_filter_sort_then_reverse_chain() {
+        // Rooted at a fresh producer (`filter`) — freshness carries through the
+        // chained mutators.
+        assert!(run("const y = arr.filter((f) => f.active).sort().reverse();").is_empty());
+    }
+
+    #[test]
+    fn flags_shared_sort_then_reverse_chain() {
+        // GUARD: the chain root is a plain (shared) identifier, not a fresh
+        // producer, so the in-place mutation is still flagged.
+        assert_eq!(run("const z = arr.sort().reverse();").len(), 1);
     }
 }
