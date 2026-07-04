@@ -228,6 +228,9 @@ impl OxcCheck for Check {
                     if preserves_call_context_return(&sigs) {
                         continue;
                     }
+                    if preserves_zero_arity_return_variants(&sigs) {
+                        continue;
+                    }
                     if preserves_rest_vs_fixed_return(&sigs) {
                         continue;
                     }
@@ -389,6 +392,26 @@ fn preserves_call_context_return(sigs: &[OverloadSig]) -> bool {
     let mut arities = sigs.iter().map(|s| s.param_count);
     let first_arity = arities.next().expect("group has at least two signatures");
     arities.any(|a| a != first_arity)
+}
+
+/// True when the overloads take zero parameters yet carry at least two distinct
+/// return-type annotations (e.g. `noop(): void; noop(): undefined;`). With no
+/// parameter to place a union on, the return type is the only thing that varies,
+/// and each zero-arity overload is load-bearing for contextual assignability: a
+/// caller in a `() => void` context selects the `void` overload, one in a
+/// `() => undefined` context the `undefined` overload. Collapsing them into a
+/// single `(): void | undefined` signature changes assignability — in strict
+/// TypeScript `() => void` is not assignable to `() => undefined` — so the
+/// overloads cannot be merged and must not be flagged.
+///
+/// A zero-arity group whose overloads all share ONE return type
+/// (`f(): void; f(): void;`) is genuinely redundant: [`has_distinct_return_types`]
+/// returns false and the group still flags.
+fn preserves_zero_arity_return_variants(sigs: &[OverloadSig]) -> bool {
+    if sigs.iter().any(|s| s.param_count != 0) {
+        return false;
+    }
+    has_distinct_return_types(sigs)
 }
 
 /// True when the overloads discriminate on a structurally incompatible first
@@ -1317,5 +1340,49 @@ function f(a: 'y', b: 'off'): void;
 function f(a: 'x' | 'y', b: 'on' | 'off'): void {}
 ";
         assert_eq!(run_on(source).len(), 4);
+    }
+
+    #[test]
+    fn allows_zero_arity_overloads_with_distinct_return_types() {
+        // Regression for #7165: TanStack/query `noop` has two zero-parameter
+        // overloads whose return types differ (`void` vs `undefined`). With no
+        // parameter to union over, each overload is load-bearing for contextual
+        // assignability — the `void` overload keeps `noop` assignable to
+        // `() => void` contexts (`.then(noop)`), the `undefined` overload to
+        // `() => undefined` contexts. Collapsing to `(): void | undefined` changes
+        // assignability (in strict TS `() => void` is not assignable to
+        // `() => undefined`), so the overloads must not be flagged.
+        let source = "
+function noop(): void;
+function noop(): undefined;
+function noop() {}
+";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_arity_overloads_with_concrete_distinct_return_types() {
+        // Distinct concrete return types at zero arity (`string` vs `number`) are
+        // equally load-bearing per contextual typing and cannot collapse into a
+        // single parameterless signature.
+        let source = "
+function f(): string;
+function f(): number;
+function f() { return '' as any }
+";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_zero_arity_overloads_with_identical_return_types() {
+        // Negative control for #7165: two zero-parameter overloads with the SAME
+        // return type are genuinely redundant — they collapse into one `(): void`
+        // signature, so the group still flags.
+        let source = "
+function f(): void;
+function f(): void;
+function f() {}
+";
+        assert_eq!(run_on(source).len(), 2);
     }
 }
