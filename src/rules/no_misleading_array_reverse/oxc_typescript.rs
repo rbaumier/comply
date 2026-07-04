@@ -66,6 +66,13 @@ fn is_fresh_array(expr: &Expression, source: &str) -> bool {
             {
                 return true;
             }
+            // An in-place mutator (`sort`/`reverse`/`fill`) returns its receiver
+            // by identity, so freshness propagates through the chain:
+            // `[...arr].sort()` is as fresh as `[...arr]`. Recurse to keep the
+            // chain rooted at a genuine fresh producer.
+            if MUTATING_METHODS.contains(&member.property.name.as_str()) {
+                return is_fresh_array(&member.object, source);
+            }
             // Chaining onto a fresh array, e.g. `arr.filter(p).sort(cmp)`.
             FRESH_ARRAY_METHODS.contains(&member.property.name.as_str())
         }
@@ -509,5 +516,28 @@ mod oxc_tests {
         // GUARD: a sparse literal with a hole (`[,]`) has a non-empty element list,
         // so it is not the empty-literal fresh case — locks the empty-vs-hole edge.
         assert_eq!(run("const r = [,].reverse();").len(), 1);
+    }
+
+    // === issue #7246: freshness propagates through chained mutating methods ===
+
+    #[test]
+    fn allows_spread_sort_then_reverse_chain() {
+        // `[...arr].sort()` returns the fresh spread copy by identity, so the
+        // chained `.reverse()` still aliases only that unshared array.
+        assert!(run("const sortedPaths = [...UNSET_BATCH].sort().reverse();").is_empty());
+    }
+
+    #[test]
+    fn allows_filter_sort_then_reverse_chain() {
+        // Rooted at a fresh producer (`filter`) — freshness carries through the
+        // chained mutators.
+        assert!(run("const y = arr.filter((f) => f.active).sort().reverse();").is_empty());
+    }
+
+    #[test]
+    fn flags_shared_sort_then_reverse_chain() {
+        // GUARD: the chain root is a plain (shared) identifier, not a fresh
+        // producer, so the aliasing mutation is still misleading.
+        assert_eq!(run("const z = arr.sort().reverse();").len(), 1);
     }
 }
