@@ -2031,6 +2031,105 @@ pub fn expression_is_map(
     }
 }
 
+/// Whether a type annotation denotes a built-in keyed set: `Set<T>`,
+/// `WeakSet<T>`, or `ReadonlySet<T>`.
+fn type_is_set(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSTypeReference(tref) = ty else {
+        return false;
+    };
+    matches!(
+        &tref.type_name,
+        TSTypeName::IdentifierReference(id)
+            if matches!(id.name.as_str(), "Set" | "WeakSet" | "ReadonlySet")
+    )
+}
+
+/// Whether an initializer expression evaluates to a built-in set: `new Set(...)`
+/// or `new WeakSet(...)`.
+fn initializer_is_set(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::NewExpression(new_expr) => matches!(
+            &new_expr.callee,
+            Expression::Identifier(id) if matches!(id.name.as_str(), "Set" | "WeakSet")
+        ),
+        Expression::ParenthesizedExpression(paren) => initializer_is_set(&paren.expression),
+        Expression::TSAsExpression(as_expr) => {
+            type_is_set(&as_expr.type_annotation) || initializer_is_set(&as_expr.expression)
+        }
+        Expression::TSSatisfiesExpression(sat) => initializer_is_set(&sat.expression),
+        Expression::TSNonNullExpression(nn) => initializer_is_set(&nn.expression),
+        _ => false,
+    }
+}
+
+/// Resolve an identifier reference to its declaration and decide whether that
+/// declaration proves the binding holds a built-in set — a `let`/`const`/`var`
+/// declarator carrying a `Set`/`WeakSet`/`ReadonlySet` type annotation or
+/// initialised from `new Set()`/`new WeakSet()`, or a parameter typed as one.
+fn binding_is_set(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    let scoping = semantic.scoping();
+    let Some(symbol_id) = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(symbol_id);
+    match nodes.kind(decl_id) {
+        AstKind::VariableDeclarator(decl) => {
+            if let Some(type_ann) = &decl.type_annotation
+                && type_is_set(&type_ann.type_annotation)
+            {
+                return true;
+            }
+            decl.init.as_ref().is_some_and(initializer_is_set)
+        }
+        AstKind::FormalParameter(param) => param
+            .type_annotation
+            .as_ref()
+            .is_some_and(|ann| type_is_set(&ann.type_annotation)),
+        _ => false,
+    }
+}
+
+/// Whether `expr` is demonstrably a built-in `Set`/`WeakSet`. A `new Set(...)`
+/// expression is one directly; an identifier is one only if its binding carries
+/// a `Set`/`WeakSet`/`ReadonlySet` type annotation or is initialised from
+/// `new Set()`/`new WeakSet()`.
+///
+/// A receiver's *name* is never evidence — names do not determine type. A
+/// receiver whose type cannot be proven a set (a `String(...)` call, a string
+/// literal, an array, a member chain, an untyped parameter) returns `false`.
+#[must_use]
+pub fn expression_is_set(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::NewExpression(_) => initializer_is_set(expr),
+        Expression::Identifier(ident) => binding_is_set(ident, semantic),
+        Expression::ParenthesizedExpression(paren) => {
+            expression_is_set(&paren.expression, semantic)
+        }
+        Expression::TSAsExpression(as_expr) => {
+            type_is_set(&as_expr.type_annotation)
+                || expression_is_set(&as_expr.expression, semantic)
+        }
+        Expression::TSSatisfiesExpression(sat) => expression_is_set(&sat.expression, semantic),
+        Expression::TSNonNullExpression(nn) => expression_is_set(&nn.expression, semantic),
+        _ => false,
+    }
+}
+
 /// True when `arg` is `delete recv.prop` whose `prop` is declared **optional**
 /// (`prop?: T`) on the receiver's structurally-resolved named type. Deleting an
 /// optional member returns the object to the absent state its own type already
