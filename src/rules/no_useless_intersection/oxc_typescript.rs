@@ -22,10 +22,15 @@ impl OxcCheck for Check {
         let AstKind::TSIntersectionType(intersection) = node.kind() else {
             return;
         };
-        let has_useless = intersection.types.iter().any(|ty| {
-            matches!(ty, TSType::TSUnknownKeyword(_) | TSType::TSNeverKeyword(_))
-        });
-        if !has_useless {
+        let has_unknown = intersection
+            .types
+            .iter()
+            .any(|ty| matches!(ty, TSType::TSUnknownKeyword(_)));
+        let has_never = intersection
+            .types
+            .iter()
+            .any(|ty| matches!(ty, TSType::TSNeverKeyword(_)));
+        if !has_unknown && !has_never {
             return;
         }
         // `unknown &` as the leading operand is a deliberate TypeScript trick to
@@ -34,6 +39,19 @@ impl OxcCheck for Check {
         let leads_with_unknown =
             matches!(intersection.types.first(), Some(TSType::TSUnknownKeyword(_)));
         if leads_with_unknown && is_deferral_trick(node, semantic) {
+            return;
+        }
+        // `<mapped-type> & unknown` is the standard `Prettify`/`Compute`
+        // type-flattening idiom: intersecting a mapped-type literal or object-type
+        // literal with `unknown` forces the checker to eagerly resolve and display
+        // the flattened object shape. The `& unknown` is load-bearing here, not a
+        // no-op. A `never` member genuinely collapses the whole intersection to
+        // `never`, so it still flags.
+        let has_flatten_sibling = intersection
+            .types
+            .iter()
+            .any(|ty| matches!(ty, TSType::TSMappedType(_) | TSType::TSTypeLiteral(_)));
+        if has_unknown && !has_never && has_flatten_sibling {
             return;
         }
         let (line, column) =
@@ -147,5 +165,37 @@ mod tests {
     #[test]
     fn flags_non_leading_unknown_in_generic_type_alias() {
         assert_eq!(run_on("type X<T> = Foo<T> & unknown;").len(), 1);
+    }
+
+    #[test]
+    fn allows_mapped_type_and_unknown_prettify_idiom() {
+        let src = "export type Compute<T> = T extends Function ? T : { [K in keyof T]: T[K] } & unknown;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_deep_mapped_type_and_unknown_prettify_idiom() {
+        let src = "export type ComputeDeep<T> = T extends Function ? T : { [K in keyof T]: ComputeDeep<T[K]> } & unknown;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_object_literal_and_unknown_prettify_idiom() {
+        assert!(run_on("type X = { a: number } & unknown;").is_empty());
+    }
+
+    #[test]
+    fn flags_type_reference_and_unknown() {
+        assert_eq!(run_on("type Y = Bar & unknown;").len(), 1);
+    }
+
+    #[test]
+    fn flags_object_literal_and_never() {
+        assert_eq!(run_on("type Z = { a: number } & never;").len(), 1);
+    }
+
+    #[test]
+    fn flags_object_literal_with_both_unknown_and_never() {
+        assert_eq!(run_on("type Z = { a: number } & unknown & never;").len(), 1);
     }
 }
