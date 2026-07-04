@@ -928,8 +928,17 @@ fn test_proves_nonempty(test: &Expression, obj_text: &str, source: &str) -> bool
 ///     only when the first element existed and satisfied the predicate. The callee
 ///     is not matched by name — the structural signal is `arr[0]` appearing as a
 ///     call argument.
-/// Recurses through the operators that preserve a truthiness guard: `&&`, `||`, `!`,
-/// and parentheses. `negated` tracks logical-NOT polarity so a predicate call under
+///   - an equality (`===` / `==`) or relational (`< > <= >=`) comparison one of whose
+///     operands references `obj_text[0]` — `typeof arr[0] === 'string'`,
+///     `arr[0] === x`, `arr[0] > 5`. A truthy result of such a comparison implies the
+///     element is present: an absent element is `undefined`, which fails every
+///     relational test and never equals a concrete value. Inequality (`!==` / `!=`) is
+///     excluded — `undefined !== x` is `true`, so the branch runs for an absent
+///     element — as is equality against `undefined` / `null`, which is an emptiness
+///     check (mirrors [`is_equality_comparison_operand`]).
+/// Recurses through the operators that preserve or carry the guard: `&&`, `||`, `!`,
+/// equality/relational comparisons (into both operands), and parentheses. `negated`
+/// tracks logical-NOT polarity so a predicate call under
 /// `!` is NOT a guard: `if (!isPlainObject(arr[0])) { …arr[0]… }` narrows the branch
 /// to the element being absent or failing the predicate, so the body access stays
 /// flagged.
@@ -985,6 +994,32 @@ fn condition_guards_index0(
             condition_guards_index0(&logical.left, obj_text, source, negated)
                 || condition_guards_index0(&logical.right, obj_text, source, negated)
         }
+        Expression::BinaryExpression(binary) => {
+            // A comparison guards the branch only when a truthy result implies the
+            // `arr[0]` operand is present. Relational operators qualify: `undefined`
+            // coerces to `NaN`, so `arr[0] > 5` (etc.) is false for an absent element.
+            // Equality (`===` / `==`) qualifies unless the element is compared against
+            // `undefined` / `null` — that is an emptiness check, not a presence guard.
+            // Inequality (`!==` / `!=`) never qualifies: `undefined !== x` is `true`, so
+            // the branch runs for an absent element. The `arr[0]` access is recognized
+            // by the member arms above, whichever side of the comparison it sits on.
+            match binary.operator {
+                BinaryOperator::LessThan
+                | BinaryOperator::LessEqualThan
+                | BinaryOperator::GreaterThan
+                | BinaryOperator::GreaterEqualThan => {
+                    condition_guards_index0(&binary.left, obj_text, source, negated)
+                        || condition_guards_index0(&binary.right, obj_text, source, negated)
+                }
+                BinaryOperator::StrictEquality | BinaryOperator::Equality => {
+                    (condition_guards_index0(&binary.left, obj_text, source, negated)
+                        && !is_nullish_literal(&binary.right))
+                        || (condition_guards_index0(&binary.right, obj_text, source, negated)
+                            && !is_nullish_literal(&binary.left))
+                }
+                _ => false,
+            }
+        }
         Expression::UnaryExpression(unary) => {
             let negated = if unary.operator == UnaryOperator::LogicalNot {
                 !negated
@@ -998,6 +1033,14 @@ fn condition_guards_index0(
         }
         _ => false,
     }
+}
+
+/// Returns true when `expr` is the `undefined` identifier or a `null` literal.
+/// Comparing `arr[0]` against either is a deliberate emptiness check, not a
+/// presence guard, so it must not vouch a body access safe.
+fn is_nullish_literal(expr: &Expression) -> bool {
+    matches!(expr, Expression::NullLiteral(_))
+        || matches!(expr, Expression::Identifier(id) if id.name.as_str() == "undefined")
 }
 
 /// Returns true when `expr` (a ternary condition) contains a `<obj_text>.length`
@@ -5341,5 +5384,58 @@ mod tests {
         // strict `===`: `undefined == 'h'` is `false` and never throws. Issue #6231.
         let src = "function f(value) { return value[0] == 'h'; }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_typeof_index0_equality_guard_issue_7106() {
+        // drizzle's overloaded-rest-param dispatch: `if (typeof params[0] === 'string')`
+        // guards the body — an empty `params` makes `typeof undefined === 'string'`
+        // false, so `params[0]` in the block is a defined string. The comparison
+        // condition references `params[0]`, so the body read is in-bounds.
+        let src = "function drizzle(...params) { if (typeof params[0] === 'string') { return new Pool({ connectionString: params[0] }); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_equality_guard_body_issue_7106() {
+        // `if (arr[0] === 'x')` narrows the branch to a present first element, so a
+        // same-array `arr[0]` read in the body is in-bounds.
+        let src = "function f(arr) { if (arr[0] === 'x') { use(arr[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_comparison_and_guard_issue_7106() {
+        // A non-equality comparison operand also guards: `arr[0] > 5 && cond` reaches
+        // `arr[0]` through the `&&` into the binary comparison, so the body read is
+        // in-bounds.
+        let src = "function f(arr, cond) { if (arr[0] > 5 && cond) { use(arr[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_binary_condition_not_referencing_it_issue_7106() {
+        // A comparison whose operands do NOT reference `arr[0]` (`flag === 1`) is not
+        // a guard for `arr[0]`, so the body read stays flagged.
+        let src = "function f(arr, flag) { if (flag === 1) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_inequality_guard_body_issue_7106() {
+        // `if (arr[0] !== 'x')` does NOT prove presence: `undefined !== 'x'` is `true`,
+        // so the branch runs for an absent element and the body read stays flagged.
+        let src = "function f(arr) { if (arr[0] !== 'x') { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_equality_against_undefined_guard_body_issue_7106() {
+        // `if (arr[0] === undefined)` is an emptiness check, not a presence guard, so
+        // it does not exempt the body read. Both `arr[0]` accesses stay flagged: the
+        // condition's own read (equality against `undefined` is not a value guard) and
+        // the body read (the branch runs exactly when the element is absent).
+        let src = "function f(arr) { if (arr[0] === undefined) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 2);
     }
 }
