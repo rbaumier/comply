@@ -318,6 +318,45 @@ fn is_conditional_check_type(
     false
 }
 
+// `type F = (_: void) => void` — `void` as the direct type of a parameter of a
+// function TYPE node (`TSFunctionType`, `TSConstructorType`, or an interface
+// method / call signature) is valid TypeScript: the parameter list of a
+// type-level function is a type-level position, required for structural
+// compatibility with callbacks such as the `resolve` of `new Promise<void>`
+// (typed `(value: void | PromiseLike<void>) => void`). The nearest function
+// boundary disambiguates: reaching a type-level function node while inside a
+// `FormalParameter` exempts it, whereas a concrete `Function` /
+// `ArrowFunctionExpression` (a value-level function) still fires — so
+// `function foo(x: void) {}` and `const foo = (x: void) => {}` keep flagging. A
+// `void` mixed into a union in the parameter (`(x: string | void) => void`) is a
+// union member, not the parameter's direct type, and stays flagged like any
+// other union `void` in parameter position.
+fn is_function_type_parameter_annotation(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let mut in_parameter = false;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::FormalParameter(_) => in_parameter = true,
+            AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSMethodSignature(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+                if in_parameter =>
+            {
+                return true;
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            // A union crossed before the parameter means the `void` is a union
+            // member, not the parameter's direct type — those stay flagged.
+            AstKind::TSUnionType(_) if !in_parameter => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSVoidKeyword]
@@ -359,6 +398,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_conditional_check_type(node, semantic, kw.span.start) {
+            return;
+        }
+        if is_function_type_parameter_annotation(node, semantic) {
             return;
         }
 
@@ -543,13 +585,13 @@ mod tests {
     }
 
     #[test]
-    fn flags_void_param_in_non_promise_class() {
-        // Negative space: `(value: void)` is only exempt when the enclosing
-        // class implements PromiseLike/Promise — a plain class still fires.
+    fn allows_void_param_in_function_typed_method_param() {
+        // `(value: void) => unknown` is a function type; its `void` parameter is a
+        // type-level function parameter and is valid regardless of the enclosing
+        // class.
         let src = "class Plain {\
                    then(onfulfilled?: (value: void) => unknown): void {} }";
-        let diags = run_on(src);
-        assert_eq!(diags.len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -592,21 +634,19 @@ mod tests {
     }
 
     #[test]
-    fn flags_void_param_in_type_literal_property_function() {
-        // Negative space: the property exemption is type-position-scoped — a
-        // `void` parameter of a function-typed property still fires.
+    fn allows_void_param_in_type_literal_property_function() {
+        // A `void` parameter of a function-typed property is a type-level function
+        // parameter — valid TypeScript, like a bare function-type alias.
         let src = "type T = { foo: (x: void) => string };";
-        let diags = run_on(src);
-        assert_eq!(diags.len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
-    fn flags_void_param_in_tuple_function_element() {
-        // Negative space: the tuple exemption is type-position-scoped — a
-        // `void` parameter of a function-typed tuple element still fires.
+    fn allows_void_param_in_tuple_function_element() {
+        // A `void` parameter of a function-typed tuple element is a type-level
+        // function parameter — valid TypeScript.
         let src = "type T = [(x: void) => string];";
-        let diags = run_on(src);
-        assert_eq!(diags.len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -685,11 +725,52 @@ mod tests {
     }
 
     #[test]
-    fn flags_void_param_in_conditional_check_type_function() {
-        // Negative space: the check-type exemption is type-position-scoped — a
-        // `void` parameter of a function type nested inside the check type still
-        // fires.
+    fn allows_void_param_in_conditional_check_type_function() {
+        // A `void` parameter of a function type nested inside a conditional check
+        // type is a type-level function parameter — valid TypeScript.
         let src = "type T = ((x: void) => number) extends F ? 1 : 2;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_param_in_function_type_alias() {
+        // Regression for rbaumier/comply#7163 — TanStack/query timeoutManager:
+        // `void` as a parameter type of a function-type alias is required for
+        // structural compatibility with the `resolve` callback of `new Promise`.
+        let src = "type TimeoutCallback = (_: void) => void;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_param_in_constructor_type() {
+        let src = "type Ctor = new (x: void) => T;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_param_in_interface_method_signature() {
+        let src = "interface I { run(x: void): void }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_param_in_call_signature() {
+        let src = "interface F { (x: void): number }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_param_in_nested_function_type() {
+        let src = "type F = (cb: (x: void) => void) => void;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_void_union_param_in_function_type() {
+        // Negative space: the function-type-parameter exemption is scoped to a
+        // `void` that is the parameter's direct type — a `void` union member in a
+        // function-type parameter still fires.
+        let src = "type F = (x: string | void) => number;";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
