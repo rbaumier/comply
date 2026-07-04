@@ -48,6 +48,9 @@ fn check_function_body_fn(
     if func.r#async {
         return;
     }
+    if returns_single_promise_type(&func.return_type) {
+        return;
+    }
     let Some(body) = &func.body else { return };
 
     let mut has_sync = false;
@@ -80,6 +83,9 @@ fn check_arrow_body(
     if arrow.expression {
         return;
     }
+    if returns_single_promise_type(&arrow.return_type) {
+        return;
+    }
 
     let mut has_sync = false;
     let mut has_async = false;
@@ -97,6 +103,28 @@ fn check_arrow_body(
             span: None,
         });
     }
+}
+
+/// True when an explicit return-type annotation is a single top-level
+/// `Promise<...>` (or `PromiseLike<...>`) type reference. TypeScript then forces
+/// every `return` in the body to yield a Promise — a bare `return nonPromise`
+/// would be a type error — so a non-async function annotated this way cannot
+/// genuinely mix sync and async returns even when a `return promise;` identifier
+/// reads as sync to `classify_return_expr` (issue #7096). A union such as
+/// `T | Promise<T>` is deliberately not matched: it can mix and must stay
+/// checked. A `|` inside the generic (`Promise<A | B>`) is still a single
+/// `Promise` reference and matches.
+fn returns_single_promise_type(
+    return_type: &Option<oxc_allocator::Box<TSTypeAnnotation>>,
+) -> bool {
+    let Some(rt) = return_type else { return false };
+    let TSType::TSTypeReference(type_ref) = &rt.type_annotation else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(ident) = &type_ref.type_name else {
+        return false;
+    };
+    matches!(ident.name.as_str(), "Promise" | "PromiseLike")
 }
 
 fn collect_returns_from_stmts(
@@ -319,5 +347,41 @@ mod tests {
         // function. Must not flag (issue #1149).
         let src = "export async function checkWithTimeout(predicate: () => boolean | Promise<boolean>, delay = 1000): Promise<boolean> { return await predicate(); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_promise_return_type_returning_promise_identifier() {
+        // Regression for #7096 — elk-zone/elk `app/composables/cache.ts`. A
+        // non-async function annotated `: Promise<T>` returns a local identifier
+        // holding a `.then()` chain alongside `Promise.resolve(...)`. TypeScript
+        // forces every return to be a Promise, so the identifier is not a genuine
+        // sync return and there is no mix.
+        let src = "function fetchStatus(id: string): Promise<Status> { if (cached) return Promise.resolve(cached); const p = client().fetch().then((s) => s); cache.set(k, p); return p; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_promise_return_type_arrow_returning_promise_identifier() {
+        // Arrow variant of #7096: an explicit `Promise<T>` return type on a
+        // block-body arrow carries the same guarantee.
+        let src = "const f = (): Promise<number> => { if (cached) return Promise.resolve(1); const p = fetch().then((r) => r); return p; };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unannotated_function_mixing_sync_and_promise() {
+        // Negative space for #7096: with no return-type annotation there is no
+        // TypeScript guarantee, so a genuine sync/async mix stays flagged.
+        let src = "function f(c: boolean) { if (c) return Promise.resolve(1); return 2; }";
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_union_return_type_mixing_sync_and_promise() {
+        // Negative space for #7096: a `T | Promise<T>` union return type can
+        // genuinely mix sync `T` and async `Promise<T>`, so it is a `TSUnionType`,
+        // not a single `Promise` reference, and is not skipped.
+        let src = "function f(c: boolean): number | Promise<number> { if (c) return 1; return Promise.resolve(2); }";
+        assert!(!run(src).is_empty());
     }
 }
