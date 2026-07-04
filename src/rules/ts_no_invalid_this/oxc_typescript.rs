@@ -384,21 +384,48 @@ fn is_event_emitter_listener_callback(
     is_listener_method_callee(&member.object)
 }
 
-/// True when `func_id` is a non-arrow `function` passed as a callback argument
-/// to a `CallExpression` that also passes at least one trailing argument
-/// (`arr.map(function () {…}, this)`, `arr.forEach(function () {…}, thisArg)`,
-/// `of(…).pipe(every(function () {…}, thisArg))`). `Array.prototype.{map,forEach,
-/// filter,…}`, RxJS predicate operators, and util libraries following the
-/// `(collection, callback, context)` convention (zrender `map`/`each`, lodash)
-/// invoke the callback with the trailing argument bound as `this`, so `this` in
-/// the callback body is the bound context. The trailing argument is the `thisArg`
-/// whether it is the literal `this` keyword or any other value (a local variable,
-/// an object literal, …).
+/// True when `arg` is a primitive-literal call argument — a number, string,
+/// template string, boolean, `null`, bigint, or regexp literal. A primitive
+/// cannot serve as a meaningful `this` receiver, so a primitive sitting after a
+/// callback is ordinary data (e.g. `setTimeout(fn, 100)`'s delay), not a
+/// `thisArg`.
+fn is_primitive_literal_arg(arg: &oxc_ast::ast::Argument) -> bool {
+    matches!(
+        arg,
+        oxc_ast::ast::Argument::NumericLiteral(_)
+            | oxc_ast::ast::Argument::StringLiteral(_)
+            | oxc_ast::ast::Argument::TemplateLiteral(_)
+            | oxc_ast::ast::Argument::BooleanLiteral(_)
+            | oxc_ast::ast::Argument::NullLiteral(_)
+            | oxc_ast::ast::Argument::BigIntLiteral(_)
+            | oxc_ast::ast::Argument::RegExpLiteral(_)
+    )
+}
+
+/// True when `func_id` is a non-arrow `function` passed as a callback argument to
+/// a `CallExpression` that hands it a receiver through a sibling argument, so
+/// `this` in the callback body is that bound receiver, not unbound. Two argument
+/// shapes supply the receiver:
 ///
-/// The `thisArg` must come *after* the callback in the argument list — an argument
-/// passed before the callback (`foo(this, function () {…})`) is data, not the
-/// `thisArg`, so it does not bind the callback's `this`.
-fn is_callback_with_trailing_this_arg(
+/// - **Leading `this`** (`Effect.gen(this, function* () {…})`, `STM.gen(this,
+///   function* () {…})`, `Layer.scopedContext(Effect.gen(this, function* () {…}))`):
+///   a direct `this` argument *before* the callback. Effect's `gen(self, body)`
+///   declares the body as `(this: Self) => Generator<…>` and invokes it as
+///   `body.call(self)`, binding the callback's `this` to that first argument.
+/// - **Trailing `thisArg`** (`arr.map(function () {…}, this)`, `arr.forEach(fn,
+///   thisArg)`, `of(…).pipe(every(fn, thisArg))`): the argument immediately
+///   *after* the callback — the ECMAScript `thisArg` convention shared by
+///   `Array.prototype.{map,forEach,…}`, RxJS predicate operators, and
+///   `(collection, callback, context)` util libraries (zrender, lodash). It binds
+///   `this` whether it is the literal `this` keyword, a local variable, or an
+///   object literal, but not a primitive literal, which cannot be a receiver
+///   (`setTimeout(fn, 100)`'s trailing `100` is a delay, so its `this` stays
+///   unbound).
+///
+/// A leading argument that is not a direct `this` (`foo(bar(this), fn)`, where the
+/// `this` is nested in a sub-expression) is data, not a receiver, so the
+/// callback's `this` stays unbound.
+fn is_callback_with_sibling_this_arg(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
@@ -422,7 +449,18 @@ fn is_callback_with_trailing_this_arg(
     else {
         return false;
     };
-    callback_index + 1 < call.arguments.len()
+    // Leading `this` argument (the `Effect.gen(this, fn)` receiver-binding form).
+    if call.arguments[..callback_index]
+        .iter()
+        .any(|arg| matches!(arg, oxc_ast::ast::Argument::ThisExpression(_)))
+    {
+        return true;
+    }
+    // Trailing `thisArg` immediately after the callback, unless it is a
+    // primitive literal that cannot serve as a receiver.
+    call.arguments
+        .get(callback_index + 1)
+        .is_some_and(|arg| !is_primitive_literal_arg(arg))
 }
 
 /// True when `call` is a `$(this)` call — a call to the bare `$` identifier
@@ -701,13 +739,14 @@ fn is_valid_this_context(
                 if is_event_emitter_listener_callback(ancestor.id(), semantic) {
                     return true;
                 }
-                // Trailing-thisArg callback: a `function` passed to a call that
-                // also passes a later argument (`arr.map(function () {…}, this)`,
-                // `arr.forEach(function () {…}, thisArg)`) is invoked with that
-                // argument bound as `this` — the ECMAScript `thisArg` convention
-                // shared by `Array.prototype.{map,forEach,…}`, RxJS predicate
-                // operators, and `(collection, callback, context)` util libraries.
-                if is_callback_with_trailing_this_arg(ancestor.id(), semantic) {
+                // Sibling-thisArg callback: a `function` passed to a call that
+                // also hands it a receiver through a sibling argument — a direct
+                // `this` *before* the callback (`Effect.gen(this, function* () {…})`,
+                // the receiver-binding generator-adapter form) or a non-primitive
+                // argument immediately *after* it (`arr.map(function () {…}, this)`,
+                // `arr.forEach(fn, thisArg)`, the ECMAScript `thisArg` convention) —
+                // is invoked with that receiver bound as `this`, so `this` is valid.
+                if is_callback_with_sibling_this_arg(ancestor.id(), semantic) {
                     return true;
                 }
                 // jQuery/cheerio iterator callback: a non-arrow `function` whose
@@ -1375,13 +1414,51 @@ mod tests {
     }
 
     #[test]
-    fn flags_this_in_callback_with_this_arg_before_it() {
-        // Negative-space guard for #3812: a `this` passed *before* the callback is
-        // data, not the `thisArg` (which the spec places after the callback) —
-        // `this` in the callback stays unbound and must fire. The leading `this`
-        // argument sits in a class method so only the callback's `this` is flagged.
-        let src = "class Foo {\n  run() {\n    return foo(this, function () {\n      return this.x;\n    });\n  }\n}";
+    fn flags_this_in_callback_with_nested_this_arg_before_it() {
+        // Negative-space guard for #7172: only a *direct* `this` argument before
+        // the callback binds its receiver. A `this` nested in a sub-expression
+        // (`foo(bar(this), fn)`) is data, not a receiver, so the callback's `this`
+        // stays unbound and must fire. The nested `this` sits in a class method so
+        // only the callback's `this` is flagged.
+        let src = "class Foo {\n  run() {\n    return foo(bar(this), function () {\n      return this.x;\n    });\n  }\n}";
         let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_generator_bound_via_leading_this_arg() {
+        // Regression for #7172: `STM.gen(this, function* () {…})` binds the
+        // generator's `this` to its leading argument (`body.call(self)`), so
+        // `this` inside the generator is the enclosing receiver and is valid.
+        let src = "class TSubscriptionRefImpl {\n  peek = STM.gen(this, function* () {\n    const x = yield* this.peekOption;\n    return x;\n  });\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_effect_gen_bound_via_leading_this_arg() {
+        // Regression for #7172: `Effect.gen(this, function* () {…})` is the same
+        // leading-receiver generator-adapter idiom as `STM.gen`.
+        let src = "class C {\n  run = Effect.gen(this, function* () {\n    if (this.dependencies) {\n      return 1;\n    }\n    return 0;\n  });\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_effect_gen_nested_in_outer_call() {
+        // Regression for #7172: the receiver-binding call can itself be nested in
+        // an outer call (`Layer.scopedContext(Effect.gen(this, function* () {…}))`);
+        // the callback's immediately enclosing call still supplies the leading
+        // `this`, so `this` in the generator is valid.
+        let src = "class C {\n  layer = Layer.scopedContext(Effect.gen(this, function* () {\n    return this.x;\n  }));\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_settimeout_callback_with_primitive_delay() {
+        // Negative-space guard for #7172: a callback whose only sibling argument is
+        // a primitive literal (`setTimeout(function () {…}, 100)`'s delay) gets no
+        // receiver — the trailing `100` cannot serve as `this`, so `this` in the
+        // callback stays unbound and must fire.
+        let diags = run_on("setTimeout(function () {\n  return this.x;\n}, 100);");
         assert_eq!(diags.len(), 1);
     }
 
