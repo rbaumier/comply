@@ -20,7 +20,9 @@
 //! structure to discriminate on, so there is no typed-error alternative.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir, result_error_type};
+use crate::rules::rust_helpers::{
+    is_expression_turbofish, is_in_test_context, is_under_tests_dir, result_error_type,
+};
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let Some(err_type) = result_error_type(node, source) else {
@@ -30,6 +32,13 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     };
     if err_text.trim() != "String" {
+        return;
+    }
+    // `Result::<_, String>::Ok(v)` is an expression-position turbofish value
+    // construction, not an error-type declaration on any API surface — the
+    // `String` is a phantom type argument for generic inference and no
+    // `Err(String)` value exists here. Only type positions carry the smell.
+    if is_expression_turbofish(node) {
         return;
     }
     // `Result<_, String>` is the idiomatic lightweight error-propagation pattern
@@ -372,5 +381,23 @@ mod tests {
         // still flagged — the exemption is scoped to panic-payload recovery.
         let src = "fn load() -> Result<i32, String> { Err(\"bad config\".to_owned()) }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_expression_position_turbofish_ok() {
+        // The tauri repro: `Result::<_, String>::Ok(v)` is an expression-position
+        // turbofish construction of the `Ok` variant — the `String` is a phantom
+        // type argument for the surrounding generic call's inference, not an
+        // error-type declaration, so no diagnostic.
+        let src = "fn call_helper<E>(_r: Result<i32, E>) {}\n\
+                   pub fn demo(v: i32) { call_helper(Result::<_, String>::Ok(v)); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_result_string_in_type_alias() {
+        // Load-bearing control: a type-alias `Result<_, String>` is an API-surface
+        // type declaration and stays flagged.
+        assert_eq!(run_on("type T = Result<i32, String>;").len(), 1);
     }
 }

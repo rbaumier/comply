@@ -90,8 +90,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    enclosing_fn, file_has_local_result_alias, is_in_test_context, is_in_trait_definition,
-    is_in_trait_impl, is_suppressed_by_clippy_allow, result_error_type, result_ok_type,
+    enclosing_fn, file_has_local_result_alias, is_expression_turbofish, is_in_test_context,
+    is_in_trait_definition, is_in_trait_impl, is_suppressed_by_clippy_allow, result_error_type,
+    result_ok_type,
 };
 use tree_sitter::Node;
 
@@ -100,6 +101,13 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     };
     if err_type.kind() != "unit_type" {
+        return;
+    }
+    // `Result::<_, ()>::Ok(v)` is an expression-position turbofish value
+    // construction, not an error-type declaration on any API surface — the `()`
+    // is a phantom type argument for generic inference and no `Err(())` value
+    // exists here. Only type positions carry the discarded-error smell.
+    if is_expression_turbofish(node) {
         return;
     }
     // A file-local `Result` alias may reorder T/E; see the module docs and
@@ -1282,5 +1290,25 @@ mod tests {
             run_on_src("impl Tr for T { type Assoc = Result<Value, ()>; }").len(),
             1
         );
+    }
+
+    // --- expression-position turbofish `Result::<_, ()>::Ok(...)` (#7235) ---
+
+    #[test]
+    fn allows_expression_position_turbofish_ok() {
+        // The tauri repro: `Result::<_, ()>::Ok(v)` is an expression-position
+        // turbofish construction of the `Ok` variant — the `()` is a phantom type
+        // argument for the surrounding generic call's inference, not a discarded
+        // error type, so no diagnostic.
+        let src = "fn call_helper<E>(_r: Result<i32, E>) {}\n\
+                   pub fn demo(v: i32) { call_helper(Result::<_, ()>::Ok(v)); }";
+        assert!(run_on_src(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unit_error_in_type_alias_not_turbofish() {
+        // Load-bearing control: a `pub type` `Result<_, ()>` is an API-surface
+        // type declaration (not an expression turbofish) and stays flagged.
+        assert_eq!(run_on_src("pub type T = Result<i32, ()>;").len(), 1);
     }
 }
