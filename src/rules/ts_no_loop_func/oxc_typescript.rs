@@ -128,6 +128,14 @@ fn captures_loop_binding<'a>(
             continue;
         }
         for reference in scoping.get_resolved_references(sym_id) {
+            // A type-only reference (`typeof binding` in a type annotation, `: T`,
+            // `as T`) is erased at compile time: the emitted JS holds no reference
+            // to the binding, so the closure captures nothing at runtime and cannot
+            // read a stale value. Only a value-position reference forms a real
+            // capture. `get_resolved_references` yields both, so skip type-only ones.
+            if !reference.flags().is_value() {
+                continue;
+            }
             let ref_span = nodes.kind(reference.node_id()).span();
             if span_contains(func_span, ref_span) {
                 return true;
@@ -411,5 +419,93 @@ mod tests {
         "#;
         let d = run(src, "src/app.ts");
         assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_closure_referencing_loop_var_only_in_type_annotation() {
+        // Issue #7124: the arrow's only reference to the function-scoped `var
+        // promise` is `typeof promise` in a type annotation. Type-position
+        // references are erased at compile time — the emitted JS never reads
+        // `promise` inside the closure, so there is no runtime capture and no
+        // stale-binding hazard. A `var` binding here isolates the type-only skip
+        // (a `let` would already be exempted as block-scoped).
+        let src = r#"
+            function g() {
+                while (cond()) {
+                    var promise = read();
+                    cb(async () => {
+                        const res: Awaited<typeof promise> = build();
+                        return res;
+                    });
+                }
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_trpc_sse_let_promise_type_annotation_repro() {
+        // Issue #7124 real-world repro (trpc/trpc stream/sse.ts): `promise` is a
+        // block-scoped `let` referenced inside the `onTimeout` arrow only via
+        // `typeof promise` in a type annotation. Sound on both counts — fresh
+        // per-iteration binding and a type-only, erased reference.
+        let src = r#"
+            while (true) {
+                let promise = stream.read();
+                promise = withTimeout({
+                    promise,
+                    onTimeout: async () => {
+                        const res: Awaited<typeof promise> = { done: false };
+                        await stream.recreate();
+                        return res;
+                    },
+                });
+                const result = await promise;
+            }
+        "#;
+        let d = run(src, "src/sse.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_closure_capturing_var_in_value_position() {
+        // Negative-space guard: the arrow reads the function-scoped `var promise`
+        // as a value (`await promise`) — a real runtime capture of a binding
+        // mutated across iterations, which must STILL be flagged.
+        let src = r#"
+            function g() {
+                while (cond()) {
+                    var promise = read();
+                    cb(async () => {
+                        const res = await promise;
+                        return res;
+                    });
+                }
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_closure_capturing_var_in_both_value_and_type_position() {
+        // Negative-space guard: the arrow references the `var promise` in a type
+        // position (`typeof promise`) AND a value position (`await promise`). The
+        // value reference is a real capture, so the closure must STILL be flagged
+        // — the type-only skip must not suppress a genuine value capture.
+        let src = r#"
+            function g() {
+                while (cond()) {
+                    var promise = read();
+                    cb(async () => {
+                        const res: Awaited<typeof promise> = await promise;
+                        return res;
+                    });
+                }
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
     }
 }
