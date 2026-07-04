@@ -33,11 +33,13 @@ impl OxcCheck for Check {
         let Some(cond_var) = extract_condition_var(test, ctx.source) else {
             return;
         };
-        let Some(upd_var) = extract_update_var(update, ctx.source) else {
+        let mut upd_vars = Vec::new();
+        collect_update_vars(update, &mut upd_vars);
+        if upd_vars.is_empty() {
             return;
-        };
+        }
 
-        if cond_var != upd_var {
+        if !upd_vars.contains(&cond_var) {
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, for_stmt.span.start as usize);
             diagnostics.push(Diagnostic {
@@ -67,17 +69,29 @@ fn extract_condition_var<'a>(expr: &'a Expression<'a>, _source: &str) -> Option<
     }
 }
 
-fn extract_update_var<'a>(expr: &'a Expression<'a>, source: &str) -> Option<&'a str> {
+/// Collect every variable the update clause mutates: `UpdateExpression`
+/// (`i++`/`++i`) arguments, assignment targets, and any nested increment or
+/// compound-assignment on an assignment's right-hand side (`j = i++` mutates
+/// both `j` and `i`). Sequence members (`++i, j++`) are collected in full.
+fn collect_update_vars<'a>(expr: &'a Expression<'a>, vars: &mut Vec<&'a str>) {
     match expr {
-        Expression::UpdateExpression(upd) => extract_update_expr_var(upd),
-        Expression::AssignmentExpression(assign) => match &assign.left {
-            AssignmentTarget::AssignmentTargetIdentifier(id) => Some(id.name.as_str()),
-            _ => None,
-        },
-        Expression::SequenceExpression(seq) => {
-            seq.expressions.first().and_then(|e| extract_update_var(e, source))
+        Expression::UpdateExpression(upd) => {
+            if let Some(name) = extract_update_expr_var(upd) {
+                vars.push(name);
+            }
         }
-        _ => None,
+        Expression::AssignmentExpression(assign) => {
+            if let AssignmentTarget::AssignmentTargetIdentifier(id) = &assign.left {
+                vars.push(id.name.as_str());
+            }
+            collect_update_vars(&assign.right, vars);
+        }
+        Expression::SequenceExpression(seq) => {
+            for e in &seq.expressions {
+                collect_update_vars(e, vars);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -129,5 +143,20 @@ mod tests {
     #[test]
     fn allows_matching_prefix() {
         assert!(run_on("for (let i = 0; i < 10; ++i) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_rhs_post_increment() {
+        assert!(run_on("for (let i = 0, j = n - 1; i < n; j = i++) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_rhs_pre_increment() {
+        assert!(run_on("for (let i = 0, j = n - 1; i < n; j = ++i) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_sequence_touching_condition_var() {
+        assert!(run_on("for (let i = 0; i < n; ++i, j++) {}").is_empty());
     }
 }
