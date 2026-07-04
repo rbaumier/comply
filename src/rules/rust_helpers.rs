@@ -476,7 +476,13 @@ fn segment_is_test_token_dir(segment: &str) -> bool {
 ///   `test_utils.rs`, `test_helpers.rs`, or `testutil.rs`. `tests.rs` / `test.rs`
 ///   is the idiomatic Rust inline-test-module convention (`mod tests;` in a
 ///   parent source file resolves to a sibling `tests.rs` holding `#[test]`
-///   functions and their helpers).
+///   functions and their helpers); OR
+/// - the file STEM (name minus the `.rs` extension) contains a `-`/`_`-delimited
+///   `test`/`tests` token, or is exactly `testing`/`testutil` — the co-located
+///   unit-test convention (`mod stacked_panes_tests;` resolving to a sibling
+///   `stacked_panes_tests.rs` holding `#[test]` functions and their mock/helper
+///   impls). Stripping the extension lets the stem split cleanly, so
+///   `stacked_panes_tests` yields the `tests` token.
 ///
 /// Cross-crate test helpers cannot be `#[cfg(test)]` (that gate hides them
 /// from integration tests in *other* crates), so their test-only nature is
@@ -506,8 +512,21 @@ pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
     }) {
         return true;
     }
-    path.file_name()
+    if path
+        .file_name()
         .is_some_and(|name| TEST_FILE_NAMES.iter().any(|test_name| name == *test_name))
+    {
+        return true;
+    }
+    // The file STEM (name minus the `.rs` extension) carrying a delimited
+    // `test`/`tests` token marks the co-located unit-test convention
+    // (`mod stacked_panes_tests;` -> sibling `stacked_panes_tests.rs`). The
+    // extension is excluded so the stem splits cleanly (`stacked_panes_tests`
+    // -> `tests`); the same delimited-token predicate used for path segments is
+    // reused here so the file-stem check behaves identically.
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| segment_is_test_token_dir(stem) || TEST_SEGMENTS.contains(&stem))
 }
 
 /// True if `node` is inside a function literally named `main`. Walks up
@@ -7465,8 +7484,18 @@ mod tests {
             ("crates/foo/src/payload_storage/tests.rs", true),
             ("crates/foo/src/index/numeric_index/tests.rs", true),
             ("crates/foo/src/parser/test.rs", true),
+            // Co-located `<name>_tests.rs` / `<name>_test.rs` unit-test files:
+            // the stem carries a delimited `tests`/`test` token once the `.rs`
+            // extension is stripped (zellij-org/zellij, #7121).
+            ("zellij-server/src/panes/tiled_panes/unit/stacked_panes_tests.rs", true),
+            ("zellij-server/src/tab/unit/layout_applier_tests.rs", true),
+            ("zellij-server/src/unit/pty_test.rs", true),
             // Negative space: non-exact segments / file names are production.
             ("crates/foo/src/lib.rs", false),
+            // A sibling source file with a non-test stem still flags: only the
+            // stem's delimited token — not merely living beside a `_tests.rs`
+            // file — marks a test file.
+            ("zellij-server/src/panes/tiled_panes.rs", false),
             ("crates/foo/src/my_testing.rs", false),
             ("crates/foo/src/testingground/k.rs", false),
             // `test`/`tests` as a non-delimited substring of a longer file stem
