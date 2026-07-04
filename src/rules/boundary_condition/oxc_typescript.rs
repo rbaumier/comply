@@ -228,6 +228,23 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `r[0]` where `r` is an UNANNOTATED `const` whose initializer is a call to
+        // a same-file function with a non-empty tuple return-type annotation
+        // (`const skipInvalidParam = (…): [number, boolean] => …; const r =
+        // skipInvalidParam(…); r[0]`). TypeScript infers `r` as that tuple, so the
+        // first-element read is in-bounds. The callee is resolved to its declaration
+        // via the symbol table (same file only); a `[A, B] | undefined` return type
+        // qualifies when every non-nullish member is a non-empty tuple — a
+        // possibly-`undefined` receiver is a nullish-access concern outside this
+        // rule's empty-array scope. An imported, unresolved, array-returning, or
+        // unannotated callee stays flagged.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_nonempty_tuple_from_call_return(obj_ident, semantic)
+        {
+            return;
+        }
+
         // `a[0]` where `a` is an UNANNOTATED callback parameter of an element-typed
         // iteration method (`.sort`/`.map`/`.forEach`/`.filter`/`.find`), or
         // `section[0]` where `section` is an UNANNOTATED `for...of` binding — and
@@ -1808,6 +1825,109 @@ fn resolves_to_nonempty_tuple_type<'a>(
             .is_some_and(|ann| ts_type_resolves_to_nonempty_tuple(&ann.type_annotation, semantic));
     }
     false
+}
+
+/// Returns true when `ident` is an UNANNOTATED `const` binding whose initializer
+/// is a call to a same-file function with a non-empty tuple return-type
+/// annotation — so the binding is provably a non-empty tuple and `ident[0]` is
+/// in-bounds. The initializer is peeled of transparent wrappers to reach the
+/// `CallExpression`; the callee is resolved to its declaration via the symbol
+/// table (same file only) and its explicit return type read from a `function`
+/// declaration or a `const`-bound arrow/function expression. A `[A, B] | undefined`
+/// return type qualifies when every non-nullish member is a non-empty tuple; a
+/// possibly-`undefined` receiver is a nullish-access concern outside this rule's
+/// empty-array scope. An imported,
+/// unresolved, array-returning, or unannotated callee stays flagged. An ANNOTATED
+/// binding is left to [`resolves_to_nonempty_tuple_type`]: an explicit annotation
+/// overrides the call's inferred type, so its own type drives the decision.
+fn resolves_to_nonempty_tuple_from_call_return<'a>(
+    ident: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    if binding_declared_type(ident, semantic).is_some() {
+        return false;
+    }
+    let Some(init) = binding_const_init(ident, semantic) else {
+        return false;
+    };
+    let Expression::CallExpression(call) = peel_transparent_wrappers(init) else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    callee_return_type_annotation(callee, semantic).is_some_and(|ann| {
+        ts_return_type_resolves_to_nonempty_tuple(&ann.type_annotation, semantic)
+    })
+}
+
+/// Resolves the callee `IdentifierReference` of a call to its declaration in the
+/// same file via the symbol table and returns that function's explicit
+/// return-type annotation. The declaration is either a `function` declaration
+/// (`function f(): [A, B]`) or a `const`-bound arrow/function expression
+/// (`const f = (): [A, B] => …`). Returns `None` when the callee does not resolve
+/// to a same-file function with an explicit return type (an imported callee has no
+/// in-file declaration; a parameter or an unannotated function has no return type).
+fn callee_return_type_annotation<'a>(
+    callee: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSTypeAnnotation<'a>> {
+    let ref_id = callee.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    for kind in std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::Function(func) => return func.return_type.as_deref(),
+            AstKind::VariableDeclarator(decl) => {
+                return match decl.init.as_ref().map(peel_transparent_wrappers) {
+                    Some(Expression::ArrowFunctionExpression(arrow)) => {
+                        arrow.return_type.as_deref()
+                    }
+                    Some(Expression::FunctionExpression(func)) => func.return_type.as_deref(),
+                    _ => None,
+                };
+            }
+            AstKind::FormalParameter(_) | AstKind::Program(_) => return None,
+            _ => continue,
+        }
+    }
+    None
+}
+
+/// Returns true when a function's return type `ty` proves a non-empty tuple
+/// result: either `ty` itself resolves to a non-empty tuple, or `ty` is a union
+/// every one of whose NON-NULLISH members does (`[A, B] | undefined`). A
+/// union with a non-tuple non-nullish member, or with no non-nullish member at
+/// all, does not qualify. Reuses [`ts_type_resolves_to_nonempty_tuple`] so the
+/// index-vs-arity behavior matches the annotated-tuple case.
+fn ts_return_type_resolves_to_nonempty_tuple<'a>(
+    ty: &'a TSType<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let TSType::TSUnionType(union) = ty else {
+        return ts_type_resolves_to_nonempty_tuple(ty, semantic);
+    };
+    let mut has_non_nullish = false;
+    for member in &union.types {
+        if is_nullish_keyword_type(member) {
+            continue;
+        }
+        has_non_nullish = true;
+        if !ts_type_resolves_to_nonempty_tuple(member, semantic) {
+            return false;
+        }
+    }
+    has_non_nullish
+}
+
+/// Returns true when `ty` is the `undefined` or `null` keyword type — a nullish
+/// union member ignored when deciding whether the non-nullish members are tuples.
+fn is_nullish_keyword_type(ty: &TSType) -> bool {
+    matches!(ty, TSType::TSUndefinedKeyword(_) | TSType::TSNullKeyword(_))
 }
 
 /// Returns true when `ty` is a literal tuple type with at least one element,
@@ -4599,6 +4719,100 @@ mod tests {
         // Negative control: an aliased element type (`Pair[]`) cannot be resolved to
         // a tuple without type info, so the callback param's `[0]` stays flagged.
         let src = "function f(xs: Pair[]) { return xs.sort((a, b) => a[0]); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_call_return_tuple_arrow_index0_issue_7148() {
+        // The issue's hono repro: `skipResult` is an unannotated `const` bound to a
+        // call to a same-file arrow with a `[number, boolean]` return type, so
+        // `skipResult[0]` / `skipResult[1]` are in-bounds.
+        let src = "const skipInvalidParam = (h: string, i: number): [number, boolean] => [i + 1, true]; const skipResult = skipInvalidParam(h, i); use(skipResult[0], skipResult[1]);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_call_return_tuple_union_undefined_index0_issue_7148() {
+        // The issue's hono `getEventSpec` repro: a `[string, boolean] | undefined`
+        // return type qualifies through its non-nullish member, so `eventSpec[0]` is
+        // in-bounds. The `if (eventSpec)` mirrors the hono source (the exemption
+        // relies on the non-nullish tuple member, not the guard).
+        let src = "const getEventSpec = (k: string): [string, boolean] | undefined => undefined; const eventSpec = getEventSpec(k); if (eventSpec) { use(eventSpec[0], eventSpec[1]); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_call_return_union_non_tuple_member_index0_issue_7148() {
+        // Negative control: a union with a non-tuple non-nullish member
+        // (`[number, boolean] | number[]`) is not provably a tuple — the `number[]`
+        // branch may be empty — so `y[0]` stays flagged.
+        let src = "const f = (): [number, boolean] | number[] => []; const y = f(); use(y[0]);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_call_return_only_nullish_union_index0_issue_7148() {
+        // Negative control: a union with no non-nullish member (`undefined | null`)
+        // yields no tuple evidence, so `y[0]` stays flagged.
+        let src = "const f = (): undefined | null => undefined; const y = f(); use(y[0]);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_call_return_tuple_let_binding_index0_issue_7148() {
+        // Negative control: a `let` receiver may be reassigned to a shorter or
+        // differently-typed value, so the tuple inference does not hold and `y[0]`
+        // stays flagged.
+        let src = "const f = (): [number, boolean] => [1, true]; let y = f(); use(y[0]);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_call_return_tuple_function_expression_index0_issue_7148() {
+        // A `const`-bound function expression callee with a tuple return type
+        // resolves the same way as the arrow and `function`-declaration forms.
+        let src = "const pair = function (): [number, boolean] { return [1, true]; }; const r = pair(); use(r[0]);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_call_return_tuple_function_decl_index0_issue_7148() {
+        // A `function` declaration callee with a tuple return type resolves the same
+        // way as the arrow form.
+        let src = "function pair(): [number, boolean] { return [1, true]; } const r = pair(); use(r[0]);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_call_return_array_index0_issue_7148() {
+        // Negative control: a callee returning a plain array (`number[]`, not a
+        // tuple) may yield an empty array, so `x[0]` stays flagged.
+        let src = "const someFn = (): number[] => []; const x = someFn(); use(x[0]);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_call_return_unannotated_callee_index0_issue_7148() {
+        // Negative control: a callee with NO return-type annotation gives no tuple
+        // evidence, so `x[0]` stays flagged.
+        let src = "const someFn = () => makeArr(); const x = someFn(); use(x[0]);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_call_return_unresolved_callee_index0_issue_7148() {
+        // Negative control: an imported / non-same-file callee has no in-file
+        // declaration to read a return type from, so `x[0]` stays flagged.
+        let src = "import { fetchPair } from './p'; const x = fetchPair(); use(x[0]);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_annotated_array_binding_over_tuple_call_index0_issue_7148() {
+        // Negative control: an explicit `number[]` annotation overrides the call's
+        // inferred tuple type, so the binding is a plain array and `x[0]` stays
+        // flagged — the inferred-type path only applies to unannotated bindings.
+        let src = "const pair = (): [number, boolean] => [1, true]; const x: number[] = pair(); use(x[0]);";
         assert_eq!(run_on(src).len(), 1);
     }
 
