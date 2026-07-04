@@ -17,8 +17,11 @@
 //! into a struct/enum-variant literal (`Thing { name }` / `Variant { error }`
 //! / `Thing { name: name }`), as a bare argument of a call — a function
 //! call, a method call, or an enum tuple-variant constructor
-//! (`some_fn(name)` / `Variant::String(name)`) — by a bare assignment that
-//! stores it in an owned place (`self.field = name`), or by being referenced
+//! (`some_fn(name)` / `Variant::String(name)`) — as a bare `identifier`
+//! element of an array literal (`[name]`) or a `vec!` macro (`vec![name]`),
+//! both of which move their elements into the owned collection, by a bare
+//! assignment that stores it in an owned place (`self.field = name`), or by
+//! being referenced
 //! anywhere inside a `move` closure (`move || { … name … }`), which captures
 //! every used variable by value. There the function genuinely needs ownership,
 //! so taking `String` is the correct API — switching to `&str` would only
@@ -102,11 +105,13 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
 /// Whether `param_name` is moved by value anywhere in `node`'s subtree, either
 /// as a bare `identifier` field value of a struct/enum-variant literal
 /// (`{ x }` shorthand, or `{ x: x }`), as a bare `identifier` argument of a
-/// call (`some_fn(x)`, `obj.method(x)`, `Variant::String(x)`), or as the bare
-/// `identifier` right-hand side of an assignment (`self.field = x`). A bare
-/// identifier consumes the owned value; `&x` (`reference_expression`) and
-/// `x.clone()` (a method call whose `arguments` list does not contain `x`) do
-/// not, so they are ignored and still warrant the warning.
+/// call (`some_fn(x)`, `obj.method(x)`, `Variant::String(x)`), as a bare
+/// `identifier` element of an array literal (`[x]`) or a `vec!` macro
+/// (`vec![x]`), or as the bare `identifier` right-hand side of an assignment
+/// (`self.field = x`). A bare identifier consumes the owned value; `&x`
+/// (`reference_expression`) and `x.clone()` (a method call whose `arguments`
+/// list does not contain `x`) do not, so they are ignored and still warrant the
+/// warning.
 fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
     match node.kind() {
         "struct_expression" => {
@@ -165,6 +170,33 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
                 return true;
             }
         }
+        "array_expression" => {
+            // Array elements move by value into the owned array, so a bare
+            // `identifier` element (`[x]`, `[a, x]`) consumes the param. `&x`
+            // is a `reference_expression` element and `x.clone()` a
+            // `call_expression` element — distinct node kinds — so a borrow or
+            // clone stays flagged.
+            let mut cursor = node.walk();
+            for element in node.named_children(&mut cursor) {
+                if is_param_identifier(Some(element), source, param_name) {
+                    return true;
+                }
+            }
+        }
+        "macro_invocation" => {
+            // `vec![x]` moves its elements into the owned `Vec`. Scope to the
+            // `vec` std collection macro: a format macro (`println!`, `write!`,
+            // `format!`) only borrows its substitution arguments, so those stay
+            // flagged. A macro `token_tree` holds flat tokens (no expression
+            // shape), so a bare-`identifier` element move is one whose
+            // neighbours are element boundaries — `&x` leaves a `&` sibling and
+            // `x.clone()` a `.` sibling, both of which stay flagged.
+            if macro_name_is_vec(node, source)
+                && vec_moves_identifier(node, source, param_name)
+            {
+                return true;
+            }
+        }
         _ => {}
     }
 
@@ -182,6 +214,48 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
 fn closure_is_move(node: tree_sitter::Node) -> bool {
     let mut cursor = node.walk();
     node.children(&mut cursor).any(|c| c.kind() == "move")
+}
+
+/// Whether `node`, a `macro_invocation`, invokes the std `vec!` macro (its
+/// `macro` name is exactly `vec`). Scoped to `vec` so format macros
+/// (`println!`, `write!`, `format!`), which only borrow their arguments, are
+/// not treated as moves.
+fn macro_name_is_vec(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.child_by_field_name("macro")
+        .and_then(|m| m.utf8_text(source).ok())
+        .is_some_and(|name| name == "vec")
+}
+
+/// Whether `param_name` appears as a bare `identifier` element of the `vec!`
+/// macro's `token_tree` (`vec![name]`, `vec![a, name]`). A `token_tree` holds
+/// flat tokens, so an element move is a bare `identifier` flanked by
+/// element-boundary tokens; a leading `&` (`vec![&name]`, a borrow) or a
+/// trailing `.` (`vec![name.clone()]`, a method/field access) leaves a
+/// non-boundary sibling, so those stay flagged.
+fn vec_moves_identifier(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
+    let mut macro_cursor = node.walk();
+    let Some(tree) = node
+        .children(&mut macro_cursor)
+        .find(|c| c.kind() == "token_tree")
+    else {
+        return false;
+    };
+    let mut cursor = tree.walk();
+    tree.children(&mut cursor).any(|token| {
+        token.kind() == "identifier"
+            && token.utf8_text(source) == Ok(param_name)
+            && is_element_boundary(token.prev_sibling())
+            && is_element_boundary(token.next_sibling())
+    })
+}
+
+/// Whether `sibling` delimits a `token_tree` element: a bracket/paren/brace or
+/// an element separator (`,` / `;`). A missing sibling counts as a boundary.
+fn is_element_boundary(sibling: Option<tree_sitter::Node>) -> bool {
+    match sibling {
+        None => true,
+        Some(node) => matches!(node.kind(), "[" | "(" | "{" | "]" | ")" | "}" | "," | ";"),
+    }
 }
 
 /// Whether `param_name` appears as a bare `identifier` anywhere in `node`'s
@@ -425,6 +499,51 @@ mod tests {
     #[test]
     fn flags_param_cloned_into_call() {
         assert_eq!(run("pub fn f(s: String) { g(s.clone()) }").len(), 1);
+    }
+
+    #[test]
+    fn allows_param_moved_into_vec_macro() {
+        // Repro of #7205 (rust-lang/cargo `compile_filter.rs`): `bin` is moved
+        // by value into `vec![bin]`, which becomes an owned `Vec<String>`, so
+        // taking `bin: String` by value is the correct API.
+        assert!(run("pub fn single_bin(bin: String) -> X { X::new(vec![bin], false) }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_moved_into_multi_element_vec() {
+        assert!(run("pub fn f(a: String, b: String) -> Vec<String> { vec![a, b] }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_moved_into_array_literal() {
+        assert!(run("pub fn f(bin: String) -> [String; 1] { [bin] }").is_empty());
+    }
+
+    #[test]
+    fn flags_param_borrowed_into_vec_element() {
+        // `vec![&s]` borrows `s` into a `Vec<&String>` — the param is not
+        // consumed, so `&str` would compile and the warning still holds.
+        assert_eq!(run("pub fn f(s: String) { let _ = vec![&s]; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_param_cloned_into_vec_element() {
+        // `vec![s.clone()]` only borrows `s` to clone it; the param is not moved.
+        assert_eq!(run("pub fn f(s: String) { let _ = vec![s.clone()]; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_param_borrowed_into_array_element() {
+        // `[&s]` borrows `s`; the array element is a `reference_expression`, not
+        // a bare `identifier`, so the param is not moved.
+        assert_eq!(run("pub fn f(s: String) { let _ = [&s]; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_param_in_format_macro() {
+        // The `vec!` move recognition is scoped to `vec`; a format macro only
+        // borrows its substitution arguments, so `format!` stays flagged.
+        assert_eq!(run(r#"pub fn f(s: String) -> String { format!("{}", s) }"#).len(), 1);
     }
 
     #[test]
