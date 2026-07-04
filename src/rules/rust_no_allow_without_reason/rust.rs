@@ -74,7 +74,7 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     let src_str = std::str::from_utf8(source).unwrap_or("");
     let lines: Vec<&str> = src_str.lines().collect();
 
-    if allow_list_contains(text, "dead_code") && has_adjacent_cfg_attribute(&lines, row) {
+    if allow_list_contains(text, "dead_code") && attribute_stack_has_cfg(node, source) {
         return;
     }
 
@@ -292,15 +292,55 @@ fn all_lints_self_justifying(attribute: &str) -> bool {
     saw_lint
 }
 
-fn has_adjacent_cfg_attribute(lines: &[&str], row: usize) -> bool {
-    let prev_is_cfg = row > 0
-        && lines
-            .get(row - 1)
-            .is_some_and(|line| line.trim_start().starts_with("#[cfg("));
-    let next_is_cfg = lines
-        .get(row + 1)
-        .is_some_and(|line| line.trim_start().starts_with("#[cfg("));
-    prev_is_cfg || next_is_cfg
+/// True when the `#[allow(...)]` item's attribute stack contains a `#[cfg(...)]`
+/// attribute anywhere, in either direction. A `#[cfg(...)]` gate can make the
+/// decorated item unreachable in some build configurations, which is the
+/// standing justification for an accompanying `#[allow(dead_code)]` — even when
+/// another attribute (`#[inline]`, `#[must_use]`, `#[cold]`, …) sits between the
+/// cfg and the allow.
+///
+/// tree-sitter-rust models outer attributes as `attribute_item` siblings of the
+/// item they decorate. Walking `prev_named_sibling`/`next_named_sibling` over the
+/// contiguous run of `attribute_item` siblings and stopping at the first
+/// non-`attribute_item` sibling keeps the check scoped to this item: the first
+/// non-attribute sibling is the decorated item (or unrelated code), so a
+/// `#[cfg(...)]` decorating a *different* item cannot leak across that boundary.
+fn attribute_stack_has_cfg(node: Node, source: &[u8]) -> bool {
+    let mut prev = node.prev_named_sibling();
+    while let Some(sibling) = prev {
+        if sibling.kind() != "attribute_item" {
+            break;
+        }
+        if is_cfg_attribute(sibling, source) {
+            return true;
+        }
+        prev = sibling.prev_named_sibling();
+    }
+
+    let mut next = node.next_named_sibling();
+    while let Some(sibling) = next {
+        if sibling.kind() != "attribute_item" {
+            break;
+        }
+        if is_cfg_attribute(sibling, source) {
+            return true;
+        }
+        next = sibling.next_named_sibling();
+    }
+
+    false
+}
+
+/// True when `attribute_item` is a `#[cfg(...)]` attribute. `#[cfg_attr(...)]` is
+/// excluded: it conditionally *applies* an attribute rather than gating the
+/// item's presence, so it does not justify a dead-code allow. Uses the rule's
+/// text idiom for attribute recognition.
+fn is_cfg_attribute(attribute_item: Node, source: &[u8]) -> bool {
+    attribute_item
+        .utf8_text(source)
+        .unwrap_or("")
+        .trim_start()
+        .starts_with("#[cfg(")
 }
 
 /// True when `line` carries a `//` line comment — either a standalone comment or
@@ -503,6 +543,46 @@ mod tests {
     fn allows_dead_code_on_cfg_item() {
         assert!(run("#[cfg(feature = \"ffi\")]\n#[allow(dead_code)]\nfn f() {}").is_empty());
         assert!(run("#[allow(dead_code)]\n#[cfg(feature = \"ffi\")]\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_dead_code_with_cfg_separated_by_other_attribute() {
+        // #7111: `#[cfg(not(test))]` justifies the dead_code allow even when
+        // `#[inline]` sits between the cfg and the allow in the attribute stack.
+        assert!(
+            run("#[cfg(not(test))]\n#[inline]\n#[allow(dead_code)]\npub fn f() {}").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_dead_code_with_cfg_after_allow_and_further_in_stack() {
+        // The cfg gate may sit after the allow, and more than one attribute away
+        // in either direction.
+        assert!(
+            run("#[allow(dead_code)]\n#[inline]\n#[cfg(feature = \"ffi\")]\npub fn f() {}")
+                .is_empty()
+        );
+        assert!(
+            run("#[cfg(not(test))]\n#[inline]\n#[cold]\n#[allow(dead_code)]\npub fn f() {}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_dead_code_with_non_cfg_attribute_in_stack() {
+        // Load-bearing guard: a non-cfg attribute in the stack is not a gate, so
+        // it does not justify the allow — only a `#[cfg(...)]` does.
+        assert_eq!(run("#[inline]\n#[allow(dead_code)]\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_dead_code_when_cfg_is_on_a_different_item() {
+        // Load-bearing guard: a `#[cfg(...)]` decorating a *different* item does
+        // not leak across the item boundary to justify a later allow.
+        assert_eq!(
+            run("#[cfg(test)]\nfn a() {}\n#[allow(dead_code)]\nfn b() {}").len(),
+            1
+        );
     }
 
     #[test]
