@@ -6,7 +6,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_helpers::scan_blocks;
 use oxc_ast::CommentKind;
-use oxc_ast::ast::{AssignmentTarget, BindingPattern, Expression, TSType};
+use oxc_ast::ast::{AssignmentTarget, BindingPattern, Expression, TSType, TSTypeAnnotation};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -87,6 +87,19 @@ fn is_method_property_assignment(
     )
 }
 
+/// True when `ann` is a callable type annotation that carries its own `this`
+/// contract — a named function-type alias (`TSTypeReference`, e.g.
+/// `MatcherFunction<…>` / `LoadHandler`) or an inline function type
+/// (`TSFunctionType`, `(this: T, …) => …`). A `function` typed against such an
+/// annotation is checked against that signature's `this`, so `this` in its body
+/// is the declared binding, not a stray reference.
+fn is_callable_type_annotation(ann: &TSTypeAnnotation) -> bool {
+    matches!(
+        ann.type_annotation,
+        TSType::TSTypeReference(_) | TSType::TSFunctionType(_)
+    )
+}
+
 /// True when `func_id` is a `function` expression that is the initializer of a
 /// variable declared with an explicit callable type annotation — either a named
 /// function-type alias (`const m: MatcherFunction<…> = function () {…}`) or an
@@ -103,12 +116,46 @@ fn is_typed_callable_binding(
     let AstKind::VariableDeclarator(declarator) = nodes.kind(nodes.parent_id(func_id)) else {
         return false;
     };
-    declarator.type_annotation.as_ref().is_some_and(|ann| {
-        matches!(
-            ann.type_annotation,
-            TSType::TSTypeReference(_) | TSType::TSFunctionType(_)
-        )
-    })
+    declarator
+        .type_annotation
+        .as_deref()
+        .is_some_and(is_callable_type_annotation)
+}
+
+/// True when `func_id` is a `function` expression that is the value returned from
+/// a function whose explicit return type is a callable type — a named
+/// function-type alias (`function make(): LoadHandler { return function () {…} }`)
+/// or an inline function type (`function make(): (this: T, …) => … { return
+/// function () {…} }`). The enclosing function's return-type annotation is the
+/// callable contract the returned function is type-checked against, and that
+/// contract supplies the `this` binding, so `this` in the body is the declared
+/// binding, not a stray reference. This is the return-position analog of
+/// `is_typed_callable_binding` (the variable-annotation position). The function
+/// must be the returned expression directly, through an optional parenthesized
+/// wrapper (`return (function () {…})`); the annotation is read from the *nearest*
+/// enclosing function/arrow, so a returned function whose enclosing function has
+/// no return-type annotation is not exempted.
+fn is_typed_callable_return(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut parent_id = nodes.parent_id(func_id);
+    if matches!(nodes.kind(parent_id), AstKind::ParenthesizedExpression(_)) {
+        parent_id = nodes.parent_id(parent_id);
+    }
+    if !matches!(nodes.kind(parent_id), AstKind::ReturnStatement(_)) {
+        return false;
+    }
+    nodes
+        .ancestors(parent_id)
+        .find_map(|ancestor| match ancestor.kind() {
+            AstKind::Function(func) => Some(func.return_type.as_deref()),
+            AstKind::ArrowFunctionExpression(arrow) => Some(arrow.return_type.as_deref()),
+            _ => None,
+        })
+        .flatten()
+        .is_some_and(is_callable_type_annotation)
 }
 
 /// Mocha test/suite globals whose `function` callback is invoked with a
@@ -693,6 +740,16 @@ fn is_valid_this_context(
                 // against a callable contract that supplies `this`, so `this` in
                 // the body is the declared binding and is valid.
                 if is_typed_callable_binding(ancestor.id(), semantic) {
+                    return true;
+                }
+                // Typed callable return position: a `function` returned from a
+                // function whose explicit return type is a callable type alias
+                // or inline function type (`function make(): LoadHandler {
+                // return function () {…} }`) is type-checked against that
+                // callable contract, which supplies `this`, so `this` in the
+                // body is the declared binding and is valid. The return-position
+                // analog of the typed-callable binding above.
+                if is_typed_callable_return(ancestor.id(), semantic) {
                     return true;
                 }
                 // Method-property assignment: a function assigned to a member
@@ -1616,6 +1673,47 @@ mod tests {
         // member access as its immediate parent, not the `Reflect.apply` call, so
         // it stays unbound and must fire.
         let diags = run_on("function f() {\n  return Reflect.apply(fn, this.ctx, args);\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_function_returned_from_callable_alias_return_type() {
+        // Regression for #7213: a `function` returned from a function whose
+        // explicit return type is a callable type alias (`function
+        // createLoadHandler(): LoadHandler { return async function (id) {…} }`,
+        // `type LoadHandler = (this: Ctx, id: string) => void`) is type-checked
+        // against that alias's `this: Ctx` binding — the idiomatic Rollup/esbuild
+        // plugin-hook shape — so `this` in the returned body is valid.
+        let src = "type LoadHandler = (this: Ctx, id: string) => void;\nfunction createLoadHandler(): LoadHandler {\n  return async function (id) {\n    this.addWatchFile(id);\n  };\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_returned_from_inline_function_return_type() {
+        // Regression for #7213: the inline function-type return annotation
+        // (`function f(): (this: T) => void`) declares the `this` binding
+        // directly, exactly like the aliased form.
+        let src = "function f(): (this: T) => void {\n  return function () {\n    return this.x;\n  };\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_returned_from_untyped_function() {
+        // Negative-space guard for #7213: a `function` returned from a function
+        // with no return-type annotation has no callable contract supplying
+        // `this` — `this` in the returned body is unbound and must fire.
+        let diags = run_on("function bad() {\n  return function () {\n    return this.x;\n  };\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_own_body_of_function_with_return_type() {
+        // Negative-space guard for #7213: the exemption keys on a `function` in
+        // *return position*, not on the enclosing function itself. A `this`
+        // written directly in the body of a function that merely carries a
+        // return-type annotation — not inside a returned function — is still
+        // unbound and must fire.
+        let diags = run_on("function f(): void {\n  return this.x;\n}");
         assert_eq!(diags.len(), 1);
     }
 }
