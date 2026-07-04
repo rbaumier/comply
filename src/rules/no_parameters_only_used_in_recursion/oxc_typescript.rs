@@ -251,8 +251,12 @@ fn all_references_in_recursion(
     any
 }
 
-/// Walks up from a reference to the enclosing function boundary; returns true if
-/// it passes through the arguments of a recursive call.
+/// Walks up from a reference to the enclosing function boundary and decides at
+/// the innermost `CallExpression` that takes the reference as a direct argument:
+/// the reference forwards recursion only when that call is the recursive one.
+/// A reference passed to a nested non-recursive call (`f(g(x))`, where `g` sits
+/// inside the recursive call's argument list) is a genuine read, not forwarding.
+/// A reference in callee position is not an argument, so the walk passes it by.
 fn reference_in_recursive_call(
     ref_node: NodeId,
     recursion: &Recursion,
@@ -264,10 +268,9 @@ fn reference_in_recursive_call(
     for ancestor in nodes.ancestors(ref_node) {
         let kind = ancestor.kind();
         if let AstKind::CallExpression(call) = kind
-            && is_recursive_call(call, recursion, scoping)
             && reference_in_arguments(call, ref_span)
         {
-            return true;
+            return is_recursive_call(call, recursion, scoping);
         }
         // Function boundary — stop before leaving the function the parameter
         // belongs to (its own span counts as the boundary).
@@ -661,5 +664,34 @@ mod tests {
         let src = "function outer(n, acc) {\n  function inner(x) { return x; }\n  if (n === 0) return inner(acc);\n  return outer(n - 1, acc);\n}";
         // `acc` is read by `inner(acc)` outside recursion → not flagged.
         assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn param_read_by_nested_call_inside_recursive_args_not_flagged() {
+        // Regression for #7192: `node`/`propertyKey` are passed to the nested,
+        // non-recursive call `list(node, propertyKey)`, whose result becomes the
+        // recursive call's 3rd argument — they are read, not merely forwarded.
+        let src = "function createClasses(propertyKey, node, list) {\n  if (typeof list === 'function') return createClasses(propertyKey, node, list(node, propertyKey));\n  return {};\n}";
+        assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn param_forwarded_to_nested_non_recursive_call_not_flagged() {
+        // `y` is passed to the non-recursive `g`, whose result is forwarded — the
+        // innermost argument-taking call for `y` is `g`, so `y` is a genuine read.
+        assert_eq!(
+            count("function f(x, y) {\n  if (x === 0) return 0;\n  return f(x, g(y));\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn param_purely_forwarded_still_flagged() {
+        // `tag` is forwarded unchanged through recursion with no intervening call:
+        // the innermost argument-taking call is the recursive one → still flagged.
+        assert_eq!(
+            count("function f(n, tag) {\n  if (n === 0) return 0;\n  return f(n - 1, tag);\n}"),
+            1
+        );
     }
 }
