@@ -2,6 +2,26 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// True when this `!` unary_expression's effective parent (peeling parentheses)
+/// is another `!` unary_expression — the inner negation of a `!!(a && b)`
+/// double-negation. Distributing De Morgan there leaves the outer `!` in place,
+/// so `!!(a && b)` becomes `!(!a || !b)`, no simpler than the original.
+fn is_inner_of_double_negation(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut parent = node.parent();
+    while let Some(p) = parent {
+        match p.kind() {
+            "parenthesized_expression" => parent = p.parent(),
+            "unary_expression" => {
+                return p
+                    .child(0)
+                    .is_some_and(|op| op.utf8_text(source).unwrap_or("") == "!");
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
     // In tree-sitter-rust, unary_expression has no fields:
     // child(0) = operator ("!"), named_child(0) = operand.
@@ -28,6 +48,11 @@ crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
     if bin_op_text != b"&&" && bin_op_text != b"||" {
         return;
     }
+
+    if is_inner_of_double_negation(node, source) {
+        return;
+    }
+
     let pos = node.start_position();
     let op_str = std::str::from_utf8(bin_op_text).unwrap_or("??");
     let suggested = if op_str == "&&" { "||" } else { "&&" };
@@ -90,5 +115,21 @@ mod tests {
     #[test]
     fn allows_negated_comparison() {
         assert!(run_on("fn f(a: i32, b: i32) { if !(a == b) {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_inner_of_double_negation_and() {
+        assert!(run_on("fn f(a: bool, b: bool) { let _ = !!(a && b); }").is_empty());
+    }
+
+    #[test]
+    fn allows_inner_of_double_negation_or() {
+        assert!(run_on("fn f(a: bool, b: bool) { let _ = !!(a || b); }").is_empty());
+    }
+
+    #[test]
+    fn allows_inner_negation_across_parens() {
+        // `!(!(a && b))`: a parenthesized_expression sits between the two `!`.
+        assert!(run_on("fn f(a: bool, b: bool) { let _ = !(!(a && b)); }").is_empty());
     }
 }
