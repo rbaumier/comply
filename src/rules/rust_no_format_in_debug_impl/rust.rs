@@ -5,7 +5,7 @@
 //! body for `format!` macro invocations. Each one is a wasted
 //! allocation that should be a `write!`.
 //!
-//! Three `format!` shapes are allowed:
+//! Four `format!` shapes are allowed:
 //!
 //! - One that supplies the *name* argument of a `debug_struct(...)` /
 //!   `debug_tuple(...)` call — those methods require a runtime `&str`
@@ -23,11 +23,13 @@
 //!   `write!` to — the closure or binding must yield an owned `String`.
 //! - One supplying the *value* argument of a debug-builder field method —
 //!   `.field(name, &format!(...))` / `.entry(...)` / `.key(...)` / `.value(...)`
-//!   whose receiver chain roots at a `debug_struct`/`debug_tuple`/`debug_list`/
-//!   `debug_set`/`debug_map` call. Those methods take a `&dyn Debug`, so a
-//!   combined render of several values can only be passed via `format!`;
-//!   `write!`-ing into the formatter would bypass the builder and produce
-//!   malformed output.
+//!   whose receiver roots at a `debug_struct`/`debug_tuple`/`debug_list`/
+//!   `debug_set`/`debug_map` call — either inline in the method-call chain, or,
+//!   when the receiver is a bare local identifier, through its `let` binding's
+//!   initializer (`let mut debug = f.debug_struct(..); debug.field(..)`). Those
+//!   methods take a `&dyn Debug`, so a combined render of several values can
+//!   only be passed via `format!`; `write!`-ing into the formatter would bypass
+//!   the builder and produce malformed output.
 //!
 //! Nested helper functions (`fn helper() { ... }` declared inside the `fmt`
 //! method body) are skipped entirely: they open a new scope where the outer
@@ -177,9 +179,13 @@ const DEBUG_BUILDER_CTORS: &[&str] = &[
 /// produced via `format!`, and `write!`-ing into the formatter would bypass the
 /// builder and emit malformed output, so this `format!` cannot be rewritten.
 ///
-/// Requiring an inline `debug_*` constructor in the receiver chain keeps the
-/// exemption precise: a `.field(&format!(...))` on an arbitrary (non-builder)
-/// receiver is not blanket-exempted.
+/// The receiver may root at the constructor inline (`f.debug_struct("Foo")
+/// .field(...)`) or through a `let` binding when the builder is bound to a
+/// local and fields are added across statements (`let mut debug =
+/// f.debug_struct(..); if let Some(v) = .. { debug.field(..) }`). Requiring the
+/// resolved receiver to root at a `debug_*` constructor keeps the exemption
+/// precise: a `.field(&format!(...))` on an arbitrary (non-builder) receiver is
+/// not blanket-exempted.
 fn is_debug_builder_field_value(format_node: tree_sitter::Node, source: &[u8]) -> bool {
     let value = climb_value_wrappers(format_node);
     let Some(arguments) = value.parent() else {
@@ -209,7 +215,60 @@ fn is_debug_builder_field_value(format_node: tree_sitter::Node, source: &[u8]) -
     }
     function
         .child_by_field_name("value")
-        .is_some_and(|receiver| receiver_chain_roots_at_debug_builder(receiver, source))
+        .is_some_and(|receiver| receiver_roots_at_debug_builder(receiver, source))
+}
+
+/// Whether a debug-builder field method's `receiver` roots at a `debug_*`
+/// constructor — either inline in the method-call chain, or, when the receiver
+/// is a bare local identifier, through the initializer of its `let` binding.
+///
+/// The local-binding form is idiomatic when fields are added conditionally
+/// (`let mut debug = f.debug_struct(..); if let Some(v) = .. { debug.field(..) }`),
+/// which a fluent chain cannot express.
+fn receiver_roots_at_debug_builder(receiver: tree_sitter::Node, source: &[u8]) -> bool {
+    if receiver_chain_roots_at_debug_builder(receiver, source) {
+        return true;
+    }
+    receiver.kind() == "identifier"
+        && receiver
+            .utf8_text(source)
+            .ok()
+            .and_then(|name| local_let_binding_init(receiver, name, source))
+            .is_some_and(|init| receiver_chain_roots_at_debug_builder(init, source))
+}
+
+/// Resolves the bare identifier `name` (a `.field(..)` receiver) to the
+/// initializer of its nearest preceding `let name = <init>` binding in an
+/// enclosing scope. Walks outward from `node`; within each scope only bindings
+/// declared before the use are considered and the last such binding wins
+/// (honoring shadowing). Mirrors the ancestor walk in
+/// `rust_helpers::local_let_binds_*`.
+fn local_let_binding_init<'a>(
+    node: tree_sitter::Node<'a>,
+    name: &str,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        let mut init = None;
+        let mut cursor = parent.walk();
+        for sib in parent.children(&mut cursor) {
+            if sib.id() == child.id() {
+                break;
+            }
+            if sib.kind() == "let_declaration"
+                && let Some(pattern) = sib.child_by_field_name("pattern")
+                && crate::rules::rust_helpers::let_pattern_binds(pattern, name, source)
+            {
+                init = sib.child_by_field_name("value");
+            }
+        }
+        if init.is_some() {
+            return init;
+        }
+        child = parent;
+    }
+    None
 }
 
 /// Walks a method-call receiver chain (`a.b(..).c(..)` → `c`'s receiver is
@@ -523,9 +582,12 @@ mod tests {
     }
 
     #[test]
-    fn issue_1326_exempts_only_the_name_arg() {
-        // sled src/db.rs: the name `format!` is exempt, the `.field(...)`
-        // value `format!` is still the genuine waste the rule targets.
+    fn allows_format_name_and_field_value_on_local_debug_struct() {
+        // sled src/db.rs: `debug_struct` is bound to a local. The
+        // `debug_struct(&format!(..))` name arg (a const generic can only be
+        // spelled at runtime) and the `.field(.., &format!(..))` value (a
+        // `&dyn Debug` slot `write!` cannot fill) are both exempt. See #1326,
+        // #7244.
         let source = r#"impl<const LEAF_FANOUT: usize> fmt::Debug for Db<LEAF_FANOUT> {
             fn fmt(&self, w: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let mut debug_struct = w.debug_struct(&format!("Db<{}>", LEAF_FANOUT));
@@ -534,7 +596,7 @@ mod tests {
                     .finish()
             }
         }"#;
-        assert_eq!(run_on(source).len(), 1);
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
@@ -661,6 +723,56 @@ mod tests {
         let source = r#"impl Debug for Foo {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let _ = self.builder.field("x", &format!("{}-{}", self.a, self.b));
+                write!(f, "Foo")
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_format_in_field_value_on_local_debug_builder_issue_7244() {
+        // meilisearch types.rs: the builder is bound to a local and `.field(..)`
+        // is called on it inside `if let Some(..)` — the conditional form a
+        // fluent chain can't express. The receiver identifier resolves to a
+        // `debug_struct` binding, so the un-rewritable `.field` value `format!`
+        // (no `.len()` truncation signal in the args) is exempt. See #7244.
+        let source = r#"impl fmt::Debug for FederatedSearchResult {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut debug = f.debug_struct("SearchResult");
+                if let Some(query_vectors) = self.query_vectors {
+                    let known = query_vectors.len();
+                    debug.field("query_vectors", &format!("[{known} known vectors]"));
+                }
+                debug.finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_format_in_entry_value_on_local_debug_list_builder() {
+        // A `debug_list` builder bound to a local: `.entry(&format!(..))` is
+        // exempt once the receiver identifier resolves to the `debug_list`
+        // binding. See #7244.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut list = f.debug_list();
+                list.entry(&format!("{:?}", self.x));
+                list.finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_field_value_format_on_local_non_builder_binding() {
+        // A `.field(..)` receiver identifier that resolves to a NON-debug-builder
+        // binding must not be exempted by the local-binding resolution path: the
+        // `format!` is still the waste the rule targets. See #7244.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut thing = SomeStruct::new();
+                thing.field("k", &format!("{}-{}", self.a, self.b));
                 write!(f, "Foo")
             }
         }"#;
