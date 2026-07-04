@@ -14,6 +14,10 @@
 //! skipped: they are throwaway fixtures deriving `PartialEq` only for
 //! `assert_eq!`, so a missing `Eq` is not a defect.
 //!
+//! A type carrying `#[allow(clippy::derive_partial_eq_without_eq)]` — the
+//! clippy lint this rule mirrors — is skipped: its author has explicitly
+//! opted out of requiring `Eq`, so re-flagging it is double-noise.
+//!
 //! A *manual* `impl PartialEq` is out of scope: it is the author's
 //! explicit opt-out from standard reflexive equality (a hand-written
 //! `eq` may be non-reflexive), so we never demand `Eq` for it.
@@ -46,7 +50,7 @@ use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{has_clippy_allow, is_in_test_context};
 
 const KINDS: &[&str] = &["struct_item", "enum_item"];
 
@@ -81,6 +85,13 @@ impl AstCheck for Check {
         // `PartialEq` only for `assert_eq!`; it never ships, so its lack of
         // `Eq` (no `HashSet` / `BTreeSet` use) is not a defect.
         if is_in_test_context(node, source_bytes) {
+            return;
+        }
+        // The author opted out of the clippy lint this rule mirrors
+        // (`derive_partial_eq_without_eq`), at item, enclosing-module, or
+        // file/module scope; deferring to that explicit `#[allow]` / `#[expect]`
+        // avoids double-flagging an already-suppressed lint.
+        if has_clippy_allow(node, source_bytes, "derive_partial_eq_without_eq") {
             return;
         }
         let Some(name_node) = node.child_by_field_name("name") else {
@@ -946,5 +957,43 @@ pub enum InvokeResponseBody {
         // `#[derive(PartialEq, Eq)]` provides both unconditionally — not flagged.
         let source = "#[derive(PartialEq, Eq)]\nstruct B;";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_prost_message_with_clippy_allow() {
+        // Issue #7120: prost emits `#[allow(clippy::derive_partial_eq_without_eq)]`
+        // on generated protobuf messages, deliberately opting out of the very lint
+        // this rule mirrors. Deferring to that allow avoids double-flagging.
+        let source = "\
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Size {
+    #[prost(uint32, tag=\"1\")]
+    pub cols: u32,
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_any_type_with_clippy_derive_partial_eq_without_eq_allow() {
+        // The allow is honored for any hand-written type, not just prost output.
+        let source =
+            "#[allow(clippy::derive_partial_eq_without_eq)]\n#[derive(PartialEq)]\npub struct Plain;";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_partial_eq_without_eq_when_no_allow() {
+        // No `#[allow]` present: the rule's genuine target still fires.
+        let source = "#[derive(PartialEq)]\npub struct S { pub x: u32 }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_partial_eq_without_eq_under_unrelated_allow() {
+        // An unrelated `#[allow(dead_code)]` does not suppress this rule — only an
+        // allow of `derive_partial_eq_without_eq` (this rule's mirror lint) does.
+        let source = "#[allow(dead_code)]\n#[derive(PartialEq)]\npub struct S;";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
