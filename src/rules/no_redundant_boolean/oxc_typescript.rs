@@ -25,6 +25,12 @@ fn operand_is_purely_boolean<'a>(
         std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         let ann = match kind {
+            // An optional parameter (`x?: boolean`) is effectively
+            // `boolean | undefined`, so `x === false` discriminates the boolean
+            // value from `undefined` and is not a redundant comparison. A default
+            // initializer (`x: boolean = true`) keeps the parameter strictly
+            // `boolean` inside the body, so it is not exempted here.
+            AstKind::FormalParameter(param) if param.optional => return false,
             AstKind::FormalParameter(param) => param.type_annotation.as_ref(),
             AstKind::VariableDeclarator(decl) => decl.type_annotation.as_ref(),
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
@@ -276,8 +282,33 @@ mod tests {
     }
 
     #[test]
+    fn allows_optional_boolean_param_comparison() {
+        // Regression for #7191 — an optional parameter `x?: boolean` is
+        // effectively `boolean | undefined`, so `x === false` discriminates the
+        // value from `undefined`; rewriting to `!x` would change semantics.
+        assert!(run_on("function f(x?: boolean) { return x === false; }").is_empty());
+        assert!(run_on("function f(x?: boolean) { return x === true; }").is_empty());
+    }
+
+    #[test]
     fn flags_annotated_boolean_param_comparison() {
         let src = "function f(x: boolean) { return x === true; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_required_boolean_param_comparison_with_false() {
+        // A required `x: boolean` is strictly boolean — still redundant.
+        let src = "function f(x: boolean) { return x === false; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_default_initialized_boolean_param_comparison() {
+        // A default initializer keeps the parameter strictly `boolean` inside the
+        // body (only `optional` widens it to `boolean | undefined`), so this is
+        // still a redundant comparison.
+        let src = "function f(x: boolean = true) { return x === false; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
