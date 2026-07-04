@@ -30,6 +30,28 @@ enum Op {
 
 pub struct Check;
 
+/// True when this layout-property member expression is the left-hand target of
+/// a plain `=` assignment (e.g. `El.prototype.getBoundingClientRect = fn`).
+/// Assigning *to* the property slot overrides/mocks it — that is a write to the
+/// slot, not a layout read, so it must not count as a read. Compound
+/// assignments (`+=`, `-=`, …) genuinely read the slot before writing, so this
+/// returns false for them and the read is still recorded.
+fn is_plain_assignment_lhs(parent: AstKind, member_span: Span) -> bool {
+    let AstKind::AssignmentExpression(assign) = parent else {
+        return false;
+    };
+    if assign.operator != oxc_ast::ast::AssignmentOperator::Assign {
+        return false;
+    }
+    // Only the assignment *target* (left) is a write; an identical layout read
+    // on the right-hand side (`a.width = b.offsetWidth`) keeps its own span and
+    // is not suppressed.
+    matches!(
+        &assign.left,
+        oxc_ast::ast::AssignmentTarget::StaticMemberExpression(left) if left.span == member_span
+    )
+}
+
 fn is_interleaved(ops: &[Op]) -> bool {
     if ops.len() < 3 {
         return false;
@@ -74,7 +96,12 @@ impl OxcCheck for Check {
                     analyze.push((arrow.span, arrow.body.span));
                 }
                 AstKind::StaticMemberExpression(member) => {
-                    if LAYOUT_READ_PROPS.contains(&member.property.name.as_str()) {
+                    if LAYOUT_READ_PROPS.contains(&member.property.name.as_str())
+                        && !is_plain_assignment_lhs(
+                            semantic.nodes().parent_node(n.id()).kind(),
+                            member.span,
+                        )
+                    {
                         ops.push((member.span, Op::Read));
                     }
                 }
@@ -126,5 +153,87 @@ impl OxcCheck for Check {
             });
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn allows_layout_prop_overrides_around_a_write() {
+        // The layout-property name only ever appears on the LHS of `=`
+        // (mocking / restoring a method), so there are zero real reads.
+        let src = r#"
+function overrideMock() {
+  HTMLElement.prototype.getBoundingClientRect = mockGetBoundingClientRect;
+  el.style.width = "300px";
+  HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_interleaved_read_write() {
+        let src = r#"
+function thrash() {
+  const w = el.offsetWidth;
+  el.style.width = w + "px";
+  const h = el.offsetHeight;
+  el.style.height = h + "px";
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn compound_assignment_lhs_still_reads() {
+        // `+=` reads the slot before writing, so its LHS still counts as a
+        // read and interleaving with a `.style.*` write is flagged.
+        let src = r#"
+function bump() {
+  el.scrollTop += 5;
+  el.style.top = "0px";
+  el.scrollTop += 5;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn rhs_layout_read_in_assignment_is_not_suppressed() {
+        // The layout read is a bare RHS member (`= b.offsetWidth`) whose parent
+        // *is* the assignment; only the LHS target span is suppressed, so the
+        // `left.span == member.span` check must keep this read — the sequence
+        // still interleaves.
+        let src = r#"
+function copy() {
+  a.style.width = b.offsetWidth;
+  b.style.height = a.offsetHeight;
+  a.style.left = b.offsetLeft;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
