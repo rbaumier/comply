@@ -1577,10 +1577,12 @@ fn stmt_is_push_on(stmt: &Statement, obj_text: &str, source: &str) -> bool {
 /// Returns true when `name` resolves to a same-scope `const` whose initializer
 /// is a non-empty array literal — making `name[0]` provably in-bounds. Walks
 /// ancestors innermost-first, so the closest binding wins (a shadowing inner
-/// `const` is honored over an outer one). Only a direct `ArrayExpression`
-/// literal qualifies: a call initializer (`getColors()`) or a `let` is unknown
-/// and stays flagged. A spread element makes the length non-static, so an array
-/// literal containing one does not qualify either.
+/// `const` is honored over an outer one). Runtime-transparent wrappers around
+/// the initializer (`[''] as T`, `<T>['x']`, `[...] satisfies T`, `[...]!`,
+/// parentheses) are peeled first, so an asserted literal still qualifies. Only
+/// an array literal qualifies: a call initializer (`getColors()`) or a `let` is
+/// unknown and stays flagged. A spread element makes the length non-static, so
+/// an array literal containing one does not qualify either.
 fn resolves_to_nonempty_array_literal(
     node: &oxc_semantic::AstNode,
     name: &str,
@@ -1610,8 +1612,11 @@ fn resolves_to_nonempty_array_literal(
                 }
                 // Closest binding wins: the first declarator matching `name`
                 // decides, even if its initializer is not a qualifying literal.
+                // Peel transparent wrappers so `['x'] as T` / `<T>['x']` /
+                // `['x'] satisfies T` / `['x']!` / `(['x'])` reach the literal.
+                let init = declarator.init.as_ref().map(peel_transparent_wrappers);
                 return matches!(
-                    &declarator.init,
+                    init,
                     Some(Expression::ArrayExpression(arr)) if is_static_nonempty_array(arr)
                 );
             }
@@ -3662,6 +3667,47 @@ mod tests {
     #[test]
     fn still_flags_index0_of_reassigned_let_issue_1967() {
         let src = "let colors = ['a', 'b']; const x = colors[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_of_as_asserted_array_literal_issue_7147() {
+        // hono's `const buffer = [''] as StringBufferWithCallbacks; buffer[0]` —
+        // the `as T` assertion is transparent, so the literal is still non-empty.
+        let src =
+            "const buffer = [''] as StringBufferWithCallbacks; const x = buffer[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_of_angle_bracket_asserted_array_literal_issue_7147() {
+        let src = "const buf = <string[]>['x']; const y = buf[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_of_satisfies_array_literal_issue_7147() {
+        let src = "const buf = ['x'] satisfies string[]; const y = buf[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_of_parenthesized_asserted_array_literal_issue_7147() {
+        let src = "const buf = (['x'] as string[])!; const y = buf[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_of_empty_asserted_array_literal_issue_7147() {
+        // Peeling the assertion must not weaken the emptiness check.
+        let src = "const arr = [] as string[]; const x = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_asserted_call_init_issue_7147() {
+        // The initializer is a call, not an array literal — unaffected by peeling.
+        let src = "const arr = getArr() as string[]; const x = arr[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 
