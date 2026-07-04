@@ -6535,8 +6535,10 @@ pub fn local_let_binds_buffer(node: Node, var: &str, source: &[u8]) -> bool {
     false
 }
 
-/// Whether `let_node` declares `var` with a `String`-shaped initializer or an
-/// explicit `String` type annotation.
+/// Whether `let_node` declares `var` with a `String`-shaped initializer
+/// (`String::new()`/`String::with_capacity(..)`/`String::from(..)`, or
+/// `format!(..)`, which also yields a `String`) or an explicit `String` type
+/// annotation.
 fn let_binds_string(let_node: Node, var: &str, source: &[u8]) -> bool {
     let Some(pattern) = let_node.child_by_field_name("pattern") else {
         return false;
@@ -6551,7 +6553,7 @@ fn let_binds_string(let_node: Node, var: &str, source: &[u8]) -> bool {
     }
     if let Some(value) = let_node.child_by_field_name("value") {
         let text = value.utf8_text(source).unwrap_or("");
-        if text.starts_with("String::") {
+        if text.starts_with("String::") || text.starts_with("format!") {
             return true;
         }
     }
