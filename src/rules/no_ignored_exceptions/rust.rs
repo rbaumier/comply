@@ -57,6 +57,16 @@
 //!   to `fmt::Write` (distinct from `io::Write`'s `write`/`write_all`), so this
 //!   is exempt by method name without type inference — a plain
 //!   `let _ = file.write_all(..)` still fires.
+//! - `let _ = write!(buf, ..)` / `let _ = writeln!(buf, ..)` where `buf` resolves
+//!   to an in-memory buffer — the macro sibling of the `write_str`/`write_char`
+//!   exemption. An in-memory write yields a `Result` that is structurally
+//!   `Ok(())`, so `let _ =` drops an always-Ok unit, not an error. The writer is
+//!   the first macro argument; it is exempt only when it provably resolves (from
+//!   the AST) to a `String`/`fmt::Formatter`/`Vec<u8>`: a local `let` initialized
+//!   with `String::…`/`format!(…)` (or annotated `String`/`Vec<…>`), or a
+//!   parameter/`let` annotated `String`/`&mut String`/`fmt::Formatter`/`Vec<u8>`.
+//!   A fallible `io::Write` writer (`File`, `BufWriter`, socket) or an
+//!   unresolvable writer still fires.
 //! - `let _ = expr.map_err(|e| ...)` / `expr.inspect_err(|e| ...)`: the error is
 //!   explicitly observed/handled (e.g. logged) inside the closure before the
 //!   resulting `Result` is intentionally discarded. The closure argument is
@@ -121,7 +131,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    is_in_kani_proof, is_in_never_fn, is_in_test_context, is_under_tests_dir,
+    find_identifier_type, is_in_kani_proof, is_in_never_fn, is_in_test_context,
+    is_under_tests_dir, local_let_binds_buffer,
 };
 use tree_sitter::Node;
 
@@ -213,6 +224,14 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Skip the `core::fmt::Write` idiom `let _ = expr.write_str/write_char(..)`:
     // on an in-memory buffer the `fmt::Result` is always `Ok(())`.
     if is_fmt_write_method(value, source) {
+        return;
+    }
+
+    // Skip the macro sibling of that idiom `let _ = write!/writeln!(buf, ..)`
+    // where `buf` provably resolves to an in-memory buffer (`String`/
+    // `fmt::Formatter`/`Vec<u8>`): the write is structurally `Ok(())`. A fallible
+    // `io::Write` writer (`File`, socket) or an unresolvable writer still fires.
+    if is_fmt_write_macro_to_buffer(value, source) {
         return;
     }
 
@@ -601,6 +620,97 @@ fn is_fmt_write_method(value: Node, source: &[u8]) -> bool {
         return false;
     };
     matches!(field.utf8_text(source), Ok("write_str" | "write_char"))
+}
+
+/// True if `value` is a `write!`/`writeln!` macro whose writer (first) argument
+/// provably resolves to an in-memory buffer — a `String`, `fmt::Formatter`, or
+/// `Vec<u8>`. Writing to such a buffer yields a `Result` that is structurally
+/// `Ok(())` (an in-memory write cannot fail), so `let _ =` drops an always-Ok
+/// unit rather than ignoring an error — the macro sibling of the
+/// `write_str`/`write_char` method exemption.
+///
+/// The writer is the first comma-delimited macro argument; it is resolved only
+/// when it is a bare identifier, from the enclosing scope: a parameter/`let`
+/// whose annotation is a buffer type (via [`find_identifier_type`]), or a local
+/// `let` whose initializer is `String::…`/`format!(…)`/`Vec::…`/`vec![…]` (via
+/// [`local_let_binds_buffer`]). A fallible `io::Write` writer (`File`,
+/// `BufWriter`, socket), a non-identifier writer (`self.buf`), or an
+/// unresolvable writer is not matched, so `let _ = writeln!(file, ..)` still
+/// fires.
+fn is_fmt_write_macro_to_buffer(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "macro_invocation" {
+        return false;
+    }
+    let Some(macro_name_node) = value.child_by_field_name("macro") else {
+        return false;
+    };
+    let Ok(macro_name) = macro_name_node.utf8_text(source) else {
+        return false;
+    };
+    let name = macro_name.rsplit("::").next().unwrap_or(macro_name);
+    if !matches!(name, "write" | "writeln") {
+        return false;
+    }
+    // The token tree is an unnamed child (no `token_tree` field exists).
+    let mut cursor = value.walk();
+    let Some(token_tree) = value
+        .children(&mut cursor)
+        .find(|child| child.kind() == "token_tree")
+    else {
+        return false;
+    };
+    let Some(writer) = macro_first_arg_identifier(token_tree, source) else {
+        return false;
+    };
+    // A parameter/`let` annotation resolves the type directly; an un-annotated
+    // local `let` is confirmed via its buffer-shaped initializer.
+    if let Some(ty) = find_identifier_type(value, writer, source)
+        && is_in_memory_writer_type(&ty)
+    {
+        return true;
+    }
+    local_let_binds_buffer(value, writer, source)
+}
+
+/// The writer of a `write!`/`writeln!` `token_tree` when it is a single bare
+/// identifier. tree-sitter parses the macro body as an opaque token stream, so
+/// the writer appears as the tokens up to the first top-level `,`. Returns the
+/// identifier text only when that segment is exactly one `identifier` token — a
+/// `self.buf`/`x.y` writer spans several tokens and is deliberately not resolved
+/// here (it stays flagged). Only the token tree's direct children are read, so a
+/// comma nested in a deeper `token_tree` does not end the writer segment early.
+fn macro_first_arg_identifier<'a>(token_tree: Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = token_tree.walk();
+    let mut writer: Option<&str> = None;
+    let mut token_count = 0usize;
+    for child in token_tree.children(&mut cursor) {
+        match child.kind() {
+            "(" | ")" | "[" | "]" | "{" | "}" => {}
+            "," => break,
+            "identifier" => {
+                token_count += 1;
+                writer = child.utf8_text(source).ok();
+            }
+            _ => token_count += 1,
+        }
+    }
+    if token_count == 1 { writer } else { None }
+}
+
+/// True if `ty` (a resolved binding/parameter type's source text) names an
+/// in-memory write buffer whose `write!`/`writeln!` result is structurally
+/// `Ok(())`: `String`, `fmt::Formatter`, or `Vec<u8>`, seen through any leading
+/// `&`/`&mut` and trailing generic (`<'_>`) args. A fallible `io::Write` writer
+/// (`File`, `BufWriter`, `TcpStream`) does not match.
+fn is_in_memory_writer_type(ty: &str) -> bool {
+    let base = ty.trim().trim_start_matches('&').trim_start();
+    let base = base.strip_prefix("mut ").unwrap_or(base).trim_start();
+    if base.replace(' ', "") == "Vec<u8>" {
+        return true;
+    }
+    let head = base.split('<').next().unwrap_or(base).trim();
+    let last = head.rsplit("::").next().unwrap_or(head).trim();
+    matches!(last, "String" | "Formatter")
 }
 
 /// True if any method in the `value` call chain is `.map_err(<closure>)` or
@@ -1055,16 +1165,64 @@ mod tests {
 
     #[test]
     fn flags_let_underscore_non_std_stream_write_macro() {
-        // Negative space for #3997: `write!`/`writeln!` are exempt ONLY when
-        // their first argument roots at a std stream. A write to an ordinary
-        // writer (file, buffer) genuinely swallows the error and must fire. A
-        // non-write macro (`some_macro!`, `vec!`) is likewise not exempt.
+        // Negative space for #3997: `write!`/`writeln!` are exempt only when
+        // their first argument roots at a std stream (or resolves to an in-memory
+        // buffer, see #7200). A write to a fallible `io::Write` writer (a `File`)
+        // genuinely swallows the error and must fire. A non-write macro
+        // (`some_macro!`, `vec!`) is likewise not exempt.
         let writeln_file = r#"fn f(mut file: File) { let _ = writeln!(file, "{x}"); }"#;
-        let write_buf = r#"fn f(buf: &mut String) { let _ = write!(buf, "x"); }"#;
         let other_macro = "fn f() { let _ = some_macro!(x); }";
         assert_eq!(run_on(writeln_file).len(), 1);
-        assert_eq!(run_on(write_buf).len(), 1);
         assert_eq!(run_on(other_macro).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_write_macro_to_buffer() {
+        // Regression for #7200: `write!`/`writeln!` into an in-memory buffer
+        // yields a `Result` that is structurally `Ok(())`, so `let _ =` drops an
+        // always-Ok unit. The writer resolves to a `String`/`fmt::Formatter`/
+        // `Vec<u8>` via a local `let` initializer or a parameter annotation. The
+        // issue's exact cargo `features.rs` `format!`-initialized `msg` example.
+        let format_init =
+            r#"fn f() { let mut msg = format!("x"); let _ = writeln!(msg, "y"); }"#;
+        let string_new = r#"fn f() { let mut s = String::new(); let _ = write!(s, "z"); }"#;
+        let with_capacity =
+            r#"fn f() { let mut s = String::with_capacity(8); let _ = write!(s, "z"); }"#;
+        let string_from = r#"fn f() { let mut s = String::from("a"); let _ = write!(s, "z"); }"#;
+        let vec_buf = r#"fn f() { let mut v = Vec::new(); let _ = write!(v, "z"); }"#;
+        let string_annot = r#"fn f() { let mut s: String = make(); let _ = write!(s, "z"); }"#;
+        let formatter_param = r#"
+            impl fmt::Display for T {
+                fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    let _ = write!(f, "q");
+                    Ok(())
+                }
+            }
+        "#;
+        let string_param = r#"fn append(msg: &mut String) { let _ = writeln!(msg, "r"); }"#;
+        assert!(run_on(format_init).is_empty());
+        assert!(run_on(string_new).is_empty());
+        assert!(run_on(with_capacity).is_empty());
+        assert!(run_on(string_from).is_empty());
+        assert!(run_on(vec_buf).is_empty());
+        assert!(run_on(string_annot).is_empty());
+        assert!(run_on(formatter_param).is_empty());
+        assert!(run_on(string_param).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_write_macro_to_fallible_or_unresolved_writer() {
+        // Negative space for #7200: the exemption fires only when the writer
+        // provably resolves to an in-memory buffer. A fallible `io::Write` writer
+        // (a `File`, whose `io::Result` can genuinely fail) must still flag, and
+        // an unresolvable writer (no in-scope binding) stays flagged conservatively.
+        let file_init =
+            r#"fn f() { let mut file = File::create("p").unwrap(); let _ = writeln!(file, "s"); }"#;
+        let file_param = r#"fn f(mut file: File) { let _ = writeln!(file, "s"); }"#;
+        let unresolved = r#"fn f() { let _ = writeln!(some_unknown_writer, "t"); }"#;
+        assert_eq!(run_on(file_init).len(), 1);
+        assert_eq!(run_on(file_param).len(), 1);
+        assert_eq!(run_on(unresolved).len(), 1);
     }
 
     #[test]
