@@ -80,6 +80,15 @@
 //! works there. The walk bails (keeps flagging) at an `async_block` boundary,
 //! where error propagation is undeterminable.
 //!
+//! `.expect(non_string_message)` is exempted — `Option::expect`/`Result::expect`
+//! always take a `&str`/`String` message, so a `.expect(enum_variant)` /
+//! `.expect(call())` is a different, same-named domain method (e.g. ruff's
+//! `Parser::expect(TokenKind) -> bool`). `.expect()` is flagged only when its
+//! first argument is a string-producing expression — a string/raw-string literal
+//! or a `format!`/`format_args!`/`concat!` macro, optionally behind a leading
+//! `&`. A bare identifier/const message is ambiguous between a `&str` message and
+//! a domain value, so it is left unflagged, the false-positive-safe direction.
+//!
 //! This rule is equivalent to `clippy::unwrap_used` + `clippy::expect_used`
 //! (both restriction-group lints, off by default in clippy). Running it
 //! via comply means you get the check without having to enable the lints
@@ -235,6 +244,17 @@ impl AstCheck for Check {
         if field_text == "unwrap" && is_fixed_size_key_delegation(function, node, source_bytes) {
             return;
         }
+        // `Option::expect`/`Result::expect` always take a string MESSAGE argument.
+        // A `.expect(non_string)` — e.g. a domain `Parser::expect(TokenKind::X) ->
+        // bool` — only shares the method name and is a different method entirely,
+        // so flag `.expect()` only when its first argument is a string-producing
+        // expression (a string/raw-string literal, or a `format!`/`format_args!`/
+        // `concat!` macro, optionally behind a leading `&`). A bare `identifier`
+        // /const message argument is ambiguous between a `&str` message and a
+        // domain value, so it is left unflagged — the false-positive-safe direction.
+        if field_text == "expect" && !first_arg_is_string_message(node, source_bytes) {
+            return;
+        }
         // Skip `.expect("documented reason")` when the enclosing function/closure
         // cannot propagate via `?` — its return type does not denote a `Result`.
         // `?` is then syntactically impossible, so a documented `.expect()` is the
@@ -283,6 +303,38 @@ fn expect_has_nonempty_message(call: tree_sitter::Node) -> bool {
     first
         .named_children(&mut cursor)
         .any(|c| c.kind() == "string_content" && !c.byte_range().is_empty())
+}
+
+/// True when `call`'s first argument is a string-producing MESSAGE expression: a
+/// `string_literal` / `raw_string_literal`, or a `format!` / `format_args!` /
+/// `concat!` macro invocation, after peeling an optional leading `&`
+/// (`reference_expression`). `Option::expect`/`Result::expect` always take such a
+/// `&str`/`String` message, so this separates a genuine panic-on-`None`/`Err`
+/// from a domain `.expect(enum_variant)` / `.expect(non_string)` method that
+/// merely shares the name. A bare `identifier` / `scoped_identifier` message
+/// argument is ambiguous and returns false (left unflagged).
+fn first_arg_is_string_message(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return false;
+    };
+    let Some(mut first) = args.named_child(0) else {
+        return false;
+    };
+    // Peel a leading `&` — `.expect(&format!("…"))`.
+    if first.kind() == "reference_expression" {
+        let Some(inner) = first.child_by_field_name("value") else {
+            return false;
+        };
+        first = inner;
+    }
+    match first.kind() {
+        "string_literal" | "raw_string_literal" => true,
+        "macro_invocation" => first
+            .child_by_field_name("macro")
+            .and_then(|m| m.utf8_text(source).ok())
+            .is_some_and(|name| matches!(name, "format" | "format_args" | "concat")),
+        _ => false,
+    }
 }
 
 /// True when the nearest enclosing function/closure of `node` has a return type
@@ -1109,6 +1161,72 @@ proc-macro = true
         // *parameter* typed `Result<…>` does not block the exemption.
         let source = r#"fn f(x: Result<u8, E>) -> bool { x.expect("m") }"#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_with_enum_variant_arg() {
+        // #7159: ruff's `Parser::expect(&mut self, expected: TokenKind) -> bool`
+        // shares the name with `Option/Result::expect` but takes an enum-variant
+        // argument, not a string message — a different method that must not flag.
+        let source = r#"fn parse(&mut self) -> bool { self.expect(TokenKind::Import) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_with_scoped_enum_arg_in_result_fn() {
+        // #7159: a non-string arg is exempt even in a `Result`-returning fn (where
+        // `?` works), because the receiver is a domain type, not an `Option`/`Result`.
+        let source = r#"fn f(cx: &Ctx) -> Result<(), E> { Ok(cx.expect(SomeEnum::V)) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_with_call_arg() {
+        // #7159: `.expect(some_call())` — a call-expression arg is not a string message.
+        let source = r#"fn f(parser: &Parser) -> bool { parser.expect(next_token()) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_with_field_arg() {
+        // #7159: `.expect(self.field)` — a field-expression arg is not a string message.
+        let source = r#"fn f(&self) -> bool { self.expect(self.kind) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_with_bare_identifier_arg() {
+        // #7159: accepted trade-off — a bare identifier message (`opt.expect(msg)`)
+        // is ambiguous between a `&str` message and a domain value, so it is
+        // exempted, the false-positive-safe direction.
+        let source =
+            r#"fn f(opt: Option<u8>, msg: &str) -> Result<u8, E> { Ok(opt.expect(msg)) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_expect_with_string_literal_in_result_fn() {
+        // #7159: a genuine `Option/Result::expect("reason")` — string-literal
+        // message — still flags where `?` is possible.
+        let source = r#"fn f(opt: Option<u8>) -> Result<u8, E> { Ok(opt.expect("reason")) }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_expect_with_format_message_in_result_fn() {
+        // #7159: `opt.expect(format!("…"))` produces a `String` message — a genuine
+        // `expect` that must still flag (guards against a string-literal-only false
+        // negative).
+        let source = r#"fn f(opt: Option<u8>, x: u8) -> Result<u8, E> { Ok(opt.expect(format!("failed {x}"))) }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_expect_with_ref_format_message_in_result_fn() {
+        // #7159: `opt.expect(&format!("…"))` — the leading `&` is peeled; still a
+        // genuine string message that must flag.
+        let source = r#"fn f(opt: Option<u8>, x: u8) -> Result<u8, E> { Ok(opt.expect(&format!("failed {x}"))) }"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     /// Closes #7014: tracing-mock's `Cargo.toml` declares
