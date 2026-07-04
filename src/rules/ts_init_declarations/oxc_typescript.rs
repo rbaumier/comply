@@ -50,6 +50,13 @@ impl OxcCheck for Check {
                 return Vec::new();
             }
             for declarator in &decl.declarations {
+                // Skip a definite-assignment assertion (`let x!: T`): the `!`
+                // is the developer's explicit assertion that the binding is
+                // assigned before read through a channel static analysis cannot
+                // see (e.g. a JSX/framework runtime writing the DOM ref at mount).
+                if declarator.definite {
+                    continue;
+                }
                 if declarator.init.is_some() {
                     continue;
                 }
@@ -226,5 +233,32 @@ function g() {
 }
 "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_definite_assignment_assertion() {
+        // `let ref!: T` uses TypeScript's definite-assignment assertion — the
+        // developer's explicit opt-out for a binding written through a channel
+        // static analysis cannot see (here a JSX runtime ref). (Closes #7162)
+        assert!(run("let ref!: HTMLDivElement;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_let_without_definite_assertion() {
+        // No `!`, no initializer, no write reference — the guard must not
+        // suppress the genuine target.
+        assert_eq!(run("let ref: HTMLDivElement;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_initialized_let() {
+        assert!(run("let x = 5;").is_empty());
+    }
+
+    #[test]
+    fn definite_skips_only_that_declarator_in_list() {
+        // In `let div!: T, plain: U`, the guard skips only the definite `div`;
+        // the plain uninitialized `plain` still flags.
+        assert_eq!(run("let div!: HTMLDivElement, plain: number;").len(), 1);
     }
 }
