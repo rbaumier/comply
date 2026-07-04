@@ -435,7 +435,16 @@ impl OxcCheck for Check {
 
         for node in semantic.nodes().iter() {
             let (is_async, return_type, span, has_body) = match node.kind() {
-                AstKind::Function(f) => (f.r#async, &f.return_type, f.span, f.body.is_some()),
+                AstKind::Function(f) => {
+                    // An async generator (`async function*`, incl. `async *m()`
+                    // methods) needs `async` regardless of any `await`: it sets
+                    // the return type to `AsyncIterable<T>` (vs `Iterable<T>` for
+                    // a sync `function*`), so the keyword is load-bearing.
+                    if f.generator {
+                        continue;
+                    }
+                    (f.r#async, &f.return_type, f.span, f.body.is_some())
+                }
                 AstKind::ArrowFunctionExpression(f) => {
                     (f.r#async, &f.return_type, f.span, true)
                 }
@@ -1199,5 +1208,32 @@ mod tests {
     fn still_flags_async_without_await() {
         let d = run_on("async function f() { return 42; }");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_async_generator_without_await() {
+        // Regression for #7123 — `async function*` sets the return type to
+        // `AsyncIterable<T>`, so `async` is load-bearing even with no await.
+        let src = "async function* gen(): AsyncIterable<number> { yield 1; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_generator_with_await() {
+        // A generator is skipped regardless of whether the body awaits.
+        let src = "async function* gen() { await foo(); yield 1; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_generator_method_without_await() {
+        let src = "class C { async *m() { yield 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_generator_async_arrow_without_await() {
+        // Control: a plain async arrow with no await stays flagged.
+        assert_eq!(run_on("const f = async () => { doSync(); };").len(), 1);
     }
 }
