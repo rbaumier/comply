@@ -78,8 +78,13 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // A `#[allow(dead_code)]` on a throwaway fixture inside test scope — a
+    // `tests/` file, a `#[test]` fn, or a `#[cfg(test)]` module — is contextually
+    // self-evident, mirroring the `unused`/`deprecated`/clippy test-scoped
+    // exemption above.
     if allow_list_contains(text, "dead_code")
-        && ctx.path.components().any(|c| c.as_os_str() == "tests")
+        && (ctx.path.components().any(|c| c.as_os_str() == "tests")
+            || is_test_scoped(node, source))
     {
         return;
     }
@@ -532,11 +537,32 @@ mod tests {
     }
 
     #[test]
-    fn flags_dead_code_in_test_context_without_reason() {
-        assert_eq!(
-            run("#[cfg(test)]\nmod tests {\n#[allow(dead_code)]\nfn f() {}\n}").len(),
-            1
+    fn allows_dead_code_on_fixture_in_test_fn() {
+        // #7110: a throwaway `#[derive(Deserialize)]` struct defined inside a
+        // `#[test]` fn carries `#[allow(dead_code)]` because its fields are only
+        // deserialized, never read; the enclosing `#[test]` makes that
+        // self-evident, on parity with `unused`/`deprecated`/clippy. The `#[test]`
+        // is on an ancestor fn, so the ancestor-walk `is_in_test_context` inside
+        // `is_test_scoped` catches the nested item.
+        assert!(
+            run("#[test]\nfn test_deserialize_enum_unknown() {\n    #[derive(Deserialize)]\n    #[allow(dead_code)]\n    struct Sample {\n        foo: SampleEnum,\n    }\n}")
+                .is_empty()
         );
+    }
+
+    #[test]
+    fn allows_dead_code_in_cfg_test_module() {
+        // A `#[cfg(test)]` module is test scope too, so a throwaway fixture's
+        // `#[allow(dead_code)]` inside it is exempt.
+        assert!(run("#[cfg(test)]\nmod tests {\n#[allow(dead_code)]\nstruct S;\n}").is_empty());
+    }
+
+    #[test]
+    fn flags_dead_code_outside_test_scope() {
+        // Load-bearing guard: the dead_code exemption is test-scoped (or `tests/`
+        // path) only; a module-top-level `#[allow(dead_code)]` in an ordinary
+        // `src/` file stays flagged.
+        assert_eq!(run("#[allow(dead_code)]\nstruct S;").len(), 1);
     }
 
     #[test]
