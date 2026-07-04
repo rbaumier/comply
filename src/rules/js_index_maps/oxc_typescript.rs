@@ -41,6 +41,9 @@ const LOOKUP_METHODS: &[&str] = &["find", "findIndex", "filter", "includes", "in
 /// such a callback runs per element.
 const CALLBACK_ITERATING_METHODS: &[&str] =
     &["forEach", "map", "flatMap", "reduce", "some", "every", "filter", "find", "findIndex"];
+/// Methods whose presence in a `filter`/`find`/`findIndex` callback body marks a
+/// membership scan of a collection — the O(n*m) work a `Map`/`Set` could replace.
+const MEMBERSHIP_METHODS: &[&str] = &["includes", "indexOf", "find", "has"];
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -140,6 +143,18 @@ impl OxcCheck for Check {
         // `.has()` on a known `Set`/`Map` — the index the rule would suggest
         // building already exists.
         if callback_is_known_set_lookup(call, semantic) {
+            return;
+        }
+
+        // `filter`/`find`/`findIndex` are O(n*m) only when their callback
+        // actually scans a collection captured from the enclosing scope — the
+        // work a `Map`/`Set` could replace. A bare named predicate, a
+        // literal-only/side-effecting callback, or a plain property-truthiness
+        // callback does no such scan. (`includes`/`indexOf` take a value, not a
+        // callback, and are inherent membership lookups, so they skip this.)
+        if matches!(method, "find" | "findIndex" | "filter")
+            && !callback_does_captured_lookup(call, semantic)
+        {
             return;
         }
 
@@ -245,6 +260,91 @@ fn callback_is_known_set_lookup<'a>(
         return false;
     }
     is_known_set_or_map(&lookup_member.object, semantic)
+}
+
+/// True for a `filter`/`find`/`findIndex` whose callback body performs a
+/// membership/equality lookup against a value captured from the enclosing
+/// scope — the O(n*m) work a `Map`/`Set` could replace. The signal is either a
+/// nested membership call (`.includes()`/`.indexOf()`/`.find()`/`.has()`), or an
+/// `===`/`==`/`in` comparison one of whose operands resolves to a free variable
+/// (a binding declared OUTSIDE the callback, i.e. not one of its parameters or
+/// locals). A bare named predicate (`arr.filter(isValid)`), a literal-only or
+/// side-effecting callback (`(m) => m === 'x' ? fx() : true`), and a plain
+/// property-truthiness callback (`(x) => x.active`) do no such scan.
+fn callback_does_captured_lookup<'a>(
+    call: &CallExpression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let (callback_span, body_span) = match call.arguments.first() {
+        Some(Argument::ArrowFunctionExpression(arrow)) => (arrow.span, arrow.body.span()),
+        Some(Argument::FunctionExpression(func)) => {
+            let Some(body) = &func.body else {
+                return false;
+            };
+            (func.span, body.span())
+        }
+        // A bare identifier / member reference (`arr.filter(isValid)`) is an
+        // opaque predicate — no visible lookup to key on.
+        _ => return false,
+    };
+
+    semantic.nodes().iter().any(|descendant| {
+        if !body_span.contains_inclusive(descendant.kind().span()) {
+            return false;
+        }
+        match descendant.kind() {
+            AstKind::CallExpression(inner) => matches!(
+                &inner.callee,
+                Expression::StaticMemberExpression(m)
+                    if MEMBERSHIP_METHODS.contains(&m.property.name.as_str())
+            ),
+            AstKind::BinaryExpression(bin)
+                if matches!(
+                    bin.operator,
+                    BinaryOperator::Equality | BinaryOperator::StrictEquality | BinaryOperator::In
+                ) =>
+            {
+                operand_is_free_variable(&bin.left, callback_span, semantic)
+                    || operand_is_free_variable(&bin.right, callback_span, semantic)
+            }
+            _ => false,
+        }
+    })
+}
+
+/// True when `expr`'s root identifier resolves to a binding declared OUTSIDE
+/// `callback_span` — a value captured from the enclosing scope (or an
+/// unresolved/global name). The root of a member chain is its head object
+/// (`item` for `item.id`, `items` for `items[i].id`). Literals and other
+/// non-identifier-rooted operands are never free variables.
+fn operand_is_free_variable<'a>(
+    expr: &Expression<'a>,
+    callback_span: oxc_span::Span,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let mut cursor = expr;
+    let id = loop {
+        match cursor {
+            Expression::Identifier(id) => break id,
+            Expression::StaticMemberExpression(m) => cursor = &m.object,
+            Expression::ComputedMemberExpression(m) => cursor = &m.object,
+            _ => return false,
+        }
+    };
+    let Some(ref_id) = id.reference_id.get() else {
+        return true;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        // Unresolved reference: not a callback-local binding — a free name the
+        // callback compares against (`x.id === key` where `key` is captured).
+        return true;
+    };
+    let decl_span = semantic
+        .nodes()
+        .kind(scoping.symbol_declaration(sym_id))
+        .span();
+    !callback_span.contains_inclusive(decl_span)
 }
 
 /// True when `expr` is structurally a `Set`/`Map`: a direct `new Set(...)` /
@@ -534,7 +634,7 @@ for (let i = 0; i < items.length; i++) {
     fn flags_filter_in_while() {
         let diags = run(r#"
 while (hasMore) {
-    const filtered = items.filter(i => i.active);
+    const filtered = items.filter(i => i.id === target);
 }
 "#);
         assert_eq!(diags.len(), 1);
@@ -1089,7 +1189,7 @@ for (const x of items) { const m = list.filter(v => v === x); }
         // The inner `for..of` iterable lookup runs once per OUTER-loop iteration —
         // the ascent must still reach the outer loop and flag it.
         let diags = run(r#"
-for (const o of outer) { for (const x of inner.filter(p => p.ok)) { use(x); } }
+for (const o of outer) { for (const x of inner.filter(p => p.id === o.id)) { use(x); } }
 "#);
         assert_eq!(diags.len(), 1);
     }
@@ -1216,6 +1316,88 @@ for (const x of xs) {
         let diags = run(r#"
 for (const y of ys) {
     if (typeof other === "string" && x.includes(y)) {}
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_bare_named_predicate_filter_in_loop() {
+        // Regression for #7211: a bare named predicate is an opaque callback with
+        // no visible membership lookup — there is no collection to pre-index.
+        assert!(
+            run(r#"
+for (const item of items) {
+    const valid = res.filter(filterValidExtends);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_literal_only_side_effecting_filter_callback_in_loop() {
+        // Regression for #7211: the callback only compares its parameter to string
+        // literals and performs a side effect — nothing to hash into a Map/Set.
+        assert!(
+            run(r#"
+for (const attr of attrs) {
+    const kept = modifiers.filter((m) => {
+        if (m === 'capture') { append(m); return false; }
+        return true;
+    });
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_property_truthiness_filter_callback_in_loop() {
+        // Regression for #7211: a plain property-truthiness callback performs no
+        // membership/equality scan of a captured collection.
+        assert!(
+            run(r#"
+for (const x of xs) {
+    const active = arr.filter((r) => r.active);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_filter_callback_with_inner_includes_against_captured_collection() {
+        // The callback scans `rootVars` (captured) via `.includes()` — a genuine
+        // O(n*m) site a Set could replace. Both the `.filter()` and the inner
+        // `.includes()` (itself a per-iteration membership scan) are flagged.
+        let diags = run(r#"
+for (const decl of decls) {
+    const free = scopes.filter((name) => !rootVars.includes(name));
+}
+"#);
+        assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_find_callback_with_inner_includes_and_destructured_param() {
+        // A destructured param (`{ type }`) with an inner `.includes()` against a
+        // captured collection is still the O(n*m) pattern.
+        let diags = run(r#"
+for (const parent of parents) {
+    const bad = nodes.find(({ type }) => !TS_NODE_TYPES.includes(type));
+}
+"#);
+        assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_find_callback_with_equality_against_captured_key() {
+        // `x.id === key` compares the element against a captured `key` — a Map
+        // keyed by id could replace the linear scan.
+        let diags = run(r#"
+for (const item of items) {
+    const hit = arr.find((x) => x.id === key);
 }
 "#);
         assert_eq!(diags.len(), 1);
