@@ -21,13 +21,14 @@ fn class_element_rank(elem: &ClassElement) -> Option<u8> {
                 Some(1)
             }
         }
-        ClassElement::MethodDefinition(method) => {
-            if method.kind == oxc_ast::ast::MethodDefinitionKind::Constructor {
-                Some(2)
-            } else {
-                Some(3)
-            }
-        }
+        ClassElement::MethodDefinition(method) => match method.kind {
+            MethodDefinitionKind::Constructor => Some(2),
+            // A `get x()` / `set x()` accessor is property-like, ranked the same
+            // as the `accessor x` field syntax below so an accessor grouped
+            // among fields does not poison the field section's running rank.
+            MethodDefinitionKind::Get | MethodDefinitionKind::Set => Some(1),
+            MethodDefinitionKind::Method => Some(3),
+        },
         ClassElement::AccessorProperty(_) => Some(1),
         ClassElement::StaticBlock(_) => None,
     }
@@ -275,6 +276,59 @@ mod tests {
             }";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_fields_and_constructor_after_getter_accessor() {
+        // typeorm/typeorm EntityManager pattern: a getter accessor (a deprecated
+        // property alias) is grouped among the fields. It is property-like, so
+        // the fields and constructor that follow it stay in order.
+        let src = "class EntityManager {\n\
+            \x20 readonly dataSource: DataSource;\n\
+            \x20 get connection(): DataSource { return this.dataSource; }\n\
+            \x20 readonly queryRunner?: QueryRunner;\n\
+            \x20 protected repositories = new Map();\n\
+            \x20 constructor(dataSource: DataSource) {}\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_field_after_method_alongside_getter() {
+        // A real data field placed after a real method remains a genuine
+        // ordering smell even when a getter accessor sits among the fields: the
+        // accessor (rank 1) must not suppress the downstream violation.
+        let src = "class Foo {\n\
+            \x20 a: A;\n\
+            \x20 get g(): number { return 1; }\n\
+            \x20 foo(): void {}\n\
+            \x20 b: B;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_field_before_constructor_before_method() {
+        // The canonical order (field, constructor, method) is unaffected.
+        let src = "class Foo {\n\
+            \x20 a: A;\n\
+            \x20 constructor() {}\n\
+            \x20 foo(): void {}\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_accessor_field_among_fields() {
+        // The `accessor x` field syntax is property-like (rank 1) and does not
+        // poison the fields that follow it — consistent with `get x()`.
+        let src = "class Foo {\n\
+            \x20 a: A;\n\
+            \x20 accessor b: B;\n\
+            \x20 c: C;\n\
+            }";
+        assert!(run(src).is_empty());
     }
 
     #[test]
