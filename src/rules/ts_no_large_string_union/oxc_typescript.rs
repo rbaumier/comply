@@ -3,10 +3,14 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{TSLiteral, TSType};
+use oxc_ast::ast::{PropertyKey, TSLiteral, TSSignature, TSType, TSTypeName};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Property names that, by universal TypeScript tagged-union convention, hold a
+/// variant's discriminant tag.
+const DISCRIMINANT_PROP_NAMES: &[&str] = &["kind", "type", "tag", "variant"];
 
 /// Count only string-literal union members. Numeric/boolean literals (e.g. HTTP
 /// status-code unions) are not what a branded string or enum would replace, so
@@ -19,6 +23,38 @@ fn count_string_literals(ty: &TSType) -> usize {
     }
 }
 
+/// True when `alias_name` is the discriminant register of a tagged union: some
+/// interface or type-literal in the same file annotates a conventionally-named
+/// discriminant property (`kind`/`type`/`tag`/`variant`) with a direct reference
+/// to it. Such a union is the closed, exhaustive set of `node.kind === '...'`
+/// tags — irreducible and structurally required by consumers — so its size is
+/// inherent to the modelled AST, not an unbounded string set to brand or enumify.
+///
+/// The exemption keys on the union's usage position (referenced from a
+/// discriminant property), not on its name or its string-literal member values.
+fn is_discriminant_register(semantic: &oxc_semantic::Semantic, alias_name: &str) -> bool {
+    semantic.nodes().iter().any(|node| {
+        let members: &[TSSignature] = match node.kind() {
+            AstKind::TSInterfaceDeclaration(decl) => &decl.body.body,
+            AstKind::TSTypeLiteral(lit) => &lit.members,
+            _ => return false,
+        };
+        members.iter().any(|member| {
+            let TSSignature::TSPropertySignature(prop) = member else { return false };
+            let PropertyKey::StaticIdentifier(key) = &prop.key else { return false };
+            if !DISCRIMINANT_PROP_NAMES.contains(&key.name.as_str()) {
+                return false;
+            }
+            let Some(annotation) = &prop.type_annotation else { return false };
+            let TSType::TSTypeReference(type_ref) = &annotation.type_annotation else {
+                return false;
+            };
+            let TSTypeName::IdentifierReference(ident) = &type_ref.type_name else { return false };
+            ident.name.as_str() == alias_name
+        })
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSTypeAliasDeclaration]
@@ -28,7 +64,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TSTypeAliasDeclaration(alias) = node.kind() else { return };
@@ -38,7 +74,9 @@ impl OxcCheck for Check {
         let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
         let count: usize = union.types.iter().map(count_string_literals).sum();
 
-        if count > max {
+        // A discriminated-union kind register (referenced by a discriminant
+        // property in the same file) is a closed, irreducible tag set — exempt.
+        if count > max && !is_discriminant_register(semantic, alias.id.name.as_str()) {
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, union.span.start as usize);
             diagnostics.push(Diagnostic {
@@ -90,6 +128,11 @@ mod tests {
         format!("type T = {};", members.join(" | "))
     }
 
+    fn named_string_union(name: &str, n: usize) -> String {
+        let members: Vec<String> = (0..n).map(|i| format!("'s{i}'")).collect();
+        format!("type {name} = {};", members.join(" | "))
+    }
+
     #[test]
     fn exempts_numeric_dominated_http_status_union() {
         // openapi-typescript ErrorStatus: ~45 numeric codes, 3 string members.
@@ -125,5 +168,47 @@ export type ErrorStatus =
     #[test]
     fn ignores_small_string_union() {
         assert!(run_on(&string_union(50)).is_empty());
+    }
+
+    #[test]
+    fn exempts_discriminated_union_kind_register() {
+        // kysely OperationNodeKind: a 60-member string union used as the `kind`
+        // discriminant of a same-file interface is a closed tagged-union register.
+        let src = format!(
+            "{}\ninterface OperationNode {{ readonly kind: OperationNodeKind }}",
+            named_string_union("OperationNodeKind", 60)
+        );
+        assert!(run_on(&src).is_empty());
+    }
+
+    #[test]
+    fn exempts_type_tag_variant_discriminants() {
+        for prop in ["type", "tag", "variant"] {
+            let src = format!(
+                "{}\ntype Event = {{ {prop}: EventKind }};",
+                named_string_union("EventKind", 60)
+            );
+            assert!(run_on(&src).is_empty(), "discriminant `{prop}` should exempt");
+        }
+    }
+
+    #[test]
+    fn flags_large_union_referenced_only_by_non_discriminant_property() {
+        // `label` is not a discriminant property, so the union still flags.
+        let src = format!(
+            "{}\ninterface Widget {{ label: Labels }}",
+            named_string_union("Labels", 60)
+        );
+        assert_eq!(run_on(&src).len(), 1);
+    }
+
+    #[test]
+    fn flags_large_union_used_only_as_function_parameter() {
+        // Not referenced by any interface/type-literal discriminant property.
+        let src = format!(
+            "{}\nfunction handle(k: Names): string {{ return k; }}",
+            named_string_union("Names", 60)
+        );
+        assert_eq!(run_on(&src).len(), 1);
     }
 }
