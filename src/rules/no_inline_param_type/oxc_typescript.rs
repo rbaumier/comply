@@ -133,18 +133,26 @@ fn is_react_component_param<'a>(
 }
 
 /// True when the nearest function-like ancestor of `node` is a type-level
-/// function signature (`TSFunctionType` / `TSConstructorType`) rather than a
-/// real `Function` / `ArrowFunctionExpression`. The first function-like
-/// ancestor reached decides it, so a parameter of a callback type used as an
-/// interface property type or `type` alias is exempt, while an implementation
-/// parameter whose type merely contains a nested function type is not.
+/// signature rather than a real `Function` / `ArrowFunctionExpression`. This
+/// covers standalone function types (`TSFunctionType` / `TSConstructorType`)
+/// and the bodyless signatures that make up an `interface` / object-type body:
+/// call (`(args): T`), construct (`new (args): T`) and method (`foo(args): T`)
+/// signatures. The first function-like ancestor reached decides it, so a
+/// parameter of a callback type or interface signature is exempt, while an
+/// implementation parameter whose type merely contains a nested function type
+/// is not. In every exempt case the inline shape IS the type contract — there
+/// is no implementation body to factor a named type out of.
 fn is_type_level_signature_param<'a>(
     semantic: &'a Semantic<'a>,
     node: &oxc_semantic::AstNode<'a>,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()).skip(1) {
         match ancestor.kind() {
-            AstKind::TSFunctionType(_) | AstKind::TSConstructorType(_) => return true,
+            AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::TSConstructSignatureDeclaration(_)
+            | AstKind::TSMethodSignature(_) => return true,
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
             _ => continue,
         }
@@ -279,5 +287,31 @@ mod tests {
     #[test]
     fn allows_overload_signature_without_body() {
         assert!(run_on("function f(arg: { x: string }): void;").is_empty());
+    }
+
+    #[test]
+    fn allows_inline_param_in_interface_call_signature() {
+        assert!(
+            run_on("interface I { (options: { type: 'seek', position: number }): Promise<void> }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_inline_param_in_interface_method_signature() {
+        assert!(run_on("interface I { foo(opts: { a: number }): void }").is_empty());
+    }
+
+    #[test]
+    fn allows_inline_param_in_interface_construct_signature() {
+        assert!(run_on("interface I { new (opts: { a: number }): T }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_class_method_with_body() {
+        assert_eq!(
+            run_on("class C { foo(opts: { a: number }) { return opts.a; } }").len(),
+            1
+        );
     }
 }
