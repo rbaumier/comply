@@ -5,7 +5,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     Argument, BindingPattern, Expression, ForStatementLeft, ObjectPropertyKind, PropertyKey,
-    VariableDeclarationKind,
+    TSType, TSTypeName, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -141,6 +141,58 @@ fn inside_promise_executor(
     false
 }
 
+/// WHATWG worker global-scope interfaces. A `WorkerGlobalScope` (and its
+/// service/dedicated/shared specializations) owns the worker's lifecycle event
+/// listeners (`install`, `activate`, `message`, …), which are registered once at
+/// startup and are intentionally permanent — never `removeEventListener`ed — so
+/// the "extract to a named function for cleanup" rationale does not apply.
+const WORKER_GLOBAL_SCOPE_TYPES: [&str; 4] = [
+    "ServiceWorkerGlobalScope",
+    "DedicatedWorkerGlobalScope",
+    "SharedWorkerGlobalScope",
+    "WorkerGlobalScope",
+];
+
+/// True when the `addEventListener` receiver `ident` resolves to a binding whose
+/// declared type is one of `WORKER_GLOBAL_SCOPE_TYPES`. Resolves the receiver
+/// reference through the symbol table to its declaration (e.g. `declare const
+/// self: ServiceWorkerGlobalScope`) and inspects that declarator's
+/// `TSTypeReference` type name — so the signal is the resolved TYPE, not the
+/// receiver's name: a receiver named `self` typed `Window` still flags, and a
+/// differently-named receiver typed `WorkerGlobalScope` is exempt. An unresolved
+/// receiver, one without a type annotation, or a non-reference type is not exempt.
+fn receiver_type_is_worker_global_scope(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(ann) = decl.type_annotation.as_ref() else {
+                return false;
+            };
+            let TSType::TSTypeReference(tref) = &ann.type_annotation else {
+                return false;
+            };
+            let TSTypeName::IdentifierReference(name) = &tref.type_name else {
+                return false;
+            };
+            return WORKER_GLOBAL_SCOPE_TYPES.contains(&name.name.as_str());
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -185,6 +237,18 @@ impl OxcCheck for Check {
         // stays flagged.
         if let Expression::Identifier(obj) = &member.object
             && receiver_is_loop_element(obj.name.as_str(), node.id(), semantic)
+        {
+            return;
+        }
+
+        // Exempt a listener attached to a worker global scope (`declare const
+        // self: ServiceWorkerGlobalScope; self.addEventListener('message', …)`):
+        // the worker's lifecycle listeners are registered once and intentionally
+        // permanent, so the removeEventListener rationale is irrelevant. Keys on
+        // the receiver binding's declared TYPE, resolved through the symbol table
+        // — not on the name `self` (a `self` typed `Window` still flags).
+        if let Expression::Identifier(obj) = &member.object
+            && receiver_type_is_worker_global_scope(obj, semantic)
         {
             return;
         }
@@ -513,5 +577,76 @@ mod tests {
             run("el.addEventListener('message', (e) => use(e), { capture: true });").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_inline_listener_on_service_worker_global_scope() {
+        // Issue #7094: `self` is declared as `ServiceWorkerGlobalScope`, so the
+        // listener is a permanent worker lifecycle callback — never removed.
+        let src = r#"
+            declare const self: ServiceWorkerGlobalScope;
+            self.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'SKIP_WAITING')
+                    self.skipWaiting();
+            });
+        "#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_inline_listener_on_dedicated_worker_global_scope() {
+        let src = r#"
+            declare const self: DedicatedWorkerGlobalScope;
+            self.addEventListener('message', (e) => {});
+        "#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_inline_listener_on_differently_named_worker_scope() {
+        // The receiver is named `scope`, not `self` — the exemption keys on the
+        // declared type (`WorkerGlobalScope`), not the name.
+        let src = r#"
+            declare const scope: WorkerGlobalScope;
+            scope.addEventListener('message', (e) => use(e));
+        "#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_inline_listener_on_window_global() {
+        // Negative control: `window` is not a worker global scope — still flagged.
+        assert_eq!(
+            run("window.addEventListener('click', () => {});").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_inline_listener_on_named_element_receiver() {
+        // Negative control: a plain element receiver — still flagged.
+        assert_eq!(run("button.addEventListener('click', () => {});").len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_listener_on_self_typed_window() {
+        // The receiver is named `self` but typed `Window` — the name is not the
+        // signal, so the removeEventListener rationale still applies: flagged.
+        let src = r#"
+            declare const self: Window;
+            self.addEventListener('click', () => {});
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_listener_on_untyped_self() {
+        // A receiver named `self` with no worker-scope type annotation carries no
+        // structural evidence of a permanent lifecycle listener — still flagged.
+        let src = r#"
+            const self = getScope();
+            self.addEventListener('message', (e) => use(e));
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
