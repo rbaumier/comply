@@ -64,9 +64,10 @@ impl OxcCheck for Check {
             }
         }
 
-        // A React effect callback has type `() => void | (() => void)`: a bare
-        // `return;` ("no cleanup") and `return () => {…}` ("here is the cleanup")
-        // are both valid and intentional. Not an inconsistency.
+        // Callbacks passed directly to a framework composable whose contract
+        // intentionally permits both a `void` (bare `return;`) and a value
+        // return: a React effect's optional cleanup (`return () => {…}`), or a
+        // Nuxt route middleware's "continue vs redirect". Not an inconsistency.
         if has_value && has_bare && is_effect_callback(node_id, nodes) {
             return;
         }
@@ -105,9 +106,13 @@ impl OxcCheck for Check {
     }
 }
 
-/// True when the function `node_id` is the callback passed directly to a React
-/// effect hook (`useEffect` / `useLayoutEffect` / `useInsertionEffect`), whose
-/// return type is `void | (() => void)`.
+/// True when the function `node_id` is the callback passed directly to a
+/// framework composable whose contract intentionally permits both a `void`
+/// (bare `return;`) and a value return: a React effect hook (`useEffect` /
+/// `useLayoutEffect` / `useInsertionEffect`, return type `void | (() => void)`),
+/// or Nuxt's `defineNuxtRouteMiddleware` (return type `NavigationGuardReturn =
+/// void | false | RouteLocationRaw`, where `void` continues navigation and a
+/// route value redirects).
 fn is_effect_callback(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNodes) -> bool {
     let parent = nodes.parent_id(node_id);
     if parent == node_id {
@@ -123,7 +128,7 @@ fn is_effect_callback(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNo
     };
     matches!(
         callee_name,
-        "useEffect" | "useLayoutEffect" | "useInsertionEffect"
+        "useEffect" | "useLayoutEffect" | "useInsertionEffect" | "defineNuxtRouteMiddleware"
     )
 }
 
@@ -314,6 +319,43 @@ useMemo(() => {
     if (x) return;
     return compute();
 }, [x]);
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn allows_nuxt_route_middleware_dual_return() {
+        // Regression for issue #7098 (elk-zone/elk app/middleware/auth.ts): a
+        // `defineNuxtRouteMiddleware` callback returns `void` (bare `return;` =
+        // continue navigation) or a `RouteLocationRaw` (redirect). Both are the
+        // intentional `NavigationGuardReturn` contract, not an inconsistency.
+        let code = r#"
+export default defineNuxtRouteMiddleware((to) => {
+    if (import.meta.server)
+        return;
+    if (to.path === "/signin/callback")
+        return;
+    if (isHydrated.value)
+        return handleAuth(to);
+    onHydrated(() => handleAuth(to));
+});
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn still_flags_inner_function_inside_nuxt_middleware() {
+        // The exemption only covers the direct callback argument. A nested
+        // function with genuinely mixed returns is not the middleware callback,
+        // so it still flags.
+        let code = r#"
+export default defineNuxtRouteMiddleware((to) => {
+    function helper(x) {
+        if (x) return 1;
+        return;
+    }
+    helper(to);
+});
 "#;
         assert_eq!(run_on(code).len(), 1);
     }
