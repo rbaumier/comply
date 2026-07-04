@@ -14,6 +14,11 @@
 //! accepted when it is spread into an accumulator array
 //! (`acc.push(...xs)` / `acc.unshift(...xs)`) whose accumulator then reaches an
 //! awaiting sink — one extra hop through the accumulator.
+//!
+//! A `.map(async ...)` / `.flatMap(async ...)` that is itself the operand of a
+//! `return` statement (`return arr.map(async ...)`) is likewise accepted: the
+//! promise array is the enclosing function's return value, handed to the caller,
+//! so nothing floats here either.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -278,6 +283,115 @@ fn bound_result_is_awaited(source: &str, pat: &str, match_offset: usize) -> bool
         .is_some_and(|name| variable_is_awaited(source, name))
 }
 
+/// True when byte offset `at` sits after an unquoted `//` on its own physical
+/// line — i.e. the token starting at `at` is inside a line comment. String
+/// literals earlier on the line are skipped so a `//` inside `"http://…"` is not
+/// mistaken for a comment marker.
+fn in_line_comment(source: &str, at: usize) -> bool {
+    let bytes = source.as_bytes();
+    let line_start = source[..at].rfind('\n').map_or(0, |n| n + 1);
+    let mut i = line_start;
+    let mut quote: Option<u8> = None;
+    while i < at {
+        let b = bytes[i];
+        match quote {
+            Some(q) => {
+                if b == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if b == q {
+                    quote = None;
+                }
+            }
+            None => match b {
+                b'"' | b'\'' | b'`' => quote = Some(b),
+                b'/' if i + 1 < at && bytes[i + 1] == b'/' => return true,
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True when the `.map(async ...)` / `.flatMap(async ...)` at `match_offset` is
+/// the operand of a `return` statement — the promise array becomes the enclosing
+/// function's return value, handed to the caller, so it does not float.
+///
+/// Scans backward across the receiver expression tracking `()[]{}` depth: nested
+/// groups (array/argument literals) are consumed whole, whitespace and member
+/// dots are skipped, and identifier chains are stepped over. An operator, `=`,
+/// separator or unmatched opener at depth 0 ends the receiver (not a return). A
+/// bare `return` heading the receiver at depth 0 exempts it, unless a newline
+/// separates the `return` from the receiver — that is a bare `return` closed by
+/// ASI followed by a distinct expression statement, which floats. String
+/// literals end at their quote and block comments at `*/`, so a `return` inside
+/// them cannot head the receiver; a `return` inside a line comment is rejected
+/// explicitly.
+fn map_result_is_returned(source: &str, pat: &str, match_offset: usize) -> bool {
+    if !BINDABLE_PATTERNS.contains(&pat) {
+        return false;
+    }
+    let bytes = source.as_bytes();
+    let mut i = match_offset;
+    let mut depth: i32 = 0;
+    // Whether a newline has been crossed since the last receiver atom; reset at
+    // each atom so it reflects the gap between `return` and the receiver head.
+    let mut crossed_newline = false;
+    while i > 0 {
+        let b = bytes[i - 1];
+        if depth > 0 {
+            match b {
+                b')' | b']' | b'}' => depth += 1,
+                b'(' | b'[' | b'{' => depth -= 1,
+                _ => {}
+            }
+            i -= 1;
+            continue;
+        }
+        match b {
+            b')' | b']' | b'}' => {
+                crossed_newline = false;
+                depth += 1;
+                i -= 1;
+            }
+            b'\n' | b'\r' => {
+                crossed_newline = true;
+                i -= 1;
+            }
+            b' ' | b'\t' | b'.' => i -= 1,
+            _ if is_ident_char(b) => {
+                let mut start = i;
+                while start > 0 && is_ident_char(bytes[start - 1]) {
+                    start -= 1;
+                }
+                // A member name (`obj.method`) continues the receiver chain; any
+                // other identifier heading the receiver is a leading atom or a
+                // prefix keyword. `return` is the handoff we accept.
+                let is_member = source[..start].trim_end().ends_with('.');
+                if !is_member && &source[start..i] == "return" {
+                    // A `return` in a line comment is not the governing keyword;
+                    // step past it and keep scanning.
+                    if in_line_comment(source, start) {
+                        crossed_newline = false;
+                        i = start;
+                        continue;
+                    }
+                    return !crossed_newline;
+                }
+                crossed_newline = false;
+                i = start;
+            }
+            // Operator, `=`, separator or unmatched opener: the receiver is an
+            // argument, element, assignment RHS or expression statement — not a
+            // return operand.
+            _ => break,
+        }
+    }
+    false
+}
+
 impl TextCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(PATTERNS)
@@ -297,6 +411,7 @@ impl TextCheck for Check {
                     let offset = line_start + col;
                     if !enclosed_in_awaiting_combinator(ctx.source, offset)
                         && !bound_result_is_awaited(ctx.source, pat, offset)
+                        && !map_result_is_returned(ctx.source, pat, offset)
                     {
                         diagnostics.push(Diagnostic {
                             path: Arc::clone(&ctx.path_arc),
@@ -535,6 +650,80 @@ mod tests {
                    const tasks = items.map(async (x) => fetchOne(x));\n\
                    promises.push(...tasks);\n\
                    console.log(promises.length);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_map_async_array_literal_returned_from_function() {
+        // Regression for #7109 (slidevjs/slidev node/setups/unocss.ts): the
+        // `.map(async ...)` array is the function's return value, handed to the
+        // caller (which does `Promise.all`), so nothing floats.
+        let src = "function loadFileConfigs(root) {\n\
+                   \x20\x20return [\n\
+                   \x20\x20\x20\x20resolve(root, 'uno.config.ts'),\n\
+                   \x20\x20\x20\x20resolve(root, 'unocss.config.ts'),\n\
+                   \x20\x20].map(async (i) => {\n\
+                   \x20\x20\x20\x20if (!existsSync(i)) return undefined;\n\
+                   \x20\x20\x20\x20return await loadModule(i);\n\
+                   \x20\x20});\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_async_identifier_receiver_returned() {
+        // `return arr.map(async ...)` with a plain identifier receiver.
+        let src = "function f(arr) {\n\
+                   \x20\x20return arr.map(async (x) => fetchOne(x));\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_flat_map_async_returned_from_function() {
+        // `.flatMap(async ...)` returned directly is handled the same way.
+        let src = "function f(arr) {\n\
+                   \x20\x20return arr.flatMap(async (x) => fetchMany(x));\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_array_map_async_expression_statement() {
+        // Negative control: the same array `.map(async ...)` as a bare
+        // expression statement (not returned) still floats.
+        let src = "[a, b].map(async (i) => { await loadModule(i); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn does_not_exempt_map_async_after_return_in_line_comment() {
+        // A `return` inside a line comment must not trigger the returned-operand
+        // exemption; the bare `.map(async ...)` still floats.
+        let src = "// early return\n\
+                   items.map(async (x) => { await save(x); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_foreach_async_returned_from_function() {
+        // `.forEach` returns `undefined`; returning it hands off nothing, so the
+        // async callbacks still float and it must still flag.
+        let src = "function f(arr) {\n\
+                   \x20\x20return arr.forEach(async (x) => save(x));\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_async_after_bare_return_with_asi() {
+        // A bare `return` on its own line is closed by ASI; the following
+        // `.map(async ...)` is a distinct expression statement, not the return
+        // operand, so it still floats (no-semicolon style).
+        let src = "function f(items, x) {\n\
+                   \x20\x20if (x) return\n\
+                   \x20\x20items.map(async (i) => { await g(i); });\n\
+                   }";
         assert_eq!(run(src).len(), 1);
     }
 }
