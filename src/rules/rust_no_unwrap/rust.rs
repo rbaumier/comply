@@ -19,6 +19,12 @@
 //! build.rs is exempted — panics in Cargo build scripts are an acceptable
 //! error mode during compilation (e.g. env::var("FOO").unwrap()).
 //!
+//! proc-macro crates are exempted — in a crate with `[lib] proc-macro = true`,
+//! `.unwrap()`/`.expect()` runs while the downstream crate is compiled, so a
+//! panic surfaces as a compile-time error, not a runtime abort. The rule's
+//! "turns a runtime condition into a panic" rationale does not apply: there is
+//! no runtime in a procedural macro.
+//!
 //! Example code is exempted — files under a Cargo `examples/` directory (or a
 //! disabled variant like `examples_disabled/`) are illustrative, so `.unwrap()`
 //! keeps them concise instead of obscuring the demonstrated feature with error
@@ -163,6 +169,17 @@ impl AstCheck for Check {
             .project
             .nearest_cargo_manifest(ctx.path)
             .is_some_and(|m| m.is_testing_crate())
+        {
+            return;
+        }
+        // Skip proc-macro crates — in a `[lib] proc-macro = true` crate,
+        // `.unwrap()`/`.expect()` runs while the downstream crate compiles, so a
+        // panic is a compile-time error, not a runtime abort. The rule's runtime
+        // rationale does not hold there.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_proc_macro())
         {
             return;
         }
@@ -528,6 +545,16 @@ edition = "2021"
 
 [lib]
 name = "normal_lib"
+"#;
+
+    const PROC_MACRO_CARGO_TOML: &str = r#"
+[package]
+name = "derive-impl-like"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
 "#;
 
     #[test]
@@ -1121,5 +1148,38 @@ name = "normal_lib"
         assert!(testing.is_testing_crate());
         let normal = CargoManifest::parse(LIB_CARGO_TOML, PathBuf::from("/c")).unwrap();
         assert!(!normal.is_testing_crate());
+    }
+
+    /// Closes #7158: astral-sh/ruff's `crates/ruff_macros` declares
+    /// `[lib] proc-macro = true`. A proc-macro's `.unwrap()`/`.expect()` panics
+    /// at compile time (there is no runtime), so neither must flag.
+    #[test]
+    fn allows_unwrap_in_proc_macro_crate() {
+        assert!(
+            run_on_with_cargo(PROC_MACRO_CARGO_TOML, "pub fn h() { let x = y.unwrap(); }")
+                .is_empty(),
+            ".unwrap() in a proc-macro crate must not flag"
+        );
+        assert!(
+            run_on_with_cargo(
+                PROC_MACRO_CARGO_TOML,
+                r#"pub fn h() { let x = y.expect("named fields"); }"#
+            )
+            .is_empty(),
+            ".expect() in a proc-macro crate must not flag"
+        );
+    }
+
+    /// The manifest predicate the proc-macro exemption keys on: `[lib]
+    /// proc-macro = true` parses to `is_proc_macro()`; a plain `[lib]` table does
+    /// not.
+    #[test]
+    fn manifest_detects_proc_macro_crate() {
+        use crate::project::CargoManifest;
+        use std::path::PathBuf;
+        let proc_macro = CargoManifest::parse(PROC_MACRO_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(proc_macro.is_proc_macro());
+        let normal = CargoManifest::parse(LIB_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(!normal.is_proc_macro());
     }
 }
