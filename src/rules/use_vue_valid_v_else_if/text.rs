@@ -151,9 +151,15 @@ fn previous_element_sibling<'a>(
 /// `directive_attribute` children, so the chain link is detected from the raw
 /// text rather than the AST.
 fn component_text_has_conditional(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Ok(text) = node.utf8_text(source) else {
-        return false;
-    };
+    node.utf8_text(source)
+        .map(text_has_conditional_directive)
+        .unwrap_or(false)
+}
+
+/// Whether `text` (a start tag or `<component>` node source) carries a standalone
+/// `v-if`/`v-else-if` directive rather than the substring appearing inside
+/// another attribute name.
+fn text_has_conditional_directive(text: &str) -> bool {
     text.match_indices("v-if")
         .chain(text.match_indices("v-else-if"))
         .any(|(start, pat)| {
@@ -176,10 +182,28 @@ fn source_is_directive_boundary(bytes: &[u8], start: usize) -> bool {
 
 /// Whether the previous sibling element carries a valid `v-if`/`v-else-if`
 /// directive, forming a valid conditional chain.
+///
+/// When the AST lookup fails and `element`'s own subtree contains a built-in
+/// `<component>` — whose directive-carrying form the Vue grammar mangles into a
+/// `vue_component`/`ERROR` node that corrupts tree-sitter's sibling links — the
+/// predecessor is recovered from the raw source instead. A genuinely orphaned
+/// `v-else-if` still finds no preceding conditional sibling and is reported.
 fn has_previous_conditional(directive: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(element) = owning_element(directive) else {
         return false;
     };
+    if ast_has_previous_conditional(element, source) {
+        return true;
+    }
+    if !subtree_has_component(element, source) {
+        return false;
+    }
+    preceding_sibling_start_tag_text(element, source).is_some_and(text_has_conditional_directive)
+}
+
+/// Whether the previous sibling element found through tree-sitter carries a valid
+/// `v-if`/`v-else-if` directive.
+fn ast_has_previous_conditional(element: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(previous) = previous_element_sibling(element, source) else {
         return false;
     };
@@ -189,6 +213,124 @@ fn has_previous_conditional(directive: tree_sitter::Node, source: &[u8]) -> bool
         return true;
     }
     start_tag_directives(previous).any(|dir| is_valid_chain_directive(dir, source))
+}
+
+/// Whether `element`'s own source text nests a built-in `<component>` tag. Its
+/// directive-carrying form is the structural trigger for the tree-sitter sibling
+/// corruption that `preceding_sibling_start_tag_text` works around.
+fn subtree_has_component(element: tree_sitter::Node, source: &[u8]) -> bool {
+    element
+        .utf8_text(source)
+        .map(|text| text.contains("<component"))
+        .unwrap_or(false)
+}
+
+/// The start-tag text of `element`'s nearest preceding sibling, recovered by
+/// tokenizing the raw source before it. Tags are scanned left-to-right while a
+/// stack tracks nesting; the last element that opens and closes at `element`'s own
+/// depth is its preceding sibling. Returns `None` when `element` is the first
+/// child (no preceding sibling exists).
+fn preceding_sibling_start_tag_text<'a>(
+    element: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    let prefix = source.get(..element.start_byte())?;
+    // Each stack entry is an open ancestor tag and records that ancestor's most
+    // recently completed child (its start-tag byte range); the base entry covers
+    // the document level. `open_tags` holds the start-tag range of every open
+    // ancestor, parallel to `stack[1..]`.
+    let mut stack: Vec<Option<(usize, usize)>> = vec![None];
+    let mut open_tags: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < prefix.len() {
+        if prefix[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        match prefix.get(i + 1) {
+            Some(b'!') => i = skip_markup_declaration(prefix, i),
+            Some(b'/') => {
+                let end = tag_end(prefix, i);
+                if let Some(range) = open_tags.pop() {
+                    stack.pop();
+                    if let Some(frame) = stack.last_mut() {
+                        *frame = Some(range);
+                    }
+                }
+                i = end;
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                let end = tag_end(prefix, i);
+                let self_closing = prefix.get(end.saturating_sub(2)..end) == Some(b"/>".as_slice())
+                    || is_void_element(prefix, i);
+                if self_closing {
+                    if let Some(frame) = stack.last_mut() {
+                        *frame = Some((i, end));
+                    }
+                } else {
+                    open_tags.push((i, end));
+                    stack.push(None);
+                }
+                i = end;
+            }
+            // A `<` that is not a tag start (e.g. inside a `a < b` expression).
+            _ => i += 1,
+        }
+    }
+    let (start, end) = (*stack.last()?)?;
+    std::str::from_utf8(source.get(start..end)?).ok()
+}
+
+/// The byte index just past the `>` closing the tag opening at `open`, skipping
+/// quoted attribute values so a `>` inside a value does not end the tag early.
+fn tag_end(bytes: &[u8], open: usize) -> usize {
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'"' | b'\'') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'>' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// The byte index just past a `<!-- -->` comment or `<! ... >` declaration
+/// opening at `open`.
+fn skip_markup_declaration(bytes: &[u8], open: usize) -> usize {
+    if bytes[open..].starts_with(b"<!--") {
+        let mut i = open + 4;
+        while i < bytes.len() {
+            if bytes[i..].starts_with(b"-->") {
+                return i + 3;
+            }
+            i += 1;
+        }
+        return bytes.len();
+    }
+    tag_end(bytes, open)
+}
+
+/// Whether the tag opening at `open` names an HTML void element, which completes
+/// without a matching end tag or a `/>` terminator.
+fn is_void_element(bytes: &[u8], open: usize) -> bool {
+    let name_start = open + 1;
+    let mut end = name_start;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
+        end += 1;
+    }
+    let name = &bytes[name_start..end];
+    const VOID: &[&[u8]] = &[
+        b"area", b"base", b"br", b"col", b"embed", b"hr", b"img", b"input", b"link", b"meta",
+        b"param", b"source", b"track", b"wbr",
+    ];
+    VOID.iter().any(|&candidate| name.eq_ignore_ascii_case(candidate))
 }
 
 /// Classify a `v-else-if` `directive_attribute`, returning the first violation
@@ -496,5 +638,45 @@ mod tests {
         let diags = run(&source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("must follow"));
+    }
+
+    #[test]
+    fn allows_v_else_if_when_body_nests_component_directive() {
+        // Regression for #7176: the flagged `<template v-else-if="c">` follows a
+        // valid `v-if` sibling, but its own body nests a `<component v-if :is />`
+        // whose `vue_component`/`ERROR` node corrupts tree-sitter sibling links.
+        // The predecessor is recovered from source, so the chain is valid.
+        let source = wrap(
+            "<div><span v-if=\"a\">1</span>\
+             <template v-else-if=\"c\"><component v-if=\"d\" :is=\"e\" /></template>\
+             <template v-else-if=\"l\">tail</template></div>",
+        );
+        let diags = run(&source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_orphan_v_else_if_when_body_nests_component_directive() {
+        // The nested `<component v-if :is />` corrupts sibling links, but there is
+        // genuinely no preceding conditional sibling, so the source recovery finds
+        // none and the `v-else-if` is still reported.
+        let source = wrap("<template v-else-if=\"x\"><component v-if=\"y\" :is=\"z\" /></template>");
+        let diags = run(&source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("must follow"));
+    }
+
+    #[test]
+    fn allows_chain_when_body_nests_plain_element_directive() {
+        // Same shape as the #7176 fixture but nesting a plain `<span v-if />`
+        // rather than a `<component>`: no parse corruption, so the AST path stays
+        // authoritative and the fallback never engages.
+        let source = wrap(
+            "<div><span v-if=\"a\">1</span>\
+             <template v-else-if=\"c\"><span v-if=\"d\" /></template>\
+             <template v-else-if=\"l\">tail</template></div>",
+        );
+        let diags = run(&source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }
 }
