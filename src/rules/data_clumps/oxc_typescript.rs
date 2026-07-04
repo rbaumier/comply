@@ -141,6 +141,41 @@ fn is_framework_callback<'a>(
     false
 }
 
+/// True when the function is an operand of a `||`/`??` `LogicalExpression` whose
+/// other operand is a member expression — the `obj.prop || function (...) {}` /
+/// `obj.prop ?? function (...) {}` idiom that reads an existing dispatch-table
+/// entry and otherwise falls back to this function. The `obj.prop` slot is filled
+/// and called by external code, so this fallback conforms to that slot's
+/// externally-owned signature and its parameters are not a refactorable clump.
+fn is_member_property_default(
+    node: &oxc_semantic::AstNode<'_>,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    let AstKind::LogicalExpression(logical) = nodes.kind(parent_id) else {
+        return false;
+    };
+    if !matches!(logical.operator, LogicalOperator::Or | LogicalOperator::Coalesce) {
+        return false;
+    }
+    // The function is one operand; the idiom requires the OTHER operand to be the
+    // `obj.prop` slot being defaulted.
+    let fn_span = node.kind().span();
+    let other = if logical.left.span() == fn_span {
+        &logical.right
+    } else {
+        &logical.left
+    };
+    matches!(
+        other,
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
+    )
+}
+
 /// Generate all sorted subsets of size `k` from `items`.
 fn combinations(items: &[String], k: usize) -> Vec<Vec<String>> {
     let mut result = Vec::new();
@@ -193,13 +228,17 @@ impl OxcCheck for Check {
                         // body) contributes to the clump count.
                         continue;
                     }
-                    if is_framework_callback(node, semantic, ctx.source) {
+                    if is_framework_callback(node, semantic, ctx.source)
+                        || is_member_property_default(node, semantic)
+                    {
                         continue;
                     }
                     Some(&func.params)
                 }
                 AstKind::ArrowFunctionExpression(arrow) => {
-                    if is_framework_callback(node, semantic, ctx.source) {
+                    if is_framework_callback(node, semantic, ctx.source)
+                        || is_member_property_default(node, semantic)
+                    {
                         continue;
                     }
                     Some(&arrow.params)
@@ -464,6 +503,49 @@ function proxy4(a, b, c, d) { return invoke(this, arguments); }
         let src = r#"
 function move(x, y, z) { return x + y + z; }
 function scale(x, y, z) { return x * y * z; }
+"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_on_member_property_logical_default() {
+        // Regression for issue #7221 — markdown-it's RenderRule signature
+        // `(tokens, idx, options, env, self)` is imposed by the library. The
+        // `md.renderer.rules.link_open || function (...)` default reads the existing
+        // dispatch slot and is exempt; that leaves the shared subset in only the
+        // bare `md.renderer.rules.link_open = function (...)` assignment (one
+        // function), below the 2-function threshold, so neither line is flagged.
+        let src = r#"
+const defaultRender = md.renderer.rules.link_open || function (tokens, idx, options, env, self) {
+  return self.renderToken(tokens, idx, options)
+}
+md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
+  return defaultRender(tokens, idx, options, env, self)
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_two_member_property_logical_defaults() {
+        // Control that specifically exercises the `||`/`??`-member-default arm:
+        // both functions default a member-property dispatch slot, so each is exempt
+        // and their shared `[alpha, beta, gamma]` subset is never counted.
+        let src = r#"
+const r1 = obj.handlers.open || function (alpha, beta, gamma) { return alpha; }
+const r2 = obj.handlers.close ?? function (alpha, beta, gamma) { return beta; }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_member_assignment_paired_with_standalone() {
+        // The bare `obj.prop = function (...)` member-ASSIGNMENT position is NOT
+        // exempted — only the `||`/`??` member-default is. Paired with a plain
+        // standalone function sharing the triple, the clump must still flag.
+        let src = r#"
+exports.createUser = function (name, email, age) { return name; }
+function updateUser(name, email, age) { return email; }
 "#;
         assert_eq!(run(src).len(), 2);
     }
