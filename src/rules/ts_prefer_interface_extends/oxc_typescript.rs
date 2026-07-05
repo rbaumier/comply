@@ -54,7 +54,9 @@ fn contains_primitive_keyword(ty: &TSType) -> bool {
 /// - a same-module type alias whose aliased type contains a primitive keyword
 ///   (e.g. `type FiniteNumber = number & Brand<…>`), which `extends` rejects; or
 /// - an imported binding, whose definition is not visible here and so cannot be
-///   confirmed to be an object type.
+///   confirmed to be an object type; or
+/// - a type parameter (e.g. `N` in `type Merge<M, N> = … & N`), a bare type
+///   variable that `interface … extends` cannot name (TS2312).
 ///
 /// A reference that does not resolve (undeclared), or that resolves to an
 /// in-module `interface`/`class`/object-typed alias, does not block the rewrite.
@@ -75,6 +77,7 @@ fn member_blocks_extends(ty: &TSType, semantic: &oxc_semantic::Semantic) -> bool
             }
             AstKind::TSInterfaceDeclaration(_) | AstKind::Class(_) => return false,
             AstKind::ImportDeclaration(_) => return true,
+            AstKind::TSTypeParameter(_) => return true,
             _ => {}
         }
     }
@@ -294,5 +297,19 @@ mod tests {
             export type FiniteNumber = number & Brand<'__finiteNumberBrand'>;\n\
             export type Integer = FiniteNumber & Brand<'__integerBrand'>;";
         assert!(run_on(src).is_empty());
+    }
+
+    /// Regression for #7320 — `N` is a bare type parameter; `interface Merge<M, N>
+    /// extends Omit<M, keyof N>, N {}` is rejected by TS2312, so the alias stays.
+    #[test]
+    fn allows_intersection_with_type_parameter_member() {
+        assert!(run_on("export type Merge<M, N> = Omit<M, keyof N> & N;").is_empty());
+    }
+
+    /// Regression for #7320 — the leading member `T` is a type parameter, so the
+    /// interface-extends rewrite would not compile.
+    #[test]
+    fn allows_intersection_leading_type_parameter_member() {
+        assert!(run_on("export type LowInfer<T> = T & NonNullable<unknown>;").is_empty());
     }
 }
