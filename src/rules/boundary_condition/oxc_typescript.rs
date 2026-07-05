@@ -1210,11 +1210,18 @@ fn case_contains_span(case: &SwitchCase, span: oxc_span::Span) -> bool {
         .any(|stmt| stmt.span().start <= span.start && span.end <= stmt.span().end)
 }
 
-/// Returns true if `stmt` or a top-level statement within it is an early exit
-/// (return, throw, or a bare `.exit()` call such as `process.exit(1)`).
+/// Returns true if `stmt` or a top-level statement within it is an early exit —
+/// `return`, `throw`, `continue`, `break`, or a bare `.exit()` call such as
+/// `process.exit(1)`. `continue`/`break` abandon the rest of the current
+/// loop/switch execution just as `return`/`throw` abandon the function, so a
+/// read reached only after such a statement fires is unreachable when the guard
+/// takes it — the same non-emptiness guarantee behind a subsequent `arr[0]`.
 fn body_has_early_exit(stmt: &Statement) -> bool {
     match stmt {
-        Statement::ReturnStatement(_) | Statement::ThrowStatement(_) => true,
+        Statement::ReturnStatement(_)
+        | Statement::ThrowStatement(_)
+        | Statement::ContinueStatement(_)
+        | Statement::BreakStatement(_) => true,
         Statement::ExpressionStatement(expr_stmt) => {
             if let Expression::CallExpression(call) = &expr_stmt.expression {
                 if let Expression::StaticMemberExpression(member) = &call.callee {
@@ -3471,6 +3478,24 @@ mod tests {
     fn no_fp_early_exit_throw() {
         let src = "if (!items.length) throw new Error('empty'); const first = items[0];";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_early_exit_continue_issue_7390() {
+        let src = "for (const columns of lists) { if (!columns.length) continue; const fixed = columns[0].fixed === true ? 'left' : columns[0].fixed || 'default'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_early_exit_break_issue_7390() {
+        let src = "for (const c of lists) { if (!c.length) break; const x = c[0].id; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_no_length_guard_in_loop_issue_7390() {
+        let src = "for (const c of lists) { const x = state.allColumns[0].id; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
