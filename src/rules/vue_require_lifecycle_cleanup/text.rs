@@ -65,6 +65,111 @@ fn has_once_true(args: &str) -> bool {
     false
 }
 
+/// Byte ranges (between the opening `{` and its balanced closing `}`) of every
+/// inline `onMounted(() => { … })` callback body. Only `addEventListener` calls
+/// within one of these ranges are lifecycle-leak candidates: a listener
+/// registered in a free function or module scope is not part of the mount
+/// lifecycle and cannot be the leak this rule targets.
+///
+/// An `onMounted` that takes a function reference (`onMounted(handler)`) has no
+/// inline body and contributes no span. Brace counting is not string- or
+/// comment-aware (same limitation as `call_args`), so a brace inside a string
+/// literal can mis-size a span in either direction. An over-long span only
+/// re-admits a listener the un-gated scan already flagged, and the persistent-
+/// receiver gate still applies — so the failure mode is a dropped candidate,
+/// never a persistent-target flag the un-gated rule would not have produced.
+fn on_mounted_spans(src: &str) -> Vec<(usize, usize)> {
+    let bytes = src.as_bytes();
+    let mut spans = Vec::new();
+    let mut search_from = 0;
+    while let Some(rel) = src[search_from..].find("onMounted(") {
+        let after_paren = search_from + rel + "onMounted(".len();
+        // Walk the argument list (paren depth starts at 1 for `onMounted(`) to
+        // the first `{` — the inline callback body. If the parens close first,
+        // this `onMounted` takes a function reference, not an inline body.
+        let mut depth = 1usize;
+        let mut i = after_paren;
+        let mut body_open = None;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                b'{' => {
+                    body_open = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        let Some(open) = body_open else {
+            search_from = after_paren;
+            continue;
+        };
+        // Balanced-brace scan from the callback body's `{` to its matching `}`.
+        let mut bdepth = 0usize;
+        let mut close = bytes.len();
+        let mut j = open;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'{' => bdepth += 1,
+                b'}' => {
+                    bdepth -= 1;
+                    if bdepth == 0 {
+                        close = j;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        spans.push((open + 1, close));
+        search_from = close.max(after_paren);
+    }
+    spans
+}
+
+/// Listener targets whose lifetime outlives the component, so a listener added
+/// in `onMounted` without cleanup genuinely leaks. A listener on a transient
+/// local (`new Image()`, `document.createElement(...)`) is garbage-collected
+/// with its scope and cannot leak.
+const PERSISTENT_TARGETS: &[&str] = &[
+    "window",
+    "document",
+    "globalThis",
+    "self",
+    "document.body",
+    "document.documentElement",
+];
+
+/// True when the receiver of the `.addEventListener` call starting at
+/// `ae_start` is one of `PERSISTENT_TARGETS`. Reads the member-access chain
+/// immediately preceding the method dot. A bare receiver, or any local binding
+/// we cannot prove persistent, is not flagged (FP-safe: prefer a false-negative
+/// over over-flagging a transient target).
+fn receiver_is_persistent(src: &str, ae_start: usize) -> bool {
+    let Some(before) = src[..ae_start].strip_suffix('.') else {
+        return false;
+    };
+    let bytes = before.as_bytes();
+    let mut j = before.len();
+    while j > 0 {
+        let c = bytes[j - 1];
+        if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c == b'.' {
+            j -= 1;
+        } else {
+            break;
+        }
+    }
+    PERSISTENT_TARGETS.contains(&&before[j..])
+}
+
 impl TextCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["onMounted"])
@@ -78,13 +183,24 @@ impl TextCheck for Check {
         if src.contains("removeEventListener(") {
             return vec![];
         }
+        let spans = on_mounted_spans(src);
+        if spans.is_empty() {
+            return vec![];
+        }
         let mut diags = Vec::new();
         let mut line_start = 0;
         for (i, line) in src.lines().enumerate() {
             if let Some(rel) = line.find("addEventListener(") {
-                let open_paren = line_start + rel + "addEventListener".len();
+                let ae_start = line_start + rel;
+                let open_paren = ae_start + "addEventListener".len();
+                let in_on_mounted = spans.iter().any(|&(s, e)| s <= ae_start && ae_start < e);
+                let is_persistent = receiver_is_persistent(src, ae_start);
                 let is_self_removing = has_once_true(call_args(src, open_paren));
-                if !line.trim().starts_with("//") && !is_self_removing {
+                if in_on_mounted
+                    && is_persistent
+                    && !line.trim().starts_with("//")
+                    && !is_self_removing
+                {
                     diags.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
                         line: i + 1,
@@ -132,7 +248,7 @@ mod tests {
     #[test]
     fn allows_once_true() {
         assert!(
-            run("onMounted(() => {})\nfunction h() { document.addEventListener('pointerup', up, { once: true }) }")
+            run("onMounted(() => { document.addEventListener('pointerup', up, { once: true }) })")
                 .is_empty()
         );
     }
@@ -140,14 +256,15 @@ mod tests {
     #[test]
     fn allows_once_true_no_space() {
         assert!(
-            run("onMounted(() => {})\ndocument.addEventListener('pointerup', up, {once:true})").is_empty()
+            run("onMounted(() => { document.addEventListener('pointerup', up, {once:true}) })")
+                .is_empty()
         );
     }
 
     #[test]
     fn allows_once_true_multiline() {
         assert!(
-            run("onMounted(() => {})\ndocument.addEventListener('pointerup', up, {\n  once: true,\n})")
+            run("onMounted(() => {\ndocument.addEventListener('pointerup', up, {\n  once: true,\n})\n})")
                 .is_empty()
         );
     }
@@ -189,9 +306,47 @@ mod tests {
         // An unbalanced `(` in the first call's string arg must not let the scan
         // run into the second call's `{ once: true }` and hide the real leak.
         let diags = run(
-            "onMounted(() => {})\nel.addEventListener('click(', leak)\nel2.addEventListener('x', g, { once: true })",
+            "onMounted(() => {\nwindow.addEventListener('click(', leak)\ndocument.addEventListener('x', g, { once: true })\n})",
         );
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].line, 2);
+    }
+
+    #[test]
+    fn allows_transient_local_in_free_function() {
+        // Issue #7351: `img` is a local `new Image()` created inside a free
+        // function `initCanvas`, called from `onMounted`. The listener is not
+        // lexically inside the `onMounted` callback and the receiver is
+        // transient, so it cannot leak — no diagnostic.
+        assert!(
+            run("<script setup>\nfunction initCanvas() {\n  const img = new Image();\n  img.addEventListener('load', () => {})\n}\nonMounted(() => { initCanvas() })\n</script>")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_transient_local_inside_on_mounted() {
+        // A transient `new Image()` created and listened to inside the
+        // `onMounted` callback is garbage-collected with the callback scope.
+        assert!(
+            run("onMounted(() => {\n  const img = new Image();\n  img.addEventListener('load', () => {})\n})")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_window_listener_inside_on_mounted() {
+        assert_eq!(
+            run("onMounted(() => { window.addEventListener('resize', onResize) })").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_document_listener_inside_on_mounted() {
+        assert_eq!(
+            run("onMounted(() => { document.addEventListener('click', onClick) })").len(),
+            1
+        );
     }
 }
