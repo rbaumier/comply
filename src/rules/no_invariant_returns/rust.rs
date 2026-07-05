@@ -9,6 +9,11 @@
 //!
 //! Nested `function_item` and `closure_expression` subtrees are skipped so
 //! an inner closure's `return` is not attributed to the outer function.
+//!
+//! A function whose body contains a `?` (`try_expression`) is left unflagged:
+//! the `?` short-circuits on the function's own `Option`/`Result` carrier, so
+//! the return type is load-bearing control flow rather than a value that could
+//! be a constant.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -29,6 +34,25 @@ fn collect_returns<'t>(node: tree_sitter::Node<'t>, out: &mut Vec<tree_sitter::N
             _ => collect_returns(child, out),
         }
     }
+}
+
+/// Whether `node`'s subtree contains a `try_expression` (`?`), stopping at
+/// nested function/closure boundaries so a `?` inside an inner closure is
+/// attributed to that closure only — mirroring `collect_returns`.
+fn contains_try(node: tree_sitter::Node) -> bool {
+    let count = node.child_count();
+    for i in 0..count {
+        let Some(child) = node.child(i) else { continue };
+        match child.kind() {
+            "function_item" | "closure_expression" => {
+                // Skip — its `?` belongs to that inner function.
+            }
+            "try_expression" => return true,
+            _ if contains_try(child) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Extract a normalized literal text from a `return_expression` value, or
@@ -90,6 +114,15 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     }
 
     let Some(body) = node.child_by_field_name("body") else { return };
+
+    // A `?` short-circuiting on the function's own `Option`/`Result` carrier
+    // makes the return type load-bearing control flow: each `?` is an implicit
+    // early return the literal-return scan never sees, so the terminal literal
+    // is the exhausted-all-early-exits fallthrough, not an invariant value that
+    // should be a constant (a `?`-carrying function cannot become a constant).
+    if contains_try(body) {
+        return;
+    }
 
     let mut returns: Vec<tree_sitter::Node> = Vec::new();
     collect_returns(body, &mut returns);
@@ -310,6 +343,48 @@ fn regular(x: i32) -> i32 {
     }
     do_stuff();
     0
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #7370 — a side-effecting event handler returning `Option<()>` whose
+    // `return None` and tail `None` are identical but whose body uses `?` to
+    // short-circuit on its own `Option` carrier. The `?` makes the return type
+    // load-bearing control flow, so it must not be flagged.
+    #[test]
+    fn allows_try_driven_side_effecting_option_fn() {
+        let src = r#"
+fn local_worktree_entry_changed(this: &mut T) -> Option<()> {
+    let id = this.get(&k)?;
+    if cond {
+        this.remove(&k);
+        return None;
+    }
+    let events = this.update()?;
+    for event in events {
+        emit(event);
+    }
+    None
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative space for #7370: the `?` bail keys on a `?` at the function's own
+    // level. A `?` living only inside a nested closure does not exempt the outer
+    // function, whose invariant `None` returns are genuine and must still fire.
+    #[test]
+    fn flags_invariant_returns_when_try_only_in_nested_closure() {
+        let src = r#"
+fn outer(x: i32) -> Option<()> {
+    let c = || -> Option<()> { probe()?; None };
+    if x > 0 {
+        return None;
+    }
+    c();
+    side_effect();
+    None
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
