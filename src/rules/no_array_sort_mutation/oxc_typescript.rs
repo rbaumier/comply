@@ -199,4 +199,29 @@ mod oxc_tests {
         let src = "const arr = src.filter(f); const alias = arr; arr.sort();";
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
+
+    #[test]
+    fn skips_sort_on_returned_fresh_slice_binding_issue_7373() {
+        // `.slice()` always returns a fresh copy; the store is untouched. Sorting
+        // it and returning the sorted copy exposes no pre-existing alias.
+        let src = "const p = store.items.slice(0, 10); if (cond) p.sort((a, b) => a - b); return p;";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_returned_fresh_filter_binding_issue_7373() {
+        // `.filter()` likewise returns a fresh array, so returning the sorted
+        // binding is safe.
+        let src = "const p = arr.filter((x) => x.ok); p.sort(); return p;";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_sort_on_returned_fresh_copy_escaping_via_call_arg() {
+        // A provably-fresh copy stays flagged when handed to a function before
+        // sorting: the callee could retain a pre-sort alias, so the fresh-copy
+        // return exemption does not extend to a call-argument escape.
+        let src = "const p = store.items.slice(); process(p); p.sort(); return p;";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
 }
