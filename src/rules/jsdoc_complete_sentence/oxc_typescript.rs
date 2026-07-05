@@ -61,6 +61,11 @@ pub struct Check;
 /// items conventionally carry no closing period, so the whole list is excluded
 /// and the `:`-terminated label that introduces it is dropped too, exactly like
 /// a trailing table.
+///
+/// A trailing inline HTML/JSX closing tag (`</docs-info>`, `</b>`) is wrapping
+/// markup, not prose: it is stripped from the last line so the real last prose
+/// character — the one preceding the tag (`…routes.</docs-info>` ends at `.`) —
+/// gates the check. Nested wrappers are unwrapped fully.
 fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     let mut description_lines = Vec::new();
     let mut in_fence = false;
@@ -98,6 +103,7 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     drop_trailing_footnote_anchor(&mut description_lines);
     drop_trailing_table_rows(&mut description_lines);
     drop_trailing_list_items(&mut description_lines);
+    drop_trailing_html_tag(&mut description_lines);
     description_lines
 }
 
@@ -162,6 +168,62 @@ fn drop_trailing_list_items(description_lines: &mut Vec<(String, usize)>) {
         description_lines.truncate(start);
         drop_trailing_code_block_label(description_lines);
     }
+}
+
+/// Strip a trailing inline HTML/JSX closing tag (`</identifier>`) from the last
+/// description line. Wrapping markup is structure, not prose, so a closing tag at
+/// the end of the line must not gate the terminal-punctuation check: the real
+/// last prose character is the one preceding the tag (`…routes.</docs-info>` ends
+/// the sentence at `.`). Nested wrappers (`text.</b></docs-info>`) are unwrapped
+/// by stripping repeatedly. Only a well-formed `</[A-Za-z][\w-]*>` close tag is
+/// removed — a `>` that is not part of a close tag (a `=>` arrow, a `>`
+/// comparison) is left intact — so a description that genuinely lacks terminal
+/// punctuation before the tag (`…routes</docs-info>`) is still flagged. If the
+/// line consists solely of the tag(s), it is dropped so the prose line beneath
+/// gates the check.
+fn drop_trailing_html_tag(description_lines: &mut Vec<(String, usize)>) {
+    let Some((text, _)) = description_lines.last_mut() else {
+        return;
+    };
+    let mut end = text.len();
+    let mut stripped_any = false;
+    while let Some(prefix) = strip_trailing_close_tag(&text[..end]) {
+        end = prefix.len();
+        stripped_any = true;
+    }
+    if !stripped_any {
+        return;
+    }
+    text.truncate(end);
+    if text.trim().is_empty() {
+        description_lines.pop();
+    }
+}
+
+/// If `s` (ignoring trailing whitespace) ends with a well-formed HTML/JSX closing
+/// tag `</identifier>`, return the slice of `s` preceding that tag; otherwise
+/// `None`. `identifier` is matched by shape (`[A-Za-z][\w-]*`), not against a
+/// fixed set of tag names.
+fn strip_trailing_close_tag(s: &str) -> Option<&str> {
+    let trimmed = s.trim_end();
+    let body = trimmed.strip_suffix('>')?;
+    let tag_start = body.rfind("</")?;
+    if is_html_tag_name(&body[tag_start + 2..]) {
+        Some(&trimmed[..tag_start])
+    } else {
+        None
+    }
+}
+
+/// Whether `name` is a valid HTML/JSX tag name: an ASCII letter followed by ASCII
+/// word characters or hyphens (`[A-Za-z][\w-]*`).
+fn is_html_tag_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// Whether a line is a Markdown bullet-list item: after trimming leading
@@ -1219,5 +1281,86 @@ function f(): void {}
         assert!(!is_bullet_item("--flag enabled"));
         assert!(!is_bullet_item("*emphasis* in prose"));
         assert!(!is_bullet_item("plain prose line"));
+    }
+
+    #[test]
+    fn ignores_terminal_punctuation_inside_trailing_html_close_tag() {
+        // Regression for rbaumier/comply#7249 — the concluding sentence ends with
+        // `.` but is wrapped in an inline `<docs-info>…</docs-info>` element. The
+        // trailing close tag is markup, not prose, so it must not gate the check.
+        let source = r#"
+/**
+ * Returns the current route matches on the page.
+ *
+ * <docs-info>useMatches only works with a data router, since it knows the full
+ * route tree up front and will not match down into any descendant route trees
+ * since the router isn't aware of the descendant routes.</docs-info>
+ *
+ * @public
+ */
+export function useMatches(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_single_line_html_wrapped_sentence() {
+        // A single-line description wrapped in an inline element whose prose ends
+        // with terminal punctuation before the close tag is accepted.
+        let source = "/** <docs-info>Some sentence.</docs-info> */\nfunction f(): void {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_nested_trailing_html_close_tags() {
+        // Nested wrappers are unwrapped fully, revealing the `.` before them.
+        let source = "/** Text here.</b></docs-info> */\nfunction f(): void {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_missing_punctuation_before_html_close_tag() {
+        // Stripping the close tag reveals prose that genuinely lacks terminal
+        // punctuation — this must still flag.
+        let source = r#"
+/**
+ * <docs-info>useMatches will not match down into any descendant route trees
+ * since the router isn't aware of the descendant routes</docs-info>
+ */
+export function useMatches(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_missing_punctuation_with_no_html_tag() {
+        // A plain description with no tag and no terminal punctuation is
+        // unaffected by the close-tag normalizer and still flags.
+        let source = r#"
+/**
+ * Some description without punctuation
+ */
+function f(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn close_tag_stripping_is_shape_only() {
+        // The signal is the well-formed `</identifier>` close-tag shape at the end
+        // of the line: an arrow `=>`, a `>` comparison, or an opening tag is not a
+        // close tag and is left intact.
+        assert_eq!(strip_trailing_close_tag("routes.</docs-info>"), Some("routes."));
+        assert_eq!(strip_trailing_close_tag("text.</b></docs-info>"), Some("text.</b>"));
+        assert_eq!(strip_trailing_close_tag("</docs-info>"), Some(""));
+        assert_eq!(strip_trailing_close_tag("a map a => b"), None);
+        assert_eq!(strip_trailing_close_tag("if a <= b =>"), None);
+        assert_eq!(strip_trailing_close_tag("compare x > y"), None);
+        assert_eq!(strip_trailing_close_tag("an opening <div>"), None);
+        assert_eq!(strip_trailing_close_tag("self closing <br/>"), None);
+        assert_eq!(strip_trailing_close_tag("empty <>"), None);
+        assert_eq!(strip_trailing_close_tag("plain prose"), None);
     }
 }
