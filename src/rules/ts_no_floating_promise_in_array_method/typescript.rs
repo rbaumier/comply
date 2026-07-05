@@ -19,6 +19,12 @@
 //! `return` statement (`return arr.map(async ...)`) is likewise accepted: the
 //! promise array is the enclosing function's return value, handed to the caller,
 //! so nothing floats here either.
+//!
+//! A `.map(async ...)` whose promise array flows into a call that is itself
+//! `await`ed or `return`ed — directly as an argument (`await wrap(arr.map(...))`)
+//! or bound first and then passed (`const xs = arr.map(...); await wrap(xs)`) —
+//! is accepted as well: the array reaches an `await`, so it is handled whatever
+//! the wrapping call is named, not only for the built-in combinators.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -38,9 +44,12 @@ const AWAITING_COMBINATORS: &[&str] =
     &["Promise.all", "Promise.allSettled", "Promise.race"];
 
 /// True when the byte at `match_offset` in `source` sits inside the argument
-/// list of `Promise.all(`, `Promise.allSettled(` or `Promise.race(`. Scans
-/// backward tracking `(`/`)` depth; the first unmatched `(` is the enclosing
-/// call's paren, whose preceding identifier decides the verdict.
+/// list of an awaiting sink call. Scans backward tracking `(`/`)` depth; the
+/// first unmatched `(` is the enclosing call's paren. The call is a sink when its
+/// callee is a built-in awaiting combinator (`Promise.all(`, `Promise.allSettled(`,
+/// `Promise.race(`) or when the whole call is itself the operand of an `await` or
+/// a `return` — in which case the promise array reaches an `await` regardless of
+/// the callee's name.
 fn enclosed_in_awaiting_combinator(source: &str, match_offset: usize) -> bool {
     let prefix = &source.as_bytes()[..match_offset];
     let mut depth: i32 = 0;
@@ -50,7 +59,8 @@ fn enclosed_in_awaiting_combinator(source: &str, match_offset: usize) -> bool {
             b'(' => {
                 if depth == 0 {
                     let before = &source[..i];
-                    return AWAITING_COMBINATORS.iter().any(|c| before.ends_with(c));
+                    return AWAITING_COMBINATORS.iter().any(|c| before.ends_with(c))
+                        || call_is_awaited_or_returned(before);
                 }
                 depth -= 1;
             }
@@ -167,9 +177,34 @@ fn ends_with_keyword(text: &str, kw: &str) -> bool {
     !head.as_bytes().last().is_some_and(|&b| is_ident_char(b))
 }
 
+/// True when the call whose `(` immediately follows `before` (the source text up
+/// to but excluding that paren) is itself the operand of an `await` or a
+/// `return`. Reads back over the callee's identifier/member chain, then checks
+/// the keyword right before it. A `.map(async ...)` promise array flowing into
+/// such a call reaches an `await`, so it is handled whatever the callee is named
+/// (e.g. a project-local `promiseAll` wrapper around `Promise.all`), not only for
+/// the built-in combinators.
+fn call_is_awaited_or_returned(before: &str) -> bool {
+    let trimmed = before.trim_end();
+    let bytes = trimmed.as_bytes();
+    let mut start = trimmed.len();
+    // Walk back over the callee expression: identifier chars plus member access
+    // (`.`) so a chained callee (`a.b.c(`) is stepped over as a whole.
+    while start > 0 && (is_ident_char(bytes[start - 1]) || bytes[start - 1] == b'.') {
+        start -= 1;
+    }
+    // No callee identifier means this is a grouping paren, not a call.
+    if start == trimmed.len() {
+        return false;
+    }
+    let head = trimmed[..start].trim_end();
+    ends_with_keyword(head, "await") || ends_with_keyword(head, "return")
+}
+
 /// True when `name` is consumed by a *direct* awaiting sink anywhere in
-/// `source`: passed to an awaiting combinator (`Promise.all(name`, …), `await`ed,
-/// or `return`ed. Word-boundary matched so `items` does not match `itemsCount`.
+/// `source`: passed to an awaiting combinator (`Promise.all(name`, …) or to any
+/// call that is itself `await`ed/`return`ed (`await wrap(name`), `await`ed, or
+/// `return`ed. Word-boundary matched so `items` does not match `itemsCount`.
 fn directly_awaited(source: &str, name: &str) -> bool {
     let bytes = source.as_bytes();
     let mut from = 0;
@@ -189,6 +224,7 @@ fn directly_awaited(source: &str, name: &str) -> bool {
             || (preceding.ends_with('(') && {
                 let call = preceding[..preceding.len() - 1].trim_end();
                 AWAITING_COMBINATORS.iter().any(|c| call.ends_with(c))
+                    || call_is_awaited_or_returned(call)
             });
         if awaited {
             return true;
@@ -724,6 +760,55 @@ mod tests {
                    \x20\x20if (x) return\n\
                    \x20\x20items.map(async (i) => { await g(i); });\n\
                    }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_map_async_bound_then_awaited_via_wrapper_call() {
+        // Regression for #7371 (medusajs/medusa link-loader.ts): the
+        // `.map(async ...)` result is bound, then passed to a project-local
+        // `promiseAll` wrapper that is itself awaited — the array reaches an
+        // `await`, so nothing floats even though the callee is not `Promise.all`.
+        let src = "const promises = arr.map(async (p) => {\n\
+                   \x20\x20await access(p);\n\
+                   \x20\x20return await read(p);\n\
+                   });\n\
+                   await promiseAll(promises);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_async_direct_arg_to_awaited_wrapper_call() {
+        // Regression for #7371 (rbac-field-filter.ts): the `.map(async ...)` is a
+        // direct argument to a `promiseAll` wrapper that is itself awaited.
+        let src = "const results = await promiseAll(\n\
+                   \x20\x20arr.map(async (x) => ({ x, ok: await check(x) })),\n\
+                   );";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_async_direct_arg_to_returned_wrapper_call() {
+        // Regression for #7371 (resource-loader.ts:93): the wrapping call is
+        // `return`ed rather than awaited inline — the array is still handed off.
+        let src = "return promiseAll(arr.map(async (x) => await f(x)));";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_map_async_in_unawaited_wrapper_discard() {
+        // Negative control: the wrapping call is neither awaited nor returned
+        // (a `void` discard), so the promise array genuinely floats.
+        let src = "void doStuff(arr.map(async (x) => await f(x)));";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_async_bound_then_passed_to_unawaited_wrapper() {
+        // Negative control: bound, then passed to a wrapper call that is itself
+        // neither awaited nor returned — nothing awaits the array, still floats.
+        let src = "const promises = arr.map(async (x) => await f(x));\n\
+                   doStuff(promises);";
         assert_eq!(run(src).len(), 1);
     }
 }
