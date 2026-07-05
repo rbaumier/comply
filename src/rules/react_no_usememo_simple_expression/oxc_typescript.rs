@@ -55,9 +55,20 @@ fn is_simple_expression(expr: &Expression) -> bool {
     }
 }
 
-fn is_usememo_call(call: &oxc_ast::ast::CallExpression) -> bool {
+fn is_usememo_call(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
     match &call.callee {
-        Expression::Identifier(id) => id.name.as_str() == "useMemo",
+        // A bare `useMemo(...)` is React's only when the binding resolves to a
+        // named import from `react`/`react-dom`. A same-named hook from another
+        // module (e.g. `vooks`'s Vue reactive memo) or a local declaration is not
+        // React's render-time memo, so the overhead rationale does not apply.
+        Expression::Identifier(id) => {
+            id.name.as_str() == "useMemo"
+                && crate::oxc_helpers::is_imported_from_react("useMemo", semantic)
+        }
+        // The namespaced `React.useMemo(...)` form is already React-scoped.
         Expression::StaticMemberExpression(member) => {
             if let Expression::Identifier(obj) = &member.object {
                 obj.name.as_str() == "React" && member.property.name.as_str() == "useMemo"
@@ -106,13 +117,13 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
-        if !is_usememo_call(call) {
+        if !is_usememo_call(call, semantic) {
             return;
         }
 
@@ -146,5 +157,87 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    // Regression for #7281: `useMemo` imported from `vooks` is a Vue reactive
+    // memo (a getter is its required contract), not React's render-time hook, so
+    // a trivially cheap body must not be flagged.
+    #[test]
+    fn skips_usememo_imported_from_vooks() {
+        let src = "import { useMemo } from 'vooks';\n\
+                   const emptyRef = useMemo(() => paginatedDataRef.value.length === 0);";
+        assert!(run(src).is_empty());
+    }
+
+    // A bare `useMemo` that resolves to no react import (unresolvable binding)
+    // does not fire.
+    #[test]
+    fn skips_unresolved_bare_usememo() {
+        assert!(run("const x = useMemo(() => a.length === 0, []);").is_empty());
+    }
+
+    // A locally declared `useMemo` is not React's and does not fire.
+    #[test]
+    fn skips_local_usememo() {
+        let src = "function useMemo(fn) { return fn(); }\n\
+                   const x = useMemo(() => a.length === 0, []);";
+        assert!(run(src).is_empty());
+    }
+
+    // React's `useMemo` wrapping a simple expression stays flagged.
+    #[test]
+    fn flags_react_usememo_simple_expression() {
+        let src = "import { useMemo } from 'react';\n\
+                   const x = useMemo(() => a.length === 0, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // A simple identifier memo from react stays flagged.
+    #[test]
+    fn flags_simple_identifier_from_react() {
+        let src = "import { useMemo } from 'react';\n\
+                   const x = useMemo(() => value, [value]);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // The namespaced `React.useMemo(...)` form stays flagged.
+    #[test]
+    fn flags_react_namespace_usememo() {
+        let src = "import React from 'react';\n\
+                   const x = React.useMemo(() => a.length === 0, []);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // A non-simple body (function call) from react is still allowed.
+    #[test]
+    fn allows_function_call_from_react() {
+        let src = "import { useMemo } from 'react';\n\
+                   const x = useMemo(() => compute(a, b), [a, b]);";
+        assert!(run(src).is_empty());
     }
 }
