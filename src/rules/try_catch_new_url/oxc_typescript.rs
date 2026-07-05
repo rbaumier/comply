@@ -206,11 +206,15 @@ fn is_url_reference(ty: &oxc_ast::ast::TSType) -> bool {
 ///   `arg_is_trusted`. The scheme must be *leading* (an anchored RFC-3986
 ///   scheme), not an incidental `://` somewhere in a scheme-less path/query
 ///   (`'/redirect?to=http://x'`), which is still a relative base and throws.
-/// * a `Location.origin` getter — `location.origin`, or `.location.origin` on a
-///   standard host object (`window`/`globalThis`/`document`/`self`). The DOM
-///   spec defines it to always return a valid `scheme://host:port` absolute-URL
-///   origin. Anchored to the same `Location` receiver shape as `Location.href`
-///   so an arbitrary `obj.origin` (which may hold a non-URL value) still flags.
+/// * an `origin` getter that always returns a valid `scheme://host:port`
+///   absolute-URL origin: either `Location.origin` (`location.origin`, or
+///   `.location.origin` on a standard host object
+///   `window`/`globalThis`/`document`/`self`) or the
+///   `WindowOrWorkerGlobalScope.origin` getter read directly on a well-known
+///   global (`window.origin`/`self.origin`/`globalThis.origin`). Both are
+///   spec-defined to serialize a real origin, so resolving a relative reference
+///   against either cannot throw on the base. An arbitrary `obj.origin` (which
+///   may hold a non-URL value) still flags.
 /// * a `Location.href` getter — `location.href`, or `.location.href` on the same
 ///   standard host objects. The browser only ever assigns `Location.href` a
 ///   well-formed absolute URL, so resolving a relative reference against it
@@ -246,16 +250,19 @@ fn base_is_trusted_absolute_url(new_expr: &oxc_ast::ast::NewExpression) -> bool 
     {
         return true;
     }
-    // A `Location.origin` getter always returns a valid absolute-URL origin, a
+    // An `origin` getter always returns a valid absolute-URL origin, a
     // `Location.href` getter always returns a well-formed absolute URL, and a
-    // `Node.baseURI` getter always returns a valid absolute URL (all DOM spec),
-    // so resolving a relative reference against any of them cannot throw on the
-    // base. `.origin`/`.href` are restricted to recognized `Location` receivers
-    // (the latter via the same `is_location_href_access` helper `arg_is_trusted`
-    // uses for the first argument); `.baseURI` is trusted on any receiver, like
-    // the `.protocol` origin shape.
+    // `Node.baseURI` getter always returns a valid absolute URL (all spec), so
+    // resolving a relative reference against any of them cannot throw on the
+    // base. `.origin` is trusted on a recognized `Location` receiver
+    // (`Location.origin`) or read directly on a `window`/`self`/`globalThis`
+    // global (the `WindowOrWorkerGlobalScope.origin` getter); `.href` is
+    // restricted to `Location` receivers via the same `is_location_href_access`
+    // helper `arg_is_trusted` uses for the first argument; `.baseURI` is trusted
+    // on any receiver, like the `.protocol` origin shape.
     if let Expression::StaticMemberExpression(member) = base {
-        return (member.property.name == "origin" && object_is_location(&member.object))
+        return (member.property.name == "origin"
+            && (object_is_location(&member.object) || object_is_global_scope(&member.object)))
             || is_location_href_access(member)
             || member.property.name == "baseURI";
     }
@@ -316,6 +323,17 @@ fn object_is_location(object: &oxc_ast::ast::Expression) -> bool {
         }
         _ => false,
     }
+}
+
+/// True for an expression denoting a `WindowOrWorkerGlobalScope` global — the
+/// well-known `window` / `self` / `globalThis` identifiers. Its `origin` getter
+/// (`WindowOrWorkerGlobalScope.origin`) returns the serialization of the origin,
+/// always a well-formed absolute-URL origin (`scheme://host:port`), identical to
+/// `Location.origin`, so a base read from it cannot make `new URL(...)` throw.
+fn object_is_global_scope(object: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    matches!(object, Expression::Identifier(id)
+        if matches!(id.name.as_str(), "window" | "self" | "globalThis"))
 }
 
 /// True for a zero-arg `.url()` method call on a request-like receiver:
@@ -975,6 +993,20 @@ mod tests {
     #[test]
     fn still_flags_origin_on_non_location_object() {
         assert_eq!(run_on("const u = new URL(x, someArbitraryObj.origin);").len(), 1);
+    }
+
+    // Regression for #7250: `WindowOrWorkerGlobalScope.origin` — `origin` read
+    // directly on a `window`/`self`/`globalThis` global — is a spec getter that
+    // returns the serialization of the origin, always a well-formed absolute-URL
+    // origin, so resolving a relative reference against it cannot throw on the base.
+    #[test]
+    fn allows_global_scope_origin_base() {
+        assert!(
+            run_on("const u = new URL(location.pathname + location.search, window.origin);")
+                .is_empty()
+        );
+        assert!(run_on("const u = new URL(page, self.origin);").is_empty());
+        assert!(run_on("const u = new URL(page, globalThis.origin);").is_empty());
     }
 
     // Regression for #6899: `Location.href` always returns a well-formed absolute
