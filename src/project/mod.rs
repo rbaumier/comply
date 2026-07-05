@@ -1806,6 +1806,12 @@ pub struct Tsconfig {
     pub module_resolution: Option<String>,
     pub strict: bool,
     pub exact_optional_property_types: bool,
+    /// `compilerOptions.useUnknownInCatchVariables`. Tri-state: `Some(true)` /
+    /// `Some(false)` when set explicitly, `None` when absent. Kept as an `Option`
+    /// (unlike the plain `bool` flags) so callers can apply the TypeScript-4.4
+    /// default — the option is on whenever `strict` is on — while still honoring
+    /// an explicit `false` that opts out under `strict`.
+    pub use_unknown_in_catch_variables: Option<bool>,
     pub jsx: Option<String>,
     /// `compilerOptions.jsxImportSource` — the package the JSX factory is
     /// imported from when files use automatic-runtime JSX without an explicit
@@ -1861,6 +1867,9 @@ impl Tsconfig {
                 .and_then(|x| x.get("exactOptionalPropertyTypes"))
                 .and_then(|b| b.as_bool())
                 .unwrap_or(false),
+            use_unknown_in_catch_variables: co
+                .and_then(|x| x.get("useUnknownInCatchVariables"))
+                .and_then(|b| b.as_bool()),
             jsx: co
                 .and_then(|x| x.get("jsx"))
                 .and_then(|s| s.as_str())
@@ -1978,6 +1987,9 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
             .and_then(|x| x.get("exactOptionalPropertyTypes"))
             .and_then(|b| b.as_bool())
             .unwrap_or(false),
+        use_unknown_in_catch_variables: co
+            .and_then(|x| x.get("useUnknownInCatchVariables"))
+            .and_then(|b| b.as_bool()),
         jsx: co
             .and_then(|x| x.get("jsx"))
             .and_then(|s| s.as_str())
@@ -2000,7 +2012,9 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
 /// are merged key-by-key so parent-only aliases survive. Boolean flags
 /// (`strict`, `exact_optional_property_types`) default to false in
 /// `parse_tsconfig_value`, so a child that omits the flag inherits the parent's
-/// value here via the `||`.
+/// value here via the `||`. `use_unknown_in_catch_variables` is an `Option`, so a
+/// `Some` in the child overrides the parent (letting an explicit `false` opt out)
+/// while a `None` inherits the parent's value.
 fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
     let mut paths = parent.paths;
     for (k, v) in child.paths {
@@ -2014,6 +2028,9 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
         strict: child.strict || parent.strict,
         exact_optional_property_types: child.exact_optional_property_types
             || parent.exact_optional_property_types,
+        use_unknown_in_catch_variables: child
+            .use_unknown_in_catch_variables
+            .or(parent.use_unknown_in_catch_variables),
         jsx: child.jsx.or(parent.jsx),
         jsx_import_source: child.jsx_import_source.or(parent.jsx_import_source),
         out_dir: child.out_dir.or(parent.out_dir),
@@ -4493,6 +4510,19 @@ impl ProjectCtx {
     pub fn uses_exact_optional_property_types(&self, path: &Path) -> bool {
         self.nearest_tsconfig(path)
             .map(|tsc| tsc.exact_optional_property_types)
+            .unwrap_or(false)
+    }
+
+    /// True when the tsconfig governing `path` has
+    /// `compilerOptions.useUnknownInCatchVariables` in effect (directly or
+    /// inherited through its `extends` chain). Since TypeScript 4.4 that option
+    /// is part of the `strict` family, so its effective value is the explicit
+    /// setting when present and otherwise falls back to `strict`. Under it an
+    /// un-annotated `catch` binding is typed `unknown` rather than `any`.
+    /// Defaults to false when no tsconfig is found.
+    pub fn uses_unknown_in_catch_variables(&self, path: &Path) -> bool {
+        self.nearest_tsconfig(path)
+            .map(|tsc| tsc.use_unknown_in_catch_variables.unwrap_or(tsc.strict))
             .unwrap_or(false)
     }
 
@@ -7666,6 +7696,71 @@ mod tests {
         .unwrap();
         let ctx = ProjectCtx::empty();
         assert!(!ctx.uses_exact_optional_property_types(&dir.path().join("src.ts")));
+    }
+
+    #[test]
+    fn use_unknown_in_catch_variables_is_tri_state() {
+        assert_eq!(
+            Tsconfig::parse(r#"{"compilerOptions":{"useUnknownInCatchVariables":true}}"#)
+                .unwrap()
+                .use_unknown_in_catch_variables,
+            Some(true)
+        );
+        assert_eq!(
+            Tsconfig::parse(r#"{"compilerOptions":{"useUnknownInCatchVariables":false}}"#)
+                .unwrap()
+                .use_unknown_in_catch_variables,
+            Some(false)
+        );
+        assert_eq!(
+            Tsconfig::parse(r#"{"compilerOptions":{"strict":true}}"#)
+                .unwrap()
+                .use_unknown_in_catch_variables,
+            None
+        );
+    }
+
+    #[test]
+    fn use_unknown_in_catch_variables_inherited_through_extends() {
+        // Issue #7447 (n8n case): the flag lives in the extended base config; a
+        // child that extends it and omits the flag must still inherit `Some(true)`.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.base.json"),
+            r#"{"compilerOptions":{"useUnknownInCatchVariables":true}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"extends":"./tsconfig.base.json","compilerOptions":{}}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert_eq!(ts.use_unknown_in_catch_variables, Some(true));
+    }
+
+    #[test]
+    fn uses_unknown_in_catch_variables_effective_value() {
+        let cases = [
+            (r#"{"strict":true}"#, true),
+            (r#"{"useUnknownInCatchVariables":true}"#, true),
+            (r#"{"strict":false}"#, false),
+            (r#"{"strict":true,"useUnknownInCatchVariables":false}"#, false),
+        ];
+        for (options, expected) in cases {
+            let dir = TempDir::new().unwrap();
+            std::fs::write(
+                dir.path().join("tsconfig.json"),
+                format!(r#"{{"compilerOptions":{options}}}"#),
+            )
+            .unwrap();
+            let ctx = ProjectCtx::empty();
+            assert_eq!(
+                ctx.uses_unknown_in_catch_variables(&dir.path().join("src.ts")),
+                expected,
+                "options: {options}"
+            );
+        }
     }
 
     #[test]
