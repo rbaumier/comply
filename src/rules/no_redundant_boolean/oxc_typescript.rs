@@ -44,6 +44,46 @@ fn operand_is_purely_boolean<'a>(
     false
 }
 
+/// Returns `true` when `expr` is provably of type `boolean` from its syntactic
+/// shape alone: a comparison / `in` / `instanceof`, a logical `&&`/`||` of
+/// provably-boolean operands, a `!expr` (always boolean), a boolean literal, or
+/// an identifier annotated `: boolean`. Optional chaining (`a?.b`, `a?.()`),
+/// bare truthiness on objects/strings, and untyped values are `T | undefined`
+/// or non-boolean, so they return `false`: for those, `if (test) return true;
+/// return false` coerces to a strict `boolean` and is not a redundant wrapper.
+fn test_is_provably_boolean<'a>(
+    expr: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    match expr {
+        Expression::ParenthesizedExpression(paren) => {
+            test_is_provably_boolean(&paren.expression, semantic)
+        }
+        Expression::BooleanLiteral(_) => true,
+        Expression::UnaryExpression(unary) => unary.operator == UnaryOperator::LogicalNot,
+        Expression::BinaryExpression(bin) => matches!(
+            bin.operator,
+            BinaryOperator::Equality
+                | BinaryOperator::Inequality
+                | BinaryOperator::StrictEquality
+                | BinaryOperator::StrictInequality
+                | BinaryOperator::LessThan
+                | BinaryOperator::LessEqualThan
+                | BinaryOperator::GreaterThan
+                | BinaryOperator::GreaterEqualThan
+                | BinaryOperator::In
+                | BinaryOperator::Instanceof
+        ),
+        Expression::LogicalExpression(logical) => {
+            matches!(logical.operator, LogicalOperator::And | LogicalOperator::Or)
+                && test_is_provably_boolean(&logical.left, semantic)
+                && test_is_provably_boolean(&logical.right, semantic)
+        }
+        Expression::Identifier(_) => operand_is_purely_boolean(expr, semantic),
+        _ => false,
+    }
+}
+
 pub struct Check;
 
 fn push_diag(
@@ -180,6 +220,15 @@ impl OxcCheck for Check {
                 let Some(cons_bool) = returns_bool(&if_stmt.consequent) else {
                     return;
                 };
+
+                // `if (test) return true; return false` collapses to
+                // `return test` only when `test` is already a strict `boolean`.
+                // A `T | undefined` test (optional chaining) or a non-boolean
+                // truthiness check is coerced to `boolean` by this shape;
+                // returning the test directly would widen the type.
+                if !test_is_provably_boolean(&if_stmt.test, semantic) {
+                    return;
+                }
 
                 // 3a. Explicit else branch.
                 if let Some(ref alt) = if_stmt.alternate {
@@ -354,6 +403,54 @@ mod tests {
         // True positive preserved — the genuinely-redundant lone 3b shape with
         // no preceding guard.
         let src = "function f(cond: boolean): boolean { if (cond) { return true; } return false; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_optional_chain_call_coercion_pattern_3b() {
+        // Regression for #7283 — the `if` test is `a?.b?.(x)`, type
+        // `boolean | undefined`; the shape coerces it to a strict `boolean`, so
+        // returning the test directly would widen the callback's return type.
+        let src = "const f = (rowData) => { if (selectionColumnRef.value?.disabled?.(rowData)) { return true } return false }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_optional_chain_member_coercion_pattern_3b() {
+        // Regression for #7283 — optional-chain member access `o?.a?.b` is
+        // `T | undefined`, not provably boolean.
+        let src = "function g(o) { if (o?.a?.b) { return true } return false }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_object_truthiness_pattern_3b() {
+        // An untyped truthiness test is non-boolean — the shape coerces to a
+        // strict `boolean`, so it is not a redundant wrapper.
+        let src = "function k(o) { if (o) { return true } return false }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_comparison_test_pattern_3b() {
+        // A comparison test is provably boolean regardless of operand types —
+        // still redundant.
+        let src = "function h(x) { if (x > 0) { return true } return false }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_logical_not_test_pattern_3b() {
+        // `!expr` is always boolean — still redundant.
+        let src = "function i(a) { if (!a) { return true } return false }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_logical_and_of_booleans_pattern_3b() {
+        // `a && b` of two `: boolean` operands is provably boolean — still
+        // redundant.
+        let src = "function j(a: boolean, b: boolean) { if (a && b) { return true } return false }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
