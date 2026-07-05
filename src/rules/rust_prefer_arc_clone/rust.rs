@@ -8,13 +8,16 @@ use crate::diagnostic::{Diagnostic, Severity};
 ///
 /// Walks up from the call through its ancestor scopes; the innermost scope that
 /// declares `target_name` before the call wins, and within it the
-/// latest-preceding `let` is used. Bindings nested in sibling or inner blocks do
-/// not contribute, so a same-named non-Arc parameter or outer binding is not
-/// shadowed by an unrelated `Arc` declaration elsewhere in the function.
+/// latest-preceding `let` is used — except a `let` whose own initializer
+/// encloses the call, which resolves to the outer binding. Bindings nested in
+/// sibling or inner blocks do not contribute, so a same-named non-Arc parameter
+/// or outer binding is not shadowed by an unrelated `Arc` declaration elsewhere
+/// in the function.
 fn is_arc_binding_at_call(
     call_node: tree_sitter::Node,
     source: &[u8],
     call_start: usize,
+    call_end: usize,
     target_name: &str,
 ) -> bool {
     let mut scope = call_node.parent();
@@ -23,7 +26,7 @@ fn is_arc_binding_at_call(
             node.kind(),
             "block" | "function_item" | "closure_expression" | "source_file"
         ) && let Some(is_arc) =
-            nearest_binding_in_scope(node, source, call_start, target_name)
+            nearest_binding_in_scope(node, source, call_start, call_end, target_name)
         {
             return is_arc;
         }
@@ -35,11 +38,14 @@ fn is_arc_binding_at_call(
 /// Within a single scope `node`, returns the Arc state of the latest `let`
 /// declaration of `target_name` that starts before `call_start`. Only direct
 /// statements of this scope are considered — nested blocks and closures are not
-/// descended into, so bindings local to a child scope are ignored.
+/// descended into, so bindings local to a child scope are ignored. A candidate
+/// whose own initializer encloses the call is skipped: a `let` binding is not in
+/// scope within its own `value`, so the receiver there is the outer binding.
 fn nearest_binding_in_scope<'a>(
     node: tree_sitter::Node<'a>,
     source: &'a [u8],
     call_start: usize,
+    call_end: usize,
     target_name: &str,
 ) -> Option<bool> {
     let mut cursor = node.walk();
@@ -52,6 +58,16 @@ fn nearest_binding_in_scope<'a>(
             && let Some((name, is_arc)) = binding_arc_state(child, source)
             && name == target_name
         {
+            // `let x = Arc::new(x.clone())` is self-referential: the `x` inside
+            // `x.clone()` binds to the outer `x`, not this not-yet-live `let`.
+            // When this candidate's `value` subtree encloses the call, skip it
+            // and keep resolving outward to the earlier/outer binding.
+            if child
+                .child_by_field_name("value")
+                .is_some_and(|v| call_start >= v.start_byte() && call_end <= v.end_byte())
+            {
+                continue;
+            }
             result = Some(is_arc);
         }
     }
@@ -104,7 +120,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["clone"] => |node, sourc
     if object.kind() != "identifier" { return; }
     let obj_name = object.utf8_text(source).unwrap_or("");
 
-    if !is_arc_binding_at_call(node, source, node.start_byte(), obj_name) { return; }
+    if !is_arc_binding_at_call(node, source, node.start_byte(), node.end_byte(), obj_name) { return; }
 
     // The explicit `Arc::clone(&x)` form is a readability convention for
     // production code review; it adds noise without benefit in test scaffolding,
@@ -257,5 +273,45 @@ mod tests {
         // flags the Arc clone.
         let src = "fn f() { let x = Arc::new(42); let _ = x.clone(); }";
         assert_eq!(run_gated(src, "src/lib.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_clone_in_self_referential_initializer_over_ref_param() {
+        // surrealdb tree.rs:371 — `i.clone()` inside `let i = Arc::new(i.clone())`
+        // resolves to the `&Idiom` parameter, a genuine deep clone; the shadowing
+        // `let i` is not yet live inside its own initializer.
+        let src = "async fn resolve_idiom(&mut self, i: &Idiom) -> Result<Node> { \
+            let i = Arc::new(i.clone()); todo!() }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_clone_in_self_referential_initializer_thg() {
+        // surrealdb knn.rs:55 — same pattern on a `&RecordId` parameter.
+        let src = "fn add(&mut self, thg: &RecordId) { let thg = Arc::new(thg.clone()); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_real_arc_clone_on_later_line() {
+        // The clone is a separate statement, not inside `let b`'s initializer, so
+        // it resolves to the real `Arc<T>` binding `a` and is still flagged.
+        let src = "fn f() { let a: Arc<T> = make(); let b = a.clone(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_arc_binding_cloned_after_initialization() {
+        // `a.clone()` is outside `let a`'s own initializer → still flagged.
+        let src = "fn g() { let a = Arc::new(x); use_it(a.clone()); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_self_referential_initializer_over_outer_arc_binding() {
+        // When the outer shadowed binding is itself an `Arc`, the self-referential
+        // `x.clone()` resolves to it and is a genuine ref-count bump → flagged.
+        let src = "fn f() { let x: Arc<T> = make(); let x = Arc::new(x.clone()); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
