@@ -23,9 +23,48 @@ fn unwrap_wrappers<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     }
 }
 
+/// True when the member-access `node` sits in a conditionally-evaluated
+/// (short-circuited) position: the right operand of a `??`/`||`/`&&`
+/// `LogicalExpression`, or the `consequent`/`alternate` branch of a
+/// `ConditionalExpression`. There the awaited call runs only on the taken branch,
+/// so the rule's "extract to a variable" remediation would hoist the `await` to run
+/// unconditionally — issuing the call (and, with a `...OrThrow`, throwing) even when
+/// the short-circuit would have skipped it — changing runtime semantics. Span
+/// containment against each operand/branch tells which side the access descends
+/// through. The walk is bounded at the enclosing statement and at the first function
+/// boundary: an `await` nested inside another function belongs to a different
+/// execution scope, so an outer operator does not short-circuit it.
+fn is_in_short_circuited_position(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let target = node.kind().span();
+    let contains = |outer: oxc_span::Span| outer.start <= target.start && target.end <= outer.end;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::LogicalExpression(logical) => {
+                if contains(logical.right.span()) {
+                    return true;
+                }
+            }
+            AstKind::ConditionalExpression(cond) => {
+                if contains(cond.consequent.span()) || contains(cond.alternate.span()) {
+                    return true;
+                }
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            other if other.is_statement() => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn check_object_is_await(
     obj: &Expression,
     span_start: u32,
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -38,6 +77,10 @@ fn check_object_is_await(
     // module's exports — the namespace object only exists to be member-accessed,
     // so extracting it to a variable buys nothing.
     if matches!(unwrap_wrappers(&await_expr.argument), Expression::ImportExpression(_)) {
+        return;
+    }
+
+    if is_in_short_circuited_position(node, semantic) {
         return;
     }
 
@@ -71,15 +114,29 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
             AstKind::StaticMemberExpression(member) => {
-                check_object_is_await(&member.object, member.span().start, ctx, diagnostics);
+                check_object_is_await(
+                    &member.object,
+                    member.span().start,
+                    node,
+                    semantic,
+                    ctx,
+                    diagnostics,
+                );
             }
             AstKind::ComputedMemberExpression(member) => {
-                check_object_is_await(&member.object, member.span().start, ctx, diagnostics);
+                check_object_is_await(
+                    &member.object,
+                    member.span().start,
+                    node,
+                    semantic,
+                    ctx,
+                    diagnostics,
+                );
             }
             _ => {}
         }
@@ -197,5 +254,60 @@ mod tests {
             "src/services/order.ts",
         );
         assert_eq!(d.len(), 1, "rule must still fire in production code");
+    }
+
+    // Issue #7424: the awaited member access is the short-circuited operand of a
+    // `??`/`||`/`&&` or a ternary branch; hoisting the await would run it
+    // unconditionally, so the rule must not fire.
+    #[test]
+    fn allows_await_member_in_nullish_coalescing_right_operand() {
+        assert!(
+            run("async function f(a, b) { const r = a ?? (await b()).c; return r; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_await_member_in_logical_or_right_operand() {
+        assert!(
+            run("async function g(a, b) { const r = a || (await b()).c; return r; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_await_member_in_logical_and_right_operand() {
+        assert!(
+            run("async function h(a, b) { const r = a && (await b()).c; return r; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_await_member_in_ternary_consequent() {
+        assert!(
+            run("async function t(cond, b, d) { const r = cond ? (await b()).c : d; return r; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_await_member_in_ternary_alternate() {
+        assert!(
+            run("async function u(cond, b, d) { const r = cond ? d : (await b()).c; return r; }")
+                .is_empty()
+        );
+    }
+
+    // Control: an unconditional statement-position access still fires — the await
+    // always runs, so extracting it to a variable is a valid remediation.
+    #[test]
+    fn flags_await_member_in_unconditional_assignment() {
+        let d = run("async function s(b) { const x = (await b()).c; return x; }");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Control: the LEFT operand of `??` is always evaluated, so it still fires.
+    #[test]
+    fn flags_await_member_in_nullish_coalescing_left_operand() {
+        let d = run("async function l(a, b) { const r = (await b()).c ?? a; return r; }");
+        assert_eq!(d.len(), 1);
     }
 }
