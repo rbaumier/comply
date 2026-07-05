@@ -120,6 +120,16 @@ mod tests {
     }
 
     #[test]
+    fn allows_underscore_prefixed_e() {
+        assert!(run_on("try { f(); } catch (_e) { return; }").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_prefixed_err() {
+        assert!(run_on("try { f(); } catch (_err) {}").is_empty());
+    }
+
+    #[test]
     fn allows_catch_cause_forwarded_to_error_cause() {
         let src = "try { result = f(); } catch (cause) { \
                    throw errorWithCause(message, cause as Error); }";

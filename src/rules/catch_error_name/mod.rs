@@ -27,8 +27,10 @@
 //!
 //! ## Allowed names
 //!
-//! - `_` — the parameter is unused. `catch (_) { return fallback; }`
-//!   is a legitimate shape.
+//! - `_`-prefixed (`_`, `_e`, `_err`, `_error`, …) — the leading
+//!   underscore is the language-wide "intentionally unused" marker
+//!   (matching `no-unused-vars` `caughtErrorsIgnorePattern: '^_'`).
+//!   `catch (_) { return fallback; }` is a legitimate shape.
 //! - `error` — the canonical name.
 //! - `cause` — the caught error is forwarded as the `cause` of a new
 //!   error: `catch (cause) { throw new Error(msg, { cause }); }`. The
@@ -78,7 +80,10 @@ pub(super) const EXPECTED: &str = "error";
 /// Whether a catch-parameter identifier is acceptable.
 ///
 /// Allowed shapes:
-/// - `_` — deliberately-unused parameter.
+/// - `_`-prefixed (`_`, `_e`, `_err`, `_error`, …) — the leading
+///   underscore is the language-wide "intentionally unused" marker
+///   (matching `no-unused-vars` `caughtErrorsIgnorePattern: '^_'`); the
+///   binding is not referenced in the catch body.
 /// - `error` — the canonical name.
 /// - `cause` — forwarded as the `cause` of a new error via the ES2022
 ///   `Error.cause` shorthand (`throw new Error(msg, { cause })`).
@@ -86,7 +91,7 @@ pub(super) const EXPECTED: &str = "error";
 ///   `innerError` (used to disambiguate nested catches that would
 ///   otherwise shadow the outer `error`).
 pub(super) fn is_acceptable_name(name: &str) -> bool {
-    name == "_"
+    name.starts_with('_')
         || name == EXPECTED
         || name == "cause"
         || name.ends_with(EXPECTED)
@@ -130,6 +135,13 @@ mod helper_tests {
     #[test]
     fn accepts_underscore() {
         assert!(is_acceptable_name("_"));
+    }
+
+    #[test]
+    fn accepts_underscore_prefixed() {
+        assert!(is_acceptable_name("_e"));
+        assert!(is_acceptable_name("_err"));
+        assert!(is_acceptable_name("_error"));
     }
 
     #[test]
