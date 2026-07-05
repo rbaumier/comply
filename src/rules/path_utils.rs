@@ -1096,7 +1096,7 @@ pub fn is_typescript_language_file(path: &Path) -> bool {
 /// a path escaping its base stays observable. Used to compare a resolved import
 /// target against a directory that may be absent in a clean checkout (so
 /// canonicalizing would fail).
-fn normalize_lexical(path: &Path) -> PathBuf {
+pub fn normalize_lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
