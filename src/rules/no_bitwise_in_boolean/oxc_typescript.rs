@@ -125,9 +125,37 @@ fn is_membership_find_call(expr: &Expression) -> bool {
     MEMBERSHIP_FIND_METHODS.contains(&member.property.name.as_str())
 }
 
+/// Whether `id` resolves to a variable whose initializer is a membership-find
+/// call (`const i = arr.indexOf(x)`), making `~i` the stored-index form of the
+/// deliberate membership idiom — the variable-binding sibling of a direct
+/// `~arr.indexOf(x)`. Resolves the binding via `reference_id` → symbol →
+/// declaration node, then reuses `is_membership_find_call` on the enclosing
+/// `VariableDeclarator`'s `init`. A parameter, imported binding, or any
+/// non-find initializer resolves to a plain number, so `~foo` there stays a
+/// possible `!foo` typo.
+fn binding_init_is_membership_find(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let Some(ref_id) = id.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return decl.init.as_ref().is_some_and(is_membership_find_call);
+        }
+    }
+    false
+}
+
 /// Check whether an expression contains a bitwise operator likely standing in
 /// for a logical operator. Deliberate bitmask flag tests are not flagged.
-fn has_bitwise_op(expr: &Expression) -> bool {
+fn has_bitwise_op(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
     match expr {
         Expression::BinaryExpression(bin) => {
             if COMPARISON_OPS.contains(&bin.operator) {
@@ -141,17 +169,24 @@ fn has_bitwise_op(expr: &Expression) -> bool {
             ) {
                 return !is_bitmask_test(bin);
             }
-            has_bitwise_op(&bin.left) || has_bitwise_op(&bin.right)
+            has_bitwise_op(&bin.left, semantic) || has_bitwise_op(&bin.right, semantic)
         }
         Expression::UnaryExpression(un) => {
-            if un.operator == UnaryOperator::BitwiseNot {
-                // `~arr.indexOf(x)` / `~str.search(re)` is the deliberate
-                // membership idiom, not a `!foo` typo — leave it unflagged.
-                return !is_membership_find_call(&un.argument);
+            if un.operator != UnaryOperator::BitwiseNot {
+                return false;
             }
-            false
+            // `~arr.indexOf(x)` / `~str.search(re)` — or `~i` where `i` is bound
+            // to such a call — is the deliberate membership idiom, not a `!foo`
+            // typo, so leave it unflagged. Any other `~operand` stays flagged.
+            if is_membership_find_call(&un.argument) {
+                return false;
+            }
+            match &un.argument {
+                Expression::Identifier(id) => !binding_init_is_membership_find(id, semantic),
+                _ => true,
+            }
         }
-        Expression::ParenthesizedExpression(paren) => has_bitwise_op(&paren.expression),
+        Expression::ParenthesizedExpression(paren) => has_bitwise_op(&paren.expression, semantic),
         _ => false,
     }
 }
@@ -177,7 +212,7 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        if !has_bitwise_op(test) {
+        if !has_bitwise_op(test, semantic) {
             return;
         }
 
@@ -320,10 +355,36 @@ mod tests {
     }
 
     #[test]
+    fn allows_stored_index_membership_idiom() {
+        // Regression for #7282: `~i` where `i` is bound to an `indexOf` /
+        // `lastIndexOf` / `search` result is the stored-index form of the
+        // membership idiom — the index is stored in a `const` first because it
+        // is reused, but the `~` is still deliberate, not a `!i` typo.
+        assert!(
+            run_on(
+                "const index = arr.indexOf(key); if (~index) { arr.splice(index, 1); }"
+            )
+            .is_empty()
+        );
+        assert!(run_on("const i = arr.lastIndexOf(key); if (~i) {}").is_empty());
+        assert!(run_on("const p = str.search(/x/); if (~p) {}").is_empty());
+    }
+
+    #[test]
     fn flags_bare_identifier_bitwise_not() {
         // A bare `~foo` is a possible `!foo` typo and must stay flagged.
         assert_eq!(run_on("if (~foo) {}").len(), 1);
         assert_eq!(run_on("if (~someValue) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_bitwise_not_on_non_find_bound_identifier() {
+        // An identifier bound to a non-membership-find initializer holds a
+        // plain value, so `~flags` stays a possible `!flags` typo. A parameter
+        // has no resolvable find initializer and also stays flagged.
+        assert_eq!(run_on("const flags = getFlags(); if (~flags) {}").len(), 1);
+        assert_eq!(run_on("const n = 3; if (~n) {}").len(), 1);
+        assert_eq!(run_on("function f(x) { if (~x) {} }").len(), 1);
     }
 
     #[test]
