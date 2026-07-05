@@ -3,16 +3,17 @@
 //! Only the canonical single-entry accumulator is flagged: a reducer that adds
 //! exactly one `[key, value]` entry per source element, which `Object.fromEntries`
 //! can express directly. Reducers that fan out (a nested loop writing a variable
-//! number of keys) or merge whole objects (`Object.assign(acc, obj)`, spread of a
-//! non-accumulator object) have no equivalent `fromEntries` rewrite and are left
-//! alone.
+//! number of keys), merge whole objects (`Object.assign(acc, obj)`, spread of a
+//! non-accumulator object), or aggregate — a read-modify-write whose assigned
+//! value reads the accumulator back (`acc[k] = (acc[k] || 0) + 1`) — have no
+//! equivalent `fromEntries` rewrite and are left alone.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, AssignmentOperator, AssignmentTarget, BindingPattern, Expression, FormalParameters,
-    FunctionBody, ObjectPropertyKind, Statement,
+    Argument, ArrayExpressionElement, AssignmentOperator, AssignmentTarget, BindingPattern,
+    ChainElement, Expression, FormalParameters, FunctionBody, ObjectPropertyKind, Statement,
 };
 use std::sync::Arc;
 
@@ -115,7 +116,8 @@ fn seed_is_empty_object(arg: &Argument) -> bool {
 ///   with a single spread of `acc` plus exactly one added property.
 ///
 /// Every other body (nested loop, `Object.assign`/spread merge, multiple or
-/// conditional writes, returning something other than `acc`) is rejected.
+/// conditional writes, a read-modify-write whose value reads `acc` back,
+/// returning something other than `acc`) is rejected.
 fn is_single_entry_accumulator(arg: &Argument) -> bool {
     let Some(expr) = arg.as_expression() else {
         return false;
@@ -159,6 +161,14 @@ fn is_block_accumulator(statements: &[Statement], acc: &str) -> bool {
         return false;
     }
 
+    // A read-modify-write aggregation (`acc[k] = (acc[k] || 0) + 1`) reads the
+    // accumulator back to compute the assigned value; colliding keys must then
+    // combine, which `Object.fromEntries` cannot express (it overwrites
+    // collisions). Only a value independent of `acc` has a `fromEntries` rewrite.
+    if value_reads_accumulator(&assign.right, acc) {
+        return false;
+    }
+
     // Second statement: `return acc;`.
     matches!(&ret.argument, Some(Expression::Identifier(id)) if id.name.as_str() == acc)
 }
@@ -172,6 +182,88 @@ fn assignment_target_object_is(target: &AssignmentTarget, acc: &str) -> bool {
         _ => return false,
     };
     matches!(object, Expression::Identifier(id) if id.name.as_str() == acc)
+}
+
+/// True when `expr` reads the accumulator binding `acc` — any reference to the
+/// identifier `acc` anywhere in the expression (member bases, logical/binary/
+/// ternary operands, call arguments, array/object elements, spreads, template
+/// substitutions). Nested functions are not descended into. Mirrors the
+/// `assignment_target_object_is` name check so a read-modify-write value
+/// (`(acc[k] || 0) + 1`) is recognised regardless of how it is wrapped.
+fn value_reads_accumulator(expr: &Expression, acc: &str) -> bool {
+    match expr {
+        Expression::Identifier(id) => id.name.as_str() == acc,
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => false,
+        Expression::BinaryExpression(bin) => {
+            value_reads_accumulator(&bin.left, acc) || value_reads_accumulator(&bin.right, acc)
+        }
+        Expression::LogicalExpression(log) => {
+            value_reads_accumulator(&log.left, acc) || value_reads_accumulator(&log.right, acc)
+        }
+        Expression::UnaryExpression(un) => value_reads_accumulator(&un.argument, acc),
+        Expression::ConditionalExpression(cond) => {
+            value_reads_accumulator(&cond.test, acc)
+                || value_reads_accumulator(&cond.consequent, acc)
+                || value_reads_accumulator(&cond.alternate, acc)
+        }
+        Expression::CallExpression(call) => {
+            value_reads_accumulator(&call.callee, acc)
+                || arguments_read_accumulator(&call.arguments, acc)
+        }
+        Expression::NewExpression(new) => {
+            value_reads_accumulator(&new.callee, acc)
+                || arguments_read_accumulator(&new.arguments, acc)
+        }
+        Expression::ChainExpression(chain) => chain_element_reads_accumulator(&chain.expression, acc),
+        Expression::ArrayExpression(arr) => arr.elements.iter().any(|el| match el {
+            ArrayExpressionElement::SpreadElement(s) => value_reads_accumulator(&s.argument, acc),
+            ArrayExpressionElement::Elision(_) => false,
+            _ => value_reads_accumulator(el.to_expression(), acc),
+        }),
+        Expression::ObjectExpression(obj) => obj.properties.iter().any(|prop| match prop {
+            ObjectPropertyKind::ObjectProperty(p) => value_reads_accumulator(&p.value, acc),
+            ObjectPropertyKind::SpreadProperty(s) => value_reads_accumulator(&s.argument, acc),
+        }),
+        Expression::StaticMemberExpression(mem) => value_reads_accumulator(&mem.object, acc),
+        Expression::ComputedMemberExpression(mem) => {
+            value_reads_accumulator(&mem.object, acc)
+                || value_reads_accumulator(&mem.expression, acc)
+        }
+        Expression::TemplateLiteral(tpl) => {
+            tpl.expressions.iter().any(|e| value_reads_accumulator(e, acc))
+        }
+        Expression::SequenceExpression(seq) => {
+            seq.expressions.iter().any(|e| value_reads_accumulator(e, acc))
+        }
+        Expression::ParenthesizedExpression(p) => value_reads_accumulator(&p.expression, acc),
+        Expression::TSAsExpression(ts) => value_reads_accumulator(&ts.expression, acc),
+        Expression::TSNonNullExpression(ts) => value_reads_accumulator(&ts.expression, acc),
+        _ => false,
+    }
+}
+
+/// True when any call/`new` argument (including a spread) reads `acc`.
+fn arguments_read_accumulator(arguments: &[Argument], acc: &str) -> bool {
+    arguments.iter().any(|arg| match arg {
+        Argument::SpreadElement(s) => value_reads_accumulator(&s.argument, acc),
+        _ => value_reads_accumulator(arg.to_expression(), acc),
+    })
+}
+
+/// True when the head of an optional chain (`acc[k]?.concat(x)`) reads `acc`.
+fn chain_element_reads_accumulator(element: &ChainElement, acc: &str) -> bool {
+    match element {
+        ChainElement::CallExpression(call) => {
+            value_reads_accumulator(&call.callee, acc)
+                || arguments_read_accumulator(&call.arguments, acc)
+        }
+        ChainElement::TSNonNullExpression(n) => value_reads_accumulator(&n.expression, acc),
+        ChainElement::StaticMemberExpression(m) => value_reads_accumulator(&m.object, acc),
+        ChainElement::ComputedMemberExpression(m) => {
+            value_reads_accumulator(&m.object, acc) || value_reads_accumulator(&m.expression, acc)
+        }
+        ChainElement::PrivateFieldExpression(m) => value_reads_accumulator(&m.object, acc),
+    }
 }
 
 /// True for a concise body `({ ...acc, [key]: value })`: an object literal with
@@ -271,6 +363,73 @@ mod tests {
             "const obj = pairs.reduce((acc, [k, v]) => { acc[k] = v; return acc; }, {} as Record<string, number>);",
         );
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_block_accumulator_independent_value() {
+        // The assigned value (`item.name`) does not read `acc` — a plain entry
+        // write, expressible as `Object.fromEntries`.
+        let d = run_on(
+            "const o = items.reduce((acc, item) => { acc[item.id] = item.name; return acc; }, {});",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_block_accumulator_transformed_value() {
+        // `transform(x)` derives the value from the element, not from `acc`.
+        let d = run_on(
+            "const o = items.reduce((acc, x) => { acc[x.k] = transform(x); return acc; }, {});",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_read_modify_write_frequency_count() {
+        // `(acc[value] || 0) + 1` reads the accumulator back — a counting
+        // aggregation with no `Object.fromEntries` rewrite (colliding keys sum).
+        assert!(
+            run_on(
+                "const c = values.reduce((acc, value) => { acc[value] = (acc[value] || 0) + 1; return acc; }, {});"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_read_modify_write_group_by() {
+        // `acc[x.k] ? [...acc[x.k], x] : [x]` reads the accumulator back — a
+        // group-by aggregation, not a single-entry write.
+        assert!(
+            run_on(
+                "const g = items.reduce((acc, x) => { acc[x.k] = acc[x.k] ? [...acc[x.k], x] : [x]; return acc; }, {});"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_read_modify_write_new_set() {
+        // `new Set([...(acc[k] ?? []), x])` reads the accumulator back inside the
+        // constructor argument — a group-into-Set aggregation.
+        assert!(
+            run_on(
+                "const g = items.reduce((acc, x) => { acc[x.k] = new Set([...(acc[x.k] ?? []), x]); return acc; }, {});"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_read_modify_write_optional_chain() {
+        // `acc[k]?.concat(x) ?? [x]` reads the accumulator back through an optional
+        // chain — a group-by aggregation.
+        assert!(
+            run_on(
+                "const g = items.reduce((acc, x) => { acc[x.k] = acc[x.k]?.concat(x) ?? [x]; return acc; }, {});"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
