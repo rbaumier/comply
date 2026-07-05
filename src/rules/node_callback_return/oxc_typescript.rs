@@ -78,8 +78,15 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Walk up to find the parent statement context.
-        let parent = semantic.nodes().parent_node(node.id());
+        // Resolve the expression that actually consumes the call's value,
+        // looking through value-forwarding wrappers (a ternary
+        // consequent/alternate, a `&&`/`||`/`??` operand, or parentheses) that
+        // transparently forward the callee's value to whatever consumes them —
+        // so `cond ? callback(x) : y` assigned or returned counts as consumed,
+        // exactly as the direct forms do. `consumed_span` is the span of the
+        // outermost forwarded expression, so the argument-position checks match
+        // the wrapper sitting in the argument slot, not the bare call.
+        let (parent, consumed_span) = consuming_parent(node, semantic);
         match parent.kind() {
             // `return cb(err);`
             AstKind::ReturnStatement(_) => return,
@@ -104,10 +111,10 @@ impl OxcCheck for Check {
             // must flow into the outer call). Only exempt the arguments position:
             // for `callback(x)(y)` the inner call is the outer call's callee, whose
             // span matches no argument, so it stays flagged.
-            AstKind::CallExpression(outer) if is_argument(call.span, &outer.arguments) => {
+            AstKind::CallExpression(outer) if is_argument(consumed_span, &outer.arguments) => {
                 return;
             }
-            AstKind::NewExpression(outer) if is_argument(call.span, &outer.arguments) => {
+            AstKind::NewExpression(outer) if is_argument(consumed_span, &outer.arguments) => {
                 return;
             }
             AstKind::ExpressionStatement(expr_stmt) => {
@@ -193,6 +200,46 @@ impl OxcCheck for Check {
 /// `SpreadElement`, not the call), so a direct span match is exact.
 fn is_argument(call_span: Span, arguments: &[Argument<'_>]) -> bool {
     arguments.iter().any(|arg| arg.span() == call_span)
+}
+
+/// Resolve the expression that consumes the call's value, peeling
+/// value-forwarding wrappers above `node`. A `ConditionalExpression` forwards
+/// its `consequent`/`alternate`, a `LogicalExpression` (`&&`/`||`/`??`) forwards
+/// either operand, and a `ParenthesizedExpression` forwards its inner
+/// expression — in each, the callee's value flows through to whatever consumes
+/// the wrapper, so the "value is consumed, not dropped" exemptions must see
+/// through it. A ternary `test` operand or a `SequenceExpression` operand does
+/// not forward, so it is not peeled. Peels iteratively for nested wrappers.
+/// Returns the first non-forwarding ancestor and the span of the outermost
+/// forwarded expression (the call's own span when nothing is peeled).
+fn consuming_parent<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> (&'a oxc_semantic::AstNode<'a>, Span) {
+    let nodes = semantic.nodes();
+    let mut cur_id = node.id();
+    let mut cur_span = node.kind().span();
+    loop {
+        let parent = nodes.parent_node(cur_id);
+        if parent.id() == cur_id {
+            return (parent, cur_span);
+        }
+        let forwards = match parent.kind() {
+            AstKind::ParenthesizedExpression(_) => true,
+            AstKind::ConditionalExpression(cond) => {
+                cond.consequent.span() == cur_span || cond.alternate.span() == cur_span
+            }
+            AstKind::LogicalExpression(logical) => {
+                logical.left.span() == cur_span || logical.right.span() == cur_span
+            }
+            _ => false,
+        };
+        if !forwards {
+            return (parent, cur_span);
+        }
+        cur_id = parent.id();
+        cur_span = parent.kind().span();
+    }
 }
 
 /// True when `callee` resolves to a binding whose declared type is a
@@ -751,6 +798,57 @@ mod tests {
               cb(null, "x");
             }
         "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_assigned_via_ternary() {
+        // Issue #7260 (nestjs/nest instance-wrapper): the call is the consequent
+        // of a ternary whose value is assigned to a binding — the result is
+        // captured and used in the following control flow, not dropped.
+        let src = r#"
+            function introspect(callback, dependencies, lookupRegistry) {
+              let introspectionResult = dependencies
+                ? callback(dependencies, lookupRegistry)
+                : false;
+              return introspectionResult;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_returned_via_ternary() {
+        // Issue #7260: the call is the consequent of a ternary that is the
+        // argument of a `return` — the result is returned, not dropped.
+        let src =
+            "function f(callback, enhancers, r) { return enhancers ? callback(enhancers, r) : false; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_reassigned_via_ternary() {
+        // Issue #7260: `result = cond ? callback(a) : b` — the ternary forwards
+        // the call's value into an assignment, so it is consumed.
+        let src =
+            "function f(callback, cond, a, b) { let result; result = cond ? callback(a) : b; return result; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_consumed_via_logical_operand() {
+        // Issue #7260: `const y = a || callback(b)` — the `||` forwards the
+        // call's value into the declaration, so it is consumed.
+        let src = "function f(callback, a, b) { const y = a || callback(b); return y; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_dropped_ternary_callback() {
+        // Negative space for #7260: a ternary whose value is dropped (bare
+        // expression statement) still drops the callback's result — the wrapper
+        // peel must not exempt it.
+        let src = "function f(callback, cond, a, b) { cond ? callback(a) : b; doMore(); }";
         assert_eq!(run(src).len(), 1);
     }
 }
