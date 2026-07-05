@@ -262,6 +262,22 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `val[0]` where `val` is the callback parameter of a Vue
+        // `watch([e0, …, eN-1], cb)` whose SOURCE (first argument) is a non-empty
+        // array literal of `N` elements. Vue types that parameter as a fixed-length
+        // `N`-tuple matching the sources, not a dynamic `T[]`, so index 0 is always
+        // in-bounds — the array can never be empty. Recognized structurally from the
+        // `watch` call + its array-literal first argument + the enclosing callback's
+        // parameter; a non-array-literal source (`watch(singleRef, cb)`) or an
+        // empty-array source (`watch([], cb)`) is not a fixed-length tuple and stays
+        // flagged.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && is_watch_array_literal_source_callback_param(node, obj_ident.name.as_str(), semantic)
+        {
+            return;
+        }
+
         // `v[0]` / `v[v.length - 1]` where `v`'s binding is annotated with a
         // gl-matrix fixed-size vector/matrix type (`vec2`/`vec3`/`vec4`,
         // `mat2`/`mat3`/`mat4`/`mat2d`, `quat`/`quat2`) imported from `gl-matrix`.
@@ -2139,6 +2155,59 @@ fn for_of_tuple_element<'a>(
             continue;
         }
         return array_element_type_is_nonempty_tuple(&for_of.right, semantic);
+    }
+    false
+}
+
+/// Returns true when `name` is the first parameter of the callback passed as the
+/// second argument to a Vue `watch([e0, …, eN-1], cb)` call whose SOURCE (first
+/// argument) is a non-empty array literal. Vue types that parameter as a
+/// fixed-length tuple matching the array-literal sources, so its index 0 is always
+/// in-bounds — the array can never be empty. Purely structural: keyed on the
+/// `watch` callee, an array-literal first argument, and the enclosing callback
+/// binding `name` as its first parameter — no name/value allowlist. A
+/// non-array-literal source (`watch(singleRef, cb)`) or an empty-array source
+/// (`watch([], cb)`) is not a fixed-length tuple and returns false, so the access
+/// stays flagged. Walks ancestors innermost-first so the closest enclosing callback
+/// decides. Mirrors [`is_object_entries_callback_param`] / [`is_then_callback_param`].
+fn is_watch_array_literal_source_callback_param(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let params = match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(arrow) => &arrow.params,
+            AstKind::Function(func) => &func.params,
+            _ => continue,
+        };
+        // `name` must be this callback's first parameter — the tuple slot Vue binds
+        // to the watched sources. If the closest enclosing callback binds `name`
+        // elsewhere (or not at all), it is not the watch source binder.
+        if !first_param_is_name(params, name) {
+            return false;
+        }
+        let AstKind::CallExpression(call) = nodes.parent_kind(ancestor.id()) else {
+            return false;
+        };
+        // Bare global `watch(<sources>, <this callback>)`.
+        if !matches!(&call.callee, Expression::Identifier(id) if id.name.as_str() == "watch") {
+            return false;
+        }
+        // The first argument must be a non-empty array-literal source, and THIS
+        // callback must be the second argument.
+        let Some(Expression::ArrayExpression(sources)) =
+            call.arguments.first().and_then(|arg| arg.as_expression())
+        else {
+            return false;
+        };
+        let callback_is_second_arg = call
+            .arguments
+            .get(1)
+            .and_then(|arg| arg.as_expression())
+            .is_some_and(|cb| cb.span() == ancestor.kind().span());
+        return callback_is_second_arg && is_static_nonempty_array(sources);
     }
     false
 }
@@ -4790,6 +4859,59 @@ mod tests {
         // Negative control: an aliased element type (`Pair[]`) cannot be resolved to
         // a tuple without type info, so the callback param's `[0]` stays flagged.
         let src = "function f(xs: Pair[]) { return xs.sort((a, b) => a[0]); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_watch_array_source_tuple_param_index0_issue_7437() {
+        // The issue's soybean-admin repro: `val` is the callback parameter of a Vue
+        // `watch` whose source is the array literal `[grayscaleMode,
+        // colourWeaknessMode]`, so Vue types it as the fixed-length tuple
+        // `[boolean, boolean]` — `val[0]` is always in-bounds (`val[1]` is a
+        // non-boundary index the rule never inspects).
+        let src = "watch([grayscaleMode, colourWeaknessMode], val => { toggleAuxiliaryColorModes(val[0], val[1]); }, { immediate: true });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_watch_array_source_three_tuple_issue_7437() {
+        // A three-element array source ⇒ three-tuple parameter; the boundary read
+        // `val[0]` (index 0 < 3) is in-bounds and exempt, and `val[2]` is a
+        // non-boundary index the rule never inspects — neither is flagged.
+        let src = "watch([a, b, c], val => { use(val[0], val[2]); });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_watch_non_array_literal_source_issue_7437() {
+        // Negative control: the `watch` source is a single ref, not an array literal,
+        // so `val` is not a fixed-length tuple — `val[0]` stays flagged.
+        let src = "watch(singleRef, val => { use(val[0]); });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_watch_callback_not_second_arg_issue_7437() {
+        // Negative control: the callback is the third argument, not the second, so
+        // it is not the source callback of `watch([sources], cb)` — `val[0]` stays
+        // flagged (guards the `callback_is_second_arg` span check).
+        let src = "watch([a, b], other, val => { use(val[0]); });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_watch_empty_array_source_issue_7437() {
+        // Negative control: an empty-array source `[]` is a zero-length tuple with no
+        // index 0, so `val[0]` stays flagged.
+        let src = "watch([], val => { use(val[0]); });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_plain_dynamic_array_index0_issue_7437() {
+        // Negative control: a plain dynamic-array access whose receiver is not a
+        // watch tuple param stays flagged.
+        let src = "const arr = getArr(); const x = arr[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 
