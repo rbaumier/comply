@@ -701,6 +701,79 @@ fn is_reflect_apply_this_arg(
     second_arg.span() == nodes.kind(this_node_id).span()
 }
 
+/// True when the reference at `ref_node_id` sits in `thisArg` position of a
+/// receiver-binding invocation: the first argument of `<callee>.call(X, …)` /
+/// `<callee>.apply(X, …)`, or the second argument of `Reflect.apply(fn, X, …)`.
+/// Each binds its `thisArg` as the receiver of the invoked function, so a local
+/// forwarded here carries a captured `this` to the call site. A `Reflect`
+/// receiver is excluded from the first-argument branch — `Reflect.apply`'s first
+/// argument is the function to invoke, not the receiver (matched at argument two).
+fn reference_is_call_apply_this_arg(
+    ref_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    // `Reflect.apply(fn, X, args)`: X is the second (thisArg) argument — reuse the
+    // same direct-thisArg check the literal-`this` path uses.
+    if is_reflect_apply_this_arg(ref_node_id, semantic) {
+        return true;
+    }
+    let nodes = semantic.nodes();
+    let AstKind::CallExpression(call) = nodes.kind(nodes.parent_id(ref_node_id)) else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !matches!(member.property.name.as_str(), "call" | "apply")
+        || matches!(&member.object, Expression::Identifier(id) if id.name == "Reflect")
+    {
+        return false;
+    }
+    let ref_span = nodes.kind(ref_node_id).span();
+    call.arguments
+        .first()
+        .is_some_and(|arg| arg.span() == ref_span)
+}
+
+/// True when the `ThisExpression` at `this_node_id` is captured into a local
+/// binding (`const`/`let`/`var X = this`) whose symbol is later forwarded as the
+/// `thisArg` of a `<callee>.call(X, …)` / `<callee>.apply(X, …)` /
+/// `Reflect.apply(fn, X, …)` invocation — the `var self = this` / `const that =
+/// this` context-capture idiom. The enclosing non-arrow `function` binds `this`
+/// dynamically at its call site; `this` is captured into the local and forwarded
+/// to preserve that receiver (the reference may sit inside a nested closure, as in
+/// `const later = function () { fn.apply(context, args); }`), so the `this` is
+/// intentional. This is one indirection hop from writing `this` directly as the
+/// thisArg (`is_reflect_apply_this_arg`), and like it is a property of the `this`
+/// node itself. The `this` must be the whole initializer of the declarator, whose
+/// bound name is a plain identifier; a `this` buried inside the initializer
+/// (`const x = this.foo`) is not this idiom.
+fn is_this_captured_and_forwarded_as_this_arg(
+    this_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::VariableDeclarator(declarator) = nodes.kind(nodes.parent_id(this_node_id)) else {
+        return false;
+    };
+    let Some(init) = &declarator.init else {
+        return false;
+    };
+    if init.span() != nodes.kind(this_node_id).span() {
+        return false;
+    }
+    let BindingPattern::BindingIdentifier(ident) = &declarator.id else {
+        return false;
+    };
+    let Some(symbol_id) = ident.symbol_id.get() else {
+        return false;
+    };
+    semantic
+        .scoping()
+        .get_resolved_references(symbol_id)
+        .any(|reference| reference_is_call_apply_this_arg(reference.node_id(), semantic))
+}
+
 fn is_valid_this_context(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -712,6 +785,15 @@ fn is_valid_this_context(
     // a property of the `this` node itself, independent of the enclosing
     // function, so it is checked before the boundary walk.
     if is_reflect_apply_this_arg(node.id(), semantic) {
+        return true;
+    }
+    // `const context = this; … fn.apply(context, args)`: the `this` is captured
+    // into a local binding that is later forwarded as the `thisArg` of a
+    // `.call`/`.apply`/`Reflect.apply` invocation — the `var self = this` /
+    // `const that = this` context-capture idiom, one indirection hop from writing
+    // `this` directly as the thisArg. Like the `Reflect.apply` case above, this is
+    // a property of the `this` node itself, so it is checked before the walk.
+    if is_this_captured_and_forwarded_as_this_arg(node.id(), semantic) {
         return true;
     }
     // Walk up from the ThisExpression. The first `this`-binding boundary
@@ -1714,6 +1796,54 @@ mod tests {
         // return-type annotation — not inside a returned function — is still
         // unbound and must fire.
         let diags = run_on("function f(): void {\n  return this.x;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_captured_into_local_forwarded_via_apply() {
+        // Regression for #7403: the `var self = this` context-capture idiom. The
+        // debounce factory returns a non-arrow `function` so `this` binds to the
+        // call site; `this` is captured into `const context` and forwarded as the
+        // `thisArg` of `fn.apply(context, args)` inside the nested `later` closure,
+        // so the `this` reference is intentional, not a stray bug.
+        let src = "export function debounce(fn) {\n  let waiting;\n  return function() {\n    if (waiting) return;\n    waiting = true;\n    const context = this,\n      args = arguments;\n    const later = function() {\n      waiting = false;\n      fn.apply(context, args);\n    };\n    nextTick(later);\n  };\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_captured_into_local_forwarded_via_call() {
+        // Regression for #7403: `this` captured into a local and forwarded as the
+        // first (thisArg) argument of `<callee>.call(X, …)` is the same idiom.
+        let src = "function f() {\n  const self = this;\n  other.call(self);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_captured_into_local_forwarded_via_reflect_apply() {
+        // Regression for #7403: forwarding the captured local as the second
+        // (thisArg) argument of `Reflect.apply(fn, X, args)` is recognized too,
+        // reusing the same direct-thisArg check the literal-`this` path uses.
+        let src = "function g() {\n  const that = this;\n  Reflect.apply(fn, that, []);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_captured_into_local_never_forwarded_as_this_arg() {
+        // Negative-space guard for #7403: the exemption keys on the captured local
+        // being *forwarded as a thisArg*. A `this` captured into a local that is
+        // only read elsewhere (never a `.call`/`.apply`/`Reflect.apply` thisArg)
+        // has no receiver-binding evidence — `this` stays unbound and must fire.
+        let diags = run_on("function h() {\n  const x = this;\n  console.log(x);\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_captured_into_local_used_as_reflect_apply_function_arg() {
+        // Negative-space guard for #7403: `Reflect.apply`'s first argument is the
+        // function to invoke, not the receiver. A local capturing `this` passed
+        // there (`Reflect.apply(x, ctx, args)`) is not a thisArg forward — keep the
+        // current behavior and flag it, mirroring the direct-`this` first-arg case.
+        let diags = run_on("function f() {\n  const x = this;\n  Reflect.apply(x, ctx, args);\n}");
         assert_eq!(diags.len(), 1);
     }
 }
