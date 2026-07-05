@@ -2566,6 +2566,124 @@ pub fn operand_is_bool(node: Node, source: &[u8]) -> bool {
     }
 }
 
+/// True when the `&`/`|` `binary_expression` `node` has an operand whose resolved
+/// type `T` defines a user-provided `impl BitAnd`/`BitOr` for `T` with
+/// `type Output = bool` in the same file — a bitflags newtype whose bit operator
+/// is designed to yield `bool`.
+///
+/// Such a `T & FLAG` / `T | FLAG` is a valid boolean condition only because it
+/// invokes that custom operator; the operands are `T`, not `bool`, so `&&`/`||`
+/// would not type-check and cannot be the intent. This mirrors the `^` exemption
+/// (`int ^ int` yields an int, never a condition, so a `^` reaching a condition
+/// is always the logical-XOR idiom): here the op yields `bool` only through the
+/// newtype's operator, so no short-circuit typo is possible.
+///
+/// The signal is purely structural — the operator impl's presence keyed to the
+/// operand's resolved type — never the operand's name or a flag-naming
+/// convention. When neither operand's type resolves, or no matching
+/// bool-returning operator impl exists in the file, this returns `false` and the
+/// `&`/`|` stays flagged.
+pub fn bitop_operand_type_has_bool_output_impl(node: Node, source: &[u8]) -> bool {
+    let Some(op) = node.child_by_field_name("operator").and_then(|o| o.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    let trait_name = match op {
+        "&" => "BitAnd",
+        "|" => "BitOr",
+        _ => return false,
+    };
+    let root = root_node(node);
+    ["left", "right"]
+        .into_iter()
+        .filter_map(|field| node.child_by_field_name(field))
+        .filter_map(|operand| resolve_operand_type_name(operand, source))
+        .any(|ty| file_has_bool_output_operator_impl(root, &ty, trait_name, source))
+}
+
+/// The base name of an operand `identifier`'s declared type: an annotated
+/// `let`/parameter binding (via [`find_identifier_type`]), or a `const NAME: T`
+/// with an explicit type annotation. Generics and any path qualifier are
+/// stripped (`ops::Foo<T>` → `"Foo"`). `None` for a non-identifier operand or an
+/// inferred/unannotated binding whose type cannot be read from the AST.
+fn resolve_operand_type_name(operand: Node, source: &[u8]) -> Option<String> {
+    if operand.kind() != "identifier" {
+        return None;
+    }
+    let name = operand.utf8_text(source).ok()?;
+    let ty = find_identifier_type(operand, name, source)
+        .or_else(|| const_identifier_type(operand, name, source))?;
+    Some(base_type_name(&ty).to_string())
+}
+
+/// The declared type of a `const NAME: T = …` visible at `ident`, by scanning
+/// each enclosing scope's direct children for a matching `const_item` carrying a
+/// `type` annotation. `None` when no such const exists or it lacks an annotation.
+fn const_identifier_type(ident: Node, name: &str, source: &[u8]) -> Option<String> {
+    let mut scope = ident.parent();
+    while let Some(node) = scope {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "const_item"
+                && child.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok())
+                    == Some(name)
+                && let Some(ty) = child.child_by_field_name("type")
+                && let Ok(text) = ty.utf8_text(source)
+            {
+                return Some(text.trim().to_string());
+            }
+        }
+        scope = node.parent();
+    }
+    None
+}
+
+/// True when `root` (the file) contains an
+/// `impl <trait_name> for <ty> { type Output = bool; … }`: some `impl_item` whose
+/// `trait` base segment equals `trait_name` (`BitAnd`/`BitOr`, matching
+/// `ops::BitAnd`/`std::ops::BitAnd<T>` too), whose Self `type` base name equals
+/// `ty`, and whose body declares the associated `type Output = bool`.
+fn file_has_bool_output_operator_impl(root: Node, ty: &str, trait_name: &str, source: &[u8]) -> bool {
+    if root.kind() == "impl_item" && impl_is_bool_output_operator(root, ty, trait_name, source) {
+        return true;
+    }
+    let mut cursor = root.walk();
+    root.children(&mut cursor)
+        .any(|child| file_has_bool_output_operator_impl(child, ty, trait_name, source))
+}
+
+/// True when `impl_item` is `impl <trait_name> for <ty>` and its body declares
+/// `type Output = bool`. Matches the trait by its last path segment and the Self
+/// type / `Output` type by their base names.
+fn impl_is_bool_output_operator(impl_item: Node, ty: &str, trait_name: &str, source: &[u8]) -> bool {
+    let Some(trait_node) = impl_item.child_by_field_name("trait") else {
+        return false;
+    };
+    if trait_base_name(trait_node, source) != Some(trait_name) {
+        return false;
+    }
+    let self_ty_matches = impl_item
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .is_some_and(|t| base_type_name(t) == ty);
+    if !self_ty_matches {
+        return false;
+    }
+    let Some(body) = impl_item.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor).any(|item| {
+        item.kind() == "type_item"
+            && item.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok())
+                == Some("Output")
+            && item
+                .child_by_field_name("type")
+                .and_then(|t| t.utf8_text(source).ok())
+                .is_some_and(|t| base_type_name(t) == "bool")
+    })
+}
+
 /// True when `name`'s nearest in-scope `let` binding before `node` has an
 /// initializer that is itself provably bool (`let enabled = lo <= x;`). This
 /// resolves the inferred-bool local that `find_identifier_type` misses — it only

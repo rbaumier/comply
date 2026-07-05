@@ -4,7 +4,7 @@
 //! not flagged: it is the only way to express logical XOR on `bool` in Rust.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::operand_is_bool;
+use crate::rules::rust_helpers::{bitop_operand_type_has_bool_output_impl, operand_is_bool};
 
 // `^` is excluded: `bool ^ bool` is the only way to express logical XOR in Rust
 // (there is no `^^`), and a `^` reached in a boolean condition is always that
@@ -32,7 +32,16 @@ fn has_bitwise_op(node: tree_sitter::Node, source: &[u8]) -> bool {
                     let both_bool = left.zip(right).is_some_and(|(l, r)| {
                         operand_is_bool(l, source) && operand_is_bool(r, source)
                     });
-                    return !both_bool;
+                    if both_bool {
+                        return false;
+                    }
+                    // A `T & FLAG` / `T | FLAG` whose operand type defines a
+                    // bool-returning `impl BitAnd`/`BitOr` (a bitflags newtype)
+                    // yields `bool` only through that custom operator; the
+                    // operands are `T`, not `bool`, so `&&`/`||` would not
+                    // type-check and cannot be the intent — same reasoning as
+                    // the `^` exemption.
+                    return !bitop_operand_type_has_bool_output_impl(node, source);
                 }
             }
             let mut cursor = node.walk();
@@ -188,5 +197,65 @@ mod tests {
         // `^` is exempt, but a `&`/`|` on unprovable operands nested inside it
         // must still fire.
         assert_eq!(run_on("fn f(s: &S, c: bool) { if (s.a & s.b) ^ c {} }").len(), 1);
+    }
+
+    #[test]
+    fn allows_custom_bitand_with_bool_output() {
+        // `TokModes` is a bitflags newtype whose `impl BitAnd { type Output = bool }`
+        // makes `mode & FLAG` a `bool`; `mode && FLAG` would be a type error, so
+        // the `&` is not a short-circuit typo (#7284).
+        let src = "struct TokModes(u8); \
+            impl BitAnd for TokModes { type Output = bool; fn bitand(self, rhs: Self) -> bool { (self.0 & rhs.0) != 0 } } \
+            const A: TokModes = TokModes(1); \
+            fn f(mode: TokModes) { if mode & A { } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_custom_bitand_when_flag_operand_is_typed_const() {
+        // Mirrors fish tokenizer.rs: the local `mode` is inferred (no annotation),
+        // but the flag operand is a `const: TokModes`, so the operand type resolves
+        // through the const and the bool-returning `BitAnd` impl exempts the `&`.
+        let src = "struct TokModes(u8); \
+            impl BitAnd for TokModes { type Output = bool; fn bitand(self, rhs: Self) -> bool { (self.0 & rhs.0) != 0 } } \
+            const TOK_MODE_REGULAR_TEXT: TokModes = TokModes(0); \
+            const TOK_MODE_CHAR_ESCAPE: TokModes = TokModes(8); \
+            fn scan() { let mut mode = TOK_MODE_REGULAR_TEXT; if mode & TOK_MODE_CHAR_ESCAPE { mode = TOK_MODE_REGULAR_TEXT; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_typed_operand_without_bool_output_impl() {
+        // The operand type resolves, but there is no `impl BitAnd … { type Output =
+        // bool }` for it: `mode & A` stays ambiguous (a genuine `&&` typo cannot be
+        // ruled out), so it fires. Suppression is gated on the impl, not on merely
+        // resolving a type.
+        let src = "struct TokModes(u8); \
+            const A: TokModes = TokModes(1); \
+            fn f(mode: TokModes) { if mode & A { } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_when_bool_output_impl_is_for_a_different_type() {
+        // A bool-returning `BitAnd` impl exists in the file, but for an unrelated
+        // type; the operand's type has no such impl, so the `&` still fires. Guards
+        // the Self-type match — suppression is not "any bitflags impl in the file".
+        let src = "struct TokModes(u8); struct OtherFlags(u8); \
+            impl BitAnd for OtherFlags { type Output = bool; fn bitand(self, rhs: Self) -> bool { (self.0 & rhs.0) != 0 } } \
+            const A: TokModes = TokModes(1); \
+            fn f(mode: TokModes) { if mode & A { } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_when_bitand_output_is_not_bool() {
+        // The custom `BitAnd` yields the newtype itself, not `bool`, so the `&` is
+        // not a boolean-condition operator; keep flagging.
+        let src = "struct TokModes(u8); \
+            impl BitAnd for TokModes { type Output = TokModes; fn bitand(self, rhs: Self) -> TokModes { TokModes(self.0 & rhs.0) } } \
+            const A: TokModes = TokModes(1); \
+            fn f(mode: TokModes) { if mode & A { } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
