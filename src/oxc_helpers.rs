@@ -1611,8 +1611,10 @@ fn resolves_to_node_module_ctor(
 /// name for readability. No caller holds a reference to it, so an in-place `.sort()`
 /// mutation is unobservable, exactly as in the inline case.
 ///
-/// The escape guard requires every resolved reference of the binding to be the
-/// **object of a member access** (`arr.map(...)`, `arr.length`, `arr[i]`). A
+/// The escape guard requires every resolved reference of the binding to read
+/// through it without leaking the value: the **object of a member access**
+/// (`arr.map(...)`, `arr.length`, `arr[i]`) or the iterated expression of a
+/// `for…of` loop (`for (const x of arr)`), which only consumes the iterator. A
 /// reference used as a bare value — a call argument (`use(arr)`), a return
 /// (`return arr`), an assignment source (`x = arr`), a spread (`[...arr]`), an
 /// object-property value (`{ k: arr }`) — could hand the array to code that later
@@ -1664,10 +1666,13 @@ pub fn is_local_fresh_array_binding(
         .all(|reference| reference_is_member_object(reference.node_id(), semantic))
 }
 
-/// True when the reference at `ref_node_id` is the *object* of a member access
-/// (`arr.foo`, `arr[i]`) — a read through the binding that does not leak the value
-/// itself. Any other parent (call argument, return, assignment source, spread,
-/// property value, …) lets the value escape and returns `false`.
+/// True when the reference at `ref_node_id` reads through the binding without
+/// leaking the value itself: it is the *object* of a member access (`arr.foo`,
+/// `arr[i]`) or the iterated expression of a `for…of` loop
+/// (`for (const x of arr)`), which consumes the iterator and reads elements
+/// without retaining or aliasing the array. Any other parent (call argument,
+/// return, assignment source, spread, property value, the `for…of` binding
+/// target, …) lets the value escape and returns `false`.
 fn reference_is_member_object(
     ref_node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
@@ -1680,6 +1685,7 @@ fn reference_is_member_object(
     match nodes.kind(nodes.parent_id(ref_node_id)) {
         AstKind::StaticMemberExpression(member) => member.object.span() == ref_span,
         AstKind::ComputedMemberExpression(member) => member.object.span() == ref_span,
+        AstKind::ForOfStatement(for_of) => for_of.right.span() == ref_span,
         _ => false,
     }
 }

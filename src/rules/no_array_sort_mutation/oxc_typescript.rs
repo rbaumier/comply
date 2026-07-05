@@ -171,4 +171,32 @@ mod oxc_tests {
         let src = "let xs = getItems(); xs = shared; xs.sort();";
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
+
+    #[test]
+    fn skips_sort_on_local_binding_iterated_with_for_of_issue_7364() {
+        // A `for…of` iteration reads the array's elements without retaining or
+        // aliasing it, so the fresh local binding still does not escape.
+        let src = "const rangesForNode = highlightRanges.filter((r) => r.ok); \
+                   if (rangesForNode.length === 0) return; \
+                   rangesForNode.sort((a, b) => a.start - b.start); \
+                   for (const range of rangesForNode) { use(range); }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_sort_on_local_binding_escaping_via_call_arg() {
+        // The fresh array is passed to a function, which could observe the
+        // reorder, so it stays flagged even alongside a `for…of` read.
+        let src = "const arr = src.filter(f); process(arr); \
+                   arr.sort((a, b) => a - b); for (const x of arr) { use(x); }";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_sort_on_aliased_local_binding() {
+        // The binding is aliased to another name that could observe the reorder,
+        // so it stays flagged.
+        let src = "const arr = src.filter(f); const alias = arr; arr.sort();";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
 }
