@@ -28,10 +28,14 @@
 //! different `mod` blocks are exempt as well: Rust's path
 //! system makes `a::f` and `b::f` distinct, and co-located test suites
 //! routinely repeat the same assertions in sibling modules. Same-name pairs
-//! where at least one carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate are exempt
-//! too: two functions of the same name in one scope can only coexist via
+//! where at least one carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate — on the
+//! function itself or on an enclosing `impl`/`mod` — are exempt too: two
+//! functions of the same name in one scope can only coexist via
 //! mutually-exclusive conditional compilation (per-feature/target/test
-//! backends), so they are distinct build variants, not copy-paste. Pairs whose
+//! backends), so they are distinct build variants, not copy-paste. This covers
+//! two same-named inherent methods on cfg-gated twin structs (a `v1` and a `v2`
+//! `MerchantAccountCreate`, each with its own gated `impl`): only one struct
+//! compiles per configuration, so the identical body is unavoidable. Pairs whose
 //! function modifiers differ (`unsafe`/`const`/`async`/`extern`) are exempt as
 //! well: a safe `fn` and an `unsafe fn` with the same body are not
 //! interchangeable — the `unsafe` qualifier is part of the API contract, so the
@@ -117,8 +121,11 @@ struct CollectedFn {
     receiver: Receiver,
     inherent_type: Option<String>,
     module_key: usize,
-    /// True if the function carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate, i.e.
-    /// it is a conditional-compilation build variant rather than ordinary code.
+    /// True if the function — or an enclosing `impl`/`mod` — carries a
+    /// `#[cfg(...)]`/`#[cfg_attr(...)]` gate, i.e. it is a conditional-compilation
+    /// build variant rather than ordinary code. A gate on the enclosing block
+    /// (two same-named inherent methods on cfg-gated twin structs) counts too:
+    /// only one variant compiles per configuration, so the methods never coexist.
     cfg_gated: bool,
     /// The function's contract-affecting modifiers (`unsafe`/`const`/`async`/
     /// `extern "C"`), sorted and whitespace-normalized. Two functions whose
@@ -152,7 +159,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let child_count = node.named_child_count();
     for i in 0..child_count {
         let Some(child) = node.named_child(i) else { continue };
-        collect_functions(child, source, None, 0, &mut next_module_key, &mut functions);
+        collect_functions(child, source, None, 0, false, &mut next_module_key, &mut functions);
     }
 
     for i in 1..functions.len() {
@@ -274,12 +281,17 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
 /// from identical methods on the same type. `module_key` identifies the
 /// enclosing `mod` scope (0 = file top level); descending into a `mod_item`
 /// allocates a fresh key from `next_module_key`, so sibling and nested modules
-/// each get a distinct key.
+/// each get a distinct key. `enclosing_cfg_gated` is true when any ancestor
+/// `impl`/`mod` carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate; it is OR-ed with
+/// the function's own cfg attribute so a method whose gate lives on the enclosing
+/// block (two same-named inherent methods on cfg-gated twin structs) is
+/// recognized as a mutually-exclusive build variant, not copy-paste.
 fn collect_functions(
     node: tree_sitter::Node,
     source: &[u8],
     inherent_type: Option<&str>,
     module_key: usize,
+    enclosing_cfg_gated: bool,
     next_module_key: &mut usize,
     functions: &mut Vec<CollectedFn>,
 ) {
@@ -299,7 +311,8 @@ fn collect_functions(
                         receiver: extract_receiver(node, source),
                         inherent_type: inherent_type.map(str::to_string),
                         module_key,
-                        cfg_gated: crate::rules::rust_helpers::has_cfg_attribute(node, source),
+                        cfg_gated: enclosing_cfg_gated
+                            || crate::rules::rust_helpers::has_cfg_attribute(node, source),
                         modifiers: extract_modifiers(node, source),
                         attributes: extract_attribute_set(node, source),
                         intentional_dup: crate::rules::rust_helpers::has_outer_attribute_path(
@@ -343,6 +356,15 @@ fn collect_functions(
             } else {
                 module_key
             };
+            // A `#[cfg(...)]`/`#[cfg_attr(...)]` gate on this `impl`/`mod` makes
+            // every function inside it a conditional-compilation build variant,
+            // even when the function itself carries no cfg attribute — so OR the
+            // block's gate into the enclosing state threaded to its methods. This
+            // is what distinguishes two same-named inherent methods on cfg-gated
+            // twin structs (only one struct compiles per configuration) from
+            // genuine copy-paste.
+            let enclosing_cfg_gated = enclosing_cfg_gated
+                || crate::rules::rust_helpers::has_cfg_attribute(node, source);
             let count = node.named_child_count();
             for i in 0..count {
                 if let Some(child) = node.named_child(i) {
@@ -351,6 +373,7 @@ fn collect_functions(
                         source,
                         inherent_type,
                         module_key,
+                        enclosing_cfg_gated,
                         next_module_key,
                         functions,
                     );
@@ -366,6 +389,7 @@ fn collect_functions(
                         source,
                         inherent_type,
                         module_key,
+                        enclosing_cfg_gated,
                         next_module_key,
                         functions,
                     );
@@ -1156,6 +1180,69 @@ fn check_beta(x: i32) -> i32 {
     let b = a * 2;
     println!("{}", b);
     b
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_cfg_gated_twin_struct_same_name_methods() {
+        // Issue #7392: juspay/hyperswitch defines `MerchantAccountCreate` twice —
+        // once under `#[cfg(feature = "v1")]`, once under `#[cfg(feature = "v2")]`
+        // — each with its own inherent `impl` carrying the SAME cfg gate. The two
+        // `get_merchant_details_as_secret` methods have byte-identical bodies and
+        // the same inherent-type text, but only one struct compiles per feature
+        // configuration, so they never coexist and no shared helper can serve
+        // both. The cfg gate lives on the enclosing `impl` (not the method), so it
+        // is recognized only by threading the enclosing block's cfg state.
+        let src = r#"
+#[cfg(feature = "v1")]
+impl MerchantAccountCreate {
+    pub fn get_merchant_details_as_secret(&self) -> Opt {
+        self.merchant_details
+            .as_ref()
+            .map(|d| d.encode_to_value().map(Secret::new))
+            .transpose()
+    }
+}
+
+#[cfg(feature = "v2")]
+impl MerchantAccountCreate {
+    pub fn get_merchant_details_as_secret(&self) -> Opt {
+        self.merchant_details
+            .as_ref()
+            .map(|d| d.encode_to_value().map(Secret::new))
+            .transpose()
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_different_name_identical_methods_in_cfg_gated_impl() {
+        // Negative-space guard for #7392: threading the enclosing `impl`'s cfg
+        // gate marks its methods as build variants, but the same-name-cfg
+        // exemption keys on matching names. Two DIFFERENT-named identical methods
+        // inside one cfg-gated `impl` coexist in that single build variant and are
+        // genuine copy-paste, so they must still be flagged.
+        let src = r#"
+#[cfg(feature = "v1")]
+impl MerchantAccountCreate {
+    pub fn get_merchant_details_as_secret(&self) -> Opt {
+        self.merchant_details
+            .as_ref()
+            .map(|d| d.encode_to_value().map(Secret::new))
+            .transpose()
+    }
+
+    pub fn get_metadata_as_secret(&self) -> Opt {
+        self.merchant_details
+            .as_ref()
+            .map(|d| d.encode_to_value().map(Secret::new))
+            .transpose()
+    }
 }
 "#;
         let d = run_on(src);
