@@ -3,22 +3,46 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryOperator, BindingPattern, Expression, UnaryOperator};
+use oxc_ast::ast::{
+    BinaryOperator, BindingPattern, Expression, FormalParameter, TSType, UnaryOperator,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
+/// The primitive keyword (`"string"`/`"number"`/`"boolean"`) the parameter is
+/// explicitly, non-optionally annotated with, if any.
+///
+/// A `typeof param === '<that primitive>'` test on such a parameter narrows its
+/// static type to itself, so the corresponding `param is T` predicate would be
+/// vacuous. An absent, optional, `unknown`/`any`, or union annotation returns
+/// `None`, because there a `typeof`/`instanceof` genuinely narrows.
+fn param_primitive_keyword(param: &FormalParameter) -> Option<&'static str> {
+    if param.optional {
+        return None;
+    }
+    match &param.type_annotation.as_ref()?.type_annotation {
+        TSType::TSStringKeyword(_) => Some("string"),
+        TSType::TSNumberKeyword(_) => Some("number"),
+        TSType::TSBooleanKeyword(_) => Some("boolean"),
+        _ => None,
+    }
+}
+
 /// True when some `return` statement inside `[start, end)` returns an
-/// expression that type-checks `param` itself — `typeof param` or
+/// expression that meaningfully narrows `param` — `typeof param` or
 /// `param instanceof X`.
 ///
 /// A type predicate (`param is T`) narrows exactly one named parameter, so the
 /// `typeof`/`instanceof` operand must be that parameter directly. A member
 /// access (`typeof param.value`), an unrelated local, or a `typeof`/`instanceof`
 /// used only to gate a branch (while the returns are unrelated booleans) cannot
-/// be expressed as `param is T`, so they are not candidates.
-fn returns_a_type_check(
+/// be expressed as `param is T`, so they are not candidates. When
+/// `vacuous_primitive` is set, a `typeof param === '<that primitive>'` test does
+/// not narrow the already-primitive parameter to a subtype, so it does not count.
+fn returns_a_narrowing_check(
     semantic: &oxc_semantic::Semantic,
     param: &str,
+    vacuous_primitive: Option<&str>,
     start: u32,
     end: u32,
 ) -> bool {
@@ -28,7 +52,7 @@ fn returns_a_type_check(
             return false;
         }
         let Some(arg) = &ret.argument else { return false };
-        expr_checks_param_type(arg, param)
+        expr_narrows_param(arg, param, vacuous_primitive)
     })
 }
 
@@ -36,7 +60,11 @@ fn returns_a_type_check(
 /// operand is the identifier `param`, recursing through the boolean/grouping
 /// operators a returned predicate is composed of (`&&`, `||`, `!`, parens,
 /// comparisons such as `typeof param === "string"`).
-fn expr_checks_param_type(expr: &Expression, param: &str) -> bool {
+///
+/// A `typeof param === '<lit>'` comparison (either operand order) whose `<lit>`
+/// equals `vacuous_primitive` narrows nothing — the parameter already has that
+/// primitive type — so it does not make the function a type-guard candidate.
+fn expr_narrows_param(expr: &Expression, param: &str, vacuous_primitive: Option<&str>) -> bool {
     match expr {
         Expression::UnaryExpression(unary) => {
             if unary.operator == UnaryOperator::Typeof
@@ -45,7 +73,7 @@ fn expr_checks_param_type(expr: &Expression, param: &str) -> bool {
                 return true;
             }
             // e.g. `!(typeof param === ...)`.
-            expr_checks_param_type(&unary.argument, param)
+            expr_narrows_param(&unary.argument, param, vacuous_primitive)
         }
         Expression::BinaryExpression(binary) => {
             if binary.operator == BinaryOperator::Instanceof
@@ -53,23 +81,58 @@ fn expr_checks_param_type(expr: &Expression, param: &str) -> bool {
             {
                 return true;
             }
-            // e.g. `typeof param === "string"` (the `typeof` is the left operand).
-            expr_checks_param_type(&binary.left, param)
-                || expr_checks_param_type(&binary.right, param)
+            // `typeof param === "<lit>"` / `"<lit>" === typeof param`: narrows
+            // nothing when `<lit>` is the parameter's own declared primitive.
+            if matches!(
+                binary.operator,
+                BinaryOperator::StrictEquality | BinaryOperator::Equality
+            ) {
+                let compared = if is_typeof_param(&binary.left, param) {
+                    string_literal_value(&binary.right)
+                } else if is_typeof_param(&binary.right, param) {
+                    string_literal_value(&binary.left)
+                } else {
+                    None
+                };
+                if let Some(lit) = compared {
+                    return Some(lit) != vacuous_primitive;
+                }
+            }
+            expr_narrows_param(&binary.left, param, vacuous_primitive)
+                || expr_narrows_param(&binary.right, param, vacuous_primitive)
         }
         Expression::LogicalExpression(logical) => {
-            expr_checks_param_type(&logical.left, param)
-                || expr_checks_param_type(&logical.right, param)
+            expr_narrows_param(&logical.left, param, vacuous_primitive)
+                || expr_narrows_param(&logical.right, param, vacuous_primitive)
         }
         Expression::ParenthesizedExpression(paren) => {
-            expr_checks_param_type(&paren.expression, param)
+            expr_narrows_param(&paren.expression, param, vacuous_primitive)
         }
         Expression::ConditionalExpression(cond) => {
-            expr_checks_param_type(&cond.test, param)
-                || expr_checks_param_type(&cond.consequent, param)
-                || expr_checks_param_type(&cond.alternate, param)
+            expr_narrows_param(&cond.test, param, vacuous_primitive)
+                || expr_narrows_param(&cond.consequent, param, vacuous_primitive)
+                || expr_narrows_param(&cond.alternate, param, vacuous_primitive)
         }
         _ => false,
+    }
+}
+
+/// True when `expr` is exactly `typeof param` — a `typeof` whose operand is the
+/// identifier `param` (not a member access of it).
+fn is_typeof_param(expr: &Expression, param: &str) -> bool {
+    matches!(
+        expr,
+        Expression::UnaryExpression(unary)
+            if unary.operator == UnaryOperator::Typeof
+                && is_param_identifier(&unary.argument, param)
+    )
+}
+
+/// The value of `expr` when it is a string literal, else `None`.
+fn string_literal_value<'a>(expr: &'a Expression) -> Option<&'a str> {
+    match expr {
+        Expression::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
     }
 }
 
@@ -131,10 +194,21 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A `typeof param === '<primitive>'` test on a parameter already declared
+        // that non-optional primitive narrows nothing — the `param is T` predicate
+        // would be vacuous — so such a check is not a candidate.
+        let vacuous_primitive = param_primitive_keyword(&func.params.items[0]);
+
         // Only flag when a `return` directly yields a type check whose operand
         // is the narrowable parameter (`typeof param`, `param instanceof X`).
         let Some(body) = &func.body else { return };
-        if !returns_a_type_check(semantic, param, body.span.start, body.span.end) {
+        if !returns_a_narrowing_check(
+            semantic,
+            param,
+            vacuous_primitive,
+            body.span.start,
+            body.span.end,
+        ) {
             return;
         }
 
@@ -265,5 +339,42 @@ mod tests {
         // single parameter is narrowed.
         let src = "function isLengthExpression(a, b): boolean { return typeof a.value === typeof b.value; }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_typeof_matching_already_primitive_param() {
+        // Regression for issue #7405: the parameter is already declared the
+        // primitive being tested, so `typeof key === 'string'` narrows `string`
+        // to `string` — nothing. A `key is string` predicate would be a vacuous
+        // no-op; these are value validators (regex match), not type guards.
+        let key = "function isValidKey(key: string): boolean { return typeof key === 'string' && REGEX.test(key); }";
+        assert!(run(key).is_empty());
+
+        let num = "function isPos(n: number): boolean { return typeof n === 'number' && n > 0; }";
+        assert!(run(num).is_empty());
+    }
+
+    #[test]
+    fn still_flags_typeof_on_wider_param() {
+        // The `typeof` genuinely narrows when the parameter's static type is
+        // wider than the tested type, so a `param is T` predicate stays
+        // meaningful: `unknown`/`any`, an optional (`?` adds `undefined`), or a
+        // union all keep flagging.
+        let unknown = "function isTransient(err: unknown): boolean { return typeof err === 'object'; }";
+        assert_eq!(run(unknown).len(), 1);
+
+        let optional = "function isActive(x?: string): boolean { return typeof x === 'string'; }";
+        assert_eq!(run(optional).len(), 1);
+
+        let union = "function isStr(x: string | number): boolean { return typeof x === 'string'; }";
+        assert_eq!(run(union).len(), 1);
+
+        let any = "function isAny(v: any): boolean { return typeof v === 'number'; }";
+        assert_eq!(run(any).len(), 1);
+
+        // A primitive-annotated param still flags when the tested type differs
+        // from its declared primitive — the `typeof` is not vacuous there.
+        let mismatch = "function isNum(x: string): boolean { return typeof x === 'number'; }";
+        assert_eq!(run(mismatch).len(), 1);
     }
 }
