@@ -176,11 +176,16 @@ fn typeof_then_undefined_string(typeof_side: &Expression, string_side: &Expressi
 }
 
 /// A condition is "negated" if it is:
-/// - a `!expr` unary expression, OR
+/// - a `!expr` unary expression whose leading `!` chain has ODD length, OR
 /// - a `!=` / `!==` binary expression.
+///
+/// An even-length `!` chain (`!!x`) is idiomatic boolean coercion: the
+/// negations cancel to a positive condition, so it is not treated as negated.
 fn is_negated_expr(expr: &Expression) -> bool {
     match expr.without_parentheses() {
-        Expression::UnaryExpression(u) => u.operator == UnaryOperator::LogicalNot,
+        Expression::UnaryExpression(u) if u.operator == UnaryOperator::LogicalNot => {
+            leading_not_count(expr) % 2 == 1
+        }
         Expression::BinaryExpression(b) => {
             matches!(
                 b.operator,
@@ -188,6 +193,17 @@ fn is_negated_expr(expr: &Expression) -> bool {
             )
         }
         _ => false,
+    }
+}
+
+/// Length of the leading consecutive `!` (`LogicalNot`) chain, ignoring any
+/// parentheses between the negations: `!x` → 1, `!!x` → 2, `!!!x` → 3.
+fn leading_not_count(expr: &Expression) -> usize {
+    match expr.without_parentheses() {
+        Expression::UnaryExpression(u) if u.operator == UnaryOperator::LogicalNot => {
+            1 + leading_not_count(&u.argument)
+        }
+        _ => 0,
     }
 }
 
@@ -281,6 +297,41 @@ mod tests {
     #[test]
     fn allows_positive_ternary() {
         assert!(run_on("const r = x ? a : b;").is_empty());
+    }
+
+    // Double negation (`!!x`) is idiomatic boolean coercion — an even-length
+    // `!` chain is a positive condition, so it is not flagged. Only an
+    // odd-length chain (`!x`, `!!!x`) reads as a real negation.
+    #[test]
+    fn allows_double_negation_ternary() {
+        assert!(run_on("const r = !!options.replace ? a : b;").is_empty());
+    }
+
+    #[test]
+    fn allows_double_negation_if_else() {
+        assert!(run_on("if (!!x) { f(); } else { g(); }").is_empty());
+    }
+
+    #[test]
+    fn allows_parenthesized_double_negation_ternary() {
+        // `!(!x)` — parentheses between the negations don't change the parity:
+        // an even count of two, still a positive condition.
+        assert!(run_on("const r = !(!x) ? a : b;").is_empty());
+    }
+
+    #[test]
+    fn flags_triple_negation_ternary() {
+        // `!!!x` is an odd-length chain — still a negated condition.
+        let d = run_on("const r = !!!x ? a : b;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_single_negation_of_logical_and() {
+        // `!(a && b)` is a single `!` whose operand is not another `!` — an
+        // odd-length chain of one, still a flagged negated condition.
+        let d = run_on("const r = !(a && b) ? a : b;");
+        assert_eq!(d.len(), 1);
     }
 
     // JSX conditional rendering — a negated test guarding a JSX arm reads as a

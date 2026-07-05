@@ -48,13 +48,10 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
 fn is_negated_condition(node: &tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "unary_expression" => {
-            // In tree-sitter-rust, unary_expression has no fields:
-            // child(0) is the operator.
-            let op = node
-                .child(0)
-                .and_then(|o| o.utf8_text(source).ok())
-                .unwrap_or("");
-            op == "!"
+            // A leading `!` chain reads as negated only when its length is odd.
+            // An even count (`!!x`) is idiomatic boolean coercion — the two
+            // negations cancel to a positive condition — so it is not flagged.
+            leading_not_count(node, source) % 2 == 1
         }
         "binary_expression" => {
             let op = node
@@ -66,6 +63,28 @@ fn is_negated_condition(node: &tree_sitter::Node, source: &[u8]) -> bool {
             op == "!=" && !is_bitmask_zero_test(node, source)
         }
         _ => false,
+    }
+}
+
+/// Length of the leading consecutive `!` unary chain, unwrapping any
+/// parentheses between the negations: `!x` → 1, `!!x` → 2, `!!!x` → 3.
+/// In tree-sitter-rust a `unary_expression` has no fields: `child(0)` is the
+/// operator token and `named_child(0)` is the operand.
+fn leading_not_count(node: &tree_sitter::Node, source: &[u8]) -> usize {
+    let inner = unwrap_parens(node);
+    if inner.kind() != "unary_expression" {
+        return 0;
+    }
+    let op = inner
+        .child(0)
+        .and_then(|o| o.utf8_text(source).ok())
+        .unwrap_or("");
+    if op != "!" {
+        return 0;
+    }
+    match inner.named_child(0) {
+        Some(operand) => 1 + leading_not_count(&operand, source),
+        None => 1,
     }
 }
 
@@ -178,6 +197,27 @@ mod tests {
     #[test]
     fn allows_positive_condition() {
         assert!(run_on("fn f(x: bool) { if x { a(); } else { b(); } }").is_empty());
+    }
+
+    #[test]
+    fn allows_double_negation() {
+        // `!!x` is an even-length `!` chain — idiomatic boolean coercion, a
+        // positive condition — so it is not flagged.
+        assert!(run_on("fn f(x: bool) { if !!x { a(); } else { b(); } }").is_empty());
+    }
+
+    #[test]
+    fn flags_triple_negation() {
+        // `!!!x` is an odd-length chain — still a negated condition.
+        let d = run_on("fn f(x: bool) { if !!!x { a(); } else { b(); } }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_parenthesized_double_negation() {
+        // `!(!x)` — parentheses between the negations don't change the parity:
+        // an even count of two, still a positive condition.
+        assert!(run_on("fn f(x: bool) { if !(!x) { a(); } else { b(); } }").is_empty());
     }
 
     #[test]
