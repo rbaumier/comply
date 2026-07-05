@@ -24,10 +24,11 @@ const VERBS: &[&str] = &[
 /// True if `word` (already lowercased) is a listed verb in its base form or a
 /// recognized inflection of one: third-person `-s` ("requires" → "require"),
 /// gerund `-ing` ("rendering" → "render", "parsing" → "parse" with the dropped
-/// silent `e` restored), or `n't` contraction ("couldn't" → "could").
+/// silent `e` restored), past-tense `-ed`/`-d` ("passed" → "pass", "used" →
+/// "use"), or `n't` contraction ("couldn't" → "could").
 ///
 /// Only accepts a token whose stem, after stripping a single recognized suffix,
-/// is itself a listed verb — an unknown `-s`/`-ing` word stays a non-verb.
+/// is itself a listed verb — an unknown `-s`/`-ing`/`-ed` word stays a non-verb.
 fn token_is_verb(word: &str) -> bool {
     if VERBS.contains(&word) {
         return true;
@@ -45,6 +46,20 @@ fn token_is_verb(word: &str) -> bool {
         }
     }
     if let Some(stem) = word.strip_suffix('s') {
+        if VERBS.contains(&stem) {
+            return true;
+        }
+    }
+    if let Some(stem) = word.strip_suffix("ed") {
+        // Past tense of a consonant-ending verb ("passed" → "pass",
+        // "rendered" → "render").
+        if VERBS.contains(&stem) {
+            return true;
+        }
+    }
+    if let Some(stem) = word.strip_suffix('d') {
+        // Past tense of a verb whose silent trailing `e` is kept before `-d`
+        // ("used" → "use", "required" → "require", "provided" → "provide").
         if VERBS.contains(&stem) {
             return true;
         }
@@ -443,5 +458,30 @@ mod tests {
             run_on(r#"fn f() { bail!("thingamajigs and gizmos everywhere abound"); }"#).len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_past_tense_ed_inflection() {
+        // emilk/egui #7449: "passed" is the past tense of "pass" (a listed verb),
+        // recognized by stripping `-ed` from a consonant-ending verb.
+        assert!(
+            run_on(r#"fn f() { panic!("Shape::Callback passed to Tessellator"); }"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_past_tense_d_inflection_silent_e_verbs() {
+        // Silent-`e` verbs keep the `e` before `-d`: "used" → "use",
+        // "required" → "require".
+        assert!(run_on(r#"fn f() { anyhow!("scratch buffer used past cleanup"); }"#).is_empty());
+        assert!(run_on(r#"fn f() { bail!("valid token required for this action"); }"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_ed_word_with_non_verb_stem() {
+        // "red" ends in `-ed`/`-d` but strips to "r"/"re", neither a listed verb;
+        // with no other verb the message stays vague — stemming is not a blanket
+        // pass for every `-ed` word.
+        assert_eq!(run_on(r#"fn f() { bail!("red banner shown here"); }"#).len(), 1);
     }
 }
