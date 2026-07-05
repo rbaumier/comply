@@ -97,9 +97,16 @@ fn invalid_last_line(lines: &[&str]) -> Option<Offender> {
         return None;
     }
 
+    // On a single-line block the closing `*/` shares its physical line with the
+    // opening `/**`, so the backward scan must stop at the opener; otherwise the
+    // opener's own two asterisks are mistaken for stray asterisks before the
+    // close (e.g. an empty `/** */`). Multi-line blocks keep the opener on a
+    // separate line, so their last line is scanned in full.
+    let scan_floor = if lines.len() == 1 { "/**".len() } else { 0 };
+
     let mut offending: Option<usize> = None;
     // Walk backwards from just before `*/`.
-    for idx in (0..bytes.len() - 2).rev() {
+    for idx in (scan_floor..bytes.len() - 2).rev() {
         let b = bytes[idx];
         if b == b'*' {
             offending = Some(idx);
@@ -285,6 +292,26 @@ mod tests {
     fn invalid_single_line_spaced_asterisk_close() {
         let src = "/** SameLine DoubleWithSpace * */\nfunction f() {}";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn valid_single_line_empty() {
+        // `/** */` is an empty single-line JSDoc; its two asterisks are the
+        // opener, not stray asterisks before the close.
+        let src = "/** */\nfunction f() {}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn valid_single_line_whitespace_only_body() {
+        let src = "/**  */\nfunction f() {}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn valid_single_line_with_content() {
+        let src = "/** hello */\nfunction f() {}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     // ── CRLF parity (Biome `invalid-crlf.js`) ──────────────────────────
