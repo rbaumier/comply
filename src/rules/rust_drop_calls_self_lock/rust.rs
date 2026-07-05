@@ -19,6 +19,14 @@
 //! struct cannot hold it and self-deadlock. Owned mutex fields (`Mutex<T>`,
 //! `Arc<Mutex<T>>`) and a struct not resolvable in the file stay flagged.
 //!
+//! The method names `read`/`write`/`try_read`/`try_write` collide with
+//! `io::Read`/`io::Write`, `Cell`/pointer writes and memory-access APIs, so for
+//! these a `self.<field>` receiver fires only when `<field>`'s type resolves to
+//! a lock-shaped type (`Mutex`/`RwLock`/a name ending in `Lock`/`Mutex`,
+//! unwrapping `Arc<…>`/`Rc<…>`/references) in the same-file struct; a non-lock
+//! field (`WasmRef`, a `BufWriter`, a raw pointer) is not. The Mutex-specific
+//! `lock`/`try_lock` names always fire on `self`'s own field.
+//!
 //! Test-only `Drop` impls are exempt: a fixture that locks shared state in
 //! `Drop` to record drop order for assertions is intentional instrumentation,
 //! not a production deadlock. The exemption fires when the impl is gated by
@@ -91,6 +99,7 @@ impl AstCheck for Check {
                     && let Some(receiver) = func.child_by_field_name("value")
                     && receiver_is_self_or_direct_self_field(receiver)
                     && !locks_borrowed_self_field(node, receiver, source_bytes)
+                    && lock_method_targets_self_lock(method, node, receiver, source_bytes)
                 {
                     diagnostics.push(Diagnostic::at_node(
                         std::sync::Arc::clone(&ctx.path_arc),
@@ -159,6 +168,52 @@ fn locks_borrowed_self_field(
     crate::rules::rust_helpers::drop_impl_field_is_reference(impl_item, field, source)
 }
 
+/// Method names that collide with non-lock APIs (`io::Read`/`io::Write`,
+/// `Cell`/pointer writes, memory-access reference writes), so a lock-shaped
+/// field type is required before flagging them.
+const AMBIGUOUS_METHODS: &[&str] = &["read", "write", "try_read", "try_write"];
+
+/// True when the `method` call in `Drop` acquires a lock on `self`'s own field.
+///
+/// `lock`/`try_lock` are Mutex-specific names and always qualify. The ambiguous
+/// `read`/`write`/`try_read`/`try_write` names qualify only when a direct
+/// `self.<field>` receiver's declared type resolves to a lock-shaped type
+/// (`Mutex`/`RwLock`/`*Lock`, unwrapping `Arc`/`Rc`/references) in the same-file
+/// struct — a `WasmRef`, `io::Write`r or raw-pointer field is not a lock and
+/// cannot self-deadlock. A bare `self` receiver or a field that can't be
+/// resolved in the file keeps the conservative flag.
+fn lock_method_targets_self_lock(
+    method: &str,
+    impl_item: tree_sitter::Node,
+    receiver: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    if !AMBIGUOUS_METHODS.contains(&method) {
+        return true;
+    }
+    if receiver.kind() != "field_expression" {
+        return true;
+    }
+    let Some(field) = receiver
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+    else {
+        return true;
+    };
+    use crate::rules::rust_helpers::DropFieldType;
+    match crate::rules::rust_helpers::drop_impl_field_type(impl_item, field, source) {
+        Some(DropFieldType::Named(type_name)) => is_lock_shaped_type_name(&type_name),
+        Some(DropFieldType::Unnamed) => false,
+        None => true,
+    }
+}
+
+/// True for the Rust concurrency-lock type vocabulary: a base type name ending
+/// in `Lock` (`RwLock`, `SpinLock`) or `Mutex` (`Mutex`, `FairMutex`).
+fn is_lock_shaped_type_name(name: &str) -> bool {
+    name.ends_with("Lock") || name.ends_with("Mutex")
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -207,6 +262,71 @@ mod tests {
         let source =
             "struct A; impl Drop for A { fn drop(&mut self) { let _g = self.rw.write(); } }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    // Regression for #7339 (wasmerio/wasmer `WasmRefAccess`): `self.ptr.write(..)`
+    // where `ptr: WasmRef<'a, T>` writes a value through a wasm-memory reference
+    // and returns a `Result` — no lock, so no self-deadlock. The ambiguous
+    // `write` name must resolve the field type and stay silent.
+    #[test]
+    fn allows_write_on_non_lock_self_field() {
+        let source = "struct A<'a, T> { ptr: WasmRef<'a, T> } \
+            impl<T> Drop for A<'_, T> { fn drop(&mut self) { self.ptr.write(v).ok(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    // An `io::Write`r field (`BufWriter<File>`) written in `Drop` is a byte write,
+    // not a lock acquisition — must not fire.
+    #[test]
+    fn allows_write_on_io_writer_self_field() {
+        let source = "struct W { writer: BufWriter<File> } \
+            impl Drop for W { fn drop(&mut self) { self.writer.write(b\"x\").ok(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    // Load-bearing positive: an owned `RwLock<T>` field written in `Drop` is the
+    // genuine self-deadlock the rule targets and must STILL fire.
+    #[test]
+    fn flags_write_on_owned_rwlock_self_field() {
+        let source = "struct L { rw: RwLock<u32> } \
+            impl Drop for L { fn drop(&mut self) { let _ = self.rw.write(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // An owned `Arc<RwLock<T>>` field read in `Drop`: the `Arc` wrapper is
+    // unwrapped to the lock, so it must STILL fire.
+    #[test]
+    fn flags_read_on_owned_arc_rwlock_self_field() {
+        let source = "struct M { m: Arc<RwLock<u32>> } \
+            impl Drop for M { fn drop(&mut self) { let _ = self.m.read(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // A raw-pointer field written in `Drop` (`self.p.write(v)` is `ptr::write`,
+    // not a lock acquisition) has no lock-shaped type name — must not fire.
+    #[test]
+    fn allows_write_on_raw_pointer_self_field() {
+        let source = "struct P { p: *mut u32 } \
+            impl Drop for P { fn drop(&mut self) { unsafe { self.p.write(0); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    // A fully-qualified lock path (`std::sync::RwLock`, a `scoped_type_identifier`)
+    // resolves to the final segment `RwLock` and must STILL fire.
+    #[test]
+    fn flags_write_on_owned_qualified_rwlock_self_field() {
+        let source = "struct L { rw: std::sync::RwLock<u32> } \
+            impl Drop for L { fn drop(&mut self) { let _ = self.rw.write(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // `try_write`/`try_read` share the ambiguous-name gate: on a non-lock field
+    // they must not fire.
+    #[test]
+    fn allows_try_write_on_non_lock_self_field() {
+        let source = "struct A<'a, T> { ptr: WasmRef<'a, T> } \
+            impl<T> Drop for A<'_, T> { fn drop(&mut self) { let _ = self.ptr.try_write(v); } }";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
