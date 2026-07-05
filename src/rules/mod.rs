@@ -65,6 +65,7 @@ pub mod vue_shadow_scope;
 pub mod vue_template_helpers;
 pub mod walker;
 pub mod yaml_k8s_helpers;
+pub mod zod_helpers;
 
 pub mod delegated;
 
