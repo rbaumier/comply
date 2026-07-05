@@ -1,6 +1,5 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::project::Framework;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use oxc_ast::ast::{BindingPattern, Expression, TSType};
@@ -28,25 +27,88 @@ const BROWSER_GLOBALS: &[&str] = &["window", "document"];
 
 pub struct Check;
 
-/// True when the file plausibly runs in a browser/DOM environment, so the
-/// browser-only globals in [`BROWSER_GLOBALS`] are genuinely in scope. The
-/// signals are read-only from central project/file context:
-///   - the file is JSX/TSX — JSX renders to the DOM;
-///   - the project uses a DOM-rendering framework (anything but `Plain`);
-///   - the nearest `package.json` declares `browserslist` — explicit browser
-///     build targets.
+/// True when the file itself shows a structural browser/DOM signal, so the
+/// browser-only globals in [`BROWSER_GLOBALS`] are genuinely in scope. Browser-
+/// ness is decided per file, not per project: a full-stack monorepo shares one
+/// `package.json` across server and client code, so a project-wide framework or
+/// `browserslist` flag cannot tell a Node backend `.ts` from a client `.ts`. The
+/// per-file signals are:
+///   - the file is JSX/TSX (or contains a JSX element) — JSX renders to the DOM;
+///   - it imports a browser/React/DOM library (see [`is_browser_import_source`]);
+///   - it accesses a browser global's member (`window.`/`document.`/`navigator.`
+///     …) where that name is *not* shadowed by a local binding — an unresolved
+///     reference to the real global, not a same-named local.
 /// When none hold the file is treated as Node.js / server-side, where `window`
 /// and `document` are not globals.
-fn file_runs_in_browser(ctx: &CheckCtx) -> bool {
+fn file_runs_in_browser<'a>(semantic: &'a oxc_semantic::Semantic<'a>, ctx: &CheckCtx) -> bool {
     if ctx.lang == crate::files::Language::Tsx {
         return true;
     }
-    if ctx.project.framework != Framework::Plain {
-        return true;
+    for node in semantic.nodes().iter() {
+        match node.kind() {
+            AstKind::JSXElement(_) | AstKind::JSXFragment(_) => return true,
+            AstKind::ImportDeclaration(import) => {
+                if is_browser_import_source(import.source.value.as_str()) {
+                    return true;
+                }
+            }
+            AstKind::StaticMemberExpression(member) => {
+                if member_object_is_unshadowed_browser_global(&member.object, semantic) {
+                    return true;
+                }
+            }
+            AstKind::ComputedMemberExpression(member) => {
+                if member_object_is_unshadowed_browser_global(&member.object, semantic) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
     }
-    ctx.project
-        .nearest_package_json(ctx.path)
-        .is_some_and(|pkg| pkg.has_browserslist)
+    false
+}
+
+/// Import sources that pull a browser/DOM rendering runtime into the file. A file
+/// importing one renders to or manipulates the DOM, so its browser-only globals
+/// are in scope. React subpaths (`react-dom/client`, `react-dom/server`) count.
+fn is_browser_import_source(source: &str) -> bool {
+    matches!(source, "react" | "react-dom" | "preact" | "jquery")
+        || source.starts_with("react-dom/")
+}
+
+/// Object names that are browser/DOM entry points. A member access on one — where
+/// the name resolves to no local binding, i.e. the real global — proves the file
+/// runs in a browser. Broader than [`BROWSER_GLOBALS`]: those are the names the
+/// rule flags as shadowed, these are the globals whose genuine use is the signal.
+const BROWSER_GLOBAL_OBJECTS: &[&str] = &[
+    "window",
+    "document",
+    "navigator",
+    "location",
+    "history",
+    "localStorage",
+    "sessionStorage",
+];
+
+/// True when `object` is an identifier naming a browser global (see
+/// [`BROWSER_GLOBAL_OBJECTS`]) whose reference resolves to no local symbol — the
+/// real global, not a same-named local. A member access on a shadowing local
+/// (e.g. `document.title` on `const document = findOne()`) resolves to that
+/// local, so it is correctly *not* counted as a browser signal.
+fn member_object_is_unshadowed_browser_global<'a>(
+    object: &Expression,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(ident) = object else {
+        return false;
+    };
+    if !BROWSER_GLOBAL_OBJECTS.contains(&ident.name.as_str()) {
+        return false;
+    }
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    semantic.scoping().get_reference(ref_id).symbol_id().is_none()
 }
 
 /// True when `path` is a TypeScript declaration file (`*.d.ts`).
@@ -390,8 +452,11 @@ impl OxcCheck for Check {
         if is_declaration_file(ctx.path) {
             return Vec::new();
         }
-        let in_browser = file_runs_in_browser(ctx);
         let scoping = semantic.scoping();
+        // Computed lazily on the first browser-global-named symbol: the per-file
+        // walk in `file_runs_in_browser` is skipped entirely on files that never
+        // declare a `window`/`document` local (the common case).
+        let mut runs_in_browser: Option<bool> = None;
         let mut diagnostics = Vec::new();
         for symbol_id in scoping.symbol_ids() {
             let name = scoping.symbol_name(symbol_id);
@@ -401,7 +466,9 @@ impl OxcCheck for Check {
                 continue;
             }
             // Browser-only globals shadow nothing outside a DOM environment.
-            if is_browser && !in_browser {
+            if is_browser
+                && !*runs_in_browser.get_or_insert_with(|| file_runs_in_browser(semantic, ctx))
+            {
                 continue;
             }
             if is_ambient_declaration(symbol_id, semantic) {
@@ -956,5 +1023,55 @@ mod tests {
         // Negative space: a plain `const window = anything` is a genuine shadow,
         // not an object-destructuring default.
         assert_eq!(run_on_browser("const window = anything;").len(), 1);
+    }
+
+    #[test]
+    fn allows_document_model_record_in_server_ts() {
+        // Issue #7462: outline/outline server/models/Document.ts — a pure-Node
+        // Koa + sequelize `.ts` file with no JSX, no react/DOM import, and no
+        // unshadowed browser-global access. `document` is a model record, not the
+        // DOM global, so the file is not a browser context and nothing is shadowed.
+        assert!(
+            run_on(
+                "async function load(id) { const document = await scope.findOne({ where: { id } }); return document.id; }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_document_foreach_param_in_server_ts() {
+        // Issue #7462: `documents.forEach((document) => …)` walks NavigationNodes
+        // in a Node backend — `document` is an arrow parameter, not the DOM global.
+        assert!(run_on("documents.forEach((document) => { walk(document); });").is_empty());
+    }
+
+    #[test]
+    fn allows_document_local_member_access_not_a_browser_signal() {
+        // Issue #7462: `document.title` on a LOCAL `const document = …` must not
+        // be read as a browser signal — the member object resolves to the local,
+        // not the DOM global, so the file stays non-browser and is not flagged.
+        assert!(run_on("const document = load();\nconst t = document.title;").is_empty());
+    }
+
+    #[test]
+    fn flags_window_local_in_react_importing_ts() {
+        // Issue #7462 control: a `.ts` file importing `react` is a browser/React
+        // module — a local `window` genuinely shadows the DOM global.
+        assert_eq!(
+            run_on("import React from 'react';\nconst window = makeThing();").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_document_local_when_file_reads_unshadowed_navigator() {
+        // Issue #7462 control (signal 3): the file genuinely touches the DOM via
+        // an unshadowed `navigator.userAgent`, so it runs in a browser — an
+        // unrelated local `document` shadows the real global and stays flagged.
+        assert_eq!(
+            run_on("const ua = navigator.userAgent;\nconst document = {};").len(),
+            1
+        );
     }
 }
