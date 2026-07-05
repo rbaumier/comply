@@ -145,6 +145,53 @@ fn is_exported(decl: Node) -> bool {
     false
 }
 
+/// Whether `kind` is a function-like scope — a node that introduces its own
+/// binding scope and body. A declaration whose ancestor chain contains one of
+/// these is nested inside another function rather than sitting at module level.
+fn is_function_scope_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "function_declaration"
+            | "function_expression"
+            | "arrow_function"
+            | "generator_function"
+            | "generator_function_declaration"
+            | "method_definition"
+    )
+}
+
+/// Whether the declaration at `decl` is nested inside another function's body —
+/// i.e. it has a function-like ancestor. A module-top-level function cannot
+/// reference enclosing-function-scope bindings; a nested one can.
+fn is_nested_function(decl: Node) -> bool {
+    let mut cur = decl.parent();
+    while let Some(node) = cur {
+        if is_function_scope_kind(node.kind()) {
+            return true;
+        }
+        cur = node.parent();
+    }
+    false
+}
+
+/// Whether any body free variable resolves to neither an import nor a top-level
+/// module-local declaration — meaning it is bound in an enclosing function scope
+/// (a closure capture). Applied only to nested functions: for a module-level
+/// function every such free var is a global, which does not affect hoistability.
+/// The function's own name is excluded (a nested recursive call is not a
+/// capture). `body_idents` already excludes the function's own parameters.
+fn has_enclosing_scope_capture(
+    entry: &FnEntry,
+    import_map: &FxHashMap<String, String>,
+    module_local_decls: &FxHashMap<String, Vec<u8>>,
+) -> bool {
+    entry.body_idents.iter().any(|name| {
+        name != &entry.name
+            && !import_map.contains_key(name)
+            && !module_local_decls.contains_key(name)
+    })
+}
+
 /// A named function eligible to be compared against others.
 struct FnEntry {
     file_idx: usize,
@@ -389,10 +436,12 @@ fn extract_functions(
     let mut module_local_decls = FxHashMap::default();
     collect_module_local_decls(tree.root_node(), bytes, &mut module_local_decls);
 
-    let mut entries = Vec::new();
+    // Each entry is paired with whether its declaration is nested inside another
+    // function's body, decided during the walk while the parent chain is at hand.
+    let mut entries: Vec<(FnEntry, bool)> = Vec::new();
     let mut import_map = FxHashMap::default();
     let mut cursor = tree.walk();
-    loop {
+    'walk: loop {
         let node = cursor.node();
         if node.kind() == "import_statement" {
             collect_import(node, bytes, &mut import_map);
@@ -401,7 +450,7 @@ fn extract_functions(
             if let Some(entry) =
                 build_entry(name, decl, sig_node, body, bytes, file_idx, min_body_tokens)
             {
-                entries.push(entry);
+                entries.push((entry, is_nested_function(decl)));
             }
         }
         if cursor.goto_first_child() {
@@ -412,10 +461,31 @@ fn extract_functions(
                 break;
             }
             if !cursor.goto_parent() {
-                return (entries, import_map, module_local_decls);
+                break 'walk;
             }
         }
     }
+
+    // A nested function that captures an enclosing-scope binding is not
+    // hoistable: a body free variable that resolves to neither an import nor a
+    // top-level module-local declaration is bound in an enclosing function scope
+    // (a closure capture, like a `setup(props)` parameter or a `const`
+    // destructured from a per-component call). Extracting such a function into a
+    // shared module would require passing the capture as a parameter, changing
+    // its signature, so it is not the cross-file duplicate this rule targets.
+    // Drop it before any comparison. (A referenced JS global absent from both
+    // maps also triggers this and is skipped — an acceptable, FP-safe miss,
+    // confined to nested functions.) The import map is fully built here, so a
+    // free var is checked against every import regardless of source order.
+    let entries: Vec<FnEntry> = entries
+        .into_iter()
+        .filter(|(entry, is_nested)| {
+            !(*is_nested && has_enclosing_scope_capture(entry, &import_map, &module_local_decls))
+        })
+        .map(|(entry, _)| entry)
+        .collect();
+
+    (entries, import_map, module_local_decls)
 }
 
 /// Top-level, non-`export`ed declarations that resolve to a module-local
@@ -1494,5 +1564,71 @@ export function compute(input: number): number {
             names.iter().any(|m| m.contains("`helper`")),
             "the identical module-local helper is still flagged"
         );
+    }
+
+    // A Vue component whose `setup(props)` declares a nested `handleKeydown`
+    // capturing `props` and a `const { onStackTop } = useStack(…, zarg)`. The
+    // `useStack` z-index argument (`zarg`) varies per component while
+    // `handleKeydown`'s body is byte-identical.
+    fn keydown_component(zarg: &str) -> String {
+        format!(
+            "import {{ defineComponent }} from \"vue\";\n\
+             import {{ call, useStack }} from \"../shared\";\n\
+             const zIndex = 100;\n\
+             const normalizedZIndex = 200;\n\
+             export default defineComponent({{\n\
+            \x20 setup(props) {{\n\
+            \x20   const {{ onStackTop }} = useStack(() => props.show, {zarg});\n\
+            \x20   function handleKeydown(event: KeyboardEvent) {{\n\
+            \x20     if (!onStackTop() || event.key !== \"Escape\" || !props.show) return;\n\
+            \x20     call(props.onKeyEscape);\n\
+            \x20     if (!props.closeOnKeyEscape) return;\n\
+            \x20     call(props[\"onUpdate:show\"], false);\n\
+            \x20   }}\n\
+            \x20   return {{ handleKeydown }};\n\
+            \x20 }},\n\
+             }});\n"
+        )
+    }
+
+    #[test]
+    fn nested_closure_capturing_enclosing_scope_not_flagged() {
+        // Issue #7338 (varletjs/varlet): `Popup.tsx` and `Overlay.tsx` each nest a
+        // byte-identical `handleKeydown` inside their `setup(props)`. The body
+        // captures `props` (the setup parameter) and `onStackTop` (a `const`
+        // destructured from a per-component `useStack(…)` call, built from
+        // `normalizedZIndex` in one file and `zIndex` in the other). The captures
+        // differ per component, so the closures are not interchangeable and cannot
+        // be hoisted into a shared module without changing their signature — not a
+        // true duplicate.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "overlay/Overlay.tsx", &keydown_component("zIndex"));
+        let b = write(&dir, "popup/Popup.tsx", &keydown_component("normalizedZIndex"));
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "a nested closure capturing enclosing-scope bindings is exempt"
+        );
+    }
+
+    #[test]
+    fn module_scope_no_capture_helper_still_flagged() {
+        // Negative control for #7338: a byte-identical *module-scope* helper with
+        // no enclosing-scope captures (only its own parameters and locals) is
+        // genuinely hoistable, so the copy-paste stays a smell. Proves the
+        // exemption keys on the nested-and-captures signal, not on any nesting or
+        // free-variable presence alone.
+        let helper = "\
+function helper(a: number, b: number): number {
+  const sum = a + b;
+  const scaled = sum * 2;
+  return scaled - a;
+}
+";
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.ts", helper);
+        let b = write(&dir, "b.ts", helper);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a module-scope no-capture duplicate is still flagged");
+        assert!(diags[0].message.contains("`helper`"));
     }
 }
