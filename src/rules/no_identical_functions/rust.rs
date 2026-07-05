@@ -36,6 +36,14 @@
 //! well: a safe `fn` and an `unsafe fn` with the same body are not
 //! interchangeable — the `unsafe` qualifier is part of the API contract, so the
 //! two cannot be merged into one helper without changing what callers may do.
+//! Pairs whose outer attribute-macro sets differ are exempt for the same
+//! reason: a codegen-affecting attribute changes the generated binding's
+//! external type, so two functions carrying different attributes are distinct
+//! external entry points (deno_core's `#[getter] #[number] fn count` marshals
+//! its `u64` to JS as a `Number`, `#[getter] #[bigint] fn count_big_int`
+//! marshals it as a `BigInt`); neither can be removed and they cannot be
+//! merged — the differing attribute is the API contract, exactly like a
+//! differing `unsafe` qualifier.
 //! Pairs where either member carries an intentional-duplication attribute are
 //! exempt as well: a `#[deprecated]` function is a backward-compat alias that
 //! must keep doing exactly what its replacement does (deleting it breaks
@@ -117,6 +125,13 @@ struct CollectedFn {
     /// modifier sets differ have different ABIs/safety contracts and cannot be
     /// merged into a shared helper, so they are never identical for this rule.
     modifiers: String,
+    /// The function's outer attribute-macro paths (`#[number]`, `#[bigint]`,
+    /// `#[getter]`, …), sorted and deduplicated. A codegen-affecting attribute
+    /// changes the generated binding's external type (deno_core's `#[number]`
+    /// emits a JS `Number`, `#[bigint]` a `BigInt`), so two functions whose
+    /// attribute sets differ are distinct external entry points and cannot be
+    /// merged — the same identity role `modifiers` plays for `unsafe`/`const`.
+    attributes: String,
     /// True if the function carries an intentional-duplication marker —
     /// `#[deprecated]` (a backward-compat alias kept on purpose), a proc-macro
     /// entry-point attribute (`#[proc_macro_derive(...)]`, `#[proc_macro]`,
@@ -180,6 +195,20 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             // be unified into one helper. The `unsafe`/safe pair in particular is
             // an intentional safe-vs-unsafe API split, not copy-paste — skip it.
             if functions[i].modifiers != functions[j].modifiers {
+                continue;
+            }
+            // A function's outer attribute macros are part of its identity too:
+            // a codegen-affecting attribute changes the generated binding's
+            // external type, so two functions with identical bodies but
+            // different attribute sets are distinct external entry points.
+            // deno_core's `#[getter] #[number] fn count` and
+            // `#[getter] #[bigint] fn count_big_int` share a byte-identical
+            // body, but `#[number]` marshals the `u64` to JS as a `Number`
+            // while `#[bigint]` marshals it as a `BigInt` — the differing
+            // attribute is the API contract, just as `unsafe` is above, so the
+            // two cannot be merged into one helper. Skip the pair when the sets
+            // differ.
+            if functions[i].attributes != functions[j].attributes {
                 continue;
             }
             // Inherent methods on different types share a body by design
@@ -272,6 +301,7 @@ fn collect_functions(
                         module_key,
                         cfg_gated: crate::rules::rust_helpers::has_cfg_attribute(node, source),
                         modifiers: extract_modifiers(node, source),
+                        attributes: extract_attribute_set(node, source),
                         intentional_dup: crate::rules::rust_helpers::has_outer_attribute_path(
                             node,
                             source,
@@ -453,6 +483,42 @@ fn extract_modifiers(node: tree_sitter::Node, source: &[u8]) -> String {
         }
     }
     String::new()
+}
+
+/// Collect a function's outer attribute-macro paths, sorted and deduplicated
+/// into one whitespace-joined string. In tree-sitter-rust an item's outer
+/// attributes are `attribute_item` siblings preceding the `function_item`; each
+/// `attribute_item`'s `attribute` child names the path (`number` in
+/// `#[number]`, `proc_macro_derive` in `#[proc_macro_derive(Name)]`) as its
+/// first named child, so an argument-bearing attribute reduces to its path
+/// identifier. Interleaved comment siblings are skipped; the scan stops at the
+/// first non-attribute sibling. Keyed on the AST path node, so the comparison
+/// is structural — any attribute-set difference makes two functions
+/// non-identical, whatever the attributes are.
+fn extract_attribute_set(node: tree_sitter::Node, source: &[u8]) -> String {
+    let mut paths: Vec<String> = Vec::new();
+    let mut sibling = node.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                let mut cursor = s.walk();
+                let path = s
+                    .children(&mut cursor)
+                    .find(|c| c.kind() == "attribute")
+                    .and_then(|attr| attr.named_child(0))
+                    .and_then(|p| p.utf8_text(source).ok());
+                if let Some(text) = path {
+                    paths.push(text.to_string());
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    paths.sort_unstable();
+    paths.dedup();
+    paths.join(" ")
 }
 
 
@@ -1164,6 +1230,72 @@ unsafe fn second(ptr: *mut u8, len: usize) -> i32 {
     let b = a * 2;
     println!("{}", b);
     b as i32
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_op2_number_vs_bigint_method_pair() {
+        // Issue #7349: deno_core `#[op2]` methods `count`/`count_big_int` on the
+        // same type share a byte-identical body but differ by a codegen-affecting
+        // marshalling attribute — `#[number]` returns a JS `Number`, `#[bigint]`
+        // a `BigInt`. They are two distinct JS-facing entry points that cannot be
+        // merged; the differing attribute is the API contract.
+        let src = r#"
+struct Histogram;
+
+impl Histogram {
+    #[getter]
+    #[number]
+    fn count(&self) -> u64 {
+        self.inner
+            .borrow()
+            .len()
+            .saturating_add(self.added_out_of_range.get())
+    }
+
+    #[getter]
+    #[bigint]
+    fn count_big_int(&self) -> u64 {
+        self.inner
+            .borrow()
+            .len()
+            .saturating_add(self.added_out_of_range.get())
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_identical_attribute_method_pair() {
+        // Negative-space guard for #7349: two methods carrying the SAME outer
+        // attribute set and an identical body are genuine duplication and must
+        // still be flagged — the attribute-set exemption keys on a *difference*,
+        // so matching attributes do not suppress a real duplicate.
+        let src = r#"
+struct Histogram;
+
+impl Histogram {
+    #[getter]
+    #[number]
+    fn count(&self) -> u64 {
+        self.inner
+            .borrow()
+            .len()
+            .saturating_add(self.added_out_of_range.get())
+    }
+
+    #[getter]
+    #[number]
+    fn count_copy(&self) -> u64 {
+        self.inner
+            .borrow()
+            .len()
+            .saturating_add(self.added_out_of_range.get())
+    }
 }
 "#;
         let d = run_on(src);
