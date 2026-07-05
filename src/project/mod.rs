@@ -25,6 +25,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use ignore::gitignore::Gitignore;
 use serde_json::Value;
 
 use crate::config::Config;
@@ -2825,6 +2826,17 @@ pub struct ProjectCtx {
     // (e.g. Directus: limiter in `app.ts`, route in `controllers/auth.ts`).
     // Built lazily per package from `indexed_paths()` (no extra fs walk).
     package_global_rate_limit_cache: Mutex<FxHashMap<PathBuf, bool>>,
+
+    // Gitignore matcher for each directory that carries a `.gitignore`, keyed by
+    // that directory; `None` caches a directory with no `.gitignore`. Honors
+    // nested gitignores — every matcher is anchored at its own directory, so
+    // `packages/web-vue/.gitignore`'s `components/icon` entry is relative to
+    // `packages/web-vue/`, not the project root. `import-no-unresolved` /
+    // `require-path-exists` consult it (via `resolves_into_gitignored_path`) to
+    // skip a relative import resolving into a gitignored generated directory
+    // (present after a build step, absent in a clean checkout). Built lazily per
+    // directory on the upward walk from a resolved import target.
+    gitignore_matcher_cache: Mutex<FxHashMap<PathBuf, Option<Arc<Gitignore>>>>,
 }
 
 impl ProjectCtx {
@@ -4948,6 +4960,80 @@ impl ProjectCtx {
             map.entry(schema_dir).or_insert_with(|| Arc::clone(&arc));
         }
         arc
+    }
+
+    /// True when `specifier`, resolved relative to `importer`, lands on a path
+    /// the project's own `.gitignore` files ignore — a generated artifact
+    /// present after a build step but absent in a clean checkout, so an
+    /// unresolved import into it is expected, not a broken path. Honors nested
+    /// `.gitignore` files: each is consulted anchored at its own directory
+    /// (a `components/icon` entry in `packages/web-vue/.gitignore` matches
+    /// `packages/web-vue/components/icon`), deepest first so a nested gitignore
+    /// overrides a shallower one. Lexical resolution only, for a relative
+    /// specifier; a bare or root-escaping specifier, or a project with no root,
+    /// returns `false`.
+    pub fn resolves_into_gitignored_path(&self, importer: &Path, specifier: &str) -> bool {
+        if !(specifier.starts_with("./") || specifier.starts_with("../")) {
+            return false;
+        }
+        let Some(root) = self.project_root.as_deref() else {
+            return false;
+        };
+        let Some(base_dir) = importer.parent() else {
+            return false;
+        };
+        let root = crate::rules::path_utils::normalize_lexical(root);
+        let resolved = crate::rules::path_utils::normalize_lexical(&base_dir.join(specifier));
+        if !resolved.starts_with(&root) {
+            return false;
+        }
+        // Walk from the resolved target's directory up to the project root; only
+        // ancestor `.gitignore` files can ignore the path. Deepest first, so the
+        // nearest gitignore's verdict (including a `!` re-inclusion) wins.
+        for dir in resolved.ancestors().skip(1) {
+            if !dir.starts_with(&root) {
+                break;
+            }
+            if let Some(matcher) = self.gitignore_matcher_for_dir(dir) {
+                let verdict = matcher.matched_path_or_any_parents(&resolved, false);
+                if verdict.is_ignore() {
+                    return true;
+                }
+                if verdict.is_whitelist() {
+                    return false;
+                }
+            }
+            if dir == root {
+                break;
+            }
+        }
+        false
+    }
+
+    /// Gitignore matcher for `dir`'s own `.gitignore`, anchored at `dir`.
+    /// Memoized per directory; `None` caches a directory with no `.gitignore` so
+    /// the stat runs at most once per directory.
+    fn gitignore_matcher_for_dir(&self, dir: &Path) -> Option<Arc<Gitignore>> {
+        if let Some(hit) = self
+            .gitignore_matcher_cache
+            .lock()
+            .ok()
+            .and_then(|c| c.get(dir).cloned())
+        {
+            return hit;
+        }
+        let gitignore_path = dir.join(".gitignore");
+        let matcher = gitignore_path.is_file().then(|| {
+            // A malformed line is skipped by the builder rather than aborting;
+            // the resulting matcher simply omits it.
+            let (gi, _err) = Gitignore::new(&gitignore_path);
+            Arc::new(gi)
+        });
+        if let Ok(mut map) = self.gitignore_matcher_cache.lock() {
+            map.entry(dir.to_path_buf())
+                .or_insert_with(|| matcher.clone());
+        }
+        matcher
     }
 }
 

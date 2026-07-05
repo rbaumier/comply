@@ -220,6 +220,19 @@ impl OxcCheck for Check {
             }
         }
 
+        // A relative import resolving into a directory the project's own
+        // `.gitignore` ignores (a build-time generated dir such as arco's
+        // `components/icon`, present after codegen but absent in a clean
+        // checkout) is expected to be missing at lint time. Keyed on the
+        // project's actual gitignore membership, honoring nested `.gitignore`
+        // files — not a fixed directory-name list.
+        if ctx
+            .project
+            .resolves_into_gitignored_path(ctx.path, &import_spec)
+        {
+            return;
+        }
+
         // Only paths that stay within the project root are verifiable. An import
         // resolving above the root (or any path when the root is unknown) targets
         // files outside the scanned tree, so we cannot assert it is missing.
@@ -829,5 +842,82 @@ mod prisma_output_tests {
         );
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("client/edge"));
+    }
+}
+
+#[cfg(test)]
+mod gitignored_generated_dir_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a temp tree with a root `package.json`, the importer, and the given
+    /// `(rel, contents)` files (e.g. a nested `.gitignore`), run the rule on the
+    /// importer, and return its diagnostics. The gitignored target directory is
+    /// never created — it is absent in a clean checkout, which is the whole point.
+    fn run_with_files(
+        importer_rel: &str,
+        source: &str,
+        files: &[(&str, &str)],
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        for (rel, contents) in files {
+            let p = dir.path().join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, contents).unwrap();
+        }
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    const NESTED_GITIGNORE: &str = "node_modules\ncomponents/icon\n";
+
+    #[test]
+    fn no_fp_for_import_into_gitignored_generated_dir_issue_7311() {
+        // arco-design/arco-design-vue reproducer: a table component imports icon
+        // components from `../icon/icon-caret-down`. `packages/web-vue/.gitignore`
+        // lists `components/icon` — those icon components are code-generated from
+        // `components/icon-component/` and absent in a clean checkout, so the
+        // imports resolve only after the build and must not be flagged.
+        let diags = run_with_files(
+            "packages/web-vue/components/table/table-th.tsx",
+            "import IconCaretDown from '../icon/icon-caret-down';\n\
+             import IconCaretUp from '../icon/icon-caret-up';\n",
+            &[("packages/web-vue/.gitignore", NESTED_GITIGNORE)],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_non_gitignored_target_issue_7311() {
+        // Negative space: with the SAME nested `.gitignore` present, a relative
+        // import into a directory it does NOT ignore (`../widget/foo`) is a
+        // genuine broken path and must still fire — the exemption stays keyed on
+        // actual gitignore membership, not a directory-name allowlist.
+        let diags = run_with_files(
+            "packages/web-vue/components/table/table-th.tsx",
+            "import Foo from '../widget/foo';\n",
+            &[("packages/web-vue/.gitignore", NESTED_GITIGNORE)],
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("../widget/foo"));
     }
 }
