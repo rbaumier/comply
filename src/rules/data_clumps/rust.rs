@@ -12,6 +12,12 @@
 //! `r: PhantomData<R>`) is also excluded: extracting it yields a struct that
 //! must re-declare the same parameters, so no duplication is removed.
 //!
+//! Fields sharing a name but disagreeing on optionality (`Option<T>` in one
+//! struct, bare `T` in another) also do not count toward a clump: no common
+//! type can hold both without dropping the mandatory side's all-present
+//! invariant or wrapping the optional side in a pointless `Option`, so there is
+//! nothing to extract.
+//!
 //! Strong/weak ownership-pair structs are excluded as well: when every shared
 //! field is `Arc<X>`/`Rc<X>` in one struct and `Weak<X>` in the other (same
 //! inner `X`), the two are a deliberate strong/weak counterpart pair (the
@@ -45,12 +51,24 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     // For each 3-field subset, record every struct that contains it, noting
     // whether that struct types the subset entirely with its own declared
     // generic parameters (in which case extraction removes no duplication).
-    let mut subset_occurrences: FxHashMap<Vec<String>, Vec<(usize, bool)>> = FxHashMap::default();
+    // Each subset field carries its optionality (`Option<T>` vs bare `T`) so a
+    // shared field name groups two structs only when both agree on it: a field
+    // that is optional in one struct and mandatory in the other cannot be
+    // factored into one shared type.
+    let mut subset_occurrences: FxHashMap<Vec<(String, bool)>, Vec<(usize, bool)>> =
+        FxHashMap::default();
     for sf in &struct_fields {
         for combo in combinations(&sf.names, 3) {
             let all_generic = combo.iter().all(|f| sf.generic_param_only.contains(f));
+            let keyed: Vec<(String, bool)> = combo
+                .into_iter()
+                .map(|f| {
+                    let optional = sf.optional_fields.contains(&f);
+                    (f, optional)
+                })
+                .collect();
             subset_occurrences
-                .entry(combo)
+                .entry(keyed)
                 .or_default()
                 .push((sf.line, all_generic));
         }
@@ -79,6 +97,11 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             continue;
         }
         if flaggable.len() >= 2 {
+            let field_names = subset
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             for &line in &flaggable {
                 if flagged_lines.insert(line) {
                     results.push((
@@ -86,7 +109,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                         format!(
                             "Fields [{}] appear together in {} structs \
                              \u{2014} extract into a shared type.",
-                            subset.join(", "),
+                            field_names,
                             flaggable.len(),
                         ),
                     ));
@@ -116,6 +139,10 @@ struct StructFields {
     /// Field names whose type is determined solely by the struct's own declared
     /// generic type parameters.
     generic_param_only: FxHashSet<String>,
+    /// Field names whose declared type is `Option<…>`. A field optional in one
+    /// struct and mandatory in another cannot be merged into a common type, so
+    /// it must not count toward a shared clump.
+    optional_fields: FxHashSet<String>,
     /// For each field typed as a single `Arc`/`Rc`/`Weak` smart pointer, its
     /// strength and inner type text (`Weak<Mutex<S>>` → `(Weak, "Mutex<S>")`).
     /// Used to recognise strong/weak ownership-pair structs.
@@ -141,6 +168,7 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
         // Look for field_declaration_list child.
         let mut names: Vec<String> = Vec::new();
         let mut generic_param_only: FxHashSet<String> = FxHashSet::default();
+        let mut optional_fields: FxHashSet<String> = FxHashSet::default();
         let mut smart_ptr_fields: FxHashMap<String, (Strength, String)> = FxHashMap::default();
         let child_count = node.named_child_count();
         for i in 0..child_count {
@@ -158,6 +186,9 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
                         if let Some(ty) = field.child_by_field_name("type") {
                             if type_is_generic_param_only(ty, &declared, source) {
                                 generic_param_only.insert(name.to_string());
+                            }
+                            if type_is_option(ty, source) {
+                                optional_fields.insert(name.to_string());
                             }
                             if let Some(ptr) = smart_pointer_parts(ty, source) {
                                 smart_ptr_fields.insert(name.to_string(), ptr);
@@ -177,6 +208,7 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
                 line: node.start_position().row + 1,
                 names,
                 generic_param_only,
+                optional_fields,
                 smart_ptr_fields,
             });
         }
@@ -224,6 +256,19 @@ fn type_is_generic_param_only(ty: tree_sitter::Node, declared: &[&str], source: 
         }
         _ => false,
     }
+}
+
+/// True if `ty` is `Option<…>`: a `generic_type` whose constructor identifier
+/// is `Option`. A field's optionality is a structural property of its type — a
+/// shared field name that is `Option<T>` in one struct and a bare `T` in
+/// another cannot be factored into a single shared type, so it must not count
+/// toward a data clump.
+fn type_is_option(ty: tree_sitter::Node, source: &[u8]) -> bool {
+    ty.kind() == "generic_type"
+        && ty
+            .child_by_field_name("type")
+            .and_then(|constructor| constructor.utf8_text(source).ok())
+            == Some("Option")
 }
 
 /// Names of the `type_identifier` generic parameters declared on the struct's
@@ -387,11 +432,11 @@ fn smart_pointer_parts(ty: tree_sitter::Node, source: &[u8]) -> Option<(Strength
 /// subset fields must satisfy this for the pair to be a strong/weak ownership
 /// counterpart rather than a data clump.
 fn is_strong_weak_pair(
-    subset: &[String],
+    subset: &[(String, bool)],
     a: &FxHashMap<String, (Strength, String)>,
     b: &FxHashMap<String, (Strength, String)>,
 ) -> bool {
-    subset.iter().all(|name| match (a.get(name), b.get(name)) {
+    subset.iter().all(|(name, _)| match (a.get(name), b.get(name)) {
         (Some((strength_a, inner_a)), Some((strength_b, inner_b))) => {
             strength_a != strength_b && inner_a == inner_b
         }
@@ -838,6 +883,51 @@ struct IntB {
     a: u32,
     b: u32,
     c: u32,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    /// The two structs share the names `[major, minor, patch]`, but `minor` and
+    /// `patch` are mandatory `u32` in one and `Option<u32>` in the other. Only
+    /// `major` agrees on optionality, dropping the shared subset below the
+    /// 3-field threshold, so no clump can be extracted.
+    #[test]
+    fn no_fp_on_optionality_mismatch_issue_7296() {
+        let src = r#"
+pub struct PackageVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+pub struct VersionBound {
+    pub major: u32,
+    pub minor: Option<u32>,
+    pub patch: Option<u32>,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Optionality only excludes the disagreeing field: with four shared names
+    /// where one differs in optionality, the remaining three agree and still
+    /// form an extractable clump.
+    #[test]
+    fn still_flags_when_enough_fields_agree_on_optionality() {
+        let src = r#"
+struct Left {
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+}
+
+struct Right {
+    a: u32,
+    b: u32,
+    c: u32,
+    d: Option<u32>,
 }
 "#;
         assert_eq!(run_on(src).len(), 2);
