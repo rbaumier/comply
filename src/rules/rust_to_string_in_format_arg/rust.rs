@@ -24,6 +24,12 @@
 //!    value's own `Debug` — different output, so the call is not
 //!    redundant.
 //!
+//! A bare `self.to_string()` is additionally kept when the enclosing
+//! type carries a manual `impl ToString for Self` block in the same file.
+//! Rust coherence forbids a manual `impl ToString for T` when `T: Display`
+//! (it would clash with the std blanket impl), so such a type provably has
+//! no `Display` and the `.to_string()` is required for a `{}` placeholder.
+//!
 //! The scan tracks parenthesis depth and skips string/char literal
 //! contents so delimiters inside a format string don't corrupt it.
 //! Mapping arguments to placeholders is positional: the Nth positional
@@ -61,11 +67,17 @@ impl AstCheck for Check {
         Some(KINDS)
     }
 
+    // Memoizes the file's manual-`ToString` Self-type set, filled lazily on the
+    // first macro that could need it. `None` = not yet computed.
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(None::<std::collections::HashSet<String>>))
+    }
+
     fn visit_node(
         &self,
         node: tree_sitter::Node,
         ctx: &CheckCtx,
-        _state: Option<&mut dyn std::any::Any>,
+        state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
@@ -83,7 +95,16 @@ impl AstCheck for Check {
         let Ok(text) = node.utf8_text(source_bytes) else {
             return;
         };
-        for _ in 0..count_redundant_to_string(text, bare) {
+        // A manual `impl ToString for T` block proves `T: !Display` — Rust
+        // coherence forbids it otherwise (it would clash with the blanket
+        // `impl<T: Display + ?Sized> ToString for T`). So a `self.to_string()`
+        // inside `T`'s inherent impl is required for a `{}` placeholder, not
+        // redundant. Suppress it when the enclosing impl's Self type carries a
+        // manual `ToString` impl somewhere in the file.
+        let suppress_self = text.contains("self.to_string()")
+            && enclosing_impl_self_type(node, source_bytes)
+                .is_some_and(|ty| manual_to_string_contains(&ty, node, source_bytes, state));
+        for _ in 0..count_redundant_to_string(text, bare, suppress_self) {
             diagnostics.push(Diagnostic::at_node(
                 std::sync::Arc::clone(&ctx.path_arc),
                 &node,
@@ -106,9 +127,13 @@ impl AstCheck for Check {
 /// `writeln!` the first argument is the writer and is skipped before the
 /// format string.
 ///
+/// When `suppress_self` is set the enclosing impl's Self type has a manual
+/// `impl ToString` (hence no `Display`), so a bare `self.to_string()` argument
+/// is required and is not counted.
+///
 /// Returns 0 whenever the placeholder mapping cannot be established
 /// confidently — see [`debug_positional_placeholders`].
-fn count_redundant_to_string(text: &str, bare: &str) -> usize {
+fn count_redundant_to_string(text: &str, bare: &str, suppress_self: bool) -> usize {
     let Some(body) = macro_body(text) else {
         return 0;
     };
@@ -148,8 +173,13 @@ fn count_redundant_to_string(text: &str, bare: &str) -> usize {
         positional += 1;
         // Flag only when this argument's terminal `.to_string()` feeds a
         // `Display` placeholder. A `Debug` placeholder (`Some(true)`) or a
-        // missing one (`None`, counts don't line up) is left alone.
-        if arg_has_terminal_to_string(arg) && positional_is_debug.get(idx) == Some(&false) {
+        // missing one (`None`, counts don't line up) is left alone. A bare
+        // `self.to_string()` is kept when the enclosing type has a manual
+        // `ToString` impl (`suppress_self`), where the call is load-bearing.
+        if arg_has_terminal_to_string(arg)
+            && positional_is_debug.get(idx) == Some(&false)
+            && !(suppress_self && arg_terminal_receiver_is_self(arg))
+        {
             count += 1;
         }
     }
@@ -217,6 +247,91 @@ fn arg_has_terminal_to_string(arg: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// Whether the argument is exactly `self.to_string()` — the terminal
+/// `.to_string()`'s receiver is the `self` value itself (not a field like
+/// `self.name`, whose type we cannot resolve from the token scan).
+fn arg_terminal_receiver_is_self(arg: &str) -> bool {
+    arg.trim() == "self.to_string()"
+}
+
+/// Whether `self_ty` (a base type name) carries a manual `impl ToString for
+/// <self_ty>` block anywhere in the file. The file-wide set is walked once and
+/// memoized in `state`.
+fn manual_to_string_contains(
+    self_ty: &str,
+    node: tree_sitter::Node,
+    source: &[u8],
+    state: Option<&mut dyn std::any::Any>,
+) -> bool {
+    match state.and_then(|s| s.downcast_mut::<Option<std::collections::HashSet<String>>>()) {
+        Some(cache) => cache
+            .get_or_insert_with(|| collect_manual_to_string_types(node, source))
+            .contains(self_ty),
+        None => collect_manual_to_string_types(node, source).contains(self_ty),
+    }
+}
+
+/// The base name of the nearest enclosing `impl_item`'s Self type, with generic
+/// arguments and any path qualifier stripped (`impl path::Foo<T>` → `"Foo"`).
+fn enclosing_impl_self_type(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "impl_item" {
+            let ty = n.child_by_field_name("type")?.utf8_text(source).ok()?;
+            return Some(base_type_name(ty).to_string());
+        }
+        current = n.parent();
+    }
+    None
+}
+
+/// The set of base type names carrying a manual `impl ToString for <Type>` block
+/// (trait `ToString` / `std::string::ToString` / `::std::string::ToString`),
+/// collected by walking the whole file from `node`'s root.
+fn collect_manual_to_string_types(
+    node: tree_sitter::Node,
+    source: &[u8],
+) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    collect_manual_to_string_impls(root_node(node), source, &mut set);
+    set
+}
+
+fn collect_manual_to_string_impls(
+    node: tree_sitter::Node,
+    source: &[u8],
+    set: &mut std::collections::HashSet<String>,
+) {
+    if node.kind() == "impl_item"
+        && let Some(trait_node) = node.child_by_field_name("trait")
+        && base_type_name(trait_node.utf8_text(source).unwrap_or("")) == "ToString"
+        && let Some(type_node) = node.child_by_field_name("type")
+        && let Ok(ty_text) = type_node.utf8_text(source)
+    {
+        set.insert(base_type_name(ty_text).to_string());
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_manual_to_string_impls(child, source, set);
+    }
+}
+
+/// The bare type name of a possibly-qualified, possibly-generic type text: strip
+/// from the first `<`, then take the final `::` segment (`a::B<C>` → `"B"`).
+fn base_type_name(text: &str) -> &str {
+    let head = text.split('<').next().unwrap_or(text).trim();
+    head.rsplit("::").next().unwrap_or(head).trim()
+}
+
+/// The root node reached by walking up from `node` (the enclosing `source_file`).
+fn root_node(node: tree_sitter::Node) -> tree_sitter::Node {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        current = parent;
+    }
+    current
 }
 
 /// Parses the format string's placeholders left to right and returns, for
@@ -477,5 +592,42 @@ mod tests {
         // `Iterator::join`, not the outer `format!`. Depth ≥ 1.
         let src = "fn f(inputs: Vec<u8>) { let _ = format!(\"[{}];\", inputs.map(|v| v.to_string()).join(\",\")); }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_self_to_string_when_type_has_manual_to_string_impl() {
+        // tabby InfoMessage: a manual `impl ToString` proves the type has no
+        // `Display`, so `self.to_string()` is required for `{}`, not redundant.
+        let src = "struct InfoMessage; \
+                   impl ToString for InfoMessage { fn to_string(&self) -> String { String::new() } } \
+                   impl InfoMessage { fn print(&self) { eprintln!(\"\\n{}\\n\", self.to_string()); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_self_to_string_with_qualified_manual_to_string_trait() {
+        // The manual impl names the trait by its full path.
+        let src = "struct Msg; \
+                   impl std::string::ToString for Msg { fn to_string(&self) -> String { String::new() } } \
+                   impl Msg { fn p(&self) { println!(\"{}\", self.to_string()); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_self_to_string_when_type_implements_display() {
+        // `Display` (no manual `ToString`) means the blanket impl applies, so
+        // `self.to_string()` IS redundant. Still flagged.
+        let src = "struct Foo; \
+                   impl std::fmt::Display for Foo { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"x\") } } \
+                   impl Foo { fn p(&self) { println!(\"{}\", self.to_string()); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plain_string_receiver_to_string() {
+        // A plain `String` receiver in a `{}` arg with no manual-ToString type
+        // involved is still redundant.
+        let src = "fn f(s: String) { println!(\"{}\", s.to_string()); }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
