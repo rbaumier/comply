@@ -130,6 +130,34 @@ fn param_binding_is_low_arity<'a>(
     }
 }
 
+/// Returns `true` when `callee` is a static member expression `Array.from` —
+/// the global whose call result is always an array.
+fn is_array_from_callee(callee: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = callee else { return false };
+    member.property.name.as_str() == "from"
+        && matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == "Array")
+}
+
+/// Returns `true` when `expr` is an initializer whose value can never be a
+/// function: an array/object literal, a template or primitive literal, or an
+/// `Array.from(…)` call producing an array. A binding initialized to such a
+/// value cannot be a callback reference, so passing it to `.map`/`.filter`
+/// cannot exhibit the `arr.map(parseInt)` extra-args footgun. This is the
+/// negative counterpart of the positive init-based proof (arrow/function init)
+/// and keys on the init node's AST type, never on its name.
+fn is_provably_non_callable_init(expr: &Expression) -> bool {
+    match expr {
+        Expression::ArrayExpression(_)
+        | Expression::ObjectExpression(_)
+        | Expression::TemplateLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_) => true,
+        Expression::CallExpression(call) => is_array_from_callee(&call.callee),
+        _ => false,
+    }
+}
+
 /// Returns `true` when `ident` resolves to a locally-declared function whose
 /// formal parameter list ignores the extra iterator arguments
 /// (see [`callee_ignores_extra_args`]), or to a parameter/variable whose type
@@ -175,7 +203,12 @@ fn is_low_arity_local<'a>(
                     callee_ignores_extra_args(&f.params)
                 }
                 Some(Expression::FunctionExpression(f)) => callee_ignores_extra_args(&f.params),
-                _ => false,
+                // A binding whose init is provably non-callable (an array/object
+                // literal, a template/primitive literal, or `Array.from(…)`)
+                // can never hold a function reference, so passing it bare is not
+                // the callback-reference footgun — exempt.
+                Some(init) => is_provably_non_callable_init(init),
+                None => false,
             }
         }
         AstKind::Function(f) => callee_ignores_extra_args(&f.params),
@@ -816,6 +849,48 @@ mod tests {
     fn flags_var_in_unbraced_for_in_body() {
         assert_eq!(
             run_on("for (const k in obj) var fn = getCb(); const x = arr.map(fn);").len(),
+            1
+        );
+    }
+
+    // #7272 repro (quasarframework/quasar): `files` is bound to an array literal
+    // built with a spread (`[...(a || b)]`), then passed to a user-supplied
+    // filter-callback prop `props.filter(files)`. The argument's init is provably
+    // non-callable, so it cannot be the callback-reference footgun. Must not flag.
+    #[test]
+    fn allows_array_literal_spread_init_argument() {
+        assert!(run_on(
+            "function f(props: any, filesToProcess: any, e: any) { let files = [...(filesToProcess || e.target.files)]; return props.filter(files); }"
+        )
+        .is_empty());
+    }
+
+    // #7272: a plain array-literal binding passed bare is provably non-callable.
+    #[test]
+    fn allows_array_literal_init_argument() {
+        assert!(run_on("const arr = [1, 2, 3]; foo.filter(arr);").is_empty());
+    }
+
+    // #7272: an `Array.from(…)` binding always produces an array, never a function.
+    #[test]
+    fn allows_array_from_init_argument() {
+        assert!(run_on("const a = Array.from(x); foo.map(a);").is_empty());
+    }
+
+    // #7272 negative space: a bare function reference still exhibits the
+    // extra-args footgun and must stay flagged.
+    #[test]
+    fn flags_parse_int_reference_after_non_callable_fix() {
+        assert_eq!(run_on("arr.map(parseInt);").len(), 1);
+    }
+
+    // #7272 negative space: a binding whose init is a two-parameter function is a
+    // function reference — the positive init proof yields false and the negative
+    // proof does not match, so it stays flagged.
+    #[test]
+    fn flags_two_param_function_init_binding() {
+        assert_eq!(
+            run_on("const fn = (x: number, y: number) => x + y; arr.map(fn);").len(),
             1
         );
     }
