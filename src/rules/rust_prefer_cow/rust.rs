@@ -30,6 +30,13 @@
 //! (`&name`) or a clone (`name.clone()`) outside a `move` closure does not
 //! consume the owned value and still warrants the warning.
 //!
+//! The parameter is also moved out when it is returned by value: a bare
+//! `identifier` that is the operand of a `return` (`return name;`) or the tail
+//! expression the function body evaluates to — reached through the tail of any
+//! `if`/`else`/`match`/`if let` that itself flows to the return. Returning the
+//! owned value by name hands the caller's allocation straight back; an `&str`
+//! parameter would force a `.to_owned()` in that branch, so `String` is correct.
+//!
 //! A function whose name is referenced as a bare value elsewhere in the file
 //! (e.g. `Some(gdbus_parse_color)` stored in a `fn(String) -> …` field, or
 //! `iter.map(gdbus_parse_color)`) is also left alone: such a reference uses the
@@ -69,7 +76,8 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
         if pattern.kind() != "identifier" { continue; }
         let Ok(param_name) = pattern.utf8_text(source) else { continue; };
         if let Some(body) = body
-            && param_is_moved(body, source, param_name)
+            && (param_is_moved(body, source, param_name)
+                || tail_expr_moves_param(body, source, param_name))
         {
             continue;
         }
@@ -107,11 +115,17 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
 /// (`{ x }` shorthand, or `{ x: x }`), as a bare `identifier` argument of a
 /// call (`some_fn(x)`, `obj.method(x)`, `Variant::String(x)`), as a bare
 /// `identifier` element of an array literal (`[x]`) or a `vec!` macro
-/// (`vec![x]`), or as the bare `identifier` right-hand side of an assignment
-/// (`self.field = x`). A bare identifier consumes the owned value; `&x`
+/// (`vec![x]`), as the bare `identifier` right-hand side of an assignment
+/// (`self.field = x`), or as the bare `identifier` operand of a `return`
+/// (`return x;`, which moves the owned value out as the function's return
+/// value). A bare identifier consumes the owned value; `&x`
 /// (`reference_expression`) and `x.clone()` (a method call whose `arguments`
 /// list does not contain `x`) do not, so they are ignored and still warrant the
 /// warning.
+///
+/// A parameter returned by value as the body's tail expression (no `return`
+/// keyword) is positional, not a subtree property, so it is handled separately
+/// by [`tail_expr_moves_param`].
 fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
     match node.kind() {
         "struct_expression" => {
@@ -197,6 +211,15 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
                 return true;
             }
         }
+        "return_expression" => {
+            // `return x;` moves the owned value out as the function's return
+            // value. The returned expression is the sole named child; a bare
+            // `identifier` there transfers ownership, whereas `return &x` is a
+            // `reference_expression` and `return x.clone()` a `call_expression`.
+            if is_param_identifier(node.named_child(0), source, param_name) {
+                return true;
+            }
+        }
         _ => {}
     }
 
@@ -207,6 +230,68 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
         }
     }
     false
+}
+
+/// Whether `param_name` is moved out as the function's return value by being the
+/// bare `identifier` the body evaluates to. Descends only *tail* positions from
+/// the body block: a block's trailing expression, and the arms of an
+/// `if`/`else`/`match`/`if let` that is itself in tail position (`if let` is an
+/// `if_expression` whose condition is a `let_condition`). Only positions whose
+/// value flows to the return count, so a bare identifier used elsewhere
+/// (`s.len()`, `println!("{}", s)`) is not treated as a move here.
+fn tail_expr_moves_param(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
+    match node.kind() {
+        "identifier" => node.utf8_text(source) == Ok(param_name),
+        "block" => {
+            block_tail_expr(node).is_some_and(|tail| tail_expr_moves_param(tail, source, param_name))
+        }
+        "if_expression" => {
+            // An `if` yields a value only with an `else`; then both the
+            // consequence and the alternative are in tail position.
+            let Some(alt) = node.child_by_field_name("alternative") else {
+                return false;
+            };
+            node.child_by_field_name("consequence")
+                .is_some_and(|c| tail_expr_moves_param(c, source, param_name))
+                || tail_expr_moves_param(alt, source, param_name)
+        }
+        "else_clause" => node
+            .named_child(0)
+            .is_some_and(|c| tail_expr_moves_param(c, source, param_name)),
+        "match_expression" => node.child_by_field_name("body").is_some_and(|body| {
+            let mut cursor = body.walk();
+            body.named_children(&mut cursor).any(|arm| {
+                arm.kind() == "match_arm"
+                    && arm
+                        .child_by_field_name("value")
+                        .is_some_and(|v| tail_expr_moves_param(v, source, param_name))
+            })
+        }),
+        _ => false,
+    }
+}
+
+/// The trailing expression a `block` evaluates to, or `None` when it evaluates
+/// to `()` (empty, or ending in a semicolon-terminated statement).
+///
+/// A bare trailing expression (`… s`) is a direct child. A block-like trailing
+/// expression (`… if c { … } else { … }`) has no semicolon, yet the grammar
+/// still wraps it in an `expression_statement` (`prec(1, …_ending_with_block)`);
+/// that wrapper *is* the block's value, so it is unwrapped. A wrapper that ends
+/// in `;` discards its value, so the block carries no tail.
+fn block_tail_expr(block: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut cursor = block.walk();
+    let last = block
+        .named_children(&mut cursor)
+        .filter(|c| !matches!(c.kind(), "line_comment" | "block_comment"))
+        .last()?;
+    if last.kind() != "expression_statement" {
+        return Some(last);
+    }
+    match last.child(last.child_count().saturating_sub(1)) {
+        Some(semi) if semi.kind() == ";" => None,
+        _ => last.named_child(0),
+    }
 }
 
 /// Whether a `closure_expression` is a `move` closure (`move || …`). The
@@ -345,8 +430,10 @@ mod tests {
 
     #[test]
     fn flags_pub_fn_with_owned_string() {
+        // The body only borrows `name` (method receiver), so `&str` would
+        // compile — the warning holds.
         assert_eq!(
-            run("pub fn greet(name: String) -> String { name }").len(),
+            run("pub fn greet(name: String) -> String { name.to_uppercase() }").len(),
             1
         );
     }
@@ -631,5 +718,78 @@ mod tests {
     fn flags_borrow_only_fn_referenced_nowhere() {
         // Negative control: no value reference anywhere — still flags.
         assert_eq!(run("pub fn f(s: String) -> usize { s.len() }").len(), 1);
+    }
+
+    #[test]
+    fn allows_param_returned_by_value_in_if_let_else_tail() {
+        // Repro of #7421 (gitui-org/gitui `emoji.rs`): when the input has no
+        // emoji, `replace_all` yields `Cow::Borrowed` and the `else` branch
+        // hands the caller's own allocation straight back by returning `s` by
+        // value. An `&str` param would force `s.to_owned()` there, so owning is
+        // correct.
+        assert!(
+            run("pub fn emojifi_string(s: String) -> String { if let Cow::Owned(a) = EMOJI_REPLACER.replace_all(&s) { a } else { s } }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_moved_out_by_return_statement() {
+        // `return s;` moves the owned value out as the function's return value.
+        assert!(run("pub fn f(s: String) -> String { return s; }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_returned_by_value_in_if_else_tail() {
+        // The param is returned by value in the `else` arm of the body's tail
+        // `if`; the arm flows to the function return, so `s` is moved out.
+        assert!(
+            run("pub fn g(s: String, cond: bool) -> String { if cond { other() } else { s } }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_returned_by_value_in_match_arm_tail() {
+        assert!(
+            run("pub fn h(s: String, n: u8) -> String { match n { 0 => other(), _ => s } }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_param_only_borrowed_via_len() {
+        // Control: the param is only borrowed (`s.len()` takes `&self`), never
+        // moved out — `&str` would compile, so the warning holds.
+        assert_eq!(run("pub fn h(s: String) -> usize { s.len() }").len(), 1);
+    }
+
+    #[test]
+    fn flags_param_only_read_in_println() {
+        // Control: the param is only borrowed by the format macro, never moved
+        // out — the warning holds.
+        assert_eq!(run(r#"pub fn i(s: String) { println!("{}", s); }"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_param_method_call_in_tail_position() {
+        // `s.clone()` in tail position borrows `s` as the method receiver — the
+        // tail is a `call_expression`, not a bare `identifier`, so the param is
+        // not moved out and the warning holds.
+        assert_eq!(
+            run("pub fn f(s: String) -> String { s.clone() }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_borrowed_in_middle_statement_not_tail() {
+        // The `if` that mentions `s` is a middle statement (trailing `;`), so its
+        // value is discarded, not returned; the real tail is `g()`. `s` is only
+        // borrowed, so the warning holds.
+        assert_eq!(
+            run("pub fn f(s: String) -> usize { if s.is_empty() { one() } else { two() }; g() }").len(),
+            1
+        );
     }
 }
