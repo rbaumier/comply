@@ -3,9 +3,11 @@
 //! as a possible O(n*m) array scan. EXCEPTIONS: `.includes()`/`.indexOf()` whose
 //! sole argument is a string literal, or whose receiver is statically a string
 //! (a string literal/template, a string-returning call like `s.toLowerCase()`,
-//! or an identifier narrowed to `string` by a `typeof x === "string"` guard in
-//! an enclosing `&&` chain), is a `String.prototype` substring search, not array
-//! membership — there is no collection to index, so it is not flagged;
+//! an identifier bound to a `const` initialized to one of those
+//! (`const lc = s.toLowerCase(); lc.includes(x)`), or an identifier narrowed to
+//! `string` by a `typeof x === "string"` guard in an enclosing `&&` chain), is a
+//! `String.prototype` substring search, not array membership — there is no
+//! collection to index, so it is not flagged;
 //! a two-argument `.indexOf(value, fromIndex)` is a forward-scan cursor (a
 //! positional string/array walk), never a membership lookup, so it is not flagged;
 //! a method-call chain rooted in an inline literal array (`["./", "/"].includes(x)`,
@@ -97,11 +99,14 @@ impl OxcCheck for Check {
         // membership — `"abc".includes(x)` or `s.toLowerCase().includes(query)`
         // has no collection to hash into a Map/Set, so the O(1)-lookup advice is a
         // category error. Skip when the receiver is statically a string: a string
-        // literal/template, a call to a string-returning method, or an identifier
-        // narrowed to `string` by a `typeof x === "string"` guard in an enclosing
-        // `&&` chain (`typeof preset === "string" && preset.includes(word)`).
+        // literal/template, a call to a string-returning method, an identifier
+        // bound to a `const` initialized to one of those
+        // (`const lc = s.toLowerCase(); lc.includes(x)`), or an identifier narrowed
+        // to `string` by a `typeof x === "string"` guard in an enclosing `&&` chain
+        // (`typeof preset === "string" && preset.includes(word)`).
         if matches!(method, "includes" | "indexOf")
             && (receiver_is_string(&member.object)
+                || receiver_is_const_bound_string(&member.object, semantic)
                 || receiver_is_typeof_narrowed_string(&member.object, node, semantic))
         {
             return;
@@ -422,6 +427,40 @@ fn receiver_is_string(expr: &Expression<'_>) -> bool {
         ),
         _ => false,
     }
+}
+
+/// True when `expr` is an identifier bound to a `const` declaration whose
+/// initializer is statically a string (`receiver_is_string`: a string
+/// literal/template or a string-returning call like `component.toLowerCase()`).
+/// Such a binding names a string one binding removed
+/// (`const lc = s.toLowerCase(); lc.includes(x)`), so `.includes()`/`.indexOf()`
+/// on it is a `String.prototype` substring search — the same category as the
+/// inline `s.toLowerCase().includes(x)` form — with no collection to hash into a
+/// Map/Set. Only `const` bindings are followed: a `let`/`var` could be reassigned
+/// to a non-string, so its static type is not guaranteed.
+fn receiver_is_const_bound_string<'a>(
+    expr: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(id) = expr else {
+        return false;
+    };
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let AstKind::VariableDeclarator(decl) =
+        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
+    else {
+        return false;
+    };
+    if decl.kind != VariableDeclarationKind::Const {
+        return false;
+    }
+    matches!(&decl.init, Some(init) if receiver_is_string(init))
 }
 
 /// True when the `.includes()`/`.indexOf()` receiver is an identifier proven to
@@ -1398,6 +1437,84 @@ for (const parent of parents) {
         let diags = run(r#"
 for (const item of items) {
     const hit = arr.find((x) => x.id === key);
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_const_bound_string_call_receiver_includes_in_loop() {
+        // Regression for #7420: `lc` is a `const` bound to `component.toLowerCase()`,
+        // a string-returning call, so `lc.includes(keyword)` is a substring search —
+        // the same category as the inline `s.toLowerCase().includes(x)` form, with no
+        // collection to index into a Map/Set.
+        assert!(
+            run(r#"
+function getMatchedPackage(component) {
+    const lc = component.toLowerCase();
+    for (const pkgConfig of lazyPackages) {
+        const keyword = pkgConfig.name.split('/').pop();
+        if (lc.includes(keyword)) { return pkgConfig; }
+    }
+    return null;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_const_bound_string_literal_receiver_includes_in_loop() {
+        // A `const` bound to a string literal is statically a string one binding
+        // removed, so `.includes()` on it is a substring search.
+        assert!(
+            run(r#"
+const s = 'prefix';
+for (const x of xs) {
+    if (s.includes(x)) {}
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_const_bound_non_string_call_receiver_includes_in_loop() {
+        // A `const` bound to a plain function call (`getKeywords()`) is NOT provably
+        // a string — its result may be an array — so the membership scan is still the
+        // genuine O(n*m) pattern the rule targets.
+        let diags = run(r#"
+const arr = getKeywords();
+for (const x of xs) {
+    if (arr.includes(x)) {}
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_let_bound_string_receiver_includes_in_loop() {
+        // A `let` binding could be reassigned to a non-string after the string init,
+        // so its static type is not guaranteed — only `const` bindings are followed.
+        let diags = run(r#"
+let s = 'prefix';
+for (const x of xs) {
+    if (s.includes(x)) {}
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_array_param_membership_in_loop() {
+        // #7420 control: `customKeywords` is a function parameter (an unbounded
+        // array) — a genuine array-membership scan the rule targets, unaffected by
+        // the const-bound string exemption.
+        let diags = run(r#"
+function scan(customKeywords) {
+    for (const k of ks) {
+        if (customKeywords.includes(k)) {}
+    }
 }
 "#);
         assert_eq!(diags.len(), 1);
