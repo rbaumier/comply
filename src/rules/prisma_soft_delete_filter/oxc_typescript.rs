@@ -157,6 +157,30 @@ fn is_null_or_undefined(expr: &Expression) -> bool {
         || matches!(expr, Expression::Identifier(id) if id.name == "undefined")
 }
 
+/// Module specifier the Prisma client identifier `ident` is imported from
+/// (`import { prisma } from '@scope/prisma'` → `"@scope/prisma"`). `None` when
+/// the binding is unresolved or not an import — e.g. a local
+/// `const prisma = new PrismaClient()` — so the schema discovery falls back to
+/// the file's own package boundary.
+fn client_import_specifier<'a>(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let symbol_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    // The binding declaration is an import specifier under an `ImportDeclaration`
+    // (or, defensively, that declaration node itself); read its source string.
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::ImportDeclaration(decl) => Some(decl.source.value.as_str()),
+            _ => None,
+        })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -192,15 +216,28 @@ impl OxcCheck for Check {
         // When a schema.prisma is available, skip models that don't have a
         // `deletedAt` field — they can't have soft-deleted rows, so the
         // missing filter is not a bug. Fall through when no schema is found
-        // (backward-compatible: fire on all).
+        // (backward-compatible: fire on all). The authoritative schema is the
+        // one backing the client this call uses: when `prisma` is imported from a
+        // workspace package (`import { prisma } from '@scope/prisma'`), that
+        // package's schema is consulted (in the dominant monorepo layout the
+        // schema lives in a dedicated sibling package, outside this file's own
+        // package boundary).
         if let Expression::StaticMemberExpression(inner) = &member.object {
             let model_name = inner.property.name.as_str();
-            if ctx.project.prisma_model_is_soft_delete(ctx.path, model_name) == Some(false) {
-                // A schema governs this file's package and this model has no
-                // `deletedAt` column — there are no soft-deleted rows, so the
-                // missing filter is not a bug. (`None` = no schema → fall
-                // through to fire-on-all; `Some(true)` = the model is
-                // soft-delete → fall through to flag.)
+            let client_specifier = match &inner.object {
+                Expression::Identifier(client) => client_import_specifier(client, semantic),
+                _ => None,
+            };
+            if ctx
+                .project
+                .prisma_model_is_soft_delete(ctx.path, model_name, client_specifier)
+                == Some(false)
+            {
+                // A schema governs this query and this model has no `deletedAt`
+                // column — there are no soft-deleted rows, so the missing filter
+                // is not a bug. (`None` = no schema → fall through to
+                // fire-on-all; `Some(true)` = the model is soft-delete → fall
+                // through to flag.)
                 return;
             }
         }
@@ -285,6 +322,62 @@ mod tests {
         let source = SourceFile { path: file_path.clone(), language: Language::TypeScript };
         let ctx = ProjectCtx::load(&[&source], &Config::default());
         (dir, ctx, file_path)
+    }
+
+    /// Build a monorepo under a tempdir: a dedicated `@scope/prisma` package owns
+    /// `schema.prisma` (`Recipient` without `deletedAt`, `Envelope` with it) and a
+    /// consumer `@scope/lib` package has no schema of its own. Returns the loaded
+    /// `ProjectCtx` and a source file path inside the consumer package.
+    fn monorepo_with_sibling_prisma_schema() -> (tempfile::TempDir, ProjectCtx, std::path::PathBuf) {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let prisma_pkg = dir.path().join("packages/prisma");
+        std::fs::create_dir_all(&prisma_pkg).unwrap();
+        std::fs::write(prisma_pkg.join("package.json"), r#"{"name":"@scope/prisma"}"#).unwrap();
+        std::fs::write(
+            prisma_pkg.join("schema.prisma"),
+            "model Recipient {\n  id String @id\n  documentDeletedAt DateTime?\n}\n\nmodel Envelope {\n  id String @id\n  deletedAt DateTime?\n}\n",
+        )
+        .unwrap();
+        let lib_pkg = dir.path().join("packages/lib");
+        std::fs::create_dir_all(lib_pkg.join("src")).unwrap();
+        std::fs::write(lib_pkg.join("package.json"), r#"{"name":"@scope/lib"}"#).unwrap();
+        let file_path = lib_pkg.join("src/repo.ts");
+        std::fs::write(&file_path, "export const x = 1;").unwrap();
+        let source = SourceFile { path: file_path.clone(), language: Language::TypeScript };
+        let ctx = ProjectCtx::load(&[&source], &Config::default());
+        (dir, ctx, file_path)
+    }
+
+    // Regression for #7434: the client is imported from a dedicated sibling
+    // package `@scope/prisma` whose schema's `Recipient` has no `deletedAt`, so
+    // the missing filter is not a bug and the query must not be flagged.
+    #[test]
+    fn ignores_recipient_when_client_imported_from_sibling_package() {
+        let (_dir, project, file_path) = monorepo_with_sibling_prisma_schema();
+        let src = r#"
+            import { prisma } from '@scope/prisma';
+            const r = await prisma.recipient.findMany({ where: {} });
+        "#;
+        assert!(run_with_project(src, &file_path, &project).is_empty());
+    }
+
+    // The same fixture: `Envelope` has `deletedAt` in `@scope/prisma`, so a
+    // query that omits the filter is still flagged (no false negative).
+    #[test]
+    fn flags_envelope_when_client_imported_from_sibling_package() {
+        let (_dir, project, file_path) = monorepo_with_sibling_prisma_schema();
+        let src = r#"
+            import { prisma } from '@scope/prisma';
+            const e = await prisma.envelope.findFirst({ where: {} });
+        "#;
+        assert_eq!(run_with_project(src, &file_path, &project).len(), 1);
     }
 
     #[test]
