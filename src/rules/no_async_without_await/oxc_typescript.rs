@@ -192,15 +192,21 @@ fn has_decorators(
     false
 }
 
-/// Check if the async function is a direct member of a class that declares an
-/// `implements` clause. The immediate parent must be a `MethodDefinition`
-/// (`async formData() {}`) or a `PropertyDefinition` (`handleError = async () =>
-/// {}`); a nested arrow inside a method body is not a class member and is not
-/// covered. comply is syntactic and cannot read the implemented interface, but
-/// `async` on a member of an `implements`-ing class is the standard way to
-/// satisfy a Promise-returning interface method without writing the explicit
-/// return annotation, so the missing `await` is not a smell.
-fn is_method_of_implementing_class(
+/// Check if the async function is a direct member of a class that has a
+/// supertype — either an `extends` clause (`class C extends Base`) or an
+/// `implements` clause (`class C implements I`). The immediate parent must be a
+/// `MethodDefinition` (`async formData() {}`) or a `PropertyDefinition`
+/// (`handleError = async () => {}`); a nested arrow inside a method body is not a
+/// class member and is not covered. comply is syntactic and cannot read the base
+/// class or the implemented interface, but `async` on such a member is the
+/// standard way to satisfy a Promise-returning inherited or interface method
+/// without writing the explicit return annotation: an override of an abstract or
+/// virtual base method must keep returning a `Promise` under Liskov substitution
+/// (dropping `async` would make it return `void`, not assignable to the base's
+/// `Promise<T>`), just as an interface method must. So the missing `await` is not
+/// a smell. Members of a class with no supertype, and standalone functions, stay
+/// flagged.
+fn is_method_of_class_with_supertype(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
@@ -212,7 +218,10 @@ fn is_method_of_implementing_class(
     ) {
         return false;
     }
-    enclosing_class(member.id(), nodes).is_some_and(|class| ClassShape::of(class).has_implements)
+    enclosing_class(member.id(), nodes).is_some_and(|class| {
+        let shape = ClassShape::of(class);
+        shape.has_super_class || shape.has_implements
+    })
 }
 
 /// Check if the async function is a class method marked `override`. The
@@ -222,9 +231,7 @@ fn is_method_of_implementing_class(
 /// returning, the override must stay `async` to preserve the `Promise` return
 /// type under Liskov substitution, so the missing `await` is not a smell. The
 /// immediate parent must be the `MethodDefinition`; a nested arrow inside the
-/// body is not the override and stays flagged. Mirrors the interface-driven
-/// `is_method_of_implementing_class` exemption for the `extends`-only case,
-/// where `ClassShape::has_implements` is false.
+/// body is not the override and stays flagged.
 fn is_override_method(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -497,24 +504,22 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Async method/property of a class with an `implements` clause. The
+            // Async method/property of a class that has a supertype — an
+            // `extends` clause or an `implements` clause. The base class or
             // interface controls the contract (commonly `(): Promise<T>`), and
-            // `async` is the standard way to satisfy it without an explicit
-            // return annotation, so the missing `await` is not a smell. Members
-            // of a class without `implements`, and standalone functions, stay
-            // flagged.
-            if is_method_of_implementing_class(node, semantic) {
+            // `async` is the standard way to override or satisfy it without an
+            // explicit return annotation, so the missing `await` is not a smell.
+            // Members of a class with no supertype, and standalone functions,
+            // stay flagged.
+            if is_method_of_class_with_supertype(node, semantic) {
                 continue;
             }
 
             // Async class method marked `override`. The `override` keyword binds
             // the method's signature to the parent class's contract (possibly an
-            // external type such as the Cloudflare Workers `DurableObject`): when
-            // the parent declares the method `async`, the override must stay
-            // `async` to preserve the `Promise` return type under Liskov
-            // substitution, so the missing `await` is not a smell. This is the
-            // `extends`-only analog of `is_method_of_implementing_class`, since an
-            // `extends`-only class has `ClassShape::has_implements == false`.
+            // external type such as the Cloudflare Workers `DurableObject`): the
+            // override must stay `async` to preserve the parent's `Promise` return
+            // type under Liskov substitution, so the missing `await` is not a smell.
             if is_override_method(node, semantic) {
                 continue;
             }
@@ -859,9 +864,10 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_async_method_of_non_implementing_class() {
-        // Negative space (a): an async method with no await in a class WITHOUT an
-        // `implements` clause has no external contract to satisfy — stays flagged.
+    fn still_flags_async_method_of_class_without_supertype() {
+        // Negative space: an async method with no await in a class with no
+        // supertype (neither `extends` nor `implements`) has no external contract
+        // to satisfy — it stays flagged.
         let src = r#"class Plain {
             async formData() { return 42; }
         }"#;
@@ -890,9 +896,9 @@ mod tests {
         // `$DurableObject extends DurableObject`. The `override` keyword binds the
         // method to the parent class's contract: the Cloudflare Workers
         // `DurableObject.webSocketMessage` is declared `async`/`Promise<void>`, so
-        // the override must stay `async` even though the body never awaits.
-        // The class uses `extends` only (no `implements`), so the interface
-        // exemption does not fire — the `override` keyword carries the contract.
+        // the override must stay `async` even though the body never awaits. The
+        // class has an `extends` supertype, so the supertype exemption applies and
+        // the explicit `override` keyword confirms the parent-owned contract.
         let src = r#"export class $DurableObject extends DurableObject {
             override async webSocketMessage(client: WebSocket, message: ArrayBuffer | string) {
                 if (import.meta._websocket) {
@@ -904,14 +910,26 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_non_override_async_method_extends_only_class() {
-        // Negative space for #6564: a plain (non-`override`) async method with no
-        // await in an `extends`-only class has no parent-owned contract — it stays
-        // flagged. Only the `override` keyword carries the exemption.
-        let src = r#"class C extends Base {
-            async foo() { return 1; }
+    fn allows_async_method_of_extends_only_class() {
+        // Regression for rbaumier/comply#7372 — medusajs/medusa workflow/job/
+        // subscriber loaders. `onFileLoaded` overrides an `abstract` base method
+        // declared `(): Promise<void> | never` on `ResourceLoader`, called as
+        // `await this.onFileLoaded(...)`, but WITHOUT the `override` keyword
+        // (`noImplicitOverride` is off by default). Dropping `async` would make the
+        // override return `void`, not assignable to the base's `Promise<void>`
+        // return, breaking Liskov substitution — so `async` is mandatory even
+        // though the body never awaits. comply is single-file and cannot read the
+        // base class, so any method of a class with an `extends` supertype is exempt.
+        let src = r#"class WorkflowLoader extends ResourceLoader {
+            protected async onFileLoaded(path: string, fileExports: Record<string, unknown>) {
+                if (isFileSkipped(fileExports)) return;
+                logger.debug(`Registering workflows from ${path}.`);
+            }
         }"#;
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
+        // Minimal shape: a plain (non-`override`) async method in an `extends`-only
+        // class is exempt on the presence of the `extends` clause alone.
+        assert!(run_on("class C extends Base { async foo() { return 1; } }").is_empty());
     }
 
     #[test]
