@@ -3,23 +3,28 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, VariableDeclarator};
+use oxc_ast::ast::{BindingPattern, Expression, VariableDeclarationKind, VariableDeclarator};
 use std::sync::Arc;
 
 pub struct Check;
 
 /// True when this declarator's shape would let TypeScript infer an evolving
-/// implicit type. Three cases, all requiring no type annotation:
+/// implicit type. All cases require no type annotation:
 /// - no initializer at all (`let a;`)
 /// - initialized to `null` (`let c = null;`)
 /// - initialized to an empty array (`const b = [];`)
-fn evolves_to_any(declarator: &VariableDeclarator) -> bool {
+///
+/// The first two evolve only via reassignment, which is impossible for `const`
+/// (`const x = null` has the fixed type `null`), so they are gated on the
+/// declaration kind. An empty array evolves for any kind — its contents mutate
+/// in place via `.push()` — so that case is kind-independent.
+fn evolves_to_any(declarator: &VariableDeclarator, kind: VariableDeclarationKind) -> bool {
     if declarator.type_annotation.is_some() {
         return false;
     }
     match &declarator.init {
-        None => true,
-        Some(Expression::NullLiteral(_)) => true,
+        None => kind != VariableDeclarationKind::Const,
+        Some(Expression::NullLiteral(_)) => kind != VariableDeclarationKind::Const,
         Some(Expression::ArrayExpression(array)) => array.elements.is_empty(),
         Some(_) => false,
     }
@@ -49,7 +54,7 @@ impl OxcCheck for Check {
         }
 
         for declarator in &decl.declarations {
-            if !evolves_to_any(declarator) {
+            if !evolves_to_any(declarator, decl.kind) {
                 continue;
             }
             // Only simple identifier bindings carry an evolving type. Biome's
@@ -166,6 +171,20 @@ mod tests {
     #[test]
     fn allows_annotated_null() {
         assert!(run_on("let workspace: Workspace | null = null;").is_empty());
+    }
+
+    #[test]
+    fn allows_const_null() {
+        // A `const` cannot be reassigned, so `const x = null` has the fixed
+        // type `null` and never evolves.
+        assert!(run_on("const x = null;").is_empty());
+        assert!(run_on("export const _ThemesComponent = null;").is_empty());
+    }
+
+    #[test]
+    fn flags_null_initialized_var() {
+        // `let`/`var` null bindings still evolve via reassignment.
+        assert_eq!(run_on("var z = null;").len(), 1);
     }
 
     #[test]
