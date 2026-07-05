@@ -5,8 +5,10 @@
 //!
 //! ## `if let` chains (pattern-binding mode)
 //!
-//! When a chain contains at least one `let_condition` (`if let PAT = EXPR`),
-//! the rule switches to comparing `(condition_text, body_text)` instead of
+//! When a chain has a branch whose condition introduces a `let` binding — a
+//! bare `if let PAT = EXPR` (`let_condition`) or a `&&` let-chain (`let_chain`,
+//! `if let A && let B`) — the rule switches to comparing `(condition_text,
+//! body_text)` instead of
 //! body text alone. Two `if let` branches can share an identical body that
 //! references a pattern-bound name (`r`, `n`, …) while the `r` in each
 //! branch is a distinct binding introduced by a different pattern — a
@@ -104,7 +106,14 @@ fn collect_if_branches(node: tree_sitter::Node, source: &[u8], branches: &mut Ve
         .and_then(|c| c.utf8_text(source).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    let is_let_condition = cond_node.is_some_and(|c| c.kind() == "let_condition");
+    // Pattern-binding mode engages when the condition introduces a `let`
+    // binding the branch body can reference: a bare `if let PAT = EXPR`
+    // (`let_condition`) or a `&&` let-chain (`let_chain`, `if let A && let B`).
+    // Both are the condition field's own node kind, so a `let` nested deeper in
+    // the condition (e.g. inside a closure) — which binds nothing visible to the
+    // body — correctly does not qualify.
+    let is_let_condition =
+        cond_node.is_some_and(|c| matches!(c.kind(), "let_condition" | "let_chain"));
 
     if let Some(body) = node.child_by_field_name("consequence") {
         let line = body.start_position().row + 1;
@@ -249,6 +258,54 @@ mod tests {
         Some(r.trim_start())
     } else {
         None
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// #7328 (biomejs/biome use_inline_script_id.rs): two `&&` let-chain
+    /// branches whose identical-text bodies each reference a `name` bound by
+    /// that branch's OWN let-chain (from different sources) are not duplicates.
+    /// The condition parses as a `let_chain`, so pattern-binding mode must
+    /// engage for it just as it does for a bare `let_condition`.
+    #[test]
+    fn allows_let_chain_branches_with_distinct_patterns() {
+        let src = r#"fn f(m: M, set: &mut S) {
+    if let Some(pm) = m.as_prop() && let Some(name) = pm.name() {
+        set.insert(name);
+    } else if let Some(sh) = m.as_shorthand() && let Some(name) = sh.name() {
+        set.insert(name);
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A `&&` let-chain repeated verbatim (identical condition AND body) is a
+    /// genuine duplicate and still fires under pattern-binding mode.
+    #[test]
+    fn flags_two_identical_let_chain_branches() {
+        let src = r#"fn f(m: M, set: &mut S) {
+    if let Some(pm) = m.as_prop() && let Some(name) = pm.name() {
+        set.insert(name);
+    } else if let Some(pm) = m.as_prop() && let Some(name) = pm.name() {
+        set.insert(name);
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Only the top-level condition node kind flips a branch into pattern-binding
+    /// mode: a `let_condition` inside a closure embedded in the condition binds
+    /// nothing the branch body can see (the condition node is a `call_expression`
+    /// here), so two such non-let branches with identical bodies stay a
+    /// trivially-mergeable duplicate and are still flagged.
+    #[test]
+    fn flags_when_let_condition_is_inside_a_closure() {
+        let src = r#"fn f(a: Vec<i32>, b: Vec<i32>) {
+    if a.iter().any(|x| if let Some(y) = x.first() { *y > 0 } else { false }) {
+        foo();
+    } else if b.iter().any(|x| if let Some(y) = x.first() { *y > 0 } else { false }) {
+        foo();
     }
 }"#;
         assert_eq!(run_on(src).len(), 1);
