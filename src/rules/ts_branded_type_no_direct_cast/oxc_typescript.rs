@@ -2,7 +2,7 @@
 //! outside a function whose declared return type is that brand (its factory).
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, name_is_generic_type_param_in_scope};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     Expression, PropertyKey, TSSignature, TSType, TSTypeName, TSTypeOperatorOperator,
@@ -71,6 +71,23 @@ fn is_structurally_branded(ty: &TSType) -> bool {
         }
         TSType::TSIntersectionType(intersection) => {
             intersection.types.iter().any(is_brand_marker_operand)
+        }
+        _ => false,
+    }
+}
+
+/// True when `ty` is a generic instantiation (`RoutesById<TRouteTree>`) whose base
+/// is not a brand helper — a container/mapped/record type, not a nominal brand.
+/// Mirrors the brand-helper gate in `is_structurally_branded`: a generic
+/// instantiation is branded only when its base passes `is_brand_helper_name`
+/// (`Brand<string, 'user'>`); any other `Foo<Bar>` is an ordinary generic type.
+/// The base is compared on its trailing segment, so a namespace-qualified helper
+/// (`B.Brand<…>`) still counts as a brand.
+fn is_non_brand_generic_instantiation(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSParenthesizedType(p) => is_non_brand_generic_instantiation(&p.type_annotation),
+        TSType::TSTypeReference(r) if r.type_arguments.is_some() => {
+            !type_reference_base_name(ty).is_some_and(is_brand_helper_name)
         }
         _ => false,
     }
@@ -303,13 +320,32 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The target resolves to a generic type parameter of an enclosing scope
+        // (`class BaseRoute<TId extends string> { … id as TId }`). A type parameter
+        // is a per-instantiation placeholder, not a nominal brand — there is no
+        // validator to route through — so casting to it is idiomatic narrowing.
+        if name_is_generic_type_param_in_scope(base_name, node.id(), semantic) {
+            return;
+        }
+
         // The name heuristic catches `*Id`/`*Token`/… but plain string-union
         // aliases share that naming (`type ColorSchemeId = 'a' | 'b'`) without
         // being nominal. When the target type is defined in this file, trust its
         // structure: only an intersection that adds a brand marker (or a brand
         // helper instantiation) is genuinely branded. Imported/built-in targets
         // have no local definition to inspect, so they keep the name heuristic.
-        if local_alias_is_branded(base_name, semantic) == Some(false) {
+        let local_branded = local_alias_is_branded(base_name, semantic);
+        if local_branded == Some(false) {
+            return;
+        }
+
+        // A target with no local definition whose cast site is a generic
+        // instantiation of a non-brand-helper base (`routesById as
+        // RoutesById<TRouteTree>`) is a container/mapped/record type, not a nominal
+        // brand — only a brand-helper instantiation carries a brand, as
+        // `is_structurally_branded` gates. A locally-defined target is left to
+        // `local_alias_is_branded` above so a local branded generic alias still fires.
+        if local_branded.is_none() && is_non_brand_generic_instantiation(&as_expr.type_annotation) {
             return;
         }
 
@@ -600,5 +636,68 @@ const m = raw as MachineId;
 const t = raw as HM.TypeId;"#;
         let diags = run_rule_gated(&Check, src, "src/domain/ids.ts");
         assert_eq!(diags.len(), 4, "arbitrary-value data-brand casts must still fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_cast_to_enclosing_class_type_parameter() {
+        // Issue #7336 — `TId` is a generic type parameter of the enclosing class,
+        // a per-instantiation placeholder resolved by TypeScript, not a nominal
+        // brand. `id as TId` is the idiomatic way a generic class narrows a
+        // computed value to its own type parameter; there is no validator to route
+        // through. Its name ends in `Id`, but it resolves to a type parameter.
+        let src = r#"class BaseRoute<TId extends string> {
+  setId(id: string) {
+    const x = id as TId;
+    return x;
+  }
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/route.ts");
+        assert!(diags.is_empty(), "cast to an enclosing class type parameter must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_cast_to_non_brand_generic_instantiation() {
+        // Issue #7336 — `RoutesById<TRouteTree>` is a generic mapped/record type,
+        // not a nominal brand: a generic instantiation whose base is not a brand
+        // helper. Its base ends in `Id`, but only a brand-helper instantiation
+        // carries a brand. (The type parameter `TRouteTree`, not `RoutesById`, so
+        // this exercises the generic-instantiation guard, not the type-param one.)
+        let src = r#"function f<TRouteTree>(routesById: unknown) {
+  return routesById as RoutesById<TRouteTree>;
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/router.ts");
+        assert!(diags.is_empty(), "cast to a non-brand generic instantiation must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_cast_to_brand_helper_instantiation() {
+        // Negative space: a brand-helper instantiation (`Brand<string, 'user'>`)
+        // IS a nominal brand — its base passes `is_brand_helper_name` — so the
+        // generic-instantiation guard must not exempt it; the direct cast fires.
+        let src = r#"const b = x as Brand<string, 'user'>;"#;
+        let diags = run_rule_gated(&Check, src, "src/domain/b.ts");
+        assert_eq!(diags.len(), 1, "cast to a brand-helper instantiation must still fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_cast_to_local_generic_branded_alias() {
+        // Negative space: the generic-instantiation guard applies only to targets
+        // with no local definition. A locally-defined generic alias that IS branded
+        // (`type Id<T> = string & { __brand: T }`) stays nominal — the direct cast
+        // to `Id<'user'>` bypasses the validator and must still fire.
+        let src = r#"type Id<T> = string & { readonly __brand: T };
+const x = raw as Id<'user'>;"#;
+        let diags = run_rule_gated(&Check, src, "src/domain/id.ts");
+        assert_eq!(diags.len(), 1, "cast to a local generic branded alias must still fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_cast_to_namespace_qualified_brand_helper_instantiation() {
+        // Negative space: a namespace-qualified brand helper (`B.Brand<…>`) is a
+        // brand too — the base is compared on its trailing segment — so the
+        // generic-instantiation guard must not exempt it; the cast fires.
+        let src = r#"const b = x as B.Brand<string, 'user'>;"#;
+        let diags = run_rule_gated(&Check, src, "src/domain/b.ts");
+        assert_eq!(diags.len(), 1, "cast to a qualified brand-helper instantiation must still fire, got: {diags:?}");
     }
 }
