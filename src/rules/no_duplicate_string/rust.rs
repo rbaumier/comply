@@ -69,6 +69,41 @@ pub(super) fn is_format_template_arg(node: tree_sitter::Node<'_>, source: &[u8])
         .is_some_and(|first| first.id() == node.id())
 }
 
+/// Macros whose string arguments are compile-time `cfg` predicate tokens
+/// (`cfg!(feature = "x")`, `cfg_attr!(...)`). Rust requires these values to be
+/// inline literal tokens — `cfg!(feature = FOO)` does not compile — so a
+/// repeated cfg feature name cannot be hoisted to a `const`. This is the
+/// macro-invocation form of the `#[cfg(...)]` attribute already skipped in
+/// `should_ignore_string_node`.
+const CFG_MACROS: &[&str] = &["cfg", "cfg_attr"];
+
+/// True when `node` is a string argument of a `cfg!(...)` / `cfg_attr!(...)`
+/// macro invocation. Ascends through the (possibly nested, e.g.
+/// `cfg!(all(feature = "x"))`) `token_tree` wrappers to the enclosing
+/// `macro_invocation` and matches its bare macro name. Such a literal is a
+/// compile-time cfg predicate token that cannot be extracted to a `const`, so
+/// it must not count toward the duplicate tally.
+pub(super) fn is_cfg_macro_arg(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "token_tree" => current = parent,
+            "macro_invocation" => {
+                let Some(macro_name) = parent.child_by_field_name("macro") else {
+                    return false;
+                };
+                let Ok(name) = macro_name.utf8_text(source) else {
+                    return false;
+                };
+                let bare = name.rsplit("::").next().unwrap_or(name);
+                return CFG_MACROS.contains(&bare);
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// True when `node` sits inside a `macro_rules!` definition body. The arm
 /// bodies of a `macro_definition` are raw token trees: a string literal there
 /// is template code spliced into every expansion (typically a `concat!`
@@ -450,6 +485,59 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_cfg_feature_flag_strings() {
+        // The issue's FP (swc): `cfg!(feature = "typescript")` used as a
+        // compile-time boolean across many parser methods. `cfg!` requires a
+        // literal token — `cfg!(feature = TS)` does not compile — so the
+        // feature name cannot be hoisted to a `const`.
+        let src = r#"
+            fn a() -> bool { if !cfg!(feature = "typescript") { return false; } true }
+            fn b() -> bool { if !cfg!(feature = "typescript") { return false; } true }
+            fn c() -> bool { if !cfg!(feature = "typescript") { return false; } true }
+            fn d() -> bool { if !cfg!(feature = "typescript") { return false; } true }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_cfg_attr_macro_arg() {
+        // The `cfg_attr!(...)` macro-invocation form: its cfg predicate string
+        // is equally a compiler-mandated literal token, not extractable.
+        let src = r#"
+            fn a() { let _ = cfg_attr!(feature = "postgres_backend", derive(X)); }
+            fn b() { let _ = cfg_attr!(feature = "postgres_backend", derive(X)); }
+            fn c() { let _ = cfg_attr!(feature = "postgres_backend", derive(X)); }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_nested_cfg_predicate() {
+        // `cfg!(all(...))` / `cfg!(not(...))` nest the feature string in an
+        // inner `token_tree`; it is still a cfg predicate token.
+        let src = r#"
+            fn a() -> bool { cfg!(all(feature = "async-runtime", unix)) }
+            fn b() -> bool { cfg!(all(feature = "async-runtime", unix)) }
+            fn c() -> bool { cfg!(not(feature = "async-runtime")) }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_duplicate_string_in_non_cfg_macro() {
+        // Precision: only `cfg!`/`cfg_attr!` args are exempt. A genuine
+        // duplicate string argument to an ordinary macro is still extractable.
+        let src = r#"
+            fn f() {
+                log_event!("welcome-banner-label");
+                log_event!("welcome-banner-label");
+                log_event!("welcome-banner-label");
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
