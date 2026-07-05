@@ -107,7 +107,18 @@ impl OxcCheck for Check {
                 let left_text =
                     &ctx.source[left_span.start as usize..left_span.end as usize];
 
-                if left_text == "this.name" && !has_es5_prototype_fix {
+                // Only flag a `this.name` assignment whose right-hand side is a
+                // string literal: the suggested `name = 'X';` class field is an
+                // equivalent replacement only for a fixed name. A dynamic RHS
+                // (e.g. `this.constructor.name`, which lets each subclass report
+                // its own name) has no static-field equivalent, so skip it.
+                let name_rhs_is_string_literal =
+                    matches!(&assign.right, Expression::StringLiteral(_));
+
+                if left_text == "this.name"
+                    && name_rhs_is_string_literal
+                    && !has_es5_prototype_fix
+                {
                     let (line, column) = byte_offset_to_line_col(
                         ctx.source,
                         expr_stmt.span.start as usize,
@@ -213,6 +224,33 @@ mod tests {
         );
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("this.message"), "got {:?}", d[0].message);
+    }
+
+    #[test]
+    fn allows_this_name_from_constructor_name() {
+        // #7300: a base error class meant to be subclassed assigns the dynamic
+        // `this.constructor.name` so each subclass reports its own name. A static
+        // `name = 'X';` field would hard-code the base name, so this is not flagged.
+        let d = run_on(
+            "class ValidationError extends Error {\n\
+             constructor(message: string) {\n\
+             super(message);\n\
+             this.name = this.constructor.name;\n\
+             }\n\
+             }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_this_name_from_identifier() {
+        // A non-literal RHS (a variable) likewise has no static-field equivalent.
+        let d = run_on(
+            "class MyError extends Error {\n\
+             constructor(m: string, n: string) { super(m); this.name = n; }\n\
+             }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
     }
 
     #[test]
