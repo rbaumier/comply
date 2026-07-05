@@ -5,7 +5,10 @@
 //! single lowercase letters each followed by a period), which is lowercase by
 //! convention. The terminal-punctuation check accepts both ASCII (`.`/`!`/`?`)
 //! and CJK (`。`/`！`/`？`) terminators, so case-less scripts (Chinese,
-//! Japanese, Korean) are not flagged.
+//! Japanese, Korean) are not flagged. It gates on the description's **summary
+//! paragraph** — the first blank-line-delimited block — so a complete summary
+//! sentence passes regardless of trailing blank-line-separated elaboration
+//! (unfenced code examples, `TODO:` markers, condition enumerations).
 //!
 //! A `/** … */` comment whose description (the prose before the first `@tag`)
 //! is a single line and that documents a property/field signature — a
@@ -25,6 +28,17 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Strip the JSDoc comment markers (`/**`, leading `*`, trailing `*/`) and
+/// surrounding whitespace from a raw comment line, yielding its prose content.
+fn strip_comment_markers(line: &str) -> &str {
+    line.trim()
+        .trim_start_matches("/**")
+        .trim_start_matches("*/")
+        .trim_start_matches('*')
+        .trim_end_matches("*/")
+        .trim()
+}
 
 /// Extract description prose lines from a JSDoc comment text.
 ///
@@ -71,13 +85,7 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     let mut in_fence = false;
 
     for (i, line) in text.lines().enumerate() {
-        let trimmed = line.trim();
-        let content = trimmed
-            .trim_start_matches("/**")
-            .trim_start_matches("*/")
-            .trim_start_matches('*')
-            .trim_end_matches("*/")
-            .trim();
+        let content = strip_comment_markers(line);
 
         if content.starts_with("```") {
             if !in_fence {
@@ -99,12 +107,64 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
         description_lines.push((content.to_string(), i));
     }
 
-    drop_trailing_bare_url(&mut description_lines);
-    drop_trailing_footnote_anchor(&mut description_lines);
-    drop_trailing_table_rows(&mut description_lines);
-    drop_trailing_list_items(&mut description_lines);
-    drop_trailing_html_tag(&mut description_lines);
+    apply_trailing_normalizers(&mut description_lines);
     description_lines
+}
+
+/// Collect the description's **summary paragraph**: the first blank-line-
+/// delimited block of prose before the first `@tag`. Terminal-punctuation
+/// completeness is a property of this summary sentence, so any following
+/// blank-line-separated paragraphs (unfenced code examples, `TODO:` markers,
+/// condition enumerations) are elaboration and do not gate the check. The same
+/// trailing-block normalizers used for the whole description are applied to the
+/// summary, so a summary ending in a fenced block, table, list, URL, footnote
+/// anchor, or HTML close tag is still reduced to its concluding prose line.
+fn summary_paragraph_lines(text: &str) -> Vec<(String, usize)> {
+    let mut lines = Vec::new();
+    let mut in_fence = false;
+
+    for (i, line) in text.lines().enumerate() {
+        let content = strip_comment_markers(line);
+
+        if content.starts_with("```") {
+            if !in_fence {
+                drop_trailing_code_block_label(&mut lines);
+            }
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if content.starts_with('@') {
+            break;
+        }
+        if content.is_empty() || content == "/" {
+            if lines.is_empty() {
+                continue;
+            }
+            break;
+        }
+
+        lines.push((content.to_string(), i));
+    }
+
+    apply_trailing_normalizers(&mut lines);
+    lines
+}
+
+/// Reduce a trailing non-prose block to the concluding prose line by running the
+/// trailing-block normalizers in a fixed order: a bare/labeled URL, footnote
+/// anchor, Markdown table, bullet list, or inline HTML close tag at the end is
+/// not a sentence and must not gate the terminal-punctuation check. The order is
+/// shared by the whole-description and summary-paragraph paths so both reduce a
+/// trailing block identically.
+fn apply_trailing_normalizers(lines: &mut Vec<(String, usize)>) {
+    drop_trailing_bare_url(lines);
+    drop_trailing_footnote_anchor(lines);
+    drop_trailing_table_rows(lines);
+    drop_trailing_list_items(lines);
+    drop_trailing_html_tag(lines);
 }
 
 /// Drop a trailing line that is a bare URL (e.g. a reference link like
@@ -378,10 +438,13 @@ impl OxcCheck for Check {
                     });
                 }
 
-            // Last line must end with punctuation. A description written in a
-            // case-less script (CJK ideographs, kana, hangul) is exempt: such
-            // text does not use ASCII terminators, and short phrases routinely
-            // carry no closing mark at all, so requiring one is meaningless.
+            // The summary paragraph — the first blank-line-delimited block —
+            // must end with punctuation, so a complete summary sentence passes
+            // even when trailing blank-line-separated paragraphs (code examples,
+            // `TODO:` markers, condition enumerations) carry no closing period. A
+            // summary written in a case-less script (CJK ideographs, kana,
+            // hangul) is exempt: such text does not use ASCII terminators, and
+            // short phrases routinely carry no closing mark at all.
             //
             // A `/** … */` comment whose description (the prose before the
             // first `@tag`) is a single line and that documents a property/field
@@ -393,8 +456,9 @@ impl OxcCheck for Check {
             // terminal punctuation.
             let is_property_label = description_lines.len() == 1
                 && precedes_property(comment.span.end as usize, &property_starts, ctx.source);
-            let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
-            if let Some(ch) = last_text.trim_end().chars().last()
+            let summary_lines = summary_paragraph_lines(raw);
+            if let Some((last_text, last_offset)) = summary_lines.last()
+                && let Some(ch) = last_text.trim_end().chars().last()
                 && !is_terminal_punctuation(ch)
                 && !is_caseless_script_letter(ch)
                 && !is_property_label {
@@ -1362,5 +1426,106 @@ function f(): void {}
         assert_eq!(strip_trailing_close_tag("self closing <br/>"), None);
         assert_eq!(strip_trailing_close_tag("empty <>"), None);
         assert_eq!(strip_trailing_close_tag("plain prose"), None);
+    }
+
+    #[test]
+    fn ignores_trailing_unfenced_sql_example_after_summary() {
+        // Regression for rbaumier/comply#7353 — a complete summary sentence
+        // followed, after a blank line, by a raw (unfenced) SQL example must not
+        // be flagged; the example is elaboration and carries no closing period.
+        let source = r#"
+/**
+ * Query to copy the published entries into draft entries.
+ *
+ * INSERT INTO tableName (columnName1, columnName2, columnName3, ...)
+ * SELECT columnName1, columnName2, columnName3, ...
+ * FROM tableName
+ */
+function copy(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_trailing_todo_marker_after_summary() {
+        // Regression for rbaumier/comply#7353 — a trailing `TODO:` task marker
+        // paragraph is not prose and must not gate the terminal-punctuation check.
+        let source = r#"
+/**
+ * Enable draft and publish for content types.
+ *
+ * Draft and publish disabled content types will have their entries published,
+ * this migration clones those entries as drafts.
+ *
+ * TODO: Clone components, dynamic zones and relations
+ */
+function enable(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_trailing_condition_enumeration_after_summary() {
+        // Regression for rbaumier/comply#7353 — a trailing `When …: …` condition
+        // enumeration is elaboration, not the concluding sentence of the summary.
+        let source = r#"
+/**
+ * Maps relation foreign keys so that draft entities reference draft targets when those
+ * targets exist; otherwise we preserve the original reference (matching discardDraft).
+ *
+ * When mapping for a draft component: maps published targets to draft targets
+ * When mapping for a published component: maps draft targets to published targets (if needed)
+ */
+function mapRelations(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_single_paragraph_summary_missing_punctuation() {
+        // A single-paragraph description with no blank line that lacks terminal
+        // punctuation is still flagged — the summary-paragraph gate does not
+        // exempt a one-paragraph description.
+        let source = r#"
+/**
+ * Does a thing without a period
+ */
+function doThing(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn still_flags_summary_paragraph_missing_punctuation_before_trailing_block() {
+        // When the summary paragraph itself lacks terminal punctuation, the
+        // description is flagged regardless of any trailing elaboration block.
+        let source = r#"
+/**
+ * A summary sentence that lacks terminal punctuation
+ *
+ * trailing block
+ */
+function summarize(): void {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn ignores_trailing_prose_paragraph_after_complete_summary() {
+        // Only the summary paragraph gates the check: once the summary is a
+        // complete sentence, every following blank-line-separated paragraph is
+        // treated as elaboration, including a trailing prose paragraph that
+        // itself lacks a closing period.
+        let source = r#"
+/**
+ * This is a complete summary.
+ *
+ * A second paragraph that forgot its period
+ */
+function summarize(): void {}
+"#;
+        assert!(run_on(source).is_empty());
     }
 }
