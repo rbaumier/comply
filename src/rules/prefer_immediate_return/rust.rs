@@ -73,6 +73,14 @@ impl AstCheck for Check {
             if let_has_outer_attribute(let_node) {
                 continue;
             }
+            // An explicit type annotation is a load-bearing inference anchor,
+            // not a redundant alias: `let x: Vec<T> = expr.collect(); x` pins
+            // `collect`'s ambiguous target type. Inlining into a bare tail
+            // expression drops the annotation and type inference fails to
+            // compile. Mirrors the TS backend's `type_annotation` guard.
+            if let_node.child_by_field_name("type").is_some() {
+                continue;
+            }
             let Some(var_name) = extract_let_var_name(let_node, source_bytes) else {
                 continue;
             };
@@ -301,6 +309,39 @@ mod tests {
                 v0
             }
         "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_type_annotated_tail_expr() {
+        // `let family: Vec<T> = expr.collect(); family` — the annotation can be
+        // a load-bearing inference anchor pinning `collect`'s ambiguous target
+        // type (in the lapce FP the tail feeds an `&[T]` boundary that does not
+        // back-propagate it, so inlining fails to compile). The rule skips any
+        // type-annotated binding. #7379.
+        let src = "fn f(font_family: &str) -> Vec<u32> { let family: Vec<u32> = font_family.bytes().map(|b| b as u32).collect(); family }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_type_annotated_return() {
+        // Statement form of the same typed boundary. #7379.
+        let src = "fn g() -> String { let s: String = make(); return s; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_untyped_tail_expr_still() {
+        // Negative control: an untyped binding is the rule's core surface and
+        // must still flag.
+        let src = "fn h() -> u32 { let x = compute(); x }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_untyped_return_still() {
+        // Negative control: untyped statement form still flags.
+        let src = "fn i() -> u32 { let x = compute(); return x; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
