@@ -170,7 +170,16 @@ impl OxcCheck for Check {
                 // `Expect<IsEqual<A, B>>()`. The constraint *is* the assertion.
                 let is_phantom_assertion = tp.constraint.is_some() && body_is_empty;
 
+                // Leading-underscore "intentionally unused" convention: a name of
+                // `_` or starting with `_` marks a deliberately-discarded binding
+                // (e.g. a default type parameter added to steer inference). This
+                // mirrors `tsc`'s `noUnusedLocals`/`noUnusedParameters` (which skip
+                // `_`-prefixed names) and the widely-adopted `^_` ignore pattern in
+                // `@typescript-eslint/no-unused-vars`.
+                let is_intentionally_unused = name.starts_with('_');
+
                 if !is_phantom_assertion
+                    && !is_intentionally_unused
                     && !used_in_params
                     && !used_in_return
                     && !used_in_other_tp
@@ -330,5 +339,23 @@ mod tests {
         // its type parameter appears nowhere.
         let src = "function f<T extends never>(selector: string): unknown {\n  return selector;\n}";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_underscore_default_type_parameter_issue_7322() {
+        // `_ = any` is an intentionally-unused default type parameter steering
+        // inference; `_` is the leading-underscore "unused" marker.
+        let src = "function createMachine<TContext extends C, _ = any>(config: { c: TContext }): void {}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_underscore_prefixed_unused_type_parameter_issue_7322() {
+        assert!(run("function f<_Phantom>(): void {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_unused_non_underscore_generic_issue_7322() {
+        assert_eq!(run("function g<TUnused>(): void {}").len(), 1);
     }
 }
