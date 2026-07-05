@@ -137,10 +137,16 @@ fn is_awaited_reduce(
     if member.property.name.as_str() != "reduce" {
         return false;
     }
-    matches!(
-        semantic.nodes().parent_node(node.id()).kind(),
-        AstKind::AwaitExpression(_)
-    )
+    // An optional-chained receiver (`recv?.reduce(...)`) wraps the CallExpression
+    // in a ChainExpression, so the awaiting `await` is that wrapper's parent rather
+    // than the call's direct parent. Skip past a single ChainExpression before
+    // testing for the AwaitExpression.
+    let nodes = semantic.nodes();
+    let mut parent = nodes.parent_node(node.id());
+    if matches!(parent.kind(), AstKind::ChainExpression(_)) {
+        parent = nodes.parent_node(parent.id());
+    }
+    matches!(parent.kind(), AstKind::AwaitExpression(_))
 }
 
 /// True when the promises produced by a `.map()`/`.flatMap()` CallExpression are
@@ -565,6 +571,36 @@ mod tests {
                        await prev;\n\
                        await db.exec(sql);\n\
                    }, Promise.resolve());";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // --- #7270: optional-chained receiver wraps the call in a ChainExpression ---
+
+    #[test]
+    fn allows_awaited_optional_chained_reduce_async() {
+        // `await recv?.reduce(async ...)` — the optional chain wraps the call in a
+        // ChainExpression, but the outer `await` still consumes the threaded promise
+        // exactly as the non-optional form does.
+        let src = "export async function withOptional(hooks?: Array<(x: number) => Promise<void>>) {\n\
+                       await hooks?.reduce(async (promise, hook) => {\n\
+                           await promise;\n\
+                           await hook(1);\n\
+                       }, Promise.resolve());\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_optional_chained_reduce_async_not_awaited() {
+        // Optional-chained but NOT awaited — the promise produced by `reduce` floats,
+        // so skipping past the ChainExpression must still land on a non-await parent
+        // and the diagnostic must fire.
+        let src = "function run(hooks?: Array<(x: number) => Promise<void>>) {\n\
+                       hooks?.reduce(async (promise, hook) => {\n\
+                           await promise;\n\
+                           await hook(1);\n\
+                       }, Promise.resolve());\n\
+                   }";
         assert_eq!(run(src).len(), 1);
     }
 
