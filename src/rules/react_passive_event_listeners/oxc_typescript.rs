@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, ObjectPropertyKind, PropertyKey};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -60,34 +60,62 @@ impl OxcCheck for Check {
             }
         }
 
-        // An explicit `passive: true` (already optimal) or `passive: false` (a deliberate
-        // opt-out so the handler can call preventDefault()) means the author consciously
-        // chose the passive behavior — do not suggest changing it.
-        let has_explicit_passive = if let Some(third_arg) = call.arguments.get(2) {
-            let opt_src =
-                &ctx.source[third_arg.span().start as usize..third_arg.span().end as usize];
-            opt_src.contains("passive: true")
-                || opt_src.contains("passive:true")
-                || opt_src.contains("passive: false")
-                || opt_src.contains("passive:false")
-        } else {
-            false
-        };
-
-        if !has_explicit_passive {
-            let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
-            diagnostics.push(Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column,
-                rule_id: super::META.id.into(),
-                message: format!(
-                    "Add `{{ passive: true }}` to `addEventListener('{event_name}', ...)` to avoid jank."
-                ),
-                severity: Severity::Warning,
-                span: None,
-            });
+        // Only flag when we can PROVE the listener carries no passive option:
+        // no 3rd argument, an inline object literal without a `passive` property,
+        // or a boolean-literal `useCapture` (legacy form, carries no passive).
+        // A present-but-opaque options argument (an identifier/member/call/... that
+        // holds the options object, e.g. `listenOpts.passive`) is not inspectable,
+        // so `passive` may already be set — bail without flagging.
+        if let Some(third_arg) = call.arguments.get(2) {
+            let Some(opt_expr) = third_arg.as_expression() else {
+                return;
+            };
+            match opt_expr {
+                Expression::ObjectExpression(obj) => {
+                    // A spread (`{ ...opts }`) may carry `passive` opaquely, so absence
+                    // cannot be proven — bail.
+                    if obj
+                        .properties
+                        .iter()
+                        .any(|prop| matches!(prop, ObjectPropertyKind::SpreadProperty(_)))
+                    {
+                        return;
+                    }
+                    // A `passive` property (true or false) is a conscious choice —
+                    // `true` is already optimal, `false` a deliberate opt-out so the
+                    // handler can call preventDefault(); either way, do not suggest it.
+                    let has_passive = obj.properties.iter().any(|prop| {
+                        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+                            return false;
+                        };
+                        let key = match &p.key {
+                            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                            PropertyKey::StringLiteral(s) => s.value.as_str(),
+                            _ => return false,
+                        };
+                        key == "passive"
+                    });
+                    if has_passive {
+                        return;
+                    }
+                }
+                Expression::BooleanLiteral(_) => {}
+                _ => return,
+            }
         }
+
+        let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: format!(
+                "Add `{{ passive: true }}` to `addEventListener('{event_name}', ...)` to avoid jank."
+            ),
+            severity: Severity::Warning,
+            span: None,
+        });
     }
 }
 
@@ -154,5 +182,37 @@ mod tests {
         assert!(
             run("el.addEventListener('touchmove', (e) => { e.preventDefault(); })").is_empty()
         );
+    }
+
+    #[test]
+    fn allows_options_by_member_reference() {
+        // quasar Scroll.js: options passed as `listenOpts.passive` (opaque, may hold passive).
+        assert!(
+            run("ctx.scrollTarget.addEventListener('scroll', ctx.scroll, listenOpts.passive)")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_options_by_bare_identifier() {
+        // quasar ScrollFire.js: `const { passive } = listenOpts` then passed as `passive`.
+        assert!(run("ctx.scrollTarget.addEventListener('scroll', ctx.scroll, passive)").is_empty());
+    }
+
+    #[test]
+    fn allows_options_by_object_spread() {
+        // A spread may carry `passive` opaquely — absence is unprovable.
+        assert!(run("el.addEventListener('scroll', cb, { ...listenOpts })").is_empty());
+    }
+
+    #[test]
+    fn flags_scroll_no_options() {
+        assert_eq!(run("el.addEventListener('scroll', cb)").len(), 1);
+    }
+
+    #[test]
+    fn flags_boolean_use_capture() {
+        // Legacy `useCapture` boolean carries no passive option — provably absent.
+        assert_eq!(run("el.addEventListener('scroll', cb, true)").len(), 1);
     }
 }
