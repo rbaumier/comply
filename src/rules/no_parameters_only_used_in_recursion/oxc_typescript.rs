@@ -16,10 +16,14 @@
 //! - Class and object methods have no callable binding, so they recurse through
 //!   `this.method(…)` / `this["method"](…)` matched on the method name.
 //!
-//! A parameter is reported only when it has at least one reference and *all* of
-//! its references sit inside the arguments of a recursive call. Parameters whose
-//! name starts with `_` (intentional-unused marker) and TypeScript signature
-//! parameters (no body) are skipped, mirroring Biome's `noParametersOnlyUsedInRecursion`.
+//! A parameter is reported only when it has at least one reference and *every*
+//! reference is a whole argument of a recursive call — a bare identifier passed
+//! straight through, modulo transparent `(x)` / `as` / `!` / `satisfies` wrappers.
+//! A reference that is merely a sub-expression of an argument (a member/element
+//! object, a nested call's argument or callee, an operator operand) reads the
+//! parameter's value and disqualifies it. Parameters whose name starts with `_`
+//! (intentional-unused marker) and TypeScript signature parameters (no body) are
+//! skipped, mirroring Biome's `noParametersOnlyUsedInRecursion`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -283,17 +287,35 @@ fn reference_in_recursive_call(
     false
 }
 
-/// True when `ref_span` is inside one of the call's non-spread argument
-/// expressions. Spread arguments are skipped conservatively: a `...rest` forwards
-/// the whole list, so the rest parameter cannot be singled out as dead.
+/// True when `ref_span` is the *whole* of one of the call's non-spread arguments
+/// — a bare identifier passed straight through, modulo transparent wrappers
+/// (`(x)`, `x as T`, `x!`, `x satisfies T`). Only a whole-argument reference
+/// forwards the parameter unchanged; a reference that is a strict sub-expression
+/// of an argument (a member/element object, a nested call's argument or callee,
+/// an operator operand) reads the parameter's value and is not forwarding. Spread
+/// arguments have no expression, so a `...rest` cannot be singled out as dead.
 fn reference_in_arguments(call: &oxc_ast::ast::CallExpression, ref_span: Span) -> bool {
     call.arguments.iter().any(|arg| {
-        if matches!(arg, oxc_ast::ast::Argument::SpreadElement(_)) {
-            return false;
-        }
-        let arg_span = arg.span();
-        arg_span.start <= ref_span.start && ref_span.end <= arg_span.end
+        arg.as_expression()
+            .is_some_and(|expr| peel_transparent_wrappers(expr).span() == ref_span)
     })
+}
+
+/// Peels wrappers that pass their operand's value through unchanged, so a wrapped
+/// parameter reference (`(x)`, `x as T`, `x!`, `x satisfies T`) is still seen as
+/// the whole argument.
+fn peel_transparent_wrappers<'a, 'b>(expr: &'b Expression<'a>) -> &'b Expression<'a> {
+    match expr {
+        Expression::ParenthesizedExpression(paren) => peel_transparent_wrappers(&paren.expression),
+        Expression::TSAsExpression(as_expr) => peel_transparent_wrappers(&as_expr.expression),
+        Expression::TSNonNullExpression(non_null) => {
+            peel_transparent_wrappers(&non_null.expression)
+        }
+        Expression::TSSatisfiesExpression(satisfies) => {
+            peel_transparent_wrappers(&satisfies.expression)
+        }
+        _ => expr,
+    }
 }
 
 /// True when a call expression calls the function recursively.
@@ -436,25 +458,10 @@ mod tests {
     }
 
     #[test]
-    fn param_with_arithmetic_in_recursion() {
-        assert_eq!(
-            count("function countdown(n, step) {\n  if (n === 0) return 0;\n  return countdown(n - step, step);\n}"),
-            1
-        );
-    }
-
-    #[test]
-    fn unary_operation_in_recursion() {
-        assert_eq!(
-            count("function negate(n, flag) {\n  if (n === 0) return 0;\n  return negate(n - 1, !flag);\n}"),
-            1
-        );
-    }
-
-    #[test]
     fn object_method_this_call() {
+        // `step` is forwarded straight through an object-method `this.count` recursion.
         assert_eq!(
-            count("const obj = {\n  count(n, step) {\n    if (n === 0) return 0;\n    return this.count(n - step, step);\n  }\n};"),
+            count("const obj = {\n  count(n, step) {\n    if (n === 0) return 0;\n    return this.count(n - 1, step);\n  }\n};"),
             1
         );
     }
@@ -471,54 +478,6 @@ mod tests {
     fn separate_declaration_and_assignment_arrow() {
         assert_eq!(
             count("let bar;\nbar = (x, unused) => {\n  if (x === 0) return 0;\n  return bar(x - 1, unused);\n};"),
-            1
-        );
-    }
-
-    #[test]
-    fn logical_and_in_recursion() {
-        assert_eq!(
-            count("function fnAnd(n, acc) {\n  if (n === 0) return 0;\n  return fnAnd(n - 1, acc && true);\n}"),
-            1
-        );
-    }
-
-    #[test]
-    fn logical_or_in_recursion() {
-        assert_eq!(
-            count("function fnOr(n, acc) {\n  if (n === 0) return 0;\n  return fnOr(n - 1, acc || 0);\n}"),
-            1
-        );
-    }
-
-    #[test]
-    fn nullish_in_recursion() {
-        assert_eq!(
-            count("function fnNullish(n, acc) {\n  if (n === 0) return 0;\n  return fnNullish(n - 1, acc ?? 0);\n}"),
-            1
-        );
-    }
-
-    #[test]
-    fn nested_logical_in_recursion() {
-        assert_eq!(
-            count("function fnNested(n, acc) {\n  if (n === 0) return 0;\n  return fnNested(n - 1, (acc || 0) && true);\n}"),
-            1
-        );
-    }
-
-    #[test]
-    fn conditional_consequent_in_recursion() {
-        assert_eq!(
-            count("function fnCond(n, acc) {\n  if (n === 0) return 0;\n  return fnCond(n - 1, n > 5 ? acc : 0);\n}"),
-            1
-        );
-    }
-
-    #[test]
-    fn conditional_test_in_recursion() {
-        assert_eq!(
-            count("function fnCondTest(n, flag) {\n  if (n === 0) return 0;\n  return fnCondTest(n - 1, flag ? true : false);\n}"),
             1
         );
     }
@@ -693,5 +652,122 @@ mod tests {
             count("function f(n, tag) {\n  if (n === 0) return 0;\n  return f(n - 1, tag);\n}"),
             1
         );
+    }
+
+    // --- A parameter that is only a sub-expression of a recursive-call argument
+    // (dereferenced, invoked, or an operator operand) is read, not forwarded ---
+
+    #[test]
+    fn param_dereferenced_to_build_recursive_arg_not_flagged() {
+        // Regression for #7301: `meta` is read via `meta.properties[...]` to build
+        // the second recursive-call argument, so it is not merely forwarded.
+        let src = "class C {\n  getRelationName(meta, prop) {\n    if (!prop.embedded) return prop.name;\n    return `${this.getRelationName(meta, meta.properties[prop.embedded[0]])}.x`;\n  }\n}";
+        assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn param_invoked_as_callee_inside_recursive_arg_not_flagged() {
+        // Regression for #7252: `a` is invoked (`a()`) to build a recursive-call
+        // argument — invoking it is a read, not a forward.
+        assert_eq!(count("function f(a, b) {\n  return f(a(), b + 1);\n}"), 0);
+    }
+
+    #[test]
+    fn arithmetic_operand_is_a_read_not_flagged() {
+        // `step` feeds `n - step`, so its value is read — not a pure forward.
+        assert_eq!(
+            count("function countdown(n, step) {\n  if (n === 0) return 0;\n  return countdown(n - step, step);\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn unary_operand_is_a_read_not_flagged() {
+        assert_eq!(
+            count("function negate(n, flag) {\n  if (n === 0) return 0;\n  return negate(n - 1, !flag);\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn logical_and_operand_is_a_read_not_flagged() {
+        assert_eq!(
+            count("function fnAnd(n, acc) {\n  if (n === 0) return 0;\n  return fnAnd(n - 1, acc && true);\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn logical_or_operand_is_a_read_not_flagged() {
+        assert_eq!(
+            count("function fnOr(n, acc) {\n  if (n === 0) return 0;\n  return fnOr(n - 1, acc || 0);\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn nullish_operand_is_a_read_not_flagged() {
+        assert_eq!(
+            count("function fnNullish(n, acc) {\n  if (n === 0) return 0;\n  return fnNullish(n - 1, acc ?? 0);\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn nested_logical_operand_is_a_read_not_flagged() {
+        assert_eq!(
+            count("function fnNested(n, acc) {\n  if (n === 0) return 0;\n  return fnNested(n - 1, (acc || 0) && true);\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn conditional_consequent_operand_is_a_read_not_flagged() {
+        assert_eq!(
+            count("function fnCond(n, acc) {\n  if (n === 0) return 0;\n  return fnCond(n - 1, n > 5 ? acc : 0);\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn conditional_test_operand_is_a_read_not_flagged() {
+        assert_eq!(
+            count("function fnCondTest(n, flag) {\n  if (n === 0) return 0;\n  return fnCondTest(n - 1, flag ? true : false);\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn param_passed_to_nested_call_inside_recursive_arg_not_flagged() {
+        // #7192 shape kept: `a` is read by the nested non-recursive `g(a)`.
+        assert_eq!(count("function f(a, b) {\n  return f(g(a), b + 1);\n}"), 0);
+    }
+
+    // --- Whole-argument forwards (bare or transparently wrapped) still flag ---
+
+    #[test]
+    fn pure_forward_still_flagged() {
+        // `a` is passed straight through; only `b` (in `b + 1`) is read.
+        assert_eq!(count("function f(a, b) {\n  return f(a, b + 1);\n}"), 1);
+    }
+
+    #[test]
+    fn as_wrapped_forward_still_flagged() {
+        assert_eq!(count("function f(a, b) {\n  return f(a as any, b + 1);\n}"), 1);
+    }
+
+    #[test]
+    fn paren_wrapped_forward_still_flagged() {
+        assert_eq!(count("function f(a, b) {\n  return f((a), b + 1);\n}"), 1);
+    }
+
+    #[test]
+    fn non_null_wrapped_forward_still_flagged() {
+        assert_eq!(count("function f(a, b) {\n  return f(a!, b + 1);\n}"), 1);
+    }
+
+    #[test]
+    fn satisfies_wrapped_forward_still_flagged() {
+        assert_eq!(count("function f(a, b) {\n  return f(a satisfies any, b + 1);\n}"), 1);
     }
 }
