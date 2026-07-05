@@ -6,9 +6,17 @@
 //! derive-based error-handling library. In what remains,
 //! flags `enum_item` declarations that are truly `pub` (bare `pub` only —
 //! `pub(crate)`, `pub(super)`, and `pub(in …)` are crate-internal, not
-//! library API) and whose name contains `Error` — the signal that this is
-//! a library-facing error type which should derive its error rather than
-//! hand-roll `Display`/`Error`.
+//! library API), whose name contains `Error`, and for which the file
+//! hand-rolls the boilerplate the derive would replace — an
+//! `impl Display for <Enum>` or `impl …Error for <Enum>` block. The name
+//! signals a library-facing error type; the impl is the `Display`/`Error`
+//! boilerplate `#[derive(thiserror::Error)]` removes. An enum with no such
+//! impl — an internal result-discriminator returned by a `get()` /
+//! `bare_name()` and pattern-matched by the caller — has nothing for the
+//! derive to replace (deriving it would only *add* an `#[error("…")]`
+//! message per variant), so it is not flagged. This also exempts `*Kind`
+//! error *classifiers* (cf. `std::io::ErrorKind`), which never hand-roll
+//! `std::error::Error`.
 //!
 //! ## error-derive-library exemption
 //!
@@ -19,11 +27,6 @@
 //! either from the file source importing the library (`use snafu::…`,
 //! `#[derive(Snafu)]`) or from the nearest `Cargo.toml` declaring it as a
 //! dependency (covering a derive that lives in a sibling file).
-//!
-//! Names ending in `Kind` are exempt: by Rust convention (cf.
-//! `std::io::ErrorKind`) a `*ErrorKind` / `*Kind` enum is an error
-//! *classifier*, not an error type — it does not implement
-//! `std::error::Error`, so deriving `thiserror::Error` does not apply.
 //!
 //! ## no_std exemption
 //!
@@ -37,6 +40,7 @@
 //! in `[package].categories`.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::trait_base_name;
 
 /// Crate import roots of derive-based error-handling libraries. A file that
 /// imports one of these (`use snafu::…`, `use miette::…`) or names one in a
@@ -60,10 +64,10 @@ crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     let Some(name) = node.child_by_field_name("name") else { return; };
     let Ok(name_text) = name.utf8_text(source) else { return; };
     if !name_text.contains("Error") { return; }
-    // `*ErrorKind` / `*Kind` enums are error CLASSIFIERS (cf. `std::io::ErrorKind`),
-    // not error types — they don't implement `std::error::Error`, so deriving
-    // `thiserror::Error` would be pointless.
-    if name_text.ends_with("Kind") { return; }
+    // Precondition: only fire when the boilerplate the derive would replace
+    // actually exists (see the module docstring) — otherwise there is nothing
+    // to derive away.
+    if !has_hand_rolled_display_or_error_impl(node, source, name_text) { return; }
 
     // A binary-only crate (no `[lib]` table, no `src/lib.rs`) builds no library
     // target, so its error types have no downstream consumers — they are
@@ -93,6 +97,39 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
             && text.trim() == "pub"
         {
             return true;
+        }
+    }
+    false
+}
+
+/// True when the file hand-rolls an `impl Display for <enum_name>` or
+/// `impl …Error for <enum_name>` block — the `Display`/`Error` boilerplate that
+/// `#[derive(thiserror::Error)]` replaces. The trait is matched by its last
+/// path segment, so `Display` / `fmt::Display` / `std::fmt::Display` and
+/// `Error` / `error::Error` / `std::error::Error` all count; the Self type is
+/// matched by its base name, so `<enum_name>` and `<enum_name><'a>` both count.
+fn has_hand_rolled_display_or_error_impl(
+    node: tree_sitter::Node,
+    source: &[u8],
+    enum_name: &str,
+) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "impl_item"
+            && let Some(target) = current.child_by_field_name("type")
+            && trait_base_name(target, source) == Some(enum_name)
+            && let Some(trait_node) = current.child_by_field_name("trait")
+            && trait_base_name(trait_node, source).is_some_and(|t| t == "Display" || t == "Error")
+        {
+            return true;
+        }
+        for child in current.children(&mut cursor) {
+            stack.push(child);
         }
     }
     false
@@ -142,37 +179,85 @@ mod tests {
     fn flags_pub_enum_error_without_thiserror() {
         // Isolated crate manifest: the relative-path `run` helper would resolve
         // to comply's own `Cargo.toml`, which depends on an error-derive library
-        // (`miette`) and would exempt the whole crate.
-        assert_eq!(
-            run_on_with_cargo(STD_CARGO_TOML, "pub enum MyError { NotFound, Unauthorized }").len(),
-            1
-        );
+        // (`miette`) and would exempt the whole crate. The enum hand-rolls the
+        // `Display` boilerplate the derive would replace, so it is flagged.
+        let src = "pub enum MyError { NotFound, Unauthorized }\n\
+                   impl std::fmt::Display for MyError {\n\
+                       fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"err\") }\n\
+                   }";
+        assert_eq!(run_on_with_cargo(STD_CARGO_TOML, src).len(), 1);
     }
 
     #[test]
     fn flags_pub_app_error_without_thiserror() {
-        assert_eq!(
-            run_on_with_cargo(STD_CARGO_TOML, "pub enum AppError { Network }").len(),
-            1
+        let src = "pub enum AppError { Network }\n\
+                   impl std::fmt::Display for AppError {\n\
+                       fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"network\") }\n\
+                   }";
+        assert_eq!(run_on_with_cargo(STD_CARGO_TOML, src).len(), 1);
+    }
+
+    /// Regression for #7295: a `pub *Error` enum with no hand-rolled
+    /// `Display`/`Error` impl (an internal result discriminator like typst's
+    /// `IntLiteralError`, returned by `get()` and matched by the caller) has no
+    /// boilerplate for the derive to replace, so it must not be flagged. Runs in
+    /// an isolated std crate so only the impl-presence precondition — not the
+    /// manifest exemption — can silence it.
+    #[test]
+    fn allows_pub_error_enum_without_hand_rolled_impl() {
+        let src = "pub enum IntLiteralError<'a> { PosOverflow, InvalidDigit(&'a str) }";
+        assert!(
+            run_on_with_cargo(STD_CARGO_TOML, src).is_empty(),
+            "must not flag a *Error enum with no hand-rolled Display/Error impl"
         );
     }
 
+    /// Counterpart of #7295: a `pub *Error` enum that *does* hand-roll `Display`
+    /// + `impl std::error::Error` (typst's `path.rs` error types) still has the
+    /// boilerplate the derive replaces, so it stays flagged.
+    #[test]
+    fn still_flags_pub_error_enum_with_hand_rolled_display_and_error() {
+        let src = "pub enum PathError { NotFound }\n\
+                   impl std::fmt::Display for PathError {\n\
+                       fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"not found\") }\n\
+                   }\n\
+                   impl std::error::Error for PathError {}";
+        assert_eq!(run_on_with_cargo(STD_CARGO_TOML, src).len(), 1);
+    }
+
+    /// A *generic* `pub enum SomeError<'a>` that hand-rolls `Display` for
+    /// `SomeError<'a>` still flags: the precondition strips the `<'a>` from the
+    /// impl's Self type when matching it against the enum name, so the generic
+    /// positive path is locked (the mirror of the generic #7295 FP).
+    #[test]
+    fn still_flags_generic_pub_error_enum_with_hand_rolled_display() {
+        let src = "pub enum SomeError<'a> { Bad(&'a str) }\n\
+                   impl<'a> std::fmt::Display for SomeError<'a> {\n\
+                       fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"bad\") }\n\
+                   }";
+        assert_eq!(run_on_with_cargo(STD_CARGO_TOML, src).len(), 1);
+    }
+
     /// Regression for #4402: `*ErrorKind` enums are error classifiers
-    /// (cf. `std::io::ErrorKind`), not error types — they don't implement
-    /// `std::error::Error`, so `thiserror::Error` does not apply.
+    /// (cf. `std::io::ErrorKind`), not error types — they don't hand-roll
+    /// `std::error::Error`, so `thiserror::Error` does not apply. Now silenced
+    /// by the impl-presence precondition (#7295), which subsumes the former
+    /// `*Kind` name-suffix carve-out. Runs in an isolated std crate so the
+    /// precondition, not the manifest exemption, is what silences it.
     #[test]
     fn allows_pub_error_kind_classifier() {
         assert!(
-            run("pub enum CommitProcessingErrorKind { Io, Parse, Json, Other }").is_empty(),
-            "must not flag *ErrorKind classifier enums"
+            run_on_with_cargo(STD_CARGO_TOML, "pub enum CommitProcessingErrorKind { Io, Parse, Json, Other }")
+                .is_empty(),
+            "must not flag *ErrorKind classifier enums (no hand-rolled Display/Error impl)"
         );
     }
 
     #[test]
     fn allows_pub_plain_error_kind() {
         assert!(
-            run("pub enum ErrorKind { NotFound, Other }").is_empty(),
-            "must not flag *Kind classifier enums"
+            run_on_with_cargo(STD_CARGO_TOML, "pub enum ErrorKind { NotFound, Other }").is_empty(),
+            "must not flag *Kind classifier enums (no hand-rolled Display/Error impl)"
         );
     }
 
@@ -223,8 +308,15 @@ edition = "2021"
 [dependencies]
 snafu = "0.8"
 "#;
+        // The enum hand-rolls `Display` (so the impl-presence precondition
+        // holds); the crate is exempt solely because the manifest depends on
+        // snafu, which is what this test exercises.
+        let src = "pub enum MyError { Fail }\n\
+                   impl std::fmt::Display for MyError {\n\
+                       fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"fail\") }\n\
+                   }";
         assert!(
-            run_on_with_cargo(SNAFU_DEP_CARGO_TOML, "pub enum MyError { Fail }").is_empty(),
+            run_on_with_cargo(SNAFU_DEP_CARGO_TOML, src).is_empty(),
             "must not flag pub error enums in a crate depending on snafu"
         );
     }
@@ -340,8 +432,15 @@ edition = "2021"
     /// cannot use `thiserror` (it generates `impl std::error::Error`).
     #[test]
     fn allows_pub_enum_error_in_no_std_crate() {
+        // The enum hand-rolls `Display` (so the impl-presence precondition
+        // holds); the crate is exempt solely because the manifest declares
+        // `categories = ["no-std"]`, which is what this test exercises.
+        let src = "pub enum MyError { Fail }\n\
+                   impl core::fmt::Display for MyError {\n\
+                       fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { write!(f, \"fail\") }\n\
+                   }";
         assert!(
-            run_on_with_cargo(NO_STD_CARGO_TOML, "pub enum MyError { Fail }").is_empty(),
+            run_on_with_cargo(NO_STD_CARGO_TOML, src).is_empty(),
             "must not flag pub error enums in a no-std crate"
         );
     }
@@ -358,8 +457,12 @@ edition = "2021"
 
     #[test]
     fn still_flags_pub_enum_error_in_std_crate() {
+        let src = "pub enum MyError { Fail }\n\
+                   impl std::fmt::Display for MyError {\n\
+                       fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"fail\") }\n\
+                   }";
         assert_eq!(
-            run_on_with_cargo(STD_CARGO_TOML, "pub enum MyError { Fail }").len(),
+            run_on_with_cargo(STD_CARGO_TOML, src).len(),
             1,
             "must keep flagging pub error enums in std crates"
         );
