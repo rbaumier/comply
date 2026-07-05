@@ -11,6 +11,9 @@
 //!   `b"…"`. Anything else (function calls, `vec![]`, etc.) is left alone
 //!   — those usually can't be `const` anyway and the false-positive cost
 //!   is high.
+//! - skip if the static's address is taken (`&NAME`) in scope — a stable,
+//!   unique address is being relied upon (e.g. an FFI pointer handed to C),
+//!   which a `const` inlined at each use site would not provide.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -73,6 +76,12 @@ impl AstCheck for Check {
             .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source).ok())
             .unwrap_or("FOO");
+        // Skip when the address is taken (`&NAME`): const-inlining would remove
+        // the stable, unique address the code relies on. Scope is the enclosing
+        // function for a function-local static, else the whole file.
+        if address_taken(address_scope(node), name, source) {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &node,
@@ -97,6 +106,36 @@ fn is_literal_value(node: tree_sitter::Node) -> bool {
             .unwrap_or(false),
         _ => false,
     }
+}
+
+/// The scope to scan for address-of on a static: the nearest enclosing
+/// `function_item` for a function-local static, else the top-level ancestor
+/// (`source_file`) for a module-level one.
+fn address_scope(node: tree_sitter::Node) -> tree_sitter::Node {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "function_item" {
+            return parent;
+        }
+        current = parent;
+    }
+    current
+}
+
+/// True when `scope`'s subtree contains a `reference_expression` (`&NAME`) whose
+/// operand is the bare identifier `name` — the static's address being taken.
+fn address_taken(scope: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if scope.kind() == "reference_expression"
+        && scope.child_by_field_name("value").is_some_and(|value| {
+            value.kind() == "identifier" && value.utf8_text(source).is_ok_and(|text| text == name)
+        })
+    {
+        return true;
+    }
+    let mut cursor = scope.walk();
+    scope
+        .children(&mut cursor)
+        .any(|child| address_taken(child, name, source))
 }
 
 #[cfg(test)]
@@ -162,5 +201,39 @@ mod tests {
     fn allows_static_with_function_call_value() {
         let src = "static V: Vec<u32> = compute();";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_function_local_static_whose_address_is_taken() {
+        let src = r#"
+            fn f(nva: &mut Vec<Nv>) {
+                if cond {
+                    static ZERO: u8 = 0;
+                    nva.push(Nv {
+                        name: &ZERO as *const _ as *mut _,
+                        value: &ZERO as *const _ as *mut _,
+                    });
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_module_level_static_whose_address_is_taken() {
+        let src = "static X: u32 = 5; fn g() -> *const u32 { &X as *const u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_module_level_static_used_by_value_only() {
+        let src = "static Y: u32 = 5; fn h() -> u32 { Y * 2 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_function_local_static_used_by_value_only() {
+        let src = "fn k() { static Z: u32 = 7; let _ = Z + 1; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
