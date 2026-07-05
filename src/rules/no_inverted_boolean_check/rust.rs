@@ -30,12 +30,14 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // In Rust `!` on an integer is bitwise NOT, not logical NOT. Comparing a
-    // `bool` to a numeric literal is a type error, so a numeric literal on the
-    // opposite side proves the `!` is bitwise complement (`!digit != 0` means
-    // "digit is not all-ones") — not the inverted-boolean footgun this targets.
+    // In Rust `!` on an integer or byte is bitwise NOT, not logical NOT.
+    // Comparing a `bool` to a numeric or char/byte literal is a type error, so
+    // such a literal on the opposite side proves the `!` is bitwise complement
+    // (`!digit != 0` means "digit is not all-ones", `!b == b'*'` compares a
+    // byte's complement) — not the inverted-boolean footgun this targets. A
+    // byte literal `b'*'` and a char literal `'*'` both parse as `char_literal`.
     let Some(right) = node.child_by_field_name("right") else { return };
-    if matches!(right.kind(), "integer_literal" | "float_literal") {
+    if matches!(right.kind(), "integer_literal" | "float_literal" | "char_literal") {
         return;
     }
 
@@ -111,6 +113,19 @@ mod tests {
     }
 
     #[test]
+    fn allows_bitwise_not_compared_to_byte_literal() {
+        // `b` is a `u8`, so `!b` is bitwise complement; a byte literal on the
+        // opposite side of `==` cannot be compared to a bool, proving `!` is not
+        // logical NOT here.
+        assert!(run_on("fn f(b: u8) -> bool { !b == b'*' }").is_empty());
+    }
+
+    #[test]
+    fn allows_bitwise_not_compared_to_char_literal() {
+        assert!(run_on("fn g(c: u8) -> bool { !c == '*' }").is_empty());
+    }
+
+    #[test]
     fn flags_not_flag_equals_bool_literal() {
         assert_eq!(run_on("fn f(flag: bool) { if !flag == false {} }").len(), 1);
     }
@@ -118,5 +133,15 @@ mod tests {
     #[test]
     fn flags_not_ready_not_equals_bool_literal() {
         assert_eq!(run_on("fn f(ready: bool) { if !ready != true {} }").len(), 1);
+    }
+
+    #[test]
+    fn flags_not_flag_equals_non_literal_bool() {
+        // The other operand is an identifier, not a numeric/char literal, so the
+        // inverted-boolean footgun still applies.
+        assert_eq!(
+            run_on("fn h(flag: bool, other: bool) -> bool { !flag == other }").len(),
+            1
+        );
     }
 }
