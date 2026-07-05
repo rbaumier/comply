@@ -1,6 +1,6 @@
-//! nestjs-no-entity-in-controller — controllers must not import ORM entities.
+//! nestjs-no-entity-in-controller — controller methods must not return ORM entities.
 
-mod typescript;
+mod oxc_typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -10,7 +10,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "nestjs-no-entity-in-controller",
-    description: "Controllers should not import ORM entities — leak persistence into the HTTP layer.",
+    description: "Controller methods should not return ORM entities — that leaks the persistence \
+                  model into the HTTP layer.",
     remediation: "Return a DTO mapped from the entity inside the service, never expose the entity \
                   directly from the controller.",
     severity: Severity::Warning,
@@ -27,13 +28,13 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
         ],
     }
 }
