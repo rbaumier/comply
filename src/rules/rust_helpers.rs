@@ -46,6 +46,26 @@ pub fn fn_is_async(function_item: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if a `function_item`'s `function_modifiers` child contains the `extern`
+/// keyword — i.e. the function declares an ABI (`extern "C" fn`, `extern fn`,
+/// including `unsafe extern "C" fn`). Scans the modifiers node only, so raw
+/// identifiers (`fn r#extern()`), parameter names, and types named "extern"
+/// can't trip the check. tree-sitter-rust groups the `extern` keyword (and its
+/// optional abi string) with `unsafe`/`async`/`const` under one
+/// `function_modifiers` node, so the abi string sits beside `extern` and the
+/// word match ignores it.
+pub fn fn_is_extern(function_item: Node, source: &[u8]) -> bool {
+    let mut cursor = function_item.walk();
+    for child in function_item.children(&mut cursor) {
+        if child.kind() == "function_modifiers" {
+            return child
+                .utf8_text(source)
+                .is_ok_and(|text| text.split_whitespace().any(|word| word == "extern"));
+        }
+    }
+    false
+}
+
 /// True if `node` sits in a const-evaluated context, where `for` loops and
 /// iterators are unavailable (`for` desugars to `IntoIterator::into_iter`,
 /// which is not `const`). A manual `while`-index loop is then the only way to
