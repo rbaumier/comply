@@ -572,8 +572,9 @@ fn is_atomic_fetch_op(name: &str) -> bool {
 /// backticks stripped, lowercased) and matched two ways: a `starts_with`
 /// against question/answer lead-ins ("returns true", "figure out if", …) so
 /// an action that merely mentions "validate" mid-prose still fires, and a
-/// `contains` against "return(s) true/false if/when" phrases so a predicate
-/// answer phrased mid-sentence ("…and return true if one was loaded") counts.
+/// `contains` against "return(s) true/false if/when" and "return(s) whether"
+/// phrases so a predicate answer phrased mid-sentence ("…and return true if one
+/// was loaded", "This will return whether the hints changed") counts.
 fn has_predicate_doc_comment(func: tree_sitter::Node, source: &[u8]) -> bool {
     const PREDICATE_DOC_LEADS: &[&str] = &[
         "returns true",
@@ -596,6 +597,8 @@ fn has_predicate_doc_comment(func: tree_sitter::Node, source: &[u8]) -> bool {
         "returns false if",
         "return false when",
         "returns false when",
+        "return whether",
+        "returns whether",
     ];
     let mut sibling = func.prev_named_sibling();
     while let Some(s) = sibling {
@@ -1192,6 +1195,47 @@ mod tests {
             fn save_record(&mut self, r: &Record) -> bool {\n\
                 match self.db.write(r) { Ok(_) => true, Err(_) => false }\n\
             }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #7268: a documented return contract phrased "return(s) whether X"
+    // mid-sentence marks a predicate regardless of the sentence position ---
+
+    #[test]
+    fn allows_update_with_mid_sentence_return_whether_doc() {
+        // alacritty `update_highlighted_hints` — the doc states it returns
+        // *whether* the highlighted hints changed (a dirty flag); the phrase
+        // sits mid-sentence, not at the line start, so only the `contains`
+        // match catches it. The tail is a non-literal variable, so neither the
+        // computed nor single-constant exemption applies — the doc alone saves it.
+        let src = "\
+            /// Update the mouse/vi mode cursor hint highlighting.\n\
+            ///\n\
+            /// This will return whether the highlighted hints changed.\n\
+            pub fn update_highlighted_hints(&mut self) -> bool {\n\
+                let dirty = recompute();\n\
+                dirty\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_update_with_returns_whether_phrase() {
+        // "returns whether" mid-sentence (not at the line start) is likewise a
+        // documented predicate contract.
+        let src = "\
+            /// Refreshes the cache and returns whether it was dirty.\n\
+            fn update_cache(&mut self) -> bool { let dirty = refresh(); dirty }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_update_action_without_predicate_doc() {
+        // Same action prefix, no predicate doc phrasing, both bool literals
+        // reachable: a genuine fallible action that must still flag.
+        let src = "\
+            /// Updates the config.\n\
+            fn update_config(&mut self) -> bool { if write() { true } else { false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
