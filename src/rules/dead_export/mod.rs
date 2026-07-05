@@ -105,6 +105,58 @@ mod tests {
         );
     }
 
+    // Regression for #7457 — an export imported only by a Vue
+    // `<script setup lang="tsx">` SFC (whose body has a JSX render function)
+    // must not be flagged dead: the TSX grammar now parses that block so its
+    // imports are indexed. Controls in the same fixture: a symbol imported by a
+    // plain `lang="ts"` SFC stays recognized, and a symbol imported nowhere is
+    // still flagged.
+    #[test]
+    fn no_fp_for_export_imported_only_from_tsx_sfc_issue_7457() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "utils.ts",
+                "export function formatValue(v: any) { return v; }\n\
+                 export function plainUsed() { return 1; }\n\
+                 export function trulyDead() { return 2; }\n",
+            ),
+            (
+                "TableColumn.vue",
+                // A JSX render function precedes the `formatValue` import: under
+                // the non-JSX TypeScript grammar the JSX element parses as an
+                // error region that swallows the following `import`, so the fix
+                // must parse this block with the TSX grammar to keep it.
+                "<script setup lang=\"tsx\" name=\"TableColumn\">\n\
+                 const RenderHeader = (item: any) => <ElColumn label=\"h\">{item}</ElColumn>;\n\
+                 import { formatValue } from './utils';\n\
+                 const RenderTableColumn = (item: any) => formatValue(item);\n\
+                 </script>\n\
+                 <template><div/></template>\n",
+            ),
+            (
+                "Plain.vue",
+                "<script setup lang=\"ts\">\n\
+                 import { plainUsed } from './utils';\n\
+                 plainUsed();\n\
+                 </script>\n\
+                 <template><div/></template>\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "utils.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("formatValue")),
+            "export used only by a lang=tsx SFC must not be flagged, got: {diags:?}"
+        );
+        assert!(
+            diags.iter().all(|d| !d.message.contains("plainUsed")),
+            "export used by a plain lang=ts SFC must not be flagged, got: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("trulyDead")),
+            "an export imported nowhere must still be flagged, got: {diags:?}"
+        );
+    }
+
     // Regression for #2302 — TSLint custom rule files follow the plugin
     // convention: export a class named `Rule` that extends `AbstractRule` (or
     // `Rules.AbstractRule`). TSLint discovers them by loading the file and

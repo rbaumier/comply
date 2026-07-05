@@ -108,6 +108,7 @@ mod tests {
             start_row: 2,
             start_column: 0,
             is_setup: false,
+            lang: None,
         };
         let ctx = CheckCtx::for_test(Path::new("test.vue"), block.text);
         let mut diags = Vec::new();
@@ -124,6 +125,7 @@ mod tests {
             start_row: 1,
             start_column: 0,
             is_setup: true,
+            lang: None,
         };
         let ctx = CheckCtx::for_test(Path::new("test.vue"), block.text);
         let mut diags = Vec::new();
@@ -168,6 +170,7 @@ mod tests {
             start_row: 5,
             start_column: 0,
             is_setup: false,
+            lang: None,
         };
         let ctx = CheckCtx::for_test(Path::new("app.vue"), block.text);
         let mut diags = Vec::new();
