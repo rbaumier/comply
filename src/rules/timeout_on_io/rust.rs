@@ -62,7 +62,9 @@ impl AstCheck for Check {
         if !is_io_call(inner, source_bytes) {
             return;
         }
-        if is_wrapped_in_timeout(node, source_bytes) {
+        if is_wrapped_in_timeout(node, source_bytes)
+            || is_reqwest_timeout_protected(inner, source_bytes)
+        {
             return;
         }
         let pos = node.start_position();
@@ -128,6 +130,128 @@ fn is_wrapped_in_timeout(node: tree_sitter::Node, source: &[u8]) -> bool {
         cur = parent;
     }
     false
+}
+
+/// True when a reqwest I/O call is bounded by reqwest's own `.timeout(...)`,
+/// which makes a `tokio::time::timeout` wrapper unnecessary. Two signals:
+/// - request-level: the call's own chain carries `.timeout(...)`
+///   (`RequestBuilder::timeout`);
+/// - client-level: the base receiver's `let` binding is built by a builder
+///   chain containing `.timeout(...)` (`ClientBuilder::timeout`), which bounds
+///   every request that client issues.
+fn is_reqwest_timeout_protected(io_call: tree_sitter::Node, source: &[u8]) -> bool {
+    let (request_has_timeout, base) = walk_receiver_spine(io_call, source);
+    if request_has_timeout {
+        return true;
+    }
+    let Some(base) = base else {
+        return false;
+    };
+    // Only a plain local binding (`let client = ...`) can be resolved; a
+    // path like `reqwest::get` or a `self.client` receiver cannot.
+    if base.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = base.utf8_text(source) else {
+        return false;
+    };
+    find_let_initializer(io_call, name, source)
+        .is_some_and(|init| walk_receiver_spine(init, source).0)
+}
+
+/// Walk the receiver spine of a method-call chain from `io_call` to its base
+/// receiver. Returns `(spine_has_timeout, base)`: `spine_has_timeout` is true
+/// when any `.timeout(...)` method call appears in the chain, `base` is the
+/// leftmost receiver node (an `identifier` for a local binding).
+fn walk_receiver_spine<'a>(
+    io_call: tree_sitter::Node<'a>,
+    source: &[u8],
+) -> (bool, Option<tree_sitter::Node<'a>>) {
+    let mut node = io_call;
+    let mut has_timeout = false;
+    loop {
+        match node.kind() {
+            "call_expression" => {
+                let Some(func) = node.child_by_field_name("function") else {
+                    return (has_timeout, None);
+                };
+                if is_timeout_field(func, source) {
+                    has_timeout = true;
+                }
+                node = func;
+            }
+            "field_expression" => {
+                let Some(value) = node.child_by_field_name("value") else {
+                    return (has_timeout, None);
+                };
+                node = value;
+            }
+            "await_expression" | "try_expression" | "parenthesized_expression" => {
+                let Some(child) = node.named_child(0) else {
+                    return (has_timeout, None);
+                };
+                node = child;
+            }
+            "identifier" | "scoped_identifier" => return (has_timeout, Some(node)),
+            _ => return (has_timeout, None),
+        }
+    }
+}
+
+/// True if `func` is the `function` of a `.timeout(...)` method call, i.e. a
+/// `field_expression` whose field name is `timeout`.
+fn is_timeout_field(func: tree_sitter::Node, source: &[u8]) -> bool {
+    func.kind() == "field_expression"
+        && func
+            .child_by_field_name("field")
+            .and_then(|f| f.utf8_text(source).ok())
+            == Some("timeout")
+}
+
+/// Initializer of the nearest in-scope `let <name> = ...` binding preceding
+/// `use_node` within its enclosing function body.
+fn find_let_initializer<'a>(
+    use_node: tree_sitter::Node<'a>,
+    name: &str,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    let mut cur = use_node;
+    let body = loop {
+        let parent = cur.parent()?;
+        if parent.kind() == "function_item" {
+            break parent.child_by_field_name("body")?;
+        }
+        cur = parent;
+    };
+    let mut best: Option<tree_sitter::Node<'a>> = None;
+    find_binding(body, name, use_node.start_byte(), source, &mut best);
+    best.and_then(|decl| decl.child_by_field_name("value"))
+}
+
+/// Record the latest `let <name> = ...` declaration under `node` that starts
+/// before `use_start` into `best`.
+fn find_binding<'a>(
+    node: tree_sitter::Node<'a>,
+    name: &str,
+    use_start: usize,
+    source: &[u8],
+    best: &mut Option<tree_sitter::Node<'a>>,
+) {
+    if node.kind() == "let_declaration"
+        && node.start_byte() < use_start
+        && node
+            .child_by_field_name("pattern")
+            .filter(|p| p.kind() == "identifier")
+            .and_then(|p| p.utf8_text(source).ok())
+            == Some(name)
+        && best.is_none_or(|b| b.start_byte() < node.start_byte())
+    {
+        *best = Some(node);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        find_binding(child, name, use_start, source, best);
+    }
 }
 
 #[cfg(test)]
@@ -197,5 +321,31 @@ mod tests {
     fn allows_timeout_with_duration() {
         let source = "async fn f() { tokio::time::timeout(Duration::from_secs(5), client.get(url).send()).await; }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_reqwest_client_builder_timeout() {
+        let source = "async fn f(registry: &str) -> anyhow::Result<()> { \
+            let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build()?; \
+            let _m = client.get(format!(\"https://x/{registry}\")).send().await?.json().await?; \
+            Ok(()) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_reqwest_request_builder_timeout() {
+        let source = "async fn g(url: &str) -> anyhow::Result<()> { \
+            let _r = reqwest::Client::new().get(url).timeout(std::time::Duration::from_secs(3)).send().await?; \
+            Ok(()) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_reqwest_client_without_timeout() {
+        let source = "async fn h(url: &str) -> anyhow::Result<()> { \
+            let client = reqwest::Client::new(); \
+            let _r = client.get(\"http://x\").send().await?; \
+            Ok(()) }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
