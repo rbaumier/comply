@@ -993,14 +993,58 @@ fn is_bare_ref_to(ty: &oxc_ast::ast::TSType, name: &str) -> bool {
     )
 }
 
+/// The TypeScript built-in utility types whose result has depth ≤ their input:
+/// `NonNullable<X>` is `X & {}`, a subtype of `X` that only removes `null` and
+/// `undefined`; `Readonly<X>` and `Required<X>` only add or drop property
+/// modifiers, leaving the structure unchanged. Wrapping a descent argument in one
+/// of these does not deepen it, so the recursion's shrinkage argument survives the
+/// wrapper — unlike an arbitrary alias, which could expand its argument and is
+/// deliberately excluded.
+const DEPTH_PRESERVING_WRAPPERS: [&str; 3] = ["NonNullable", "Readonly", "Required"];
+
+/// Peel any chain of single-argument `NonNullable`/`Readonly`/`Required` wrappers
+/// off `arg` and return the innermost type, so a descent check sees the underlying
+/// indexed access: `NonNullable<T[K]>` becomes `T[K]`, and nested built-ins like
+/// `NonNullable<Readonly<T[K]>>` peel down to `T[K]`. Any other reference name, a
+/// bare reference, or a wrapper applied to a number of arguments other than one
+/// stops the peeling. Terminates because each step descends into a strictly
+/// smaller sub-tree of the finite input AST.
+fn unwrap_depth_preserving_wrapper<'b, 'a>(
+    arg: &'b oxc_ast::ast::TSType<'a>,
+) -> &'b oxc_ast::ast::TSType<'a> {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let mut current = arg;
+    loop {
+        let TSType::TSTypeReference(tref) = current else {
+            return current;
+        };
+        let TSTypeName::IdentifierReference(id) = &tref.type_name else {
+            return current;
+        };
+        if !DEPTH_PRESERVING_WRAPPERS.contains(&id.name.as_str()) {
+            return current;
+        }
+        let Some(args) = &tref.type_arguments else {
+            return current;
+        };
+        if args.params.len() != 1 {
+            return current;
+        }
+        current = &args.params[0];
+    }
+}
+
 /// Return true if `arg` is `T[K]`: an indexed access whose object is a bare type
 /// reference and whose index is a bare type reference naming one of
 /// `mapped_keys` — the key variables of the enclosing mapped types. `T[K]` reads
 /// the input at the key currently being iterated, a direct child value, so the
 /// recursion descends one level each step. A naked `T[keyof T]` (the index is
-/// `keyof T`, not a mapped key) or a free index variable is not matched.
+/// `keyof T`, not a mapped key) or a free index variable is not matched. A
+/// non-widening built-in wrapper (`NonNullable<T[K]>`) is peeled off first, since
+/// it does not deepen the descent argument.
 fn is_mapped_key_index(arg: &oxc_ast::ast::TSType, mapped_keys: &[&str]) -> bool {
     use oxc_ast::ast::{TSType, TSTypeName};
+    let arg = unwrap_depth_preserving_wrapper(arg);
     let TSType::TSIndexedAccessType(idx) = arg else {
         return false;
     };
@@ -1038,9 +1082,12 @@ fn is_exclude_application(arg: &oxc_ast::ast::TSType) -> bool {
 /// into a base type via a named (string-literal) container property, where the
 /// innermost base is a bare type reference — e.g. `T['states'][K]`. The named
 /// container property is what guarantees descent into a distinct nested child:
-/// a single-level access (`T[keyof T]`, `T["next"]`) does not.
+/// a single-level access (`T[keyof T]`, `T["next"]`) does not. A non-widening
+/// built-in wrapper (`NonNullable<T['states'][K]>`) is peeled off first, since it
+/// does not deepen the descent argument.
 fn is_nested_member_descent(arg: &oxc_ast::ast::TSType) -> bool {
     use oxc_ast::ast::TSType;
+    let arg = unwrap_depth_preserving_wrapper(arg);
     let TSType::TSIndexedAccessType(outer) = arg else {
         return false;
     };
@@ -1624,6 +1671,92 @@ type Loop<T extends readonly unknown[]> = T extends readonly [] ? readonly [] : 
 type DropTrailingString<T extends readonly unknown[]> = T extends readonly [...infer R, string] ? R : T;
 type Loop<T extends readonly unknown[]> = T extends readonly [] ? readonly [] : Loop<DropTrailingString<T>> | T;
 "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_mapped_key_index_wrapped_in_non_nullable() {
+        // ToTestStateValue (xstate) recurses on `NonNullable<TStateValue[K]>` inside
+        // a `[K in keyof TStateValue]` mapped type. `NonNullable<X>` is `X & {}`, a
+        // subtype of `X`, so the descent argument is still `TStateValue[K]` one level
+        // down — the mapped-key-index shape — and the recursion is bounded.
+        let src = r#"
+type ToTestStateValue<TStateValue extends StateValue> =
+  TStateValue extends string
+    ? TStateValue
+    : IsNever<keyof TStateValue> extends true
+      ? never
+      :
+          | keyof TStateValue
+          | {
+              [K in keyof TStateValue]?: ToTestStateValue<
+                NonNullable<TStateValue[K]>
+              >;
+            };
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_nested_member_descent_wrapped_in_non_nullable() {
+        // ToStateSchema (xstate) recurses on `NonNullable<TSchema['states'][SK]>`.
+        // The inner `TSchema['states'][SK]` is the nested-member-descent shape; the
+        // non-widening `NonNullable<>` wrapper is peeled off, so the descent still
+        // bounds the recursion by the schema's nesting depth.
+        let src = r#"
+type ToStateSchema<TSchema extends StateSchema> = {
+  -readonly [K in keyof TSchema as K & ('id' | 'states')]: K extends 'states'
+    ? {
+        [SK in keyof TSchema['states']]: ToStateSchema<
+          NonNullable<TSchema['states'][SK]>
+        >;
+      }
+    : TSchema[K];
+};
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_mapped_key_index_wrapped_in_readonly() {
+        // `Readonly<X>` only adds modifiers, same structure and depth, so a
+        // `Readonly<TValue[TKey]>` descent argument is peeled to `TValue[TKey]` and
+        // the mapped-key-index exemption still applies.
+        let src = r#"
+type DeepReadonly<TValue> = TValue extends object
+  ? { readonly [TKey in keyof TValue]: DeepReadonly<Readonly<TValue[TKey]>> }
+  : TValue;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_mapped_key_index_wrapped_in_nested_builtins() {
+        // Nested non-widening built-ins peel together: `NonNullable<Readonly<T[K]>>`
+        // unwraps to `T[K]`, still the mapped-key-index descent.
+        let src = r#"
+type Deep<TValue> = TValue extends object
+  ? { [K in keyof TValue]: Deep<NonNullable<Readonly<TValue[K]>>> }
+  : TValue;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_non_nullable_wrapping_bare_type_parameter() {
+        // `NonNullable<T>` peels to the bare type parameter `T`, which is not an
+        // indexed-access descent — the input does not shrink — so the recursion
+        // stays unbounded and flagged.
+        let src = "type Loop<T> = T extends object ? Loop<NonNullable<T>> : T;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_non_builtin_wrapper_around_mapped_key_index() {
+        // `SomeAlias<T[K]>` is a user alias, not a non-widening built-in, so it is
+        // not peeled: it could expand its argument, so the descent guarantee does
+        // not hold and the recursion stays flagged.
+        let src = "type Bad<T> = { [K in keyof T]: Bad<SomeAlias<T[K]>> };";
         assert_eq!(run_on(src).len(), 1);
     }
 }
