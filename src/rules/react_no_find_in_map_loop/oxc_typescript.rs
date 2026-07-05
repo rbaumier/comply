@@ -2,9 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
-use crate::oxc_helpers::{
-    byte_offset_to_line_col, callback_first_param_name, receiver_root_identifier,
-};
+use crate::oxc_helpers::{byte_offset_to_line_col, span_contains};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
@@ -53,8 +51,7 @@ impl OxcCheck for Check {
         }
 
         // Check if it's inside a loop or .map() callback.
-        let receiver_root = receiver_root_identifier(&mem.object);
-        if !flagged_inside_loop_or_map(node, semantic, receiver_root.as_deref()) {
+        if !flagged_inside_loop_or_map(node, semantic) {
             return;
         }
 
@@ -85,7 +82,6 @@ impl OxcCheck for Check {
 fn flagged_inside_loop_or_map(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
-    receiver_root: Option<&str>,
 ) -> bool {
     let mut current = node.id();
     loop {
@@ -123,14 +119,17 @@ fn flagged_inside_loop_or_map(
                     if child_span == call.callee.span() {
                         return false;
                     }
-                    // Inside the callback. If the find/filter receiver root matches
-                    // the map callback param, it's not the O(n^2) pattern.
-                    let param = callback_first_param_name(call);
-                    match (receiver_root, param.as_deref()) {
-                        (Some(recv), Some(p)) if recv == p => {
-                            // derived from current iteration item — keep looking up
-                        }
-                        _ => return true,
+                    // Inside the callback: this find/filter runs once per
+                    // iteration, but it is a correlated O(n²) lookup only when it
+                    // is data-dependent on the iteration binding — the map
+                    // callback's first parameter must be referenced somewhere
+                    // inside the find/filter call (its receiver chain or its
+                    // predicate). When it is, the lookup is keyed per-element and
+                    // we flag. When it is not, the find/filter is loop-invariant
+                    // with respect to this map (same result every iteration); keep
+                    // walking up in case an outer loop/map makes it per-iteration.
+                    if find_correlated_with_map_param(call, node.kind().span(), semantic) {
+                        return true;
                     }
                 }
             }
@@ -167,6 +166,53 @@ fn is_map_call(call: &oxc_ast::ast::CallExpression) -> bool {
     } else {
         false
     }
+}
+
+/// True when the find/filter spanning `find_span` is a correlated per-element
+/// lookup: some binding introduced by `map_call`'s callback first parameter — the
+/// iteration binding — is referenced inside the find/filter call, whether in its
+/// receiver chain (`item.children.find(…)`) or its predicate
+/// (`others.find(o => o.id === item.id)`). A find/filter that references no
+/// iteration binding is loop-invariant (the same result every iteration), not the
+/// O(n²) pattern the rule targets.
+///
+/// Works for a plain identifier parameter (`item => …`) and a destructured one
+/// (`({ id }) => …`) alike: a binding qualifies when its declaration sits inside
+/// the parameter and one of its resolved references sits inside the find/filter
+/// call. Matching by resolved symbol — not by name — means a predicate that
+/// shadows the name with its own binding is not mistaken for a reference to the
+/// outer iteration binding.
+fn find_correlated_with_map_param(
+    map_call: &oxc_ast::ast::CallExpression,
+    find_span: oxc_span::Span,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(param_span) = map_callback_first_param_span(map_call) else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    scoping.symbol_ids().any(|symbol_id| {
+        span_contains(param_span, scoping.symbol_span(symbol_id))
+            && scoping.get_resolved_references(symbol_id).any(|reference| {
+                span_contains(find_span, nodes.get_node(reference.node_id()).kind().span())
+            })
+    })
+}
+
+/// Span of the map callback's first parameter — the iteration binding, whether a
+/// plain identifier or a destructuring pattern. Returns `None` for spreads,
+/// non-function arguments, or a callback with no parameters.
+fn map_callback_first_param_span(
+    call: &oxc_ast::ast::CallExpression,
+) -> Option<oxc_span::Span> {
+    let expr = call.arguments.first()?.as_expression()?;
+    let params = match expr {
+        Expression::ArrowFunctionExpression(arrow) => &arrow.params,
+        Expression::FunctionExpression(func) => &func.params,
+        _ => return None,
+    };
+    Some(params.items.first()?.span)
 }
 
 #[cfg(test)]
@@ -288,6 +334,55 @@ mod tests {
               />
             ));
         "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    // Regression for #7325 (vuetify VDataTableGroupHeaderRow): a `.filter()` in
+    // the map callback whose predicate ignores the iteration binding `column` is
+    // loop-invariant (same result every iteration), not a correlated per-element
+    // lookup — must not flag.
+    #[test]
+    fn allows_loop_invariant_filter_independent_of_map_param() {
+        let src = r#"columns.map(column => {
+            if (column.key === 'x') {
+                const r = rows.filter(x => x.selectable);
+                return r;
+            }
+        });"#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    // True positive: a `.filter()` whose predicate reads the iteration binding
+    // (`x.type === i.type`) is a correlated per-element lookup — must flag.
+    #[test]
+    fn flags_filter_predicate_correlated_with_map_param() {
+        let src = "items.map(i => arr.filter(x => x.type === i.type));";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
+    }
+
+    // True positive: a `.find()` whose receiver is rooted on the iteration
+    // binding (`i.children`) is correlated with the map param — must flag.
+    #[test]
+    fn flags_find_receiver_correlated_with_map_param() {
+        let src = "items.map(i => i.children.find(c => c.active));";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
+    }
+
+    // True positive: a destructured iteration binding still counts — the
+    // predicate reads `id` bound by `({ id }) => …`, a correlated per-element
+    // lookup — must flag.
+    #[test]
+    fn flags_find_correlated_with_destructured_map_param() {
+        let src = "items.map(({ id }) => others.find(o => o.id === id));";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
+    }
+
+    // The find/filter predicate shadows the iteration binding name with its own
+    // parameter, so the `i` it reads is the inner binding, not the map's `i`.
+    // The scan is loop-invariant with respect to the map — must not flag.
+    #[test]
+    fn allows_filter_when_predicate_shadows_map_param() {
+        let src = "items.map(i => arr.filter(i => i.ok));";
         assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
     }
 }
