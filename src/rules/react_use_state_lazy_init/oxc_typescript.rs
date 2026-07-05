@@ -57,18 +57,25 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
-        // Check that the callee is `useState`.
-        let is_use_state = match &call.callee {
-            Expression::Identifier(id) => id.name == "useState",
+        // Fire only when the callee resolves to React's `useState` — a named
+        // import from `react`/`react-dom`. A same-named binding from another
+        // module (e.g. a Vue composable wrapping `ref()`) or a local declaration
+        // is not React's render-time hook, so the every-render/SSR rationale does
+        // not apply.
+        let is_react_use_state = match &call.callee {
+            Expression::Identifier(id) => {
+                id.name == "useState"
+                    && crate::oxc_helpers::is_imported_from_react("useState", semantic)
+            }
             _ => false,
         };
-        if !is_use_state {
+        if !is_react_use_state {
             return;
         }
         // Flag only when the first argument is an expensive initializer.
@@ -118,48 +125,84 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
     }
 
+    const REACT_IMPORT: &str = "import { useState } from 'react';\n";
+
     #[test]
     fn flags_use_state_with_function_call() {
-        assert_eq!(run_on("const [w] = useState(getInitial());").len(), 1);
+        let src = format!("{REACT_IMPORT}const [w] = useState(getInitial());");
+        assert_eq!(run_on(&src).len(), 1);
     }
 
     #[test]
     fn flags_use_state_with_browser_api() {
-        assert_eq!(run_on("const [w] = useState(window.innerWidth);").len(), 1);
+        let src = format!("{REACT_IMPORT}const [w] = useState(window.innerWidth);");
+        assert_eq!(run_on(&src).len(), 1);
     }
 
     #[test]
     fn allows_lazy_init() {
-        assert!(run_on("const [w] = useState(() => getInitial());").is_empty());
+        let src = format!("{REACT_IMPORT}const [w] = useState(() => getInitial());");
+        assert!(run_on(&src).is_empty());
     }
 
     #[test]
     fn allows_primitive_init() {
-        assert!(run_on("const [w] = useState(0);").is_empty());
+        let src = format!("{REACT_IMPORT}const [w] = useState(0);");
+        assert!(run_on(&src).is_empty());
     }
 
     // Regression #2131: cheap property access is not an expensive initializer.
     #[test]
     fn allows_prop_access_on_local() {
-        assert!(run_on("const [c, sc] = useState(props.initialCount);").is_empty());
-        assert!(run_on("const [c, sc] = useState(obj.a.b);").is_empty());
-        assert!(run_on("const [c, sc] = useState(this.x);").is_empty());
-        assert!(run_on("const [c, sc] = useState(arr[0]);").is_empty());
+        assert!(run_on(&format!("{REACT_IMPORT}const [c, sc] = useState(props.initialCount);")).is_empty());
+        assert!(run_on(&format!("{REACT_IMPORT}const [c, sc] = useState(obj.a.b);")).is_empty());
+        assert!(run_on(&format!("{REACT_IMPORT}const [c, sc] = useState(this.x);")).is_empty());
+        assert!(run_on(&format!("{REACT_IMPORT}const [c, sc] = useState(arr[0]);")).is_empty());
     }
 
     // A call on a member (`obj.compute()`) is a call expression, still expensive.
     #[test]
     fn flags_method_call_on_member() {
-        assert_eq!(run_on("const [c, sc] = useState(obj.compute());").len(), 1);
+        let src = format!("{REACT_IMPORT}const [c, sc] = useState(obj.compute());");
+        assert_eq!(run_on(&src).len(), 1);
     }
 
     #[test]
     fn flags_new_expression() {
-        assert_eq!(run_on("const [c, sc] = useState(new Map());").len(), 1);
+        let src = format!("{REACT_IMPORT}const [c, sc] = useState(new Map());");
+        assert_eq!(run_on(&src).len(), 1);
     }
 
     #[test]
     fn flags_json_parse() {
-        assert_eq!(run_on("const [c, sc] = useState(JSON.parse(s));").len(), 1);
+        let src = format!("{REACT_IMPORT}const [c, sc] = useState(JSON.parse(s));");
+        assert_eq!(run_on(&src).len(), 1);
+    }
+
+    // Regression #7297: `useState` default-imported from a non-react module (a
+    // local Vue composable wrapping `ref()`) is not React's hook — its
+    // initializer runs once, so an expensive arg must not be flagged.
+    #[test]
+    fn skips_non_react_default_import_use_state() {
+        let src = "import useState from '../../../_util/hooks/useState';\n\
+                   const [s, setS] = useState(collectFilterStates(cols, true));";
+        assert!(run_on(src).is_empty());
+    }
+
+    // React's `useState` (named import) with a non-lazy expensive initializer
+    // stays flagged.
+    #[test]
+    fn flags_react_named_import_expensive_init() {
+        let src = "import { useState } from 'react';\n\
+                   const [s, setS] = useState(expensive());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A locally declared `useState` is not React's and does not fire.
+    #[test]
+    fn skips_local_use_state() {
+        let src = "function useState() {}\n\
+                   const [s, setS] = useState(expensive());";
+        assert!(run_on(src).is_empty());
     }
 }
