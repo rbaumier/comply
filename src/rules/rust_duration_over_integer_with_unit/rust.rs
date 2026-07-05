@@ -32,6 +32,13 @@
 //! struct) must keep the integer type. The match is purely nominal and
 //! file-wide — it does not verify a structural link — which deliberately errs
 //! toward silence over a false positive on a name collision.
+//! A `*_seconds`/`*_nanoseconds` struct field is exempted when its enclosing
+//! struct holds a same-typed sibling that shares its stem but carries the
+//! counterpart suffix (`change_seconds` ↔ `change_nanoseconds`). The pair is a
+//! POSIX `timespec` decomposition of an absolute instant into whole seconds and
+//! sub-second nanoseconds; a single `Duration` field cannot represent the
+//! two-field split, so both halves keep the integer type. A lone `*_seconds`
+//! with no counterpart, or a counterpart of a different stem or type, still flags.
 //! Test code is exempted via `is_in_test_context`.
 //! A parameter of a trait method — both the definition
 //! (`trait Foo { fn f(ms: u32); }`) and any implementation
@@ -71,6 +78,14 @@ const SUFFIXES: &[&str] = &[
 /// for these names even though they carry a unit word.
 const ABSOLUTE_TIME_PREFIXES: &[&str] = &["julian_", "gregorian_", "unix_", "epoch_"];
 
+/// The two halves of a POSIX `struct timespec`: a whole-seconds part and a
+/// sub-second nanoseconds part. Ordered longest-suffix-first so the stem is
+/// stripped correctly. A field carrying one family's suffix that co-occurs with
+/// a same-typed, same-stem sibling carrying the other family's suffix is one
+/// half of a decomposed instant, not a lone unit-in-name.
+const SECONDS_SUFFIXES: &[&str] = &["_seconds", "_secs", "_sec"];
+const NANOSECONDS_SUFFIXES: &[&str] = &["_nanoseconds", "_nanos", "_nsec"];
+
 const INTEGER_TYPES: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize",
 ];
@@ -104,6 +119,7 @@ impl AstCheck for Check {
             && is_integer_type(type_text)
             && !mirrors_atomic_counter(node, name, source_bytes)
             && !in_serde_derived_struct(node, source_bytes)
+            && !has_seconds_nanoseconds_pair(node, name, type_text, source_bytes)
         {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
             return;
@@ -206,14 +222,84 @@ fn file_has_atomic_field_named(node: tree_sitter::Node, name: &str, source: &[u8
 /// by final path segment, so `serde::Serialize` counts but a custom
 /// `MySerialize` does not.
 fn in_serde_derived_struct(field: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut node = field;
-    while let Some(parent) = node.parent() {
+    enclosing_struct(field).is_some_and(|s| struct_derives_serde(s, source))
+}
+
+/// The nearest `struct_item` ancestor of `node`, if any.
+fn enclosing_struct(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
         if parent.kind() == "struct_item" {
-            return struct_derives_serde(parent, source);
+            return Some(parent);
         }
-        node = parent;
+        current = parent;
     }
-    false
+    None
+}
+
+/// True when `field` is one half of a seconds/nanoseconds `timespec` split: its
+/// enclosing struct holds a same-typed sibling whose name shares this field's
+/// stem but carries the counterpart unit suffix (`change_seconds` ↔
+/// `change_nanoseconds`, `mod_seconds` ↔ `mod_nanoseconds`). Such a pair
+/// decomposes an absolute filesystem instant into whole seconds and sub-second
+/// nanoseconds; a single `Duration` field cannot map onto the two-field split,
+/// so both halves keep the integer type. A lone `*_seconds` with no counterpart,
+/// or a counterpart of a different stem or type, is not a pair and still flags.
+/// Mirrors the enclosing-struct sibling-scan `mirrors_atomic_counter` uses.
+fn has_seconds_nanoseconds_pair(
+    field: tree_sitter::Node,
+    name: &str,
+    type_text: &str,
+    source: &[u8],
+) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let (stem, counterpart) = if let Some(stem) = stem_without_suffix(&lower, SECONDS_SUFFIXES) {
+        (stem, NANOSECONDS_SUFFIXES)
+    } else if let Some(stem) = stem_without_suffix(&lower, NANOSECONDS_SUFFIXES) {
+        (stem, SECONDS_SUFFIXES)
+    } else {
+        return false;
+    };
+    if stem.is_empty() {
+        return false;
+    }
+    enclosing_struct(field)
+        .is_some_and(|s| struct_has_counterpart_field(s, stem, counterpart, type_text, source))
+}
+
+/// The stem of `lower_name` (already lowercased) with the first matching unit
+/// suffix from `family` removed; `None` when no suffix in the family matches.
+fn stem_without_suffix<'a>(lower_name: &'a str, family: &[&str]) -> Option<&'a str> {
+    family
+        .iter()
+        .find_map(|suffix| lower_name.strip_suffix(suffix))
+}
+
+/// True when `node`'s subtree holds a `field_declaration` whose type equals
+/// `type_text` and whose name is `stem` followed by one of the `counterpart`
+/// unit suffixes. The candidate field itself carries the opposite family's
+/// suffix, so it can never match the counterpart family and needs no exclusion.
+fn struct_has_counterpart_field(
+    node: tree_sitter::Node,
+    stem: &str,
+    counterpart: &[&str],
+    type_text: &str,
+    source: &[u8],
+) -> bool {
+    if node.kind() == "field_declaration"
+        && let Some(name_node) = node.child_by_field_name("name")
+        && let Some(type_node) = node.child_by_field_name("type")
+        && let Ok(field_name) = name_node.utf8_text(source)
+        && let Ok(field_type) = type_node.utf8_text(source)
+        && field_type.trim() == type_text.trim()
+        && stem_without_suffix(&field_name.to_ascii_lowercase(), counterpart)
+            .is_some_and(|counterpart_stem| counterpart_stem == stem)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| struct_has_counterpart_field(child, stem, counterpart, type_text, source))
 }
 
 /// True when `struct_item`'s preceding `#[derive(...)]` attributes include a
@@ -597,5 +683,42 @@ pub trait File {
         // choice — the rule still flags it, proving the trait-definition exemption
         // does not neuter the check.
         assert_eq!(run_on("fn touch(atime_secs: i64) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_timespec_seconds_nanoseconds_pair() {
+        // fish-shell `FileId`: `change_seconds`/`change_nanoseconds` and
+        // `mod_seconds`/`mod_nanoseconds` are a POSIX `timespec` split of an
+        // absolute filesystem instant (ctime/mtime from `stat`). A single
+        // `Duration` field cannot represent the two-field seconds+nanoseconds
+        // decomposition, so neither half of either pair flags. Regression for
+        // #7285.
+        let source = "\
+struct FileId {
+    dev_inode: DevInode,
+    size: u64,
+    change_seconds: i64,
+    change_nanoseconds: i64,
+    mod_seconds: i64,
+    mod_nanoseconds: i64,
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_lone_seconds_without_nanoseconds_sibling() {
+        // A `*_seconds` field with no same-stem `*_nanoseconds` counterpart is a
+        // genuine `Duration` candidate and still flags.
+        assert_eq!(run_on("struct Config { timeout_seconds: u64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_seconds_nanoseconds_with_different_stems() {
+        // `a_seconds` and `b_nanoseconds` do not share a stem, so they are not a
+        // decomposed `timespec` pair; both still flag.
+        assert_eq!(
+            run_on("struct X { a_seconds: i64, b_nanoseconds: i64 }").len(),
+            2
+        );
     }
 }
