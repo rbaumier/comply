@@ -72,12 +72,26 @@ fn is_jsx_expr(expr: &Expression) -> bool {
 // that are always boolean: comparison/relational binary expressions, logical
 // NOT (also covering `!!x`), and `typeof`. A `&&`/`||` chain is boolean when
 // both operands are themselves boolean (`hasFilters && onClear !== undefined`).
+// A member access is boolean when it is a Vue `.value` unwrap of a boolean base
+// (`hasSorter.value`) or a boolean-prefixed property (`props.showHeader`).
 fn is_boolean_predicate(expr: &Expression) -> bool {
     match expr.without_parentheses() {
         Expression::CallExpression(call) => {
             matches!(&call.callee, Expression::Identifier(id) if has_boolean_prefix(id.name.as_str()))
         }
         Expression::Identifier(id) => has_boolean_prefix(id.name.as_str()),
+        Expression::StaticMemberExpression(member) => {
+            // A Vue `ref`/`computed` holding a boolean is read through `.value`,
+            // so `hasSorter.value` is boolean when the unwrapped object is
+            // (recurse to also cover nested bases like `cfg.isVirtual.value`).
+            // A member whose own property follows the boolean-naming convention
+            // (`props.showHeader`) is boolean by convention.
+            if member.property.name.as_str() == "value" {
+                is_boolean_predicate(&member.object)
+            } else {
+                has_boolean_prefix(member.property.name.as_str())
+            }
+        }
         Expression::BinaryExpression(binary) => {
             binary.operator.is_equality() || binary.operator.is_compare()
         }
@@ -226,5 +240,48 @@ mod tests {
         // boolean by convention and stays flagged.
         assert_eq!(run_on("const x = <div>{island && <div />}</div>;").len(), 1);
         assert_eq!(run_on("const x = <div>{cancel && <div />}</div>;").len(), 1);
+    }
+
+    #[test]
+    fn allows_vue_boolean_ref_value_unwrap() {
+        // Regression for #7310: a boolean-prefixed Vue ref read through `.value`
+        // is boolean and cannot leak `0`/`''`.
+        assert!(
+            run_on("const x = () => <span>{hasSorter.value && <div>i</div>}</span>;").is_empty()
+        );
+        // Nested boolean-prefixed base: `virtualConfig.isVirtualScroll.value`.
+        assert!(
+            run_on(
+                "const y = () => <span>{virtualConfig.isVirtualScroll.value && <div>i</div>}</span>;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_boolean_prefixed_property() {
+        // A member whose own property follows the boolean-naming convention is
+        // boolean (`props.showHeader`).
+        assert!(
+            run_on("const z = () => <span>{props.showHeader && <div>i</div>}</span>;").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_non_boolean_ref_value_unwrap() {
+        // A non-boolean-named ref read through `.value` can still leak `0`/`''`.
+        assert_eq!(
+            run_on("const a = () => <span>{count.value && <div>i</div>}</span>;").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_non_boolean_prefixed_property() {
+        // A member whose property is not boolean-prefixed stays flagged.
+        assert_eq!(
+            run_on("const b = () => <span>{props.title && <div>i</div>}</span>;").len(),
+            1
+        );
     }
 }
