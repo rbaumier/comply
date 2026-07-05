@@ -4,10 +4,11 @@
 //! following sibling `for_expression` pushes into `X` unconditionally:
 //! the `X.push(...)` must be a direct statement of the loop body (not
 //! nested inside an `if`/`match`) and the body must contain no `continue`
-//! that would skip iterations. Only then does the Vec's final length equal
+//! that would skip iterations nor an early `break` that would exit before the
+//! iterable is exhausted. Only then does the Vec's final length equal
 //! the iterable's length, making `Vec::with_capacity(n)` the right call —
 //! it avoids the log2(n) reallocation chain from doubling. A conditional
-//! push or a `continue` makes the final length unknowable up front, so
+//! push, a `continue`, or an early `break` makes the final length unknowable up front, so
 //! `with_capacity` would mis-size. Likewise a body that reassigns the
 //! accumulator (`X = ...`) resets it each iteration, so its final length is
 //! one segment's size rather than the iteration count, and the rule stays
@@ -59,6 +60,7 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
             && let Some(body) = for_node.child_by_field_name("body")
             && body_directly_pushes(body, var_name, source)
             && !body_has_continue(body)
+            && !body_has_break(body)
             && !body_extends_or_appends(body, var_name, source)
             && !body_reassigns(body, var_name, source)
         {
@@ -285,6 +287,18 @@ fn body_has_continue(node: tree_sitter::Node) -> bool {
     node.children(&mut cursor).any(body_has_continue)
 }
 
+/// Whether the loop body can `break` early anywhere in its subtree. A `break`
+/// exits the loop before the iterable is exhausted, so the accumulator's final
+/// length is not the iteration count and `with_capacity(n)` would over-allocate.
+/// Uses the same whole-subtree walk as `body_has_continue`.
+fn body_has_break(node: tree_sitter::Node) -> bool {
+    if node.kind() == "break_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(body_has_break)
+}
+
 /// Whether the loop body contains any `<var>.extend(...)`/`<var>.append(...)`
 /// anywhere — including nested inside an `if`/`if let` — using the same
 /// whole-subtree walk as `body_has_continue` so a conditional extend is caught.
@@ -471,6 +485,18 @@ mod tests {
     #[test]
     fn flags_concrete_slice_param_in_generic_fn() {
         let src = "fn g<T>(items: &[T]) {\n    let mut v = Vec::new();\n    for x in items {\n        v.push(x);\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_push_with_conditional_break_in_body_issue_7209() {
+        let src = "fn f(statuses: Vec<i32>, check_dirty: bool) {\n    let mut changes = Vec::new();\n    for change in statuses {\n        changes.push(change);\n        if check_dirty {\n            break;\n        }\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_plain_push_loop_no_break_no_continue_issue_7209() {
+        let src = "fn f(items: Vec<i32>) {\n    let mut v = Vec::new();\n    for x in items {\n        v.push(x);\n    }\n}";
         assert_eq!(run(src).len(), 1);
     }
 
