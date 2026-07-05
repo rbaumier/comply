@@ -12,7 +12,10 @@
 //! - `todo!` / `unimplemented!` — placeholders that must not ship.
 //! - `unreachable!` — asserts an invariant the compiler can't prove. A
 //!   documented `unreachable!("reason")` carrying an explanatory string
-//!   message is allowed; a bare, undocumented `unreachable!()` is not.
+//!   message is allowed; so is a bare `unreachable!()` that is the entire body
+//!   of a value-forcing trait-impl method (the null-object shape above, whose
+//!   signature leaves no non-diverging escape). Any other bare, undocumented
+//!   `unreachable!()` is not.
 //!
 //! Tests are exempted because panicking in a `#[test]` is a clean
 //! failure mode. Same exemption logic as `rust-no-unwrap`. cargo-fuzz
@@ -108,18 +111,22 @@ impl AstCheck for Check {
         if macro_name == "unreachable" && has_documented_message(node, ctx.source) {
             return;
         }
-        // Null-object pattern: a `panic!` that is the *entire* body of a
-        // trait-impl method returning a bare value type. The implementor
-        // can't change the signature (it's the trait contract), the return
-        // type isn't `Result`/`Option`/`()` so `?`/`Err`/`None`/early-return
-        // are impossible, and the method does nothing but panic — calling it
-        // is a documented invariant violation (e.g. `get_val` on an empty
-        // column sentinel). Same justification as documented `unreachable!`:
-        // the arm has no value to return. A `panic!` buried in real logic, or
-        // in a method whose signature admits a non-panicking result, still
-        // flags. Restricted to `panic!`: `todo!`/`unimplemented!` are
-        // placeholders that must not ship even as a sole-body stub.
-        if macro_name == "panic" && is_sole_body_null_object_panic(node, source_bytes) {
+        // Null-object pattern: a `panic!` or bare `unreachable!()` that is the
+        // *entire* body of a trait-impl method returning a bare value type. The
+        // implementor can't change the signature (it's the trait contract), the
+        // return type isn't `Result`/`Option`/`()` so `?`/`Err`/`None`/early-
+        // return are impossible, and the method does nothing but diverge —
+        // calling it is a documented invariant violation (e.g. `get_val` on an
+        // empty-column sentinel, or `from_array` on an uninhabited type whose
+        // value can never be constructed). The signature leaves no non-diverging
+        // escape, so a documenting message adds nothing. A divergent macro
+        // buried in real logic, or in a method whose signature admits a
+        // non-panicking result, still flags. `todo!`/`unimplemented!` are
+        // placeholders that must not ship even as a sole-body stub, so they are
+        // not covered.
+        if matches!(macro_name, "panic" | "unreachable")
+            && is_sole_body_null_object_panic(node, source_bytes)
+        {
             return;
         }
         let pos = node.start_position();
@@ -378,6 +385,66 @@ libfuzzer-sys = "0.4"
             }
         "#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_null_object_unreachable_in_infallible_trait_method() {
+        // wasmerio/wasmer lib/api/src/utils/native/convert.rs:638 — the FP from
+        // #7341. `from_array` returns `Self` = the uninhabited `Infallible`; no
+        // value can ever be constructed, so a bare `unreachable!()` sole body is
+        // the only possible implementation and needs no documenting message.
+        let source = r#"
+            impl WasmTypeList for Infallible {
+                unsafe fn from_array(_: &mut impl AsStoreMut, _: Self::Array) -> Self {
+                    unreachable!()
+                }
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_conditional_unreachable_in_infallible_trait_method() {
+        // A bare `unreachable!()` buried in real logic (not the sole body) still
+        // flags — the method has a real non-diverging path.
+        let source = r#"
+            impl ColumnValues<T> for SparseColumn {
+                fn get_val(&self, idx: u32) -> T {
+                    if idx >= self.len {
+                        unreachable!();
+                    }
+                    self.data[idx as usize]
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_sole_body_todo_in_infallible_trait_method() {
+        // The null-object exemption is not extended to `todo!` — a placeholder
+        // must not ship even as the sole body of a value-forcing method.
+        let source = r#"
+            impl WasmTypeList for Infallible {
+                unsafe fn from_array(_: &mut impl AsStoreMut, _: Self::Array) -> Self {
+                    todo!()
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_sole_body_unimplemented_in_infallible_trait_method() {
+        // Likewise `unimplemented!` is not covered by the null-object exemption.
+        let source = r#"
+            impl WasmTypeList for Infallible {
+                unsafe fn from_array(_: &mut impl AsStoreMut, _: Self::Array) -> Self {
+                    unimplemented!()
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
