@@ -148,25 +148,31 @@ impl OxcCheck for Check {
                                 return;
                             }
 
-                        // If this is the last statement in a function body, it's
-                        // fine — unless the enclosing function is itself a
-                        // callback argument, in which case the rule still applies.
+                        // No statement runs after the callback within its
+                        // block. Exempt it when that block is in terminal
+                        // position, so nothing runs after the callback on any
+                        // path and a missing `return` drops nothing: directly a
+                        // function body (unless that function is a callback
+                        // argument, whose return value the outer call consumes),
+                        // or an if/else branch whose enclosing `if` cascade is
+                        // itself terminal.
                         if idx == stmts.len() - 1 {
                             let great_grandparent =
                                 semantic.nodes().parent_node(grandparent.id());
                             match great_grandparent.kind() {
-                                AstKind::Function(_) => return,
-                                AstKind::ArrowFunctionExpression(_) => {
-                                    // Only exempt if the arrow is not itself
-                                    // passed as an argument to another call.
-                                    let ggp_parent = semantic
-                                        .nodes()
-                                        .parent_node(great_grandparent.id());
-                                    if !matches!(
-                                        ggp_parent.kind(),
-                                        AstKind::CallExpression(_)
-                                            | AstKind::StaticMemberExpression(_)
-                                            | AstKind::ComputedMemberExpression(_)
+                                AstKind::Function(_)
+                                | AstKind::ArrowFunctionExpression(_) => {
+                                    if is_exemptible_function_body_owner(
+                                        great_grandparent,
+                                        semantic,
+                                    ) {
+                                        return;
+                                    }
+                                }
+                                AstKind::IfStatement(_) => {
+                                    if is_in_terminal_position(
+                                        great_grandparent,
+                                        semantic,
                                     ) {
                                         return;
                                     }
@@ -200,6 +206,69 @@ impl OxcCheck for Check {
 /// `SpreadElement`, not the call), so a direct span match is exact.
 fn is_argument(call_span: Span, arguments: &[Argument<'_>]) -> bool {
     arguments.iter().any(|arg| arg.span() == call_span)
+}
+
+/// True when a callback that is the last statement of `owner`'s body may be
+/// exempted from the missing-`return` check. A plain `Function` returns to its
+/// caller after the last statement, and an arrow does too — unless the arrow is
+/// itself passed as a callback argument (or is the callee of an IIFE), where the
+/// outer call consumes the arrow's return value, so a dropped return still
+/// matters and the callback stays flagged.
+fn is_exemptible_function_body_owner<'a>(
+    owner: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    match owner.kind() {
+        AstKind::Function(_) => true,
+        AstKind::ArrowFunctionExpression(_) => {
+            let parent = semantic.nodes().parent_node(owner.id());
+            !matches!(
+                parent.kind(),
+                AstKind::CallExpression(_)
+                    | AstKind::StaticMemberExpression(_)
+                    | AstKind::ComputedMemberExpression(_)
+            )
+        }
+        _ => false,
+    }
+}
+
+/// True when `node` (a statement) is in terminal position: after it completes,
+/// control leaves the enclosing function on every path, so no statement runs
+/// afterward. `node` is terminal when it is the last statement of a function
+/// body (that owner being exemptible), the last statement of a block that is
+/// itself terminal, or a branch (consequent/alternate) of an `IfStatement` that
+/// is itself terminal — walking up `if`/`else` cascades and enclosing blocks to
+/// the function body. The walk stops at the function body, never crossing into
+/// an outer function.
+fn is_in_terminal_position<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    if parent.id() == node.id() {
+        return false;
+    }
+    let node_span = node.kind().span();
+    match parent.kind() {
+        AstKind::FunctionBody(fb) => {
+            fb.statements.last().is_some_and(|s| s.span() == node_span)
+                && is_exemptible_function_body_owner(
+                    semantic.nodes().parent_node(parent.id()),
+                    semantic,
+                )
+        }
+        AstKind::BlockStatement(bs) => {
+            bs.body.last().is_some_and(|s| s.span() == node_span)
+                && is_in_terminal_position(parent, semantic)
+        }
+        // `node` is the consequent or alternate branch of the `if`; after it
+        // runs, control leaves the `if`, so the branch is terminal iff the `if`
+        // is (this also threads `else if` chains: the inner `if` is the outer's
+        // alternate).
+        AstKind::IfStatement(_) => is_in_terminal_position(parent, semantic),
+        _ => false,
+    }
 }
 
 /// Resolve the expression that consumes the call's value, peeling
@@ -849,6 +918,44 @@ mod tests {
         // expression statement) still drops the callback's result — the wrapper
         // peel must not exempt it.
         let src = "function f(callback, cond, a, b) { cond ? callback(a) : b; doMore(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_callback_in_terminal_if_else_cascade() {
+        // Issue #7450 (element-plus / async-validator completion callback): each
+        // `callback(new Error(...))` is the last statement of its if/else branch,
+        // and the whole cascade is the last statement of the arrow body. Control
+        // leaves the function after any branch runs, so a missing `return` drops
+        // nothing.
+        let src = r#"
+            const validator = (rule, value, callback) => {
+              if (value === "") {
+                callback(new Error("required"));
+              } else if (!re.test(value)) {
+                callback(new Error("wrong"));
+              } else {
+                callback();
+              }
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_callback_in_terminal_if_without_else() {
+        // The `if` is the last statement of the function body, so nothing runs
+        // after `cb(err)` on any path.
+        let src = "function f(err, cb) { if (err) { cb(err); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_callback_when_stmt_follows_same_branch() {
+        // `doMore()` follows the callback within the same branch, so the callback
+        // is not the last statement of its block — a real dropped-return, still
+        // flagged.
+        let src = "function g(err, cb) { if (err) { cb(err); doMore(); } }";
         assert_eq!(run(src).len(), 1);
     }
 }
