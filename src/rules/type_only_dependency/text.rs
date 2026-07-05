@@ -8,6 +8,10 @@
 //! files re-enter the rule and short-circuit.
 //!
 //! Skips:
+//!   - A published library (not `private`) that ships type declarations
+//!     (`types`/`typings`/`exports`-types). Its `.d.ts` public surface can
+//!     re-export a type-only dependency, so that dependency must resolve for
+//!     downstream consumers and belongs in `dependencies`/`peerDependencies`.
 //!   - `@types/*` packages — they're devDependencies by convention and exist
 //!     to expose ambient types, so flagging them produces no actionable signal.
 //!   - Packages absent from `dependencies` — already in `devDependencies` /
@@ -27,6 +31,16 @@ impl TextCheck for Check {
         let Some(pkg) = ctx.project.package_json.as_deref() else {
             return Vec::new();
         };
+
+        // A published library (not `private`) that ships type declarations emits
+        // a `.d.ts` whose public surface can re-export a type-only dependency;
+        // that dependency must resolve for downstream consumers and belongs in
+        // `dependencies`/`peerDependencies`, never `devDependencies`. This text
+        // rule cannot prove which type-only imports escape into the exported
+        // surface, so gate the whole suggestion off for such packages.
+        if !pkg.is_private && pkg.ships_type_declarations {
+            return Vec::new();
+        }
 
         let index = ctx.project.import_index();
         let canon = index.canonical(ctx.path);
@@ -183,5 +197,87 @@ mod tests {
         )];
         let (_dir, diags) = run_on_project(&files, pkg);
         assert!(diags.is_empty(), "@types/* packages must not be flagged");
+    }
+
+    #[test]
+    fn allows_published_library_shipping_type_declarations() {
+        // A published package (`private: false`) that ships a `.d.ts` (`types`
+        // field) may re-export a type-only dependency in its public surface, so
+        // the dep must resolve for consumers and cannot move to devDependencies.
+        let pkg = r#"{
+  "name": "@refine/ui-types",
+  "private": false,
+  "types": "dist/index.d.ts",
+  "dependencies": { "dayjs": "1.0.0" }
+}"#;
+        let files = vec![(
+            "field.ts",
+            "import type { ConfigType } from 'dayjs';\nexport type FieldProps<T = ConfigType> = { value: T };",
+        )];
+        let (_dir, diags) = run_on_project(&files, pkg);
+        assert!(
+            diags.is_empty(),
+            "published lib shipping .d.ts must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_published_library_with_exports_types_condition() {
+        // Ships its `.d.ts` via an `exports` `types` condition rather than a
+        // top-level `types` field — same shipped public surface, same gate.
+        let pkg = r#"{
+  "name": "@scope/lib",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "dependencies": { "dayjs": "1.0.0" }
+}"#;
+        let files = vec![(
+            "index.ts",
+            "import type { ConfigType } from 'dayjs';\nexport type Stamp = ConfigType;",
+        )];
+        let (_dir, diags) = run_on_project(&files, pkg);
+        assert!(
+            diags.is_empty(),
+            "exports `types` condition marks a shipped .d.ts, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_private_app_with_type_only_prod_dep() {
+        // A private app bundles everything at build time; it ships no consumer
+        // `.d.ts`, so its type-only prod dep is still flagged.
+        let pkg = r#"{
+  "name": "demo-app",
+  "private": true,
+  "types": "dist/index.d.ts",
+  "dependencies": { "prisma-client": "1.0.0" }
+}"#;
+        let files = vec![(
+            "app.ts",
+            "import type { PrismaClient } from 'prisma-client';\nexport const x = 1;",
+        )];
+        let (_dir, diags) = run_on_project(&files, pkg);
+        assert_eq!(diags.len(), 1, "private app's type-only prod dep still flagged");
+    }
+
+    #[test]
+    fn flags_publishable_package_without_type_declarations() {
+        // Publishable (`private` absent) but ships no `.d.ts`: `exports` has no
+        // `types` condition and there is no `types`/`typings` field. The gate
+        // requires shipping type declarations, so this is still flagged.
+        let pkg = r#"{
+  "name": "demo-lib",
+  "exports": { ".": { "import": "./dist/index.js" } },
+  "dependencies": { "prisma-client": "1.0.0" }
+}"#;
+        let files = vec![(
+            "index.ts",
+            "import type { PrismaClient } from 'prisma-client';\nexport const x = 1;",
+        )];
+        let (_dir, diags) = run_on_project(&files, pkg);
+        assert_eq!(
+            diags.len(),
+            1,
+            "publishable pkg shipping no .d.ts still flagged"
+        );
     }
 }

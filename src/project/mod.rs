@@ -115,6 +115,13 @@ pub struct PackageJson {
     /// deps in `dependencies`; for a private package everything is bundled at
     /// build time, so importing from `devDependencies` is correct.
     pub is_private: bool,
+    /// True if the package ships TypeScript type declarations to its consumers:
+    /// a top-level `types` or `typings` field, or a `types` condition anywhere in
+    /// the `exports` map. Such a package emits a `.d.ts` whose public surface can
+    /// re-export a type-only dependency, so that dependency must resolve for
+    /// downstream consumers and belongs in `dependencies`/`peerDependencies`,
+    /// never `devDependencies`.
+    pub ships_type_declarations: bool,
     /// Relative paths of source files that appear as CLI entry points in the
     /// `scripts` field (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
     /// Stored with forward slashes and without a leading `./`.
@@ -238,6 +245,7 @@ impl PackageJson {
             has_bin: json.get("bin").is_some(),
             has_main: json.get("main").is_some(),
             is_private: parse_private(&json),
+            ships_type_declarations: ships_type_declarations(&json),
             workspaces: parse_workspaces(&json),
             script_entry_files: json
                 .get("scripts")
@@ -1009,6 +1017,29 @@ fn parse_private(json: &Value) -> bool {
     match json.get("private") {
         Some(Value::Bool(b)) => *b,
         Some(Value::String(s)) => s == "true",
+        _ => false,
+    }
+}
+
+/// True when the manifest ships TypeScript type declarations to consumers: a
+/// top-level `types` or `typings` field, or a `types` condition anywhere in the
+/// `exports` map.
+fn ships_type_declarations(json: &Value) -> bool {
+    json.get("types").is_some()
+        || json.get("typings").is_some()
+        || json
+            .get("exports")
+            .is_some_and(exports_has_types_condition)
+}
+
+/// True when a `types` condition key appears anywhere in an `exports` subtree.
+/// `exports` subpath keys start with `.` (`"."`, `"./sub"`), so a bare `types`
+/// key is always the conditional-exports types condition, never a subpath.
+fn exports_has_types_condition(node: &Value) -> bool {
+    match node {
+        Value::Object(map) => map
+            .iter()
+            .any(|(key, value)| key == "types" || exports_has_types_condition(value)),
         _ => false,
     }
 }
