@@ -93,7 +93,15 @@ fn is_boolean_expression(expr: &Expression, source: &str) -> bool {
         }
         Expression::Identifier(ident) => looks_like_boolean_identifier(ident.name.as_str()),
         Expression::StaticMemberExpression(member) => {
-            looks_like_boolean_identifier(member.property.name.as_str())
+            // `foo.value` is a Vue `Ref`/`ComputedRef` unwrap: the booleanness
+            // belongs to the underlying object (`showText.value` → `showText`),
+            // so delegate the boolean-name check to `member.object`. This also
+            // resolves nested refs (`virtualConfig.isVirtualScroll.value`).
+            if member.property.name.as_str() == "value" {
+                is_boolean_expression(&member.object, source)
+            } else {
+                looks_like_boolean_identifier(member.property.name.as_str())
+            }
         }
         Expression::ComputedMemberExpression(_) => {
             let span = oxc_span::GetSpan::span(expr);
@@ -197,5 +205,30 @@ mod tests {
     fn flags_number_member_before_jsx() {
         let src = "const b = items.length && <div>hi</div>;";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_boolean_named_vue_ref_unwrap() {
+        // #7378: a Vue `Ref`/`ComputedRef` is read through `.value`; the
+        // booleanness belongs to the underlying object, so a boolean-named base
+        // (`showText`, `isVirtualScroll`) cannot leak `0`/`""`.
+        assert!(run_on("const t = showText.value && <div>hi</div>;").is_empty());
+        assert!(
+            run_on("const u = virtualConfig.isVirtualScroll.value && <div>hi</div>;").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_non_boolean_named_vue_ref_unwrap() {
+        // A `.value` unwrap whose base is not boolean-named can still hold a
+        // number/string and leak `0`/`""`.
+        assert_eq!(run_on("const a = items.value && <div>hi</div>;").len(), 1);
+        assert_eq!(run_on("const b = count.value && <div>hi</div>;").len(), 1);
+    }
+
+    #[test]
+    fn allows_boolean_prefixed_property() {
+        let src = "const c = props.showText && <div>hi</div>;";
+        assert!(run_on(src).is_empty());
     }
 }
