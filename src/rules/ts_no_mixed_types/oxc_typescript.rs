@@ -6,7 +6,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, PropertyKey, TSMethodSignature, TSSignature};
+use oxc_ast::ast::{
+    Expression, PropertyKey, TSMethodSignature, TSMethodSignatureKind, TSSignature,
+};
 use std::sync::Arc;
 
 pub struct Check;
@@ -17,7 +19,16 @@ fn scan_signatures(sigs: &oxc_allocator::Vec<'_, TSSignature>) -> (bool, bool) {
     for sig in sigs {
         match sig {
             TSSignature::TSPropertySignature(_) => has_property = true,
-            TSSignature::TSMethodSignature(_) => has_method = true,
+            // Only true methods (`foo(): T`) count. Get/Set accessor signatures
+            // (`get x(): T` / `set x(v)`) are also `TSMethodSignature` nodes, but
+            // they encode distinct read/write contracts that no single property
+            // signature can express, so they aren't part of the property-vs-method
+            // mix this rule targets.
+            TSSignature::TSMethodSignature(method)
+                if method.kind == TSMethodSignatureKind::Method =>
+            {
+                has_method = true
+            }
             _ => {}
         }
     }
@@ -283,5 +294,41 @@ interface UserConfig {
         );
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("UserConfig"));
+    }
+
+    #[test]
+    fn allows_property_with_get_set_accessor_pair() {
+        // Regression rbaumier/comply#7354 (strapi/strapi, index.ts) — a data
+        // property alongside a get/set accessor pair is not a property-vs-method
+        // mix. The getter returns `ParsedQuery` while the setter takes `any`, so
+        // no single property signature can express both; the accessors aren't
+        // methods and the interface is not flagged.
+        let d = run_on(
+            r#"
+interface BaseRequest {
+    _querycache?: ParsedQuery;
+    get query(): ParsedQuery;
+    set query(obj: any);
+}
+"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_property_with_getter_only() {
+        // A data property plus a lone getter accessor signature: the getter is
+        // not a method signature, so there is no property/method mix to flag.
+        let d = run_on("interface OnlyAccessors { data: string; get x(): number; }");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_with_real_method() {
+        // Negative control: a data property mixed with a genuine callable method
+        // (`register` has `kind == Method`) is still flagged.
+        let d = run_on("interface AsyncHook { handlers: Handler[]; register(h: Handler): void; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("AsyncHook"));
     }
 }
