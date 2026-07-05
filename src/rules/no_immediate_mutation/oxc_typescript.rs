@@ -90,7 +90,15 @@ impl OxcCheck for Check {
                             && is_property_assignment_text(next_stmt_text, var_name))
                 }
                 LiteralKind::Object => {
+                    // A property assignment whose right-hand side reads the object
+                    // itself (`x[k] = x[k].replace(...)`, `x.p = f(x.p)`) is a
+                    // self-referential read-modify-write: the new value derives from
+                    // the initialised value, so it can't be folded back into the
+                    // object literal — no chainable mutator on `{ [k]: v }`
+                    // reproduces it. An accumulator-independent set (`x[k] = v`)
+                    // stays flagged.
                     is_property_assignment_text(next_stmt_text, var_name)
+                        && !statement_rhs_reads_var(next_stmt, var_name)
                 }
                 LiteralKind::Set => {
                     is_method_call_on_text(next_stmt_text, var_name, &["add"])
@@ -183,6 +191,76 @@ fn statement_is_computed_dynamic_assignment(stmt: &Statement, var_name: &str) ->
         &member.expression,
         Expression::NumericLiteral(_) | Expression::StringLiteral(_)
     )
+}
+
+/// True when `stmt` is a property/element assignment (`var_name.p = …` /
+/// `var_name[k] = …`) whose right-hand side reads `var_name` itself. Such a
+/// self-referential read-modify-write derives the mutated value from the
+/// initialised value, so it cannot be folded onto the object-literal initialiser.
+fn statement_rhs_reads_var(stmt: &Statement, var_name: &str) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+    let Expression::AssignmentExpression(assign) = &expr_stmt.expression else {
+        return false;
+    };
+    expr_reads_name(&assign.right, var_name)
+}
+
+/// Recursively test whether `expr` reads the identifier `name` as a free variable.
+/// Arrow/function bodies are not descended into: a read there is deferred (a
+/// closure), so it stays chainable onto the initialiser and is not a
+/// read-modify-write of the current value.
+fn expr_reads_name(expr: &Expression, name: &str) -> bool {
+    match expr {
+        Expression::Identifier(id) => id.name == name,
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => false,
+        Expression::BinaryExpression(bin) => {
+            expr_reads_name(&bin.left, name) || expr_reads_name(&bin.right, name)
+        }
+        Expression::LogicalExpression(log) => {
+            expr_reads_name(&log.left, name) || expr_reads_name(&log.right, name)
+        }
+        Expression::UnaryExpression(un) => expr_reads_name(&un.argument, name),
+        Expression::AwaitExpression(aw) => expr_reads_name(&aw.argument, name),
+        Expression::ConditionalExpression(cond) => {
+            expr_reads_name(&cond.test, name)
+                || expr_reads_name(&cond.consequent, name)
+                || expr_reads_name(&cond.alternate, name)
+        }
+        Expression::CallExpression(call) => {
+            expr_reads_name(&call.callee, name)
+                || call.arguments.iter().any(|arg| match arg {
+                    oxc_ast::ast::Argument::SpreadElement(s) => expr_reads_name(&s.argument, name),
+                    _ => expr_reads_name(arg.to_expression(), name),
+                })
+        }
+        Expression::StaticMemberExpression(mem) => expr_reads_name(&mem.object, name),
+        Expression::ComputedMemberExpression(mem) => {
+            expr_reads_name(&mem.object, name) || expr_reads_name(&mem.expression, name)
+        }
+        Expression::TemplateLiteral(tpl) => {
+            tpl.expressions.iter().any(|e| expr_reads_name(e, name))
+        }
+        Expression::SequenceExpression(seq) => {
+            seq.expressions.iter().any(|e| expr_reads_name(e, name))
+        }
+        Expression::ParenthesizedExpression(p) => expr_reads_name(&p.expression, name),
+        Expression::TSAsExpression(ts) => expr_reads_name(&ts.expression, name),
+        Expression::TSNonNullExpression(ts) => expr_reads_name(&ts.expression, name),
+        Expression::ArrayExpression(arr) => arr.elements.iter().any(|el| match el {
+            ArrayExpressionElement::SpreadElement(s) => expr_reads_name(&s.argument, name),
+            ArrayExpressionElement::Elision(_) => false,
+            _ => expr_reads_name(el.to_expression(), name),
+        }),
+        Expression::ObjectExpression(obj) => obj.properties.iter().any(|prop| match prop {
+            oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) => expr_reads_name(&p.value, name),
+            oxc_ast::ast::ObjectPropertyKind::SpreadProperty(s) => {
+                expr_reads_name(&s.argument, name)
+            }
+        }),
+        _ => false,
+    }
 }
 
 /// The statement immediately following `decl_node` in its enclosing statement
@@ -481,6 +559,52 @@ mod tests {
     #[test]
     fn flags_object_simple_assignment_after_spread() {
         assert_eq!(run_on("const u = { ...route }; u.name = f();").len(), 1);
+    }
+
+    // --- Regressions for #7412: a property assignment whose RHS reads the object
+    // itself is a self-referential read-modify-write. The mutated value derives
+    // from the initialised value, so it can't be folded onto the initialiser and
+    // must not be flagged. ---
+
+    // The repro (formbricks): computed member read-modify-write via `.replace`.
+    #[test]
+    fn allows_object_self_referential_computed_read() {
+        let src = "let m = { [k]: v };\nm[k] = m[k].replace(/@(\\b|$)/g, 'r');";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Static property read wrapped in a call: `x.p = transform(x.p)`.
+    #[test]
+    fn allows_object_self_referential_static_read() {
+        let src = "let x = { p: init };\nx.p = transform(x.p);";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // The self-referential read hides inside a spread-merge into a field
+    // (`x.items = [...x.items, v]` / `x.meta = { ...x.meta, k: v }`): the RHS
+    // still reads the object, so it can't be folded onto the initialiser.
+    #[test]
+    fn allows_object_self_referential_spread_merge() {
+        let arr = "const x = { items: [1] };\nx.items = [...x.items, 2];";
+        assert!(run_on(arr).is_empty(), "{:?}", run_on(arr));
+        let obj = "const x = { meta: {} };\nx.meta = { ...x.meta, k: v };";
+        assert!(run_on(obj).is_empty(), "{:?}", run_on(obj));
+    }
+
+    // Control: a copy-then-set whose value is independent of the object still
+    // folds into `{ ...a, [k]: e.target.value }`, so it stays flagged.
+    #[test]
+    fn flags_object_copy_then_set_independent_value() {
+        assert_eq!(
+            run_on("const x = { ...a };\nx[k] = e.target.value;").len(),
+            1
+        );
+    }
+
+    // Control: a static-value set independent of the object stays flagged.
+    #[test]
+    fn flags_object_static_set_independent_value() {
+        assert_eq!(run_on("const x = { a: 1 };\nx.b = 2;").len(), 1);
     }
 
     // --- Regression for #6520: in semicolon-free (ASI) code, a `.forEach` read
