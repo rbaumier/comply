@@ -16,9 +16,10 @@
 //! A money word as a `<word>_<qualifier>` prefix where the trailing
 //! segment is a dimensionless mathematical/statistical qualifier
 //! (`factor`, `weight`, `ratio`, `coefficient`, `score`, `index`,
-//! `multiplier`, `loss`) is not flagged: the qualifier reclassifies the
-//! quantity as a unitless ratio/weight, not currency (`balance_factor`
-//! is a clustering hyperparameter, not an account balance). A bare money
+//! `multiplier`, `loss`, `percent`, `pct`) is not flagged: the qualifier
+//! reclassifies the quantity as a unitless ratio/weight, not currency
+//! (`balance_factor` is a clustering hyperparameter, not an account
+//! balance). A bare money
 //! word and a `_<word>` suffix (`balance`, `account_balance`) still flag.
 //! `rate` is deliberately not a qualifier — `tax_rate`/`interest_rate`
 //! are financial.
@@ -61,6 +62,8 @@ const AGGREGATE_NAMES: &[&str] = &["total", "subtotal"];
 /// Dimensionless mathematical/statistical qualifiers. A money word as a
 /// `<money>_<qualifier>` prefix denotes a unitless ratio/weight, not
 /// currency (`balance_factor`, `price_index`), so it is not flagged.
+/// `percent`/`pct` are per-hundred ratios, dimensionless like `ratio`
+/// (`charge_percent` is a battery charge percentage, not currency).
 /// `rate` is excluded — `tax_rate`/`interest_rate` are financial.
 const NON_MONETARY_QUALIFIERS: &[&str] = &[
     "factor",
@@ -71,6 +74,8 @@ const NON_MONETARY_QUALIFIERS: &[&str] = &[
     "index",
     "multiplier",
     "loss",
+    "percent",
+    "pct",
 ];
 
 #[derive(Debug)]
@@ -278,6 +283,20 @@ mod tests {
     fn flags_account_balance_suffix_field() {
         // `balance` as a suffix stays monetary. #5598.
         assert_eq!(run_on("struct Account { account_balance: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_charge_percent_field() {
+        // `charge` qualified by `percent` is a battery charge percentage
+        // (0–100), a dimensionless per-hundred ratio, not currency. #7433.
+        let src = "struct BatteryData { charge_percent: f64 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_fee_pct_field() {
+        // `pct` is the abbreviated percent suffix, dimensionless. #7433.
+        assert!(run_on("struct S { fee_pct: f64 }").is_empty());
     }
 
     #[test]
