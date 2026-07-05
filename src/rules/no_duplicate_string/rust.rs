@@ -120,6 +120,23 @@ pub(super) fn is_in_macro_rules_body(node: tree_sitter::Node<'_>) -> bool {
     false
 }
 
+/// True when `node` is a string literal in `match`-arm **pattern** position
+/// (`match name { "is_datetime" => …, "a" | "b" => … }`), reached through a
+/// `match_pattern`/`or_pattern` wrapper. Such a literal is a key in a
+/// categorized keyword-dispatch table: the same canonical function-name key
+/// validly recurs across the parallel `match` blocks of a builtin dispatcher
+/// (function-call vs method-call syntax, sync vs async), so — like an element
+/// of a categorized-lookup array — it is intentional data, not a business
+/// constant worth hoisting to a `const`. Only the pattern side is exempt: a
+/// literal in the arm's value expression or guard is not wrapped in a
+/// `match_pattern`/`or_pattern`, so it stays in ordinary expression position
+/// and still counts.
+pub(super) fn is_match_arm_pattern(node: tree_sitter::Node<'_>) -> bool {
+    node.parent()
+        .is_some_and(|parent| matches!(parent.kind(), "match_pattern" | "or_pattern"))
+        && crate::rules::rust_helpers::match_arm_of_pattern(node).is_some()
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -551,6 +568,97 @@ mod tests {
                 let _ = (a, b, c);
             }
         "###;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_string_literals_in_match_arm_patterns() {
+        // The issue's FP (surrealdb): a builtin-function dispatcher with
+        // parallel `match name { … }` blocks (function-call vs method-call
+        // syntax), each repeating the same canonical function-name keys in
+        // arm-pattern position. These are categorized keyword-table keys, not
+        // extractable business constants.
+        let src = r#"
+            fn dispatch(name: &str) -> u8 {
+                match name {
+                    "is_datetime" => 1,
+                    "is_decimal" => 2,
+                    _ => 0,
+                }
+            }
+            fn dispatch_method(name: &str) -> u8 {
+                match name {
+                    "is_datetime" => 3,
+                    "is_decimal" => 4,
+                    _ => 0,
+                }
+            }
+            fn dispatch_async(name: &str) -> u8 {
+                match name {
+                    "is_datetime" => 5,
+                    _ => 0,
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_string_literals_in_or_pattern_match_arms() {
+        // Keys grouped with `"a" | "b" =>` are still match-arm patterns; the
+        // `or_pattern` wrapper must not defeat the skip.
+        let src = r#"
+            fn categorize(name: &str) -> u8 {
+                match name {
+                    "is_datetime" | "is_decimal" => 1,
+                    _ => 0,
+                }
+            }
+            fn categorize_again(name: &str) -> u8 {
+                match name {
+                    "is_datetime" | "is_decimal" => 2,
+                    _ => 0,
+                }
+            }
+            fn categorize_third(name: &str) -> u8 {
+                match name {
+                    "is_datetime" => 3,
+                    _ => 0,
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_repeated_match_arm_value_string() {
+        // A literal in the arm's *value* expression is ordinary expression
+        // position (direct child of `match_arm`, not a pattern wrapper) and
+        // stays an extractable duplicate.
+        let src = r#"
+            fn label(x: u8) -> &'static str {
+                match x {
+                    0 => "shared label text",
+                    1 => "shared label text",
+                    _ => "shared label text",
+                }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_repeated_expression_position_string() {
+        // Repeated `.expect("valid datetime")` messages are expression
+        // position, not match-arm patterns, so they remain flagged.
+        let src = r#"
+            fn f(a: Option<u8>, b: Option<u8>, c: Option<u8>) {
+                let x = a.expect("valid datetime");
+                let y = b.expect("valid datetime");
+                let z = c.expect("valid datetime");
+                let _ = (x, y, z);
+            }
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 }

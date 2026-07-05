@@ -2179,12 +2179,11 @@ fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool
         .any(|child| pattern_contains_identifier(child, name, source))
 }
 
-/// Walk up from a `tuple_struct_pattern` through the arm's `match_pattern` wrapper
-/// and any `or_pattern`, returning the enclosing `match_arm`. Returns `None` for a
-/// tuple-struct pattern that is not a match-arm pattern (an `if let` / `let`
-/// binding, or one wrapped in a `reference_pattern`), so resolution stays limited
-/// to match arms.
-fn match_arm_of_pattern(pattern: Node) -> Option<Node> {
+/// Walk up from a pattern node through the arm's `match_pattern` wrapper and any
+/// `or_pattern`, returning the enclosing `match_arm`. Returns `None` for a pattern
+/// that is not a match-arm pattern (an `if let` / `let` binding, or one wrapped in
+/// a `reference_pattern`), so resolution stays limited to match arms.
+pub(crate) fn match_arm_of_pattern(pattern: Node) -> Option<Node> {
     let mut current = pattern.parent();
     while let Some(p) = current {
         match p.kind() {
