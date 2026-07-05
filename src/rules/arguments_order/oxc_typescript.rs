@@ -2,10 +2,11 @@
 //!
 //! Flags call sites whose identifier arguments match the callee's parameter
 //! names in reversed order (a likely accidental swap). A call is exempt when it
-//! is a branch of a ternary whose consequent and alternate both call the same
-//! function with argument lists that are exact reverses of each other
-//! (`cond ? f(a, b) : f(b, a)`) — the deliberate argument-reversal idiom for
-//! selecting sort order, not an accidental swap.
+//! is a branch of a ternary chain in which a sibling call to the same function
+//! passes the same identifier arguments in exactly reversed order
+//! (`cond ? f(a, b) : … : f(b, a)`) — the deliberate argument-reversal idiom for
+//! selecting sort order or normalizing which operand comes first, not an
+//! accidental swap.
 
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -92,52 +93,93 @@ fn extract_param_names(func: &oxc_ast::ast::Function) -> Vec<String> {
     result
 }
 
-/// Names of the identifier arguments of `expr` if it is a `CallExpression` whose
-/// callee is the bare identifier `name`; otherwise `None`. Non-identifier args
-/// map to a `None` slot so positions still line up.
-fn call_arg_names_if_to<'a>(expr: &Expression<'a>, name: &str) -> Option<Vec<Option<String>>> {
-    let Expression::CallExpression(call) = expr else {
-        return None;
-    };
-    let Expression::Identifier(callee) = &call.callee else {
-        return None;
-    };
-    if callee.name.as_str() != name {
-        return None;
-    }
-    Some(
-        call.arguments
-            .iter()
-            .map(|a| match a {
-                oxc_ast::ast::Argument::Identifier(id) => Some(id.name.to_string()),
-                _ => None,
-            })
-            .collect(),
-    )
+/// Identifier names of a call's arguments. Non-identifier arguments map to a
+/// `None` slot so positions still line up for a reversal comparison.
+fn arg_names_of_call(call: &oxc_ast::ast::CallExpression) -> Vec<Option<String>> {
+    call.arguments
+        .iter()
+        .map(|a| match a {
+            oxc_ast::ast::Argument::Identifier(id) => Some(id.name.to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
-/// True when `node` (a `CallExpression` to `name`) is a branch of a ternary whose
-/// consequent and alternate both call `name` with argument lists that are exact
-/// reverses of each other (`cond ? f(a, b) : f(b, a)`) — the deliberate
-/// argument-reversal idiom for selecting sort order, not an accidental swap.
+/// Byte span of the outermost `ConditionalExpression` reachable from `node` by
+/// following parent `ConditionalExpression` links — the full nested-ternary chain
+/// enclosing the call. The caller guarantees `node`'s direct parent is a
+/// `ConditionalExpression`.
+fn enclosing_conditional_chain_span<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> (u32, u32) {
+    let nodes = semantic.nodes();
+    let mut cond = nodes.parent_node(node.id());
+    loop {
+        let grandparent = nodes.parent_node(cond.id());
+        if matches!(grandparent.kind(), AstKind::ConditionalExpression(_)) {
+            cond = grandparent;
+        } else {
+            break;
+        }
+    }
+    match cond.kind() {
+        AstKind::ConditionalExpression(c) => (c.span.start, c.span.end),
+        _ => unreachable!("caller guarantees node's parent is a ConditionalExpression"),
+    }
+}
+
+/// True when the call `node` (a call to `name` that is a branch of a ternary) is
+/// part of the deliberate argument-reversal idiom: somewhere in the enclosing
+/// nested-ternary chain a sibling call to `name` passes the same identifier
+/// arguments in exactly reversed order (`cond ? f(a, b) : … : f(b, a)`), used to
+/// select sort order or normalize which operand comes first — not an accidental
+/// swap. A lone reversed call with no reversed sibling is not exempt.
 fn in_reversed_arg_ternary<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
     name: &str,
 ) -> bool {
-    let parent = semantic.nodes().parent_node(node.id());
-    let AstKind::ConditionalExpression(cond) = parent.kind() else {
+    let nodes = semantic.nodes();
+
+    // The call must itself be a direct branch of a ternary.
+    if !matches!(
+        nodes.parent_node(node.id()).kind(),
+        AstKind::ConditionalExpression(_)
+    ) {
+        return false;
+    }
+    let AstKind::CallExpression(this_call) = node.kind() else {
         return false;
     };
-    let (Some(consequent), Some(alternate)) = (
-        call_arg_names_if_to(&cond.consequent, name),
-        call_arg_names_if_to(&cond.alternate, name),
-    ) else {
+    let this_args = arg_names_of_call(this_call);
+    if this_args.len() < 2 {
         return false;
-    };
-    consequent.len() >= 2
-        && consequent.len() == alternate.len()
-        && consequent.iter().rev().eq(alternate.iter())
+    }
+
+    let (chain_start, chain_end) = enclosing_conditional_chain_span(node, semantic);
+
+    // A reversed-argument sibling call to `name` anywhere in the chain marks the
+    // reversal as deliberate.
+    nodes.iter().any(|other| {
+        if other.id() == node.id() {
+            return false;
+        }
+        let AstKind::CallExpression(call) = other.kind() else {
+            return false;
+        };
+        if call.span.start < chain_start || call.span.end > chain_end {
+            return false;
+        }
+        let Expression::Identifier(callee) = &call.callee else {
+            return false;
+        };
+        if callee.name.as_str() != name {
+            return false;
+        }
+        let other_args = arg_names_of_call(call);
+        other_args.len() == this_args.len() && this_args.iter().rev().eq(other_args.iter())
+    })
 }
 
 fn check_call_args(
@@ -147,17 +189,7 @@ fn check_call_args(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut args: Vec<Option<String>> = Vec::new();
-    for arg in &call.arguments {
-        match arg {
-            oxc_ast::ast::Argument::Identifier(id) => {
-                args.push(Some(id.name.to_string()));
-            }
-            _ => {
-                args.push(None);
-            }
-        }
-    }
+    let args = arg_names_of_call(call);
 
     if let Some(swap) = find_likely_swap(params, &args) {
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -263,6 +295,26 @@ mod tests {
     fn flags_ternary_with_single_matching_branch() {
         // Only the alternate calls `cmp`; not a reversed pair, so still flagged.
         let src = "function cmp(a, b) {}\nfunction g(a, b, c) { return c ? cmp(b, a) : other(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_reversed_arg_idiom_across_nested_ternary_chain() {
+        // #7273: the un-swapped `isEquivalentArray(a, b)` and the swapped
+        // `isEquivalentArray(b, a)` sit at different nesting levels of one ternary
+        // chain (`a` is the array → `(a, b)`; `b` is the array → `(b, a)`). The
+        // reversed sibling in the chain makes the swap deliberate, not accidental.
+        let src = "function isEquivalentArray(a, b) { return true; }\n\
+                   function isSame(a, b) { return Array.isArray(a) ? isEquivalentArray(a, b) : Array.isArray(b) ? isEquivalentArray(b, a) : a === b; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_lone_reversed_call_in_ternary_chain() {
+        // A reversed call in a nested ternary chain with no un-reversed sibling to
+        // the same callee is still an accidental swap.
+        let src = "function cmp(a, b) {}\n\
+                   function g(a, b, c, d) { return c ? cmp(b, a) : d ? other() : a === b; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
