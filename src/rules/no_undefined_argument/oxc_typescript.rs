@@ -5,11 +5,17 @@
 //! `createContext<T | undefined>(undefined)`) is exempt: the explicit type
 //! argument selects a value-providing overload, so omitting the argument
 //! changes overload resolution / type inference rather than being a no-op.
+//!
+//! An `undefined` argument that maps to a REQUIRED parameter of the callee's
+//! resolved signature — a parameter with no `?`, no default value, and which is
+//! not a rest — is also exempt: omitting the argument is `error TS2554`, so
+//! passing `undefined` explicitly is mandatory rather than an omittable
+//! placeholder.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{Argument, Expression, FormalParameters};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -69,6 +75,75 @@ fn is_array_insertion_value(callee: &Expression, idx: usize) -> bool {
         "splice" => idx >= 2,
         _ => false,
     }
+}
+
+/// True when the argument at `arg_idx` binds to a REQUIRED parameter of the
+/// callee's resolved signature — one with no `?`, no default value, and which is
+/// not a rest. Passing `undefined` there is mandatory (omitting it is
+/// `error TS2554`), so it is not the omittable-placeholder smell the rule
+/// targets. Resolves an identifier callee via the symbol table to a same-file
+/// `function` declaration or a `const`/`let` bound to an arrow / function
+/// expression. A callee resolving to no such in-file signature, or an argument
+/// mapping to an optional / defaulted / rest / beyond-signature position,
+/// returns false so those keep their normal trailing-placeholder handling.
+fn arg_maps_to_required_param<'a>(
+    callee: &Expression,
+    args: &[Argument],
+    arg_idx: usize,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(ident) = callee else {
+        return false;
+    };
+    // A spread before this position shifts every following argument onto an
+    // unknown parameter, so we cannot prove `arg_idx` fills the parameter at the
+    // same index — keep the normal handling rather than risk suppressing.
+    if args[..arg_idx]
+        .iter()
+        .any(|a| matches!(a, Argument::SpreadElement(_)))
+    {
+        return false;
+    }
+    let scoping = semantic.scoping();
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(sym_id);
+    let decl_kind = std::iter::once(nodes.kind(decl_id))
+        .chain(nodes.ancestor_kinds(decl_id))
+        .find(|kind| matches!(kind, AstKind::Function(_) | AstKind::VariableDeclarator(_)));
+
+    let params = match decl_kind {
+        // `function f(a, b) {}`
+        Some(AstKind::Function(func)) => &func.params,
+        // `const f = (a, b) => …` / `const f = function (a, b) {}`
+        Some(AstKind::VariableDeclarator(decl)) => match decl.init.as_ref() {
+            Some(Expression::ArrowFunctionExpression(arrow)) => &arrow.params,
+            Some(Expression::FunctionExpression(func)) => &func.params,
+            _ => return false,
+        },
+        _ => return false,
+    };
+
+    param_at_arg_index_is_required(params, arg_idx)
+}
+
+/// Whether the formal parameter at index `arg_idx` in the callee's signature is
+/// required (no `?`, no default value). An `arg_idx` past the last declared
+/// parameter — an extra argument, or one absorbed by a `...rest` — is not a
+/// fixed required parameter. A TS `this` parameter is not stored in
+/// `params.items`, so it needs no index adjustment.
+fn param_at_arg_index_is_required(params: &FormalParameters, arg_idx: usize) -> bool {
+    let Some(param) = params.items.get(arg_idx) else {
+        return false;
+    };
+    // A `?` makes the argument omittable; a default (`b = 5`) makes `undefined`
+    // equivalent to omitting — both stay the rule's target.
+    !param.optional && param.initializer.is_none()
 }
 
 /// True when a callee expression's member/call chain bottoms out in an
@@ -166,6 +241,12 @@ impl OxcCheck for Check {
                 // `undefined` inserted into an array by push/unshift/splice is
                 // the element being added, not an omittable trailing parameter.
                 if is_array_insertion_value(&call.callee, idx) {
+                    continue;
+                }
+                // The resolved callee's parameter at this position is required,
+                // so omitting the argument is `error TS2554`; the explicit
+                // `undefined` is mandatory, not an omittable placeholder.
+                if arg_maps_to_required_param(&call.callee, args, idx, semantic) {
                     continue;
                 }
                 let span = arg.span();
@@ -401,6 +482,70 @@ mod tests {
         // trailing `undefined` there is still an omittable trailing parameter.
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, "arr.splice(i, undefined);", "t.ts").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_undefined_to_required_function_param_issue_7323() {
+        // `toStateNode: N | undefined` is a required parameter (no `?`, no
+        // default); omitting the argument is `error TS2554`, so the `undefined`
+        // is mandatory, not an omittable placeholder. The `| undefined` in the
+        // type does NOT make the argument optional.
+        let src = "function getProperAncestors(stateNode: N, toStateNode: N | undefined): N[] { return []; }\nfor (const a of getProperAncestors(head, undefined)) {}";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_undefined_to_required_arrow_param_issue_7323() {
+        // A `const` bound to an arrow resolves the same way: the required `event`
+        // slot (2nd arg) is suppressed. The optional `prevState` trailing
+        // `undefined` (3rd arg) stays flagged as an omittable placeholder.
+        let src = "const serializeState = (state: S, event: E | undefined, prevState?: S): string => '';\nserializeState(fromState, undefined, undefined);";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+        // The single remaining diagnostic is on the trailing (optional)
+        // `prevState`, not on the required `event` argument.
+        let line2 = src.lines().nth(1).unwrap();
+        assert_eq!(diags[0].column, line2.rfind("undefined").unwrap() + 1);
+    }
+
+    #[test]
+    fn allows_undefined_to_required_function_expression_param_issue_7323() {
+        // A `const` bound to a function expression resolves like the arrow case.
+        let src = "const f = function (a: number, b: number) {};\nf(1, undefined);";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_undefined_after_spread_arg_issue_7323() {
+        // A spread before the `undefined` shifts the argument→parameter mapping,
+        // so the position is not provably required — keep flagging.
+        let src = "function s(a: number, b: number) {}\ns(...xs, undefined);";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_undefined_to_optional_param_issue_7323() {
+        // `b?: number` is optional: a trailing `undefined` there is omittable.
+        let src = "function g(a: number, b?: number) {}\ng(1, undefined);";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_undefined_to_default_param_issue_7323() {
+        // `b = 5` has a default: passing `undefined` triggers it, same as
+        // omitting the argument, so it stays the rule's target.
+        let src = "function h(a: number, b: number = 5) {}\nh(1, undefined);";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_undefined_to_unresolvable_callee_issue_7323() {
+        // The callee resolves to no in-file signature, so the trailing
+        // `undefined` keeps its omittable-placeholder handling (unchanged).
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "unresolvedExternal(1, undefined);", "t.ts").len(),
             1
         );
     }
