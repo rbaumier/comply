@@ -6167,6 +6167,81 @@ pub fn drop_impl_field_is_reference(impl_item: Node, field: &str, source: &[u8])
     field_declaration_is_reference(struct_item, field, source)
 }
 
+/// The resolved type of a `self.<field>` receiver in a `Drop` impl, for gating
+/// the ambiguous lock-method names of `rust-drop-calls-self-lock`.
+pub enum DropFieldType {
+    /// The field's wrapper-unwrapped base type name (`Mutex`, `WasmRef`, …).
+    Named(String),
+    /// The field type has no leading name (raw pointer, tuple, array): a
+    /// `self.<field>.write()` on it is a value/byte write, never a lock.
+    Unnamed,
+}
+
+/// The resolved type of `field` in `impl_item`'s in-file `Drop` target struct,
+/// unwrapping smart-pointer (`Arc<…>`/`Rc<…>`) and reference (`&T`) wrappers so
+/// that `Arc<Mutex<T>>` resolves to `Named("Mutex")` and `&'a RwLock<T>` to
+/// `Named("RwLock")`; a nameless shape (raw pointer, tuple) is `Unnamed`.
+///
+/// Returns `None` only when the struct or field itself is not resolvable in the
+/// file (comply analyses one file at a time), so the caller can fail closed.
+///
+/// Used by `rust-drop-calls-self-lock` to gate the ambiguous `read`/`write`/
+/// `try_read`/`try_write` method names on a lock-shaped field type.
+pub fn drop_impl_field_type(impl_item: Node, field: &str, source: &[u8]) -> Option<DropFieldType> {
+    let struct_name = impl_type_struct_name(impl_item, source)?;
+    let struct_item = find_struct_item(impl_item, &struct_name, source)?;
+    let body = struct_item.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    for decl in body.named_children(&mut cursor) {
+        if decl.kind() != "field_declaration" {
+            continue;
+        }
+        if decl
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            != Some(field)
+        {
+            continue;
+        }
+        let type_node = decl.child_by_field_name("type")?;
+        return Some(match field_base_type_name(type_node, source) {
+            Some(name) => DropFieldType::Named(name),
+            None => DropFieldType::Unnamed,
+        });
+    }
+    None
+}
+
+/// The leading type name of a type node, descending through `reference_type`
+/// (`&T`) and `Arc<…>`/`Rc<…>` smart-pointer wrappers and reading the final
+/// segment of a `scoped_type_identifier` (`std::sync::Mutex` → `Mutex`).
+fn field_base_type_name(type_node: Node, source: &[u8]) -> Option<String> {
+    match type_node.kind() {
+        "type_identifier" => type_node.utf8_text(source).ok().map(str::to_string),
+        "scoped_type_identifier" => type_node
+            .utf8_text(source)
+            .ok()
+            .and_then(|t| t.rsplit("::").next())
+            .map(str::to_string),
+        "reference_type" => {
+            field_base_type_name(type_node.child_by_field_name("type")?, source)
+        }
+        "generic_type" => {
+            let name = field_base_type_name(type_node.child_by_field_name("type")?, source)?;
+            if matches!(name.as_str(), "Arc" | "Rc") {
+                // Smart-pointer wrapper: the lock, if any, is its type argument.
+                let args = type_node.child_by_field_name("type_arguments")?;
+                let mut cursor = args.walk();
+                args.named_children(&mut cursor)
+                    .find_map(|arg| field_base_type_name(arg, source))
+            } else {
+                Some(name)
+            }
+        }
+        _ => None,
+    }
+}
+
 /// The bare struct name from an `impl_item`'s `type` field: the text of a plain
 /// `type_identifier`, or the leading `type_identifier` of a `generic_type`
 /// (`UsageScope<'a>` → `UsageScope`). `None` for any other target shape.
