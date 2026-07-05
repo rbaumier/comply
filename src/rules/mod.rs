@@ -28,6 +28,7 @@ pub struct RuleDef {
 
 // --- helpers at src/rules/ root (not rule directories) ---
 pub mod backend;
+pub mod boolean_prefix;
 pub mod call_expression;
 pub mod elysia_helpers;
 pub mod file_ctx;

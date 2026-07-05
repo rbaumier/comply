@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::boolean_prefix::has_boolean_prefix;
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
@@ -63,24 +64,6 @@ fn is_jsx_expr(expr: &Expression) -> bool {
         expr.without_parentheses(),
         Expression::JSXElement(_) | Expression::JSXFragment(_)
     )
-}
-
-// mirrors jsx_ensure_booleans::BOOLEAN_PREFIXES
-const BOOLEAN_PREFIXES: &[&str] = &[
-    "is", "has", "should", "can", "will", "did", "show", "hide", "with",
-    "enable", "disable", "visible", "active", "open", "loading",
-    "loaded", "allow", "need", "must",
-];
-
-// True when `name` follows the boolean-naming convention: a boolean prefix at a
-// camelCase boundary (e.g. `isSelected`, `hasFilters`) or the bare prefix word
-// (`is`, `has`). Requiring an uppercase letter after the prefix avoids matching
-// words that merely begin with the letters (`island`, `cancel`, `history`).
-fn has_boolean_prefix(name: &str) -> bool {
-    BOOLEAN_PREFIXES.iter().any(|p| {
-        name.strip_prefix(p)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_uppercase()))
-    })
 }
 
 // True when the operand can only evaluate to a boolean, so `expr && <X />`

@@ -1,6 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::boolean_prefix::has_boolean_prefix;
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
@@ -82,6 +83,13 @@ fn is_boolean_expression(expr: &Expression, source: &str) -> bool {
                     | BinaryOperator::In
                     | BinaryOperator::Instanceof
             )
+        }
+        // A call to a boolean-prefixed function (`isExpanded(item)`, `hasFoo()`)
+        // returns a boolean by naming convention, so `expr && <JSX/>` cannot leak
+        // `0`/`""`. Uses the same camelCase-boundary predicate as the sibling
+        // `react-no-and-conditional-jsx` to keep the two `&&`-guard rules in parity.
+        Expression::CallExpression(call) => {
+            matches!(&call.callee, Expression::Identifier(id) if has_boolean_prefix(id.name.as_str()))
         }
         Expression::Identifier(ident) => looks_like_boolean_identifier(ident.name.as_str()),
         Expression::StaticMemberExpression(member) => {
@@ -168,5 +176,26 @@ mod tests {
     fn ignores_and_without_jsx_rhs() {
         let src = "const v = a && b;";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_prefixed_call() {
+        // #7324: a call to a boolean-prefixed function returns `boolean`, so
+        // `expr && <JSX/>` cannot leak `0`/`""`.
+        assert!(run_on("const x = isExpanded(item) && <div>hi</div>;").is_empty());
+        assert!(run_on("const y = hasFoo() && <div>hi</div>;").is_empty());
+        assert!(run_on("const z = shouldBar() && <div>hi</div>;").is_empty());
+    }
+
+    #[test]
+    fn flags_non_boolean_prefixed_call() {
+        // A non-boolean-prefixed call can return a number/string and still leak.
+        assert_eq!(run_on("const a = getCount() && <div>hi</div>;").len(), 1);
+    }
+
+    #[test]
+    fn flags_number_member_before_jsx() {
+        let src = "const b = items.length && <div>hi</div>;";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
