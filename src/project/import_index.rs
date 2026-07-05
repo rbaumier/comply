@@ -163,6 +163,15 @@ pub struct ImportedSymbol {
     /// cannot. Defaults to `true` for index paths that do not compute usage
     /// (Rust / Vue / Markdown), preserving their prior cycle behavior.
     pub is_runtime_value: bool,
+    /// `true` when this edge originates from a dynamic `import()` call
+    /// expression (`() => import('./x')`, `await import('./x')`) rather than a
+    /// static `import` declaration. A dynamic import is a deferred, code-split,
+    /// asynchronous load: it does not evaluate its target at the importer's
+    /// module-evaluation time, so it cannot participate in a module-init cycle.
+    /// It is excluded from the cycle-detection adjacency in `compute_cycles`
+    /// (like `import type`), but stays in the graph for every other consumer
+    /// (specifier resolution, usage, unresolved-import).
+    pub is_dynamic: bool,
 }
 
 /// One use-site of a cross-file exported symbol — i.e. a matching import.
@@ -380,6 +389,7 @@ impl ImportIndex {
                                     line: *line,
                                     is_type_only: false,
                                     is_runtime_value: true,
+                                    is_dynamic: false,
                                 })
                         })
                         .collect();
@@ -1109,12 +1119,15 @@ fn is_indexable(lang: Language) -> bool {
 
 /// Iterative Tarjan SCC — returns only components with 2+ members (cycles).
 ///
-/// Two edge classes matter. `import type` edges are dropped from the graph
-/// entirely (they emit no JS, so they never load their source). The remaining
-/// value edges are kept, but each is tagged `is_runtime_value`: `false` when the
-/// binding is referenced only in type positions and/or deferred bodies (e.g. ORM
-/// bidirectional relations through lazy `() => Entity` decorator thunks), `true`
-/// otherwise. A detected cycle is reported only if at least one edge among its
+/// Two edge classes are dropped from the graph entirely. `import type` edges
+/// emit no JS, so they never load their source. Dynamic `import()` edges are
+/// deferred, code-split loads that do not evaluate their target at the
+/// importer's module-evaluation time, so they cannot form an initialization
+/// cycle. The remaining value edges are kept, but each is tagged
+/// `is_runtime_value`: `false` when the binding is referenced only in type
+/// positions and/or deferred bodies (e.g. ORM bidirectional relations through
+/// lazy `() => Entity` decorator thunks), `true` otherwise. A detected cycle is
+/// reported only if at least one edge among its
 /// members is a runtime-value edge; a cycle whose every edge is deferred-only
 /// carries no module-evaluation hazard and is suppressed.
 fn compute_cycles(imports: &FxHashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<PathBuf>> {
@@ -1127,6 +1140,13 @@ fn compute_cycles(imports: &FxHashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<
         all_nodes.insert(file.as_path());
         for imp in imps {
             if imp.is_type_only {
+                continue;
+            }
+            // A dynamic `import()` is a deferred, code-split load that does not
+            // evaluate its target at module-evaluation time, so it cannot form
+            // an initialization cycle. Skip it here, like an `import type` edge;
+            // the edge still exists in the index for other consumers.
+            if imp.is_dynamic {
                 continue;
             }
             if let Some(src) = &imp.source_path {
@@ -1560,6 +1580,7 @@ fn extract_doc_includes(source: &str) -> Vec<ImportedSymbol> {
             line,
             is_type_only: false,
             is_runtime_value: true,
+            is_dynamic: false,
         });
     };
 
@@ -1913,6 +1934,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
             line,
             is_type_only: false,
             is_runtime_value: true,
+            is_dynamic: false,
         });
         return;
     };
@@ -1932,6 +1954,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                     line,
                     is_type_only: stmt_type_only,
                     is_runtime_value: true,
+                    is_dynamic: false,
                 });
             }
             "namespace_import" => {
@@ -1950,6 +1973,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                         line,
                         is_type_only: stmt_type_only,
                         is_runtime_value: true,
+                        is_dynamic: false,
                     });
                 }
             }
@@ -1972,6 +1996,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                         line,
                         is_type_only: spec_type_only,
                         is_runtime_value: true,
+                        is_dynamic: false,
                     });
                 }
             }
@@ -2027,6 +2052,7 @@ fn extract_dynamic_import(
         line: node.start_position().row + 1,
         is_type_only: false,
         is_runtime_value: true,
+        is_dynamic: true,
     });
 }
 
@@ -2082,6 +2108,7 @@ fn extract_require(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
         line: node.start_position().row + 1,
         is_type_only: false,
         is_runtime_value: true,
+        is_dynamic: false,
     });
 }
 
@@ -2798,6 +2825,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                 is_type_only: true,
                 // Erased at compile time — never a runtime-value edge.
                 is_runtime_value: false,
+                is_dynamic: false,
             });
         }
     }
@@ -3069,6 +3097,7 @@ fn oxc_extract_import(
             // A side-effect import runs the imported module at the importer's
             // module-evaluation time, so it is a runtime edge.
             is_runtime_value: true,
+            is_dynamic: false,
         });
         return;
     };
@@ -3087,6 +3116,7 @@ fn oxc_extract_import(
                     line,
                     is_type_only: stmt_type_only,
                     is_runtime_value,
+                    is_dynamic: false,
                 });
             }
             ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
@@ -3101,6 +3131,7 @@ fn oxc_extract_import(
                     line,
                     is_type_only: stmt_type_only,
                     is_runtime_value,
+                    is_dynamic: false,
                 });
             }
             ImportDeclarationSpecifier::ImportSpecifier(named) => {
@@ -3123,6 +3154,7 @@ fn oxc_extract_import(
                     line,
                     is_type_only: spec_type_only,
                     is_runtime_value,
+                    is_dynamic: false,
                 });
             }
         }
@@ -3684,6 +3716,7 @@ fn oxc_extract_dynamic_import(
         line: oxc_line_at(lines, import_expr.span.start as usize),
         is_type_only: false,
         is_runtime_value: true,
+        is_dynamic: true,
     });
 }
 
@@ -3718,6 +3751,7 @@ fn oxc_extract_require(
         line: oxc_line_at(lines, call.span.start as usize),
         is_type_only: false,
         is_runtime_value: true,
+        is_dynamic: false,
     });
 }
 
@@ -3792,6 +3826,7 @@ fn oxc_extract_import_equals(
         line: oxc_line_at(lines, import_eq.span.start as usize),
         is_type_only: import_eq.import_kind.is_type(),
         is_runtime_value: true,
+        is_dynamic: false,
     });
 }
 
@@ -4664,6 +4699,7 @@ fn extract_rust_use(
             line,
             is_type_only: false,
             is_runtime_value: true,
+            is_dynamic: false,
         });
 
         if is_pub && leaf.imported != "*" {
@@ -5142,6 +5178,116 @@ mod tests {
         let refs: Vec<&SourceFile> = source_files.iter().collect();
         let index = ImportIndex::build(&refs);
         (dir, index, paths)
+    }
+
+    // Regression for #7436: a dynamic `import()` is a deferred, code-split load
+    // that cannot form a module-initialization cycle, so its edge is excluded
+    // from cycle detection. The only forward edge into `home` is the dynamic
+    // `() => import('./home')` in `imports.ts` (elegant-router's generated hub),
+    // so no cycle is reported even though `home` statically imports back to
+    // `routes`, which statically reaches `imports`.
+    #[test]
+    fn dynamic_import_edge_does_not_form_cycle() {
+        let (_dir, index, paths) = build_index(&[
+            (
+                "imports.ts",
+                "export const views = { home: () => import('./home') };\n",
+            ),
+            (
+                "routes.ts",
+                "import { views } from './imports';\nexport const routes = views;\n",
+            ),
+            (
+                "home.ts",
+                "import { routes } from './routes';\nexport const home = routes;\n",
+            ),
+        ]);
+        let imports_ts = &paths[0];
+        let home_ts = &paths[2];
+
+        // The dynamic-import edge is still in the graph for other consumers…
+        let dyn_edge = index
+            .get_imports(imports_ts)
+            .iter()
+            .find(|i| i.specifier == "./home")
+            .expect("dynamic import edge must be indexed");
+        assert!(
+            dyn_edge.is_dynamic,
+            "the `import()` edge must be tagged dynamic"
+        );
+        assert_eq!(
+            dyn_edge.source_path.as_ref(),
+            Some(home_ts),
+            "the dynamic import must still resolve to its target"
+        );
+
+        // …but it is not traversed during cycle detection, so no spurious SCC.
+        assert!(
+            index.cycles().is_empty(),
+            "code-split dynamic-import edge must not close a cycle, got: {:?}",
+            index.cycles()
+        );
+    }
+
+    // A genuine static eager cycle (both edges are `import` declarations read at
+    // module-evaluation time) is still reported — the dynamic-import exclusion
+    // must not introduce a false negative.
+    #[test]
+    fn static_import_cycle_is_still_reported() {
+        let (_dir, index, paths) = build_index(&[
+            ("a.ts", "import { b } from './b';\nexport const a = b;\n"),
+            ("b.ts", "import { a } from './a';\nexport const b = a;\n"),
+        ]);
+        let a_ts = &paths[0];
+        let b_ts = &paths[1];
+        let cycle = index
+            .cycle_for(a_ts)
+            .expect("a static import cycle must still be reported");
+        assert!(
+            cycle.contains(a_ts) && cycle.contains(b_ts),
+            "the reported cycle must contain both statically-cyclic modules, got: {cycle:?}"
+        );
+    }
+
+    // Unit check on the Tarjan adjacency: an edge tagged `is_dynamic` is dropped
+    // from the graph (like `import type`), so it cannot close an SCC, while a
+    // fully static two-node cycle still forms one.
+    #[test]
+    fn compute_cycles_excludes_dynamic_edges() {
+        fn edge(target: &Path, is_dynamic: bool) -> ImportedSymbol {
+            ImportedSymbol {
+                local_name: String::new(),
+                imported_name: "*".into(),
+                kind: ImportKind::Namespace,
+                specifier: String::new(),
+                source_path: Some(target.to_path_buf()),
+                line: 1,
+                is_type_only: false,
+                is_runtime_value: true,
+                is_dynamic,
+            }
+        }
+        let a = PathBuf::from("/a.ts");
+        let b = PathBuf::from("/b.ts");
+
+        // a → b static, b → a dynamic: the deferred edge is dropped, no cycle.
+        let mut deferred: FxHashMap<PathBuf, Vec<ImportedSymbol>> = FxHashMap::default();
+        deferred.insert(a.clone(), vec![edge(&b, false)]);
+        deferred.insert(b.clone(), vec![edge(&a, true)]);
+        assert!(
+            compute_cycles(&deferred).is_empty(),
+            "a dynamic edge must not close an SCC"
+        );
+
+        // Both edges static: the cycle stands.
+        let mut eager: FxHashMap<PathBuf, Vec<ImportedSymbol>> = FxHashMap::default();
+        eager.insert(a.clone(), vec![edge(&b, false)]);
+        eager.insert(b.clone(), vec![edge(&a, false)]);
+        assert_eq!(
+            compute_cycles(&eager).len(),
+            1,
+            "a fully static two-node cycle must still be detected"
+        );
     }
 
     // Regression for #1850: a bare specifier that names a workspace sibling
