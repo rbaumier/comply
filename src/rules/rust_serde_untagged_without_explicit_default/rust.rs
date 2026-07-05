@@ -10,6 +10,12 @@
 //! into it, so it cannot fall through on missing data and its `Option` fields
 //! are harmless. Only variants where every field is optional/defaultable can
 //! match empty input and shadow later variants.
+//!
+//! A struct variant deserializes only from a map, so it can shadow — or be
+//! shadowed by — only another map-shaped (struct) variant. Its `Option` fields
+//! are flagged only when the enum has at least two struct variants; a lone
+//! struct variant among newtype/tuple/unit siblings (which accept scalar or
+//! sequence shapes) has no map-shaped peer and is exempt.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -38,20 +44,43 @@ impl AstCheck for Check {
         let Some(body) = node.child_by_field_name("body") else {
             return;
         };
+        let struct_variant_count = count_struct_variants(body);
         let mut variant_cursor = body.walk();
         for variant in body.named_children(&mut variant_cursor) {
             if variant.kind() != "enum_variant" {
                 continue;
             }
-            check_variant(variant, source, ctx, diagnostics);
+            check_variant(variant, source, ctx, struct_variant_count, diagnostics);
         }
     }
+}
+
+/// Count the enum's struct variants — those carrying a `field_declaration_list`
+/// (as opposed to a tuple/newtype `ordered_field_declaration_list` or a unit
+/// variant with neither).
+fn count_struct_variants(body: tree_sitter::Node) -> usize {
+    let mut count = 0;
+    let mut cursor = body.walk();
+    for variant in body.named_children(&mut cursor) {
+        if variant.kind() != "enum_variant" {
+            continue;
+        }
+        let mut inner = variant.walk();
+        if variant
+            .named_children(&mut inner)
+            .any(|child| child.kind() == "field_declaration_list")
+        {
+            count += 1;
+        }
+    }
+    count
 }
 
 fn check_variant(
     variant: tree_sitter::Node,
     source: &[u8],
     ctx: &CheckCtx,
+    struct_variant_count: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Variant body is either `field_declaration_list` (struct-style) or
@@ -59,7 +88,11 @@ fn check_variant(
     let mut cursor = variant.walk();
     for child in variant.named_children(&mut cursor) {
         match child.kind() {
-            "field_declaration_list" => check_field_decls(child, source, ctx, diagnostics),
+            // Only a second map-shaped variant can shadow this one — see the
+            // module docs.
+            "field_declaration_list" if struct_variant_count >= 2 => {
+                check_field_decls(child, source, ctx, diagnostics)
+            }
             "ordered_field_declaration_list" => {
                 check_ordered_fields(child, source, ctx, diagnostics)
             }
@@ -226,11 +259,14 @@ mod tests {
 
     #[test]
     fn flags_untagged_option_field_without_default() {
+        // Two struct variants, so `A` (all-optional) can shadow `B`; `A`'s bare
+        // `Option` field is flagged. `B` has a required field and is exempt.
         let src = r#"
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum E {
     A { x: Option<u32> },
+    B { id: u32 },
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
@@ -330,9 +366,9 @@ enum E {
 
     #[test]
     fn flags_option_when_sibling_has_default_but_no_required_field() {
-        // Both fields are optional (one `Option` with `#[serde(default)]`, one
-        // bare `Option`), so the variant can still match empty input. Only the
-        // bare `Option` (`y`) is flagged.
+        // `A`'s fields are all optional (one `Option` with `#[serde(default)]`,
+        // one bare `Option`), so it can match empty input and shadow the second
+        // struct variant `B`. Only the bare `Option` (`y`) is flagged.
         let src = r#"
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -342,6 +378,43 @@ enum E {
         x: Option<u32>,
         y: Option<u32>,
     },
+    B { z: String },
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_lone_struct_variant_among_scalar_siblings() {
+        // Repro from #7413: `Specific` is the only map-shaped variant; its
+        // scalar-shaped sibling `Basic` (a newtype wrapping a unit-variant
+        // enum) cannot shadow it, so its all-optional fields are harmless.
+        let src = r#"
+#[derive(Serialize, Deserialize)]
+#[serde(untagged, rename_all = "kebab-case")]
+pub enum WhitespaceRender {
+    Basic(WhitespaceRenderValue),
+    Specific {
+        default: Option<WhitespaceRenderValue>,
+        space: Option<WhitespaceRenderValue>,
+        tab: Option<WhitespaceRenderValue>,
+    },
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_all_optional_struct_variant_with_struct_sibling() {
+        // Two map-shaped variants: all-optional `A` can shadow `B`, so `A`'s
+        // bare `Option` field is flagged. `B` has a required field (`z`) and is
+        // exempt.
+        let src = r#"
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum E {
+    A { x: Option<i32> },
+    B { y: Option<i32>, z: String },
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
