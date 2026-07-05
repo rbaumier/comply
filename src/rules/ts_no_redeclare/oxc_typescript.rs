@@ -27,8 +27,10 @@
 //! Namespace declaration merging: a `namespace`/`module`
 //! (`TSModuleDeclaration`) may share a name with an interface, class,
 //! function, or enum (e.g. `interface Foo` + `declare namespace Foo`,
-//! the Standard Schema V1 pattern) — skipped when one declaration is a
-//! namespace and another is a type or value declaration.
+//! the Standard Schema V1 pattern), or with other namespaces of the same
+//! name — re-opening a `namespace` merges every block's body into one.
+//! Skipped when every declaration is a namespace, or when a namespace
+//! coexists with a type or value declaration.
 //!
 //! `@ts-expect-error` opt-in: a redeclaration immediately preceded by a
 //! `// @ts-expect-error` (or `/* @ts-expect-error */`) comment is deliberate —
@@ -137,10 +139,16 @@ impl OxcCheck for Check {
 
             // Namespace declaration merging: a `namespace`/`module` may share a
             // name with an interface, class, function, or enum (`interface Foo`
-            // + `declare namespace Foo`, the Standard Schema V1 pattern). Always
-            // intentional in TypeScript.
+            // + `declare namespace Foo`, the Standard Schema V1 pattern), or with
+            // other namespaces of the same name — re-opening a `namespace` merges
+            // every block's body into one. Both forms are always intentional in
+            // TypeScript: exempt when every declaration is a namespace, or when a
+            // namespace coexists with a type or value declaration.
             let is_namespace =
                 |id| -> bool { matches!(nodes.kind(id), AstKind::TSModuleDeclaration(_)) };
+            if decl_ids.iter().all(|&id| is_namespace(id)) {
+                continue;
+            }
             if decl_ids.iter().any(|&id| is_namespace(id))
                 && decl_ids
                     .iter()
@@ -541,6 +549,27 @@ function SortFilterItem({ item }: { item: SortFilterItem }) {
         let d = run("const Foo = 1;\nclass Foo {}");
         assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
         assert!(d[0].message.contains("`Foo`"));
+    }
+
+    #[test]
+    fn allows_pure_namespace_to_namespace_merging() {
+        // Regression for #7314: apollo-client re-opens the same namespace many
+        // times, each block contributing a distinct interface. Every declaration
+        // of the symbol is a `TSModuleDeclaration`, so this is unconditional
+        // namespace declaration merging, not a redeclaration.
+        let d = run(
+            "namespace X { export interface A {} }\nnamespace X { export interface B {} }\nnamespace X { export interface C {} }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn flags_duplicate_const_no_namespace() {
+        // Guard for #7314: a genuine value-namespace redeclaration with no
+        // namespace involved must still fire.
+        let d = run("const X = 1;\nlet X = 2;");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`X`"));
     }
 
     #[test]
