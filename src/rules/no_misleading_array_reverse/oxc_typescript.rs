@@ -29,18 +29,11 @@ const FRESH_ARRAY_METHODS: &[&str] =
 
 /// Whether the receiver is a freshly-constructed array with no prior alias, so
 /// mutating it in place is not observable through any other reference.
-fn is_fresh_array(expr: &Expression, source: &str) -> bool {
+fn is_fresh_array(expr: &Expression) -> bool {
     match expr {
-        // An array literal is a fresh allocation: an empty literal (`[]`, often
-        // filled later via `.push(...)`) or a spread copy (`[...arr]`). Either way
-        // no other reference aliases it, so mutating it in place is unobservable.
-        Expression::ArrayExpression(arr) => {
-            if arr.elements.is_empty() {
-                return true;
-            }
-            let text = &source[arr.span.start as usize..arr.span.end as usize];
-            text.contains("...")
-        }
+        // An array literal `[a, b]` is constructed fresh at this expression and
+        // has no other reference, so mutating it in place is unobservable.
+        Expression::ArrayExpression(_) => true,
         // `new Array(n)` / `new Uint8Array(n)` (or any TypedArray ctor) build a
         // brand-new array-like value with no prior alias.
         Expression::NewExpression(new_expr) => {
@@ -71,7 +64,7 @@ fn is_fresh_array(expr: &Expression, source: &str) -> bool {
             // `[...arr].sort()` is as fresh as `[...arr]`. Recurse to keep the
             // chain rooted at a genuine fresh producer.
             if MUTATING_METHODS.contains(&member.property.name.as_str()) {
-                return is_fresh_array(&member.object, source);
+                return is_fresh_array(&member.object);
             }
             // Chaining onto a fresh array, e.g. `arr.filter(p).sort(cmp)`.
             FRESH_ARRAY_METHODS.contains(&member.property.name.as_str())
@@ -87,7 +80,6 @@ fn is_fresh_array(expr: &Expression, source: &str) -> bool {
 fn receiver_is_fresh_const(
     id: &IdentifierReference,
     semantic: &oxc_semantic::Semantic,
-    source: &str,
 ) -> bool {
     let Some(ref_id) = id.reference_id.get() else {
         return false;
@@ -111,7 +103,7 @@ fn receiver_is_fresh_const(
                 let Some(init) = &decl.init else {
                     return false;
                 };
-                if !is_fresh_array(init, source) {
+                if !is_fresh_array(init) {
                     return false;
                 }
             }
@@ -123,7 +115,7 @@ fn receiver_is_fresh_const(
 
 /// Check if a call expression is a mutating array method call (not on a spread
 /// copy nor a fresh array returned by a non-mutating method).
-fn is_mutating_call(expr: &Expression, semantic: &oxc_semantic::Semantic, source: &str) -> bool {
+fn is_mutating_call(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
     let Expression::CallExpression(call) = expr else {
         return false;
     };
@@ -142,11 +134,11 @@ fn is_mutating_call(expr: &Expression, semantic: &oxc_semantic::Semantic, source
     // Not misleading when the receiver is a fresh array — either literally
     // (`[...arr].sort()`) or an identifier resolving to a fresh-array `const`
     // (`const a = [...arr]; a.sort()`).
-    if is_fresh_array(&member.object, source) {
+    if is_fresh_array(&member.object) {
         return false;
     }
     if let Expression::Identifier(obj) = &member.object
-        && receiver_is_fresh_const(obj, semantic, source)
+        && receiver_is_fresh_const(obj, semantic)
     {
         return false;
     }
@@ -175,7 +167,7 @@ impl OxcCheck for Check {
                     let Some(init) = &declarator.init else {
                         continue;
                     };
-                    if is_mutating_call(init, semantic, ctx.source) {
+                    if is_mutating_call(init, semantic) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, init.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -192,7 +184,7 @@ impl OxcCheck for Check {
             }
             AstKind::ReturnStatement(ret) => {
                 if let Some(arg) = &ret.argument
-                    && is_mutating_call(arg, semantic, ctx.source) {
+                    && is_mutating_call(arg, semantic) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, arg.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -358,9 +350,28 @@ mod oxc_tests {
         assert!(run("const fill = shape.fill();").is_empty());
     }
 
+    // === issue #7287: any element-list array literal is a fresh receiver ===
+
     #[test]
-    fn flags_array_literal_reverse() {
-        assert_eq!(run("const r = [1, 2, 3].reverse();").len(), 1);
+    fn allows_array_literal_reverse() {
+        // An inline element-list literal is a brand-new allocation with no other
+        // alias, so reversing it in place is unobservable — not misleading.
+        assert!(run("const r = [1, 2, 3].reverse();").is_empty());
+    }
+
+    #[test]
+    fn allows_inline_array_literal_sort() {
+        // `[this.foreignKey, this.otherKey].sort()` — the literal is fresh, no
+        // prior binding aliases it, so the in-place sort is unobservable.
+        assert!(
+            run("class C { m() { const keys = [this.foreignKey, this.otherKey].sort(); } }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_single_element_literal_reverse() {
+        assert!(run("const y = [x].reverse();").is_empty());
     }
 
     // === issue #3794: `splice` returns a new array of removed elements, never `this` ===
@@ -512,10 +523,10 @@ mod oxc_tests {
     }
 
     #[test]
-    fn flags_hole_array_literal_reverse() {
-        // GUARD: a sparse literal with a hole (`[,]`) has a non-empty element list,
-        // so it is not the empty-literal fresh case — locks the empty-vs-hole edge.
-        assert_eq!(run("const r = [,].reverse();").len(), 1);
+    fn allows_hole_array_literal_reverse() {
+        // Any array literal — even a sparse one with a hole (`[,]`) — is a fresh
+        // allocation with no other alias, so reversing it in place is unobservable.
+        assert!(run("const r = [,].reverse();").is_empty());
     }
 
     // === issue #7246: freshness propagates through chained mutating methods ===

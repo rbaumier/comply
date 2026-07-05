@@ -278,6 +278,17 @@ mod oxc_tests {
     }
 
     #[test]
+    fn allows_single_element_literal_reverse() {
+        assert!(run("const y = [x].reverse();").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_array_literal_sort() {
+        // An empty literal is a fresh allocation like any other — no other alias.
+        assert!(run("const z = [].sort();").is_empty());
+    }
+
+    #[test]
     fn flags_typed_array_reverse() {
         assert_eq!(
             run("function f(arr: number[]) { const r = arr.reverse(); }").len(),
