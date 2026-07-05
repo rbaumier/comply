@@ -50,6 +50,7 @@ impl OxcCheck for Check {
                             &body.statements,
                             ctx.source,
                         )
+                        && !is_promise_passthrough_dual_mode(&body.statements)
                     {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, func.span.start as usize);
@@ -82,6 +83,7 @@ impl OxcCheck for Check {
                             &arrow.body.statements,
                             ctx.source,
                         )
+                        && !is_promise_passthrough_dual_mode(&arrow.body.statements)
                     {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, arrow.span.start as usize);
@@ -601,6 +603,137 @@ fn span_contains(outer: Span, inner: Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
 }
 
+/// True when the function is an isomorphic sync/async passthrough discriminated
+/// by `<X> instanceof Promise`: the promise branch returns a
+/// `.then`/`.catch`/`.finally` chain on `<X>` and the sync branch returns the
+/// raw `<X>`. Both arms forward the same binding `<X>`, so the mixed
+/// Sync/Promise returns mirror whatever the callback that produced `<X>` returned
+/// rather than being an accidental inconsistency. Recognised structurally on the
+/// `instanceof Promise` test and the shared returned binding, never by name.
+fn is_promise_passthrough_dual_mode(body: &[Statement]) -> bool {
+    passthrough_guard_in_stmts(body)
+}
+
+fn passthrough_guard_in_stmts(stmts: &[Statement]) -> bool {
+    stmts.iter().any(stmt_has_passthrough_guard)
+}
+
+/// Descends through control flow but not into nested function bodies.
+fn stmt_has_passthrough_guard(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::IfStatement(if_stmt) => {
+            if_is_passthrough_guard(if_stmt)
+                || stmt_has_passthrough_guard(&if_stmt.consequent)
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alt| stmt_has_passthrough_guard(alt))
+        }
+        Statement::BlockStatement(block) => passthrough_guard_in_stmts(&block.body),
+        Statement::TryStatement(try_stmt) => {
+            passthrough_guard_in_stmts(&try_stmt.block.body)
+                || try_stmt
+                    .handler
+                    .as_ref()
+                    .is_some_and(|h| passthrough_guard_in_stmts(&h.body.body))
+                || try_stmt
+                    .finalizer
+                    .as_ref()
+                    .is_some_and(|f| passthrough_guard_in_stmts(&f.body))
+        }
+        Statement::ForStatement(f) => stmt_has_passthrough_guard(&f.body),
+        Statement::ForInStatement(f) => stmt_has_passthrough_guard(&f.body),
+        Statement::ForOfStatement(f) => stmt_has_passthrough_guard(&f.body),
+        Statement::WhileStatement(w) => stmt_has_passthrough_guard(&w.body),
+        Statement::DoWhileStatement(d) => stmt_has_passthrough_guard(&d.body),
+        Statement::SwitchStatement(switch) => switch
+            .cases
+            .iter()
+            .any(|case| passthrough_guard_in_stmts(&case.consequent)),
+        Statement::LabeledStatement(l) => stmt_has_passthrough_guard(&l.body),
+        _ => false,
+    }
+}
+
+/// Does this `if` implement the `<X> instanceof Promise` sync/async passthrough?
+/// The consequent (promise branch) must return a `.then`/`.catch`/`.finally`
+/// chain on `<X>`, and the `else` branch must return the raw `<X>`.
+fn if_is_passthrough_guard(if_stmt: &IfStatement) -> bool {
+    let Some(binding) = instanceof_promise_operand(&if_stmt.test) else {
+        return false;
+    };
+    let Some(alternate) = &if_stmt.alternate else {
+        return false;
+    };
+    branch_returns_promise_chain_on(&if_stmt.consequent, binding)
+        && branch_returns_identifier(alternate, binding)
+}
+
+/// Extract `<X>` from a `<X> instanceof Promise` test: a `BinaryExpression` whose
+/// operator is `instanceof`, whose right operand is the identifier `Promise`, and
+/// whose left operand is a plain identifier (the discriminated binding).
+fn instanceof_promise_operand<'a>(test: &'a Expression<'a>) -> Option<&'a str> {
+    let Expression::BinaryExpression(bin) = test else {
+        return None;
+    };
+    if bin.operator != BinaryOperator::Instanceof {
+        return None;
+    }
+    let Expression::Identifier(right) = &bin.right else {
+        return None;
+    };
+    if right.name.as_str() != "Promise" {
+        return None;
+    }
+    match &bin.left {
+        Expression::Identifier(left) => Some(left.name.as_str()),
+        _ => None,
+    }
+}
+
+/// Does this branch return a `.then`/`.catch`/`.finally` call whose receiver is
+/// the identifier `name`?
+fn branch_returns_promise_chain_on(stmt: &Statement, name: &str) -> bool {
+    match stmt {
+        Statement::ReturnStatement(ret) => ret
+            .argument
+            .as_ref()
+            .is_some_and(|arg| is_promise_chain_on(arg, name)),
+        Statement::BlockStatement(block) => block
+            .body
+            .iter()
+            .any(|s| branch_returns_promise_chain_on(s, name)),
+        _ => false,
+    }
+}
+
+fn is_promise_chain_on(expr: &Expression, name: &str) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !matches!(member.property.name.as_str(), "then" | "catch" | "finally") {
+        return false;
+    }
+    matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == name)
+}
+
+/// Does this branch return the raw identifier `name`?
+fn branch_returns_identifier(stmt: &Statement, name: &str) -> bool {
+    match stmt {
+        Statement::ReturnStatement(ret) => {
+            matches!(&ret.argument, Some(Expression::Identifier(id)) if id.name.as_str() == name)
+        }
+        Statement::BlockStatement(block) => block
+            .body
+            .iter()
+            .any(|s| branch_returns_identifier(s, name)),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -830,6 +963,60 @@ mod tests {
         // captures a concrete function's return (the type argument is not a type
         // parameter), so a genuinely mixed body still fires.
         let src = "function f(x: boolean): ReturnType<typeof concreteFn> { if (x) return 1; return Promise.resolve(2); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_instanceof_promise_passthrough_with_finally() {
+        // Regression for #7456: Budibase's `withEnv` is an isomorphic sync/async
+        // wrapper. It inspects the runtime value returned by its callback: when
+        // `result instanceof Promise` it chains cleanup via `.finally(cleanup)`,
+        // otherwise it returns the raw sync value. Both branches forward the same
+        // binding `result`, so the mixed returns mirror the callback, not a bug.
+        let src = "export function withEnv<T>(v: any, f: () => T) {
+            const cleanup = setEnv(v);
+            const result = f();
+            if (result instanceof Promise) {
+                return result.finally(cleanup);
+            } else {
+                cleanup();
+                return result;
+            }
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_instanceof_promise_passthrough_with_then() {
+        // The discriminator generalises across chain methods: the promise branch
+        // may return `.then`/`.catch`/`.finally` on the discriminated binding.
+        let src = "function w<T>(f: () => T) {
+            const r = f();
+            if (r instanceof Promise) {
+                return r.then(x => x);
+            } else {
+                return r;
+            }
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_mixed_gated_on_business_condition_without_instanceof_promise() {
+        // Negative control for #7456: the gate must be the `instanceof Promise`
+        // runtime discriminator. A genuine mixed Sync/Promise return selected by a
+        // business condition (`cond`) is the real footgun and still fires.
+        let src = "function g(cond: boolean) { if (cond) { return Promise.resolve(1); } else { return 2; } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_instanceof_promise_when_branches_forward_different_bindings() {
+        // Negative control for #7456: the guard keys on the *shared* returned
+        // binding. Here the chain is on `b` while the test discriminates `a` and
+        // the sync branch returns `c`, so the branches do not passthrough a single
+        // value and the mixed return still fires.
+        let src = "function h(a: any, b: any) { if (a instanceof Promise) { return b.finally(cleanup); } else { return c; } }";
         assert_eq!(run(src).len(), 1);
     }
 }
