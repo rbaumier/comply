@@ -6,7 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, RegExpFlags};
 use std::sync::Arc;
 
 // === nullability analysis ===
@@ -28,6 +28,40 @@ fn pattern_can_match_empty(pattern: &str) -> bool {
 
 fn is_fully_anchored(pattern: &str) -> bool {
     pattern.starts_with('^') && pattern.ends_with('$')
+}
+
+/// Whether the pattern's match location is pinned to a single string boundary:
+/// a leading start-of-string `^` or a trailing end-of-string `$`. For such a
+/// pattern the empty match can only land at that boundary, so a non-global
+/// `.replace()` performs the deterministic prepend / ensure-suffix idiom rather
+/// than a surprising leftmost empty match.
+fn is_boundary_anchored(pattern: &str) -> bool {
+    starts_with_caret_anchor(pattern) || ends_with_dollar_anchor(pattern)
+}
+
+/// Leading `^` anchor. A quantified `^` (`^?`, `^*`, `^{…}`) is rejected: it lets
+/// the match float off the start-of-string boundary.
+fn starts_with_caret_anchor(pattern: &str) -> bool {
+    let bytes = pattern.as_bytes();
+    if bytes.first() != Some(&b'^') {
+        return false;
+    }
+    !matches!(bytes.get(1), Some(b'?') | Some(b'*') | Some(b'{'))
+}
+
+/// Trailing `$` anchor. An escaped `\$` is a literal dollar, not an
+/// end-of-string anchor, so it is rejected.
+fn ends_with_dollar_anchor(pattern: &str) -> bool {
+    let bytes = pattern.as_bytes();
+    if bytes.last() != Some(&b'$') {
+        return false;
+    }
+    let preceding_backslashes = bytes[..bytes.len() - 1]
+        .iter()
+        .rev()
+        .take_while(|&&b| b == b'\\')
+        .count();
+    preceding_backslashes % 2 == 0
 }
 
 /// Nullable iff ANY top-level alternative (split on `|` at depth 0) is nullable.
@@ -320,7 +354,18 @@ impl OxcCheck for Check {
             return;
         }
         // Walk up to check if this regex is an argument of .split() or .replace().
-        if !is_arg_of_split_or_replace(node, semantic) {
+        let Some(method) = call_method_for_regex_arg(node, semantic) else {
+            return;
+        };
+        // A non-global `.replace()` performs a single leftmost replacement; when
+        // the pattern is anchored to a `^` or `$` boundary that replacement is
+        // pinned to that boundary (the prepend / ensure-suffix idiom), not a
+        // surprising empty match. `.split()` and global `.replace()` on an
+        // empty-matchable pattern remain genuine footguns.
+        if method == CallMethod::Replace
+            && !re.regex.flags.contains(RegExpFlags::G)
+            && is_boundary_anchored(pattern)
+        {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, re.span.start as usize);
@@ -336,23 +381,34 @@ impl OxcCheck for Check {
     }
 }
 
-fn is_arg_of_split_or_replace<'a>(
+#[derive(PartialEq)]
+enum CallMethod {
+    Split,
+    Replace,
+}
+
+/// The `String` method the regex is an argument of, if any. `.split()` and
+/// `.replace()` are distinguished because their empty-match footgun differs.
+fn call_method_for_regex_arg<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
+) -> Option<CallMethod> {
     let nodes = semantic.nodes();
     let mut cur_id = nodes.parent_id(node.id());
     loop {
         if cur_id == node.id() || cur_id == nodes.parent_id(cur_id) {
-            return false;
+            return None;
         }
         let parent_kind = nodes.kind(cur_id);
         if let AstKind::CallExpression(call) = parent_kind {
             if let Expression::StaticMemberExpression(member) = &call.callee {
-                let name = member.property.name.as_str();
-                return name == "split" || name == "replace";
+                return match member.property.name.as_str() {
+                    "split" => Some(CallMethod::Split),
+                    "replace" => Some(CallMethod::Replace),
+                    _ => None,
+                };
             }
-            return false;
+            return None;
         }
         cur_id = nodes.parent_id(cur_id);
     }
@@ -463,5 +519,49 @@ mod tests {
     #[test]
     fn allows_negative_lookbehind() {
         assert!(run_on(r#"const r = s.replace(/(?<!\d)x/g, '');"#).is_empty());
+    }
+
+    // --- #7362: boundary-anchored non-global `.replace` is deterministic. ---
+
+    #[test]
+    fn allows_trailing_dollar_anchored_non_global_replace() {
+        // `/\/?$/` can only match empty at end-of-string — the "ensure exactly
+        // one trailing slash" idiom.
+        assert!(run_on(r#"const srcDir = dir.replace(/\/?$/, '/');"#).is_empty());
+    }
+
+    #[test]
+    fn allows_leading_caret_anchored_non_global_replace() {
+        // `/^(?!...)/` can only match empty at position 0 — the prepend idiom.
+        assert!(run_on(r#"const rel = p.replace(/^(?![^.]{1,2}\/)/, './');"#).is_empty());
+    }
+
+    #[test]
+    fn flags_split_on_boundary_anchored_empty_matchable() {
+        // `.split` on an empty-matchable regex stays a genuine footgun.
+        assert_eq!(run_on(r#"const parts = s.split(/\/?$/);"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_non_anchored_non_global_replace() {
+        // Non-anchored empty-matchable pattern: surprising leftmost empty match.
+        assert_eq!(run_on(r#"const r = s.replace(/a?/, 'b');"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_global_non_anchored_replace() {
+        assert_eq!(run_on(r#"const r = s.replace(/a?/g, 'b');"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_global_boundary_anchored_replace() {
+        // The global flag makes even a `$`-anchored empty match land at every
+        // position — the boundary exemption applies only to non-global replace.
+        assert_eq!(run_on(r#"const r = s.replace(/\/?$/g, '/');"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_fully_anchored_replace() {
+        assert!(run_on(r#"const r = s.replace(/^abc$/g, 'x');"#).is_empty());
     }
 }
