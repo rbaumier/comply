@@ -22,9 +22,10 @@
 //! backreferences that make exponential backtracking possible, so a crafted
 //! pattern cannot trigger ReDoS. The constructor is recognized as one of these
 //! engines either by a crate-qualified call (`regex::Regex::new`) or, for a
-//! bare `Regex::new`, by a `use` importing it from such a crate. A backtracking
-//! engine (`fancy_regex`, `onig`, `pcre2`) still flags; an unresolved bare
-//! `Regex::new` stays flagged.
+//! bare `Regex::new`, by a `use` importing it from such a crate — whether at
+//! the crate root (`use regex::Regex`) or re-exported through a facade crate
+//! (`use hbb_common::regex::Regex`). A backtracking engine (`fancy_regex`,
+//! `onig`, `pcre2`) still flags; an unresolved bare `Regex::new` stays flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -215,7 +216,8 @@ fn imports_backtracking_engine(source: &str) -> bool {
 
 /// `true` when the file imports a Regex type from `krate`, in either the
 /// single-item form (`use regex::Regex;`, `use tantivy_fst::Regex;`) or the
-/// brace-grouped form (`use regex::{Regex, RegexBuilder};`).
+/// brace-grouped form (`use regex::{Regex, RegexBuilder};`), whether `krate` is
+/// the crate root or re-exported through a facade (`use hbb_common::regex::…`).
 ///
 /// The byte-oriented `bytes` submodule of the `regex` crate
 /// (`use regex::bytes::Regex;`, `use regex::bytes::{Regex, RegexBuilder};`) is
@@ -226,6 +228,7 @@ fn source_imports_regex_from(source: &str, krate: &str) -> bool {
         crate::oxc_helpers::source_contains(source, &format!("use {krate}::{module}Regex"))
             || crate::oxc_helpers::source_contains(source, &format!("use {krate}::{module}RegexBuilder"))
     }) || imports_grouped_regex_from(source, krate)
+        || imports_regex_via_facade(source, krate)
 }
 
 /// `true` when a brace-grouped `use {krate}::{ ... }` import group names a
@@ -236,9 +239,9 @@ fn source_imports_regex_from(source: &str, krate: &str) -> bool {
 ///
 /// Anchored on the `use {krate}::` crate-segment boundary — the `::` must
 /// immediately follow the crate name (modulo surrounding whitespace), so a
-/// different crate whose path merely contains `regex` (`use my_regex::{…}`,
-/// `use foo::regex::{…}`) is not matched. Tolerant of spaces/newlines around
-/// `::` and inside the group, covering single- and multi-line grouped imports.
+/// different crate whose path merely contains `regex` (`use my_regex::{…}`) is
+/// not matched. Tolerant of spaces/newlines around `::` and inside the group,
+/// covering single- and multi-line grouped imports.
 fn imports_grouped_regex_from(source: &str, krate: &str) -> bool {
     let prefix = format!("use {krate}");
     let mut rest = source;
@@ -262,6 +265,78 @@ fn imports_grouped_regex_from(source: &str, krate: &str) -> bool {
         }
     }
     false
+}
+
+/// `true` when `krate` (a linear-time engine) is re-exported through a facade
+/// crate and a Regex type reaches the file through that re-export, in either the
+/// path form (`use hbb_common::regex::Regex;`) or the nested-brace form
+/// (`use hbb_common::{ regex::{Captures, Regex} };`).
+///
+/// `krate` is matched only as a full `::`-delimited path segment: its right
+/// neighbor must be `::` and its left neighbor a use-tree path boundary — a `::`
+/// step, or a `{`/`,` position inside a group that a `::` step opened. A crate
+/// whose name merely contains `krate` (`my_regex`, `fancy_regex`) has an
+/// identifier char on its left and is never matched, and a `regex` segment not
+/// followed by `::Regex…` (`regexp::…`) fails the right boundary.
+fn imports_regex_via_facade(source: &str, krate: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(rel) = source[search_from..].find(krate) {
+        let idx = search_from + rel;
+        search_from = idx + krate.len();
+        if !facade_segment_boundary(&source[..idx]) {
+            continue;
+        }
+        let after = &source[idx + krate.len()..];
+        let Some(seg) = after.trim_start().strip_prefix("::").map(str::trim_start) else {
+            continue;
+        };
+        if regex_type_reachable(seg) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `true` when the source preceding a `regex` path segment ends at a facade
+/// re-export boundary: a `::` separator, or a `{`/`,` position inside a brace
+/// group that itself follows a `::` step. Rejects an identifier char (the tail
+/// of `my_regex`), keeping lookalike crate names distinct.
+fn facade_segment_boundary(before: &str) -> bool {
+    let trimmed = before.trim_end();
+    if trimmed.ends_with("::") {
+        return true;
+    }
+    match trimmed.as_bytes().last() {
+        Some(b'{') | Some(b',') => enclosing_group_follows_path_step(trimmed),
+        _ => false,
+    }
+}
+
+/// `true` when the innermost brace group still open at the end of `before` was
+/// opened by a `::` path step (`facade::{ … `), confirming a `regex` item inside
+/// it is a re-exported path segment rather than a top-level group entry.
+fn enclosing_group_follows_path_step(before: &str) -> bool {
+    let bytes = before.as_bytes();
+    let mut depth = 0u32;
+    for i in (0..bytes.len()).rev() {
+        match bytes[i] {
+            b'}' => depth += 1,
+            b'{' if depth == 0 => return before[..i].trim_end().ends_with("::"),
+            b'{' => depth -= 1,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// `true` when the text right after a `regex::` path segment brings a Regex type
+/// into scope: a direct `Regex`/`RegexBuilder`, or a brace group naming one.
+fn regex_type_reachable(after: &str) -> bool {
+    if let Some(group) = after.strip_prefix('{') {
+        let end = group.find('}').unwrap_or(group.len());
+        return group[..end].contains("Regex");
+    }
+    after.starts_with("Regex")
 }
 
 #[cfg(test)]
@@ -527,6 +602,55 @@ mod tests {
     #[test]
     fn still_flags_single_item_bytes_import_from_lookalike_crate() {
         let source = "use regexp::bytes::Regex;\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_regex_from_facade_reexport_path() {
+        // Issue #7257: rustdesk `linux.rs` — the linear-time `regex` crate
+        // re-exported through the `hbb_common` workspace facade as a `::regex::`
+        // path step: `use hbb_common::regex::Regex;`.
+        let source =
+            "use hbb_common::regex::Regex;\nfn f(p: &str) -> Option<Regex> { Regex::new(p).ok() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_regex_from_facade_nested_brace_group() {
+        // Issue #7257: `use hbb_common::{ regex::{Captures, Regex} };`.
+        let source = "use hbb_common::{regex::{Captures, Regex}};\nfn f(p: &str) -> Option<Regex> { Regex::new(p).ok() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_regex_from_facade_multi_item_group() {
+        // Issue #7257: the real form — `regex` is one item among several in the
+        // facade group, so its left boundary is a `,` sibling separator inside a
+        // `::`-opened group.
+        let source = "use hbb_common::{\n    config::Config,\n    regex::{Captures, Regex},\n    sysinfo::System,\n};\nfn f(p: &str) -> Option<Regex> { Regex::new(p).ok() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_facade_reexport_with_backtracking_engine() {
+        // A backtracking engine in scope can bind a bare `Regex`, so a facade
+        // re-export of the linear-time crate must not grant the exemption.
+        let source = "use hbb_common::regex::Regex;\nuse fancy_regex::RegexBuilder;\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_facade_lookalike_segment() {
+        // `my_regex` merely contains `regex`; in facade position its left
+        // boundary is an identifier char, not `::`, so it stays flagged.
+        let source = "use company::my_regex::Regex;\nfn f(p: &str) { let r = Regex::new(p); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_regex_from_non_regex_crate_import() {
+        // No `regex` path segment resolves the engine, so stay conservative.
+        let source = "use some_crate::Regex;\nfn f(p: &str) { let r = Regex::new(p); }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
