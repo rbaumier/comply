@@ -3,7 +3,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression, Statement};
+use oxc_ast::ast::{
+    Argument, BindingPattern, Expression, FormalParameters, IdentifierReference, Statement, TSType,
+    TSTypeName,
+};
 use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
 
@@ -44,6 +47,19 @@ impl OxcCheck for Check {
         // error-first callback (`cb(err)`, `callback(err, data)`), so there's
         // no propagation hazard.
         if call.arguments.is_empty() {
+            return;
+        }
+
+        // A callee whose declared type is a void-returning *visitor* — a
+        // function type `(value, depth) => void` whose first parameter is not an
+        // error — is invoked purely for its side effect. It carries no error and
+        // no result for a missing `return` to propagate, and a `return` here
+        // would abort the surrounding traversal early. This is structurally
+        // distinct from a Node error-first callback (`(err, data) => void`),
+        // which stays flagged because its first parameter is the error the
+        // caller must short-circuit on. An untyped or unresolvable callee keeps
+        // the default behavior.
+        if callee_is_void_visitor(callee, semantic) {
             return;
         }
 
@@ -177,6 +193,100 @@ impl OxcCheck for Check {
 /// `SpreadElement`, not the call), so a direct span match is exact.
 fn is_argument(call_span: Span, arguments: &[Argument<'_>]) -> bool {
     arguments.iter().any(|arg| arg.span() == call_span)
+}
+
+/// True when `callee` resolves to a binding whose declared type is a
+/// void-returning function type (`TSFunctionType`/`TSConstructorType` with a
+/// `void`/`undefined` return) whose first parameter is not error-shaped — a
+/// side-effecting visitor rather than a Node error-first callback.
+fn callee_is_void_visitor<'a>(
+    callee: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Some(ty) = binding_type_annotation(callee, semantic) else {
+        return false;
+    };
+    let (params, return_type) = match ty {
+        TSType::TSFunctionType(f) => (&f.params, &f.return_type),
+        TSType::TSConstructorType(c) => (&c.params, &c.return_type),
+        _ => return false,
+    };
+    let returns_void = matches!(
+        return_type.type_annotation,
+        TSType::TSVoidKeyword(_) | TSType::TSUndefinedKeyword(_)
+    );
+    returns_void && !first_param_is_error_shaped(params)
+}
+
+/// The declared TypeScript type of the binding `ident` refers to, resolved
+/// through its parameter or variable declaration. `None` when the binding has
+/// no in-file annotation (imported, inferred, or untyped) — those keep the
+/// rule's default behavior.
+fn binding_type_annotation<'a>(
+    ident: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        match kind {
+            AstKind::FormalParameter(param) => {
+                return param.type_annotation.as_ref().map(|a| &a.type_annotation);
+            }
+            AstKind::VariableDeclarator(decl) => {
+                return decl.type_annotation.as_ref().map(|a| &a.type_annotation);
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return None;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// True when the first parameter of a function type is a Node error-first
+/// error: named `err`/`error` (case-insensitive) or typed `Error` /
+/// `NodeJS.ErrnoException` (including nullable unions like `Error | null`).
+/// Keeps error-first callbacks flagged while exempting visitors.
+fn first_param_is_error_shaped(params: &FormalParameters) -> bool {
+    let Some(first) = params.items.first() else {
+        return false;
+    };
+    if let BindingPattern::BindingIdentifier(id) = &first.pattern {
+        let name = id.name.as_str();
+        if name.eq_ignore_ascii_case("err") || name.eq_ignore_ascii_case("error") {
+            return true;
+        }
+    }
+    first
+        .type_annotation
+        .as_ref()
+        .is_some_and(|ann| type_is_error(&ann.type_annotation))
+}
+
+/// True when `ty` denotes the `Error` type or `NodeJS.ErrnoException`, directly
+/// or as a member of a union (e.g. `Error | null`).
+fn type_is_error(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSTypeReference(r) => type_name_is_error(&r.type_name),
+        TSType::TSUnionType(u) => u.types.iter().any(type_is_error),
+        _ => false,
+    }
+}
+
+/// True when a type name is `Error` or ends in `ErrnoException`
+/// (i.e. `NodeJS.ErrnoException`).
+fn type_name_is_error(name: &TSTypeName) -> bool {
+    match name {
+        TSTypeName::IdentifierReference(id) => id.name == "Error",
+        TSTypeName::QualifiedName(q) => q.right.name == "ErrnoException",
+        TSTypeName::ThisExpression(_) => false,
+    }
 }
 
 /// Walk up from `node`; return true if a loop statement (`for`, `for...of`,
@@ -578,6 +688,67 @@ mod tests {
                   cb();
                 });
               }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_void_visitor_callback() {
+        // Issue #7261 (nestjs/nest topology-tree): a void visitor
+        // `(value, depth) => void` is invoked for its side effect before the
+        // walk recurses over children. It carries no error/result to propagate,
+        // and a trailing `return callback(...)` would abort the traversal — this
+        // is not a Node error-first callback.
+        let src = r#"
+            class TopologyTree {
+              public walk(callback: (value: Module, depth: number) => void) {
+                function walkNode(node: TreeNode<Module>, depth = 1) {
+                  callback(node.value, depth);
+                  node.children.forEach(child => walkNode(child, depth + 1));
+                }
+                walkNode(this.root);
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_single_param_void_visitor() {
+        // A `(node) => void` visitor whose first parameter is not an error is
+        // exempt: void return, non-error first parameter.
+        let src = r#"
+            function traverse(callback: (node: TreeNode) => void, node: TreeNode) {
+              callback(node);
+              node.children.forEach(c => traverse(callback, c));
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_typed_error_first_void_callback() {
+        // Negative space for #7261: a void-returning callback whose first
+        // parameter is an error (`(err: Error, data) => void`) is a genuine Node
+        // error-first callback — the void-visitor exemption must not silence it.
+        let src = r#"
+            function run(callback: (err: Error, data?: string) => void) {
+              if (bad) { callback(oops); }
+              callback(null, "x");
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_errno_typed_first_param_not_named_err() {
+        // First parameter typed `NodeJS.ErrnoException | null` marks an
+        // error-first callback even when not named `err` — stays flagged.
+        let src = r#"
+            function run(cb: (cause: NodeJS.ErrnoException | null, data?: string) => void) {
+              if (bad) { cb(oops); }
+              cb(null, "x");
             }
         "#;
         assert_eq!(run(src).len(), 1);
