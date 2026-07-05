@@ -1759,6 +1759,43 @@ mod tests {
         assert_eq!(run_on(source).len(), 1);
     }
 
+    /// Closes #7455: `write!(&mut msg, ..).unwrap()` where `msg` is a local
+    /// `String` initialized via `.to_string()` writes through `fmt::Write` for
+    /// `String`, which never returns `Err` — the unwrap is infallible and the
+    /// `From` impl stays total. A `.to_string()` initializer is as much a `String`
+    /// binding as `String::new()`/`format!(..)`, so it must not be flagged.
+    #[test]
+    fn allows_unwrap_on_write_macro_into_to_string_buffer() {
+        let source = r#"impl From<E> for C {
+            fn from(err: E) -> Self {
+                let mut msg = err.to_string();
+                for src in iter::successors(err.source(), |&src| src.source()) {
+                    write!(&mut msg, ": {src}").unwrap();
+                }
+                C::service_error(msg)
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "write! into a String buffer initialized via .to_string() is infallible"
+        );
+    }
+
+    /// A genuine fallible `.unwrap()` in a `From` impl — not a buffer write — must
+    /// still flag even when a sibling `.to_string()` `String` binding is present:
+    /// recognizing the `String` buffer must not over-broaden the exemption.
+    #[test]
+    fn flags_fallible_unwrap_alongside_to_string_binding() {
+        let source = r#"impl From<E> for C {
+            fn from(err: E) -> Self {
+                let msg = err.to_string();
+                let v = fallible(err).unwrap();
+                C(msg, v)
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
     /// Characterization of the deliberate limit: a `TryFrom` impl could return
     /// `Err` even for a discriminated variant, but the rule has no type
     /// resolution and cannot tell. This case is intentionally exempted (lint
