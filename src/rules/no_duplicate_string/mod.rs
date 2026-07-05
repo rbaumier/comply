@@ -112,6 +112,9 @@ pub(super) fn collect_diagnostics(
         if is_rust && rust::is_format_template_arg(node, source_bytes) {
             continue;
         }
+        if is_rust && rust::is_cfg_macro_arg(node, source_bytes) {
+            continue;
+        }
         if is_rust && rust::is_in_macro_rules_body(node) {
             continue;
         }
