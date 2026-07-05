@@ -4006,6 +4006,28 @@ fn probe_path(raw: &Path, known: &FxHashSet<PathBuf>) -> Option<PathBuf> {
         return std::fs::canonicalize(raw).ok();
     }
 
+    // A specifier carrying an explicit non-script asset extension (stylesheet,
+    // image, font, media) names a real file-type suffix, not a strippable stem.
+    // Such assets are never in the indexed script set, so they resolve to no
+    // module: return `None` rather than `with_extension`-substituting a TS/JS
+    // extension below, which would fabricate a phantom edge to a script sibling
+    // (`import "./index.less"` resolving to the sibling `./index.ts`). This is
+    // distinct from a synthetic pseudo-extension that is part of the filename
+    // (`./cabinets_.$cabinetId`): those are not real file-type suffixes and are
+    // not listed here. `json`/`wasm`/`node` are intentionally excluded — they
+    // can be legitimately resolved modules.
+    const ASSET_EXTS: &[&str] = &[
+        "css", "less", "scss", "sass", "styl", "pcss", "png", "jpg", "jpeg", "gif", "svg", "webp",
+        "avif", "woff", "woff2", "ttf", "eot", "otf", "mp4", "webm", "mp3", "wav",
+    ];
+    if raw
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ASSET_EXTS.contains(&ext))
+    {
+        return None;
+    }
+
     let known_ext = raw
         .extension()
         .and_then(|e| e.to_str())
@@ -7011,5 +7033,108 @@ mod tests {
                    }\n";
         let extract = extract_ts_oxc(src, Path::new("ns.ts")).expect("oxc extract");
         assert!(extract.module_augmentations.is_empty());
+    }
+
+    #[test]
+    fn probe_path_asset_extension_does_not_stem_substitute_ts() {
+        // Regression for #7410: `./index.less` next to an existing `index.ts`
+        // must not stem-substitute the stylesheet extension for `.ts` and
+        // resolve to the script sibling. A non-script asset extension resolves
+        // to no module.
+        let mut known = FxHashSet::default();
+        known.insert(PathBuf::from("/proj/comp/index.ts"));
+        assert_eq!(
+            probe_path(Path::new("/proj/comp/index.less"), &known),
+            None,
+        );
+        // Same for an image asset with a script sibling of the same stem.
+        let mut known = FxHashSet::default();
+        known.insert(PathBuf::from("/proj/assets/logo.ts"));
+        assert_eq!(probe_path(Path::new("/proj/assets/logo.svg"), &known), None);
+    }
+
+    #[test]
+    fn probe_path_extensionless_still_resolves_via_fallback() {
+        // An extensionless specifier keeps resolving to its TS sibling.
+        let mut known = FxHashSet::default();
+        known.insert(PathBuf::from("/proj/foo.ts"));
+        assert_eq!(
+            probe_path(Path::new("/proj/foo"), &known),
+            Some(PathBuf::from("/proj/foo.ts")),
+        );
+    }
+
+    #[test]
+    fn probe_path_vue_sfc_extension_resolves() {
+        // `.vue` is a real script/SFC extension, resolved exactly.
+        let mut known = FxHashSet::default();
+        known.insert(PathBuf::from("/proj/comp.vue"));
+        assert_eq!(
+            probe_path(Path::new("/proj/comp.vue"), &known),
+            Some(PathBuf::from("/proj/comp.vue")),
+        );
+    }
+
+    #[test]
+    fn probe_path_synthetic_pseudo_extension_preserved() {
+        // A synthetic pseudo-extension that is part of the filename
+        // (`cabinets_.$cabinetId`, TanStack Router) is not a real file-type
+        // suffix: the TS extension is appended to the full path, not
+        // substituted.
+        let mut known = FxHashSet::default();
+        known.insert(PathBuf::from("/proj/routes/cabinets_.$cabinetId.tsx"));
+        assert_eq!(
+            probe_path(Path::new("/proj/routes/cabinets_.$cabinetId"), &known),
+            Some(PathBuf::from("/proj/routes/cabinets_.$cabinetId.tsx")),
+        );
+    }
+
+    #[test]
+    fn stylesheet_side_effect_import_forms_no_cycle() {
+        // Regression for #7410: the standard component layout — `<comp>/index.ts`
+        // imports the SFC, the SFC side-effect-imports `./index.less` — must not
+        // fabricate a `SFC → index.ts` edge and report a cycle.
+        let (_dir, index, paths) = build_index(&[
+            (
+                "popper/index.ts",
+                "import Component from \"./popper.vue\";\nexport default Component;\n",
+            ),
+            (
+                "popper/popper.vue",
+                "<script setup lang=\"ts\">\nimport \"./index.less\";\n</script>\n<template><div/></template>\n",
+            ),
+        ]);
+        let index_ts = &paths[0];
+        let popper_vue = &paths[1];
+        assert!(
+            index.cycle_for(index_ts).is_none(),
+            "index.ts must not be reported in a cycle"
+        );
+        assert!(
+            index.cycle_for(popper_vue).is_none(),
+            "popper.vue must not be reported in a cycle"
+        );
+        let less_import = index
+            .get_imports(popper_vue)
+            .iter()
+            .find(|i| i.specifier == "./index.less")
+            .expect("the `./index.less` side-effect import must be indexed");
+        assert_eq!(
+            less_import.source_path, None,
+            "a stylesheet import must not resolve to a script sibling"
+        );
+    }
+
+    #[test]
+    fn genuine_value_import_cycle_still_flagged() {
+        // A real `a.ts → b.ts → a.ts` runtime-value cycle is still reported.
+        let (_dir, index, paths) = build_index(&[
+            ("a.ts", "import B from \"./b\";\nexport const A = B;\n"),
+            ("b.ts", "import A from \"./a\";\nexport const B = A;\n"),
+        ]);
+        assert!(
+            index.cycle_for(&paths[0]).is_some(),
+            "a genuine value-import cycle must still be flagged"
+        );
     }
 }
