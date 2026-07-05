@@ -9,7 +9,15 @@ pub struct Check;
 fn is_indexof_call(expr: &Expression) -> bool {
     let Expression::CallExpression(call) = expr else { return false };
     let Expression::StaticMemberExpression(member) = &call.callee else { return false };
-    member.property.name.as_str() == "indexOf"
+    if member.property.name.as_str() != "indexOf" {
+        return false;
+    }
+    // Only a single positional argument has an `includes()`/`startsWith()`
+    // equivalent. A `fromIndex` second argument makes `indexOf` a bounded
+    // forward scan (`str.indexOf(x, from) !== -1` means "x occurs at or after
+    // `from`"), and a spread could expand to that form, so neither rewrite
+    // preserves behavior — leave those calls alone.
+    matches!(call.arguments.as_slice(), [arg] if !arg.is_spread())
 }
 
 /// Returns "0", "-1" etc. as a static string for the common numeric comparisons.
@@ -96,5 +104,64 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_single_arg_not_found() {
+        let d = run_on("if (str.indexOf('x') !== -1) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("includes()"));
+    }
+
+    #[test]
+    fn flags_single_arg_starts_with() {
+        let d = run_on("if (str.indexOf('x') === 0) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("startsWith()"));
+    }
+
+    #[test]
+    fn no_fp_on_two_arg_indexof_not_found() {
+        // #7258: `indexOf('.webp', b[1].length - 5) !== -1` is really an
+        // `endsWith('.webp')` test — the single-argument `includes()` rewrite
+        // scans the whole string, a different predicate.
+        assert!(run_on("if (b[1].indexOf('.webp', b[1].length - 5) !== -1) {}").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_two_arg_indexof_equals_minus_one() {
+        assert!(run_on("if (str.indexOf('x', 5) === -1) {}").is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_spread_arg_indexof() {
+        // A spread could expand to a `fromIndex` form, so it has no static
+        // single-argument equivalent.
+        assert!(run_on("if (str.indexOf(...args) !== -1) {}").is_empty());
     }
 }
