@@ -81,6 +81,14 @@ fn block_tail_expression<'t>(block: tree_sitter::Node<'t>) -> Option<tree_sitter
 }
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
+    // An `extern`-ABI function (`extern "C" fn`, incl. `unsafe extern "C"`) is an
+    // FFI entry point handed to foreign code as a callable, not a value: its
+    // return type and any invariant status code are fixed by the external ABI
+    // contract and cannot be replaced by a constant. Skip it.
+    if crate::rules::rust_helpers::fn_is_extern(node, source) {
+        return;
+    }
+
     let Some(body) = node.child_by_field_name("body") else { return };
 
     let mut returns: Vec<tree_sitter::Node> = Vec::new();
@@ -236,6 +244,72 @@ fn always_none(x: i32) -> Option<i32> {
     }
     do_side_effect();
     None
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #7348 — an `unsafe extern "C"` FFI callback (denoland/deno's nghttp2
+    // handlers) returns `0` on every path because `0` is the ABI success status,
+    // not dead logic. The signature and return value are fixed by the external
+    // ABI contract and cannot become a constant, so it must not be flagged.
+    #[test]
+    fn allows_unsafe_extern_c_ffi_callback() {
+        let src = r#"
+unsafe extern "C" fn on_stream_close_callback(id: i32, data: *mut c_void) -> i32 {
+    let session = unsafe { Session::from_user_data(data) };
+    if session.find_stream_obj(id).is_none() {
+        return 0;
+    }
+    session.close_stream(id);
+    0
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #7348 — the `extern` guard keys on the ABI modifier, not on `unsafe`,
+    // so a safe `extern "C"` function with invariant returns is exempt too.
+    #[test]
+    fn allows_extern_c_invariant_returns() {
+        let src = r#"
+extern "C" fn cb(x: i32) -> i32 {
+    if x > 0 {
+        return 0;
+    }
+    0
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #7348 — the abi string is optional (`extern fn` defaults to "C"); the
+    // guard matches on the `extern` keyword, so this is exempt as well.
+    #[test]
+    fn allows_extern_without_abi_string() {
+        let src = r#"
+extern fn cb(x: i32) -> i32 {
+    if x > 0 {
+        return 0;
+    }
+    0
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative space for #7348: a regular (non-`extern`) function whose return
+    // sites all yield the same literal is a genuine invariant return and must
+    // still fire — the `extern` guard must not over-suppress ordinary functions.
+    #[test]
+    fn flags_regular_invariant_returns() {
+        let src = r#"
+fn regular(x: i32) -> i32 {
+    if x > 0 {
+        return 0;
+    }
+    do_stuff();
+    0
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
