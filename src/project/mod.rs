@@ -2765,13 +2765,20 @@ pub struct ProjectCtx {
     // (same value `apply_to_all` iterates), so no canonicalization is needed.
     clean_files: Mutex<FxHashSet<PathBuf>>,
 
-    // Prisma soft-delete model names (lowercase) scoped to a file's package
-    // boundary directory, so a same-named model in a sibling package's schema
-    // doesn't leak its `deletedAt` status across packages. The value is the
-    // downward scan of that boundary: `None` = no `schema.prisma` under it
-    // (caller falls back to fire-on-all). Built lazily on first miss per
-    // boundary and reused for the rest of the run.
+    // Prisma soft-delete model names (lowercase) from the downward `schema.prisma`
+    // scan rooted at a directory, keyed by that directory. Scoping the scan to one
+    // directory (a resolved sibling package or the file's own boundary) keeps a
+    // same-named model in another package's schema from leaking its `deletedAt`
+    // status. The value `None` = no `schema.prisma` under it (caller falls back to
+    // fire-on-all). Built lazily on first miss per directory and reused for the run.
     prisma_soft_delete_models_by_boundary: Mutex<FxHashMap<PathBuf, Option<FxHashSet<String>>>>,
+
+    // Workspace member package `name` → its manifest directory, keyed by the
+    // npm/pnpm workspaces root nearest an importer. `prisma-soft-delete-filter`
+    // resolves the `@scope/prisma` client import to the providing package's
+    // directory so it can read that package's `schema.prisma`. Built once per
+    // workspaces root and reused for the rest of the run.
+    workspace_package_dirs_cache: Mutex<FxHashMap<PathBuf, Arc<FxHashMap<String, PathBuf>>>>,
 
     // Frameworks detected from the *nearest* package.json to a file, keyed by
     // that manifest's directory. Root-level `detected_frameworks` misses an app
@@ -4940,30 +4947,83 @@ impl ProjectCtx {
     }
 
     /// Whether `model` (compared case-insensitively) declares a `deletedAt`
-    /// field per the `schema.prisma` file(s) governing `file_path`'s package.
+    /// field per the authoritative `schema.prisma` for `file_path`.
     /// `Some(true)` = the model is soft-delete (flag a missing filter);
-    /// `Some(false)` = a schema governs the package and this model has no
+    /// `Some(false)` = a schema governs the query and this model has no
     /// `deletedAt` column (no soft-deleted rows, so don't flag); `None` = no
-    /// `schema.prisma` found under the package boundary, so the caller falls
-    /// back to the backward-compatible "fire on all models".
+    /// `schema.prisma` found, so the caller falls back to the "fire on all
+    /// models" default.
     ///
-    /// The set is scoped to the file's package boundary (the nearest ancestor
-    /// `package.json` directory, else the project root) and the existing
-    /// downward scan is rooted there — so it descends into that package's
-    /// `prisma/` subdirectory but not into sibling packages, and a sibling
-    /// package's same-named model can't leak its soft-delete status. Prisma
-    /// schemas live in a `prisma/` subdirectory, so the scan goes downward
-    /// rather than up; the result is cached per boundary directory.
-    pub fn prisma_model_is_soft_delete(&self, file_path: &Path, model: &str) -> Option<bool> {
+    /// The authoritative schema is the one backing the Prisma client the file
+    /// actually uses. When `client_specifier` names a workspace package (the file
+    /// imports its client via `import { prisma } from '@scope/prisma'`), that
+    /// package's schema is consulted first — in the dominant monorepo layout the
+    /// schema lives in a dedicated sibling package every consumer imports the
+    /// client from, outside the consumer file's own package boundary, so scanning
+    /// the consumer's boundary never finds it. Resolving the specifier ties the
+    /// model set to exactly one schema (no cross-package model-name union).
+    ///
+    /// Falls back to the file's own package boundary (nearest ancestor
+    /// `package.json` directory, else the project root), scanned downward into its
+    /// `prisma/` subdirectory — the single-package layout and the case where no
+    /// client import resolves to a schema-bearing package. Results are cached per
+    /// scanned directory.
+    pub fn prisma_model_is_soft_delete(
+        &self,
+        file_path: &Path,
+        model: &str,
+        client_specifier: Option<&str>,
+    ) -> Option<bool> {
+        if let Some(pkg_dir) =
+            client_specifier.and_then(|spec| self.resolve_workspace_package_dir(file_path, spec))
+            && let Some(is_soft_delete) = self.prisma_model_is_soft_delete_in(&pkg_dir, model)
+        {
+            return Some(is_soft_delete);
+        }
         let boundary = self
             .nearest_package_json_dir(file_path)
             .or_else(|| self.project_root.clone())
             .or_else(|| file_path.parent().map(Path::to_path_buf))?;
+        self.prisma_model_is_soft_delete_in(&boundary, model)
+    }
+
+    /// Whether `model` (case-insensitive) declares a `deletedAt` field per the
+    /// `schema.prisma` file(s) found by a downward scan rooted at `dir`. `None`
+    /// when no schema exists under `dir`. Cached per directory.
+    fn prisma_model_is_soft_delete_in(&self, dir: &Path, model: &str) -> Option<bool> {
         let mut cache = self.prisma_soft_delete_models_by_boundary.lock().unwrap();
         let set = cache
-            .entry(boundary.clone())
-            .or_insert_with(|| collect_prisma_soft_delete_models(&boundary));
+            .entry(dir.to_path_buf())
+            .or_insert_with(|| collect_prisma_soft_delete_models(dir));
         set.as_ref().map(|s| s.contains(&model.to_lowercase()))
+    }
+
+    /// Directory of the workspace member package named by `specifier` (or its
+    /// package head for a subpath import like `@scope/prisma/client`), resolved
+    /// against the npm/pnpm workspaces root nearest `importer`. `None` for a
+    /// relative specifier, when no workspaces root governs `importer`, or when no
+    /// member's `package.json` name matches. The member-name → directory map is
+    /// built once per workspaces root and reused for the run.
+    fn resolve_workspace_package_dir(&self, importer: &Path, specifier: &str) -> Option<PathBuf> {
+        if specifier.starts_with('.') {
+            return None;
+        }
+        let root = self.workspaces_root(importer)?;
+        let map = {
+            let mut cache = self.workspace_package_dirs_cache.lock().unwrap();
+            Arc::clone(
+                cache
+                    .entry(root.clone())
+                    .or_insert_with(|| Arc::new(collect_workspace_member_name_dirs(&root))),
+            )
+        };
+        map.iter().find_map(|(name, dir)| {
+            let matches = specifier == name.as_str()
+                || specifier
+                    .strip_prefix(name.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'));
+            matches.then(|| dir.clone())
+        })
     }
 
     /// Absolute directories where Prisma's client generator emits its output,
@@ -5353,6 +5413,29 @@ fn collect_workspace_member_deps(root: &Path) -> FxHashSet<String> {
         }
     }
     names
+}
+
+/// Map each workspace member package's `name` to its manifest directory, for the
+/// npm/pnpm workspaces root at `root`. Member directories come from expanding the
+/// root manifest's `workspaces` globs (or `pnpm-workspace.yaml`); a member with no
+/// `name` is skipped and the first directory wins for a duplicated name.
+fn collect_workspace_member_name_dirs(root: &Path) -> FxHashMap<String, PathBuf> {
+    let mut map = FxHashMap::default();
+    let Some(pkg) = std::fs::read_to_string(root.join("package.json"))
+        .ok()
+        .and_then(|raw| PackageJson::parse(&raw))
+    else {
+        return map;
+    };
+    for member in resolve_workspace_roots(Some(root), &pkg) {
+        if let Ok(raw) = std::fs::read_to_string(member.join("package.json"))
+            && let Some(member_pkg) = PackageJson::parse(&raw)
+            && let Some(name) = member_pkg.name
+        {
+            map.entry(name).or_insert(member);
+        }
+    }
+    map
 }
 
 /// Collect the union of every dependency name declared in every `package.json`
@@ -8455,10 +8538,10 @@ model User {
         let file_b = pkg_b.join("src/repo.ts");
 
         // pkgA: schema present, User has no deletedAt → not soft-delete (not flagged).
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file_a, "user"), Some(false));
+        assert_eq!(ctx.prisma_model_is_soft_delete(&file_a, "user", None), Some(false));
         // pkgB: User has deletedAt → soft-delete (flagged). The leak is closed:
         // pkgB's deletedAt does NOT make pkgA's User look soft-delete.
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file_b, "user"), Some(true));
+        assert_eq!(ctx.prisma_model_is_soft_delete(&file_b, "user", None), Some(true));
     }
 
     // A single-package project (one root-level schema, no nested package.json)
@@ -8478,8 +8561,8 @@ model User {
             ..ProjectCtx::default()
         };
         let file = dir.path().join("src/repo.ts");
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "envelope"), Some(true));
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "account"), Some(false));
+        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "envelope", None), Some(true));
+        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "account", None), Some(false));
     }
 
     // No `schema.prisma` anywhere under the boundary → `None`, so the caller
@@ -8493,7 +8576,67 @@ model User {
             ..ProjectCtx::default()
         };
         let file = dir.path().join("src/repo.ts");
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "user"), None);
+        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "user", None), None);
+    }
+
+    // Regression for #7434: the schema lives in a dedicated sibling package
+    // (`@scope/prisma`) that consumer packages import the client from, so the
+    // consumer's own boundary has no schema. Resolving the client specifier to
+    // that package's directory reads the authoritative schema — `Recipient`
+    // (no `deletedAt`) is not flagged; `Envelope` (has `deletedAt`) still is.
+    #[test]
+    fn soft_delete_models_resolved_from_imported_workspace_package() {
+        const SCHEMA: &str = r#"
+model Recipient {
+  id                String    @id @default(cuid())
+  documentDeletedAt DateTime?
+}
+
+model Envelope {
+  id        String    @id @default(cuid())
+  deletedAt DateTime?
+}
+"#;
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        // @scope/prisma owns the schema.
+        let prisma_pkg = dir.path().join("packages/prisma");
+        std::fs::create_dir_all(&prisma_pkg).unwrap();
+        std::fs::write(prisma_pkg.join("package.json"), r#"{"name":"@scope/prisma"}"#).unwrap();
+        std::fs::write(prisma_pkg.join("schema.prisma"), SCHEMA).unwrap();
+        // @scope/lib consumes the client; it has no schema of its own.
+        let lib_pkg = dir.path().join("packages/lib");
+        std::fs::create_dir_all(lib_pkg.join("src")).unwrap();
+        std::fs::write(lib_pkg.join("package.json"), r#"{"name":"@scope/lib"}"#).unwrap();
+        let file = lib_pkg.join("src/repo.ts");
+
+        let ctx = ProjectCtx {
+            project_root: Some(dir.path().to_path_buf()),
+            ..ProjectCtx::default()
+        };
+
+        // Recipient has no deletedAt in @scope/prisma → not soft-delete.
+        assert_eq!(
+            ctx.prisma_model_is_soft_delete(&file, "recipient", Some("@scope/prisma")),
+            Some(false)
+        );
+        // Envelope has deletedAt → still soft-delete.
+        assert_eq!(
+            ctx.prisma_model_is_soft_delete(&file, "envelope", Some("@scope/prisma")),
+            Some(true)
+        );
+        // A subpath import of the same package resolves to the same schema.
+        assert_eq!(
+            ctx.prisma_model_is_soft_delete(&file, "recipient", Some("@scope/prisma/client")),
+            Some(false)
+        );
+        // No client specifier → falls back to the consumer's own boundary (no
+        // schema) → None, so the caller fires on all models.
+        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "recipient", None), None);
     }
 
     /// Helper: load a `ProjectCtx` from explicit `(relative-path, contents)`
