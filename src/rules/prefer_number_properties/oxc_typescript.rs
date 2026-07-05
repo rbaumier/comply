@@ -1,10 +1,38 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{Argument, BinaryOperator, Expression, UnaryOperator};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Whether an expression is statically a `number`, so swapping global
+/// `isNaN`/`isFinite` for `Number.*` cannot change the coercion outcome.
+/// Provably numeric: a numeric literal, a `Number`/`parseInt`/`parseFloat`
+/// call, a unary `+`, or a non-`+` arithmetic binary (`-`/`*`/`/`/`%`/`**`).
+/// `+` is excluded because string `+` is concatenation, not addition.
+fn is_provably_numeric(expr: &Expression) -> bool {
+    match expr {
+        Expression::NumericLiteral(_) => true,
+        Expression::UnaryExpression(unary) => {
+            matches!(unary.operator, UnaryOperator::UnaryPlus)
+        }
+        Expression::BinaryExpression(bin) => matches!(
+            bin.operator,
+            BinaryOperator::Subtraction
+                | BinaryOperator::Multiplication
+                | BinaryOperator::Division
+                | BinaryOperator::Remainder
+                | BinaryOperator::Exponential
+        ),
+        Expression::CallExpression(call) => matches!(
+            &call.callee,
+            Expression::Identifier(id)
+                if matches!(id.name.as_str(), "Number" | "parseInt" | "parseFloat")
+        ),
+        _ => false,
+    }
+}
 
 struct GlobalCheck {
     name: &'static str,
@@ -73,15 +101,19 @@ impl OxcCheck for Check {
         }
 
         // For the coercing globals (`isNaN`/`isFinite`), the `Number.*` swap is
-        // only semantics-preserving when the argument is statically a `number`.
-        // A `... as T` cast erases the operand's static type (e.g. `value as any`
-        // is the idiomatic invalid-`Date` probe `!isNaN(date as any)`), so the
-        // coercion is load-bearing and `Number.isNaN(date)` would always be
-        // `false`. Suppress the suggestion there. `parseInt`/`parseFloat`/`NaN`
-        // have no coercion semantics and are unaffected.
+        // only semantics-preserving when the argument is statically a `number`:
+        // the global coerces (`isFinite("123") === true`) while `Number.*` does
+        // not (`Number.isFinite("123") === false`). Only flag when the argument
+        // is provably numeric; on a bare `any`/`string`, an `as`-cast, or any
+        // opaque expression the coercion is load-bearing, so suppress the
+        // suggestion. `parseInt`/`parseFloat`/`NaN` have no coercion semantics
+        // and are flagged unconditionally.
         if matches!(name, "isNaN" | "isFinite")
-            && let Some(Expression::TSAsExpression(_)) =
-                call.arguments.first().and_then(Argument::as_expression)
+            && !call
+                .arguments
+                .first()
+                .and_then(Argument::as_expression)
+                .is_some_and(is_provably_numeric)
         {
             return;
         }
@@ -167,18 +199,39 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
-    // True positives: globals on a plain argument must still flag.
+    // True positives: `isNaN`/`isFinite` on a provably-numeric argument (numeric
+    // literal, `Number`/`parseInt`/`parseFloat` call, unary `+`, arithmetic
+    // binary) still flag — the coercion is a no-op there.
 
     #[test]
-    fn flags_global_is_nan() {
-        let d = run("if (isNaN(value)) {}");
+    fn flags_is_nan_on_numeric_literal() {
+        let d = run("if (isNaN(42)) {}");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("Number.isNaN"));
     }
 
     #[test]
-    fn flags_global_is_finite() {
-        assert_eq!(run("if (isFinite(n)) {}").len(), 1);
+    fn flags_is_nan_on_parse_float() {
+        // `isNaN` flags (its argument is a provably-numeric `parseFloat` call);
+        // the inner `parseFloat` is an unconditional rename, so it flags too.
+        let d = run("if (isNaN(parseFloat(value))) {}");
+        assert_eq!(d.len(), 2);
+        assert!(d.iter().any(|x| x.message.contains("Number.isNaN")));
+    }
+
+    #[test]
+    fn flags_is_finite_on_number_call() {
+        assert_eq!(run("if (isFinite(Number(x))) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_is_finite_on_unary_plus() {
+        assert_eq!(run("if (isFinite(+x)) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_is_finite_on_arithmetic() {
+        assert_eq!(run("if (isFinite(x * 2)) {}").len(), 1);
     }
 
     #[test]
@@ -193,11 +246,11 @@ mod tests {
         assert_eq!(run("const n = parseFloat('3.14');").len(), 1);
     }
 
-    // The coercion guard only exempts coercing globals on a cast argument;
-    // `parseInt`/`parseFloat` keep coercion-free semantics, so a cast does
-    // not exempt them. (Bare `NaN` is detected in `run_on_semantic`, which the
-    // per-node test harness does not drive; it stays covered by the tree-sitter
-    // backend's `flags_global_nan`.)
+    // The coercion guard gates only the coercing globals; `parseInt`/`parseFloat`
+    // keep coercion-free semantics, so a non-numeric argument does not exempt
+    // them. (Bare `NaN` is detected in `run_on_semantic`, which the per-node test
+    // harness does not drive; it stays covered by the tree-sitter backend's
+    // `flags_global_nan`.)
 
     #[test]
     fn flags_parse_int_on_cast() {
@@ -208,6 +261,8 @@ mod tests {
     fn flags_parse_float_on_cast() {
         assert_eq!(run("const n = parseFloat(s as any);").len(), 1);
     }
+
+    // Non-numeric argument → coercion is load-bearing, so no suggestion.
 
     // Regression for #3969: `isNaN`/`isFinite` on a `... as T` cast is the
     // invalid-`Date` probe whose coercion the `Number.*` swap would break.
@@ -221,6 +276,27 @@ mod tests {
     #[test]
     fn allows_is_finite_on_cast() {
         assert!(run("if (isFinite(x as any)) {}").is_empty());
+    }
+
+    // Regression for #7298: the jQuery-derived `isNumeric` probe. `value` is a
+    // bare `any`, so `isFinite(value)` coerces a string like `"123"` and the
+    // `Number.isFinite` swap would break it — must not flag. The sibling
+    // `isNaN(parseFloat(value))` stays flagged (its argument is provably
+    // numeric).
+    #[test]
+    fn allows_is_finite_on_bare_any() {
+        let d = run(
+            "const isNumeric = (value: any): boolean => !isNaN(parseFloat(value)) && isFinite(value);",
+        );
+        // The FP: `isFinite(value)` (bare `any`) must not be flagged.
+        assert!(d.iter().all(|x| !x.message.contains("Number.isFinite")));
+        // The sibling `isNaN(parseFloat(value))` stays flagged (numeric argument).
+        assert!(d.iter().any(|x| x.message.contains("Number.isNaN")));
+    }
+
+    #[test]
+    fn allows_is_nan_on_bare_identifier() {
+        assert!(run("if (isNaN(value)) {}").is_empty());
     }
 
     #[test]
