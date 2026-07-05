@@ -54,6 +54,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A literal-returning getter in a class that `extends` a superclass may
+        // override an inherited accessor. Rewriting it as a `readonly` field is
+        // unsafe: class fields initialize after `super()` returns, so a base
+        // constructor reading the member during `super()` would see `undefined`
+        // instead of the override's value. Skip the whole class (matches
+        // typescript-eslint's exclusion of overriding members).
+        if class.super_class.is_some() {
+            return;
+        }
+
         for element in &class.body.body {
             let ClassElement::MethodDefinition(method) = element else {
                 continue;
@@ -249,5 +259,47 @@ class Foo {
                 "{path} (TypeScript) must still be flagged",
             );
         }
+    }
+
+    // Issue #7286: a literal-returning getter in a subclass may override an
+    // inherited accessor read by the base constructor during `super()`;
+    // converting it to a `readonly` field breaks that read, so it must not be
+    // flagged when the enclosing class `extends` a superclass.
+    #[test]
+    fn allows_literal_getter_in_class_that_extends_a_superclass() {
+        let diags = run_on(
+            r#"
+class JsonNullClass extends DialectAwareFn {
+    get maxArgCount() { return 0; }
+    get minArgCount() { return 0; }
+}
+"#,
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_static_literal_getter_in_class_that_extends_a_superclass() {
+        let diags = run_on(
+            r#"
+class MultiAssociation extends Association {
+    static get isMultiAssociation() { return true; }
+}
+"#,
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_literal_getter_in_standalone_class() {
+        let diags = run_on(
+            r#"
+class Standalone {
+    get x() { return 1; }
+}
+"#,
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("readonly"));
     }
 }
