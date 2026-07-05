@@ -67,6 +67,14 @@
 //!   parameter/`let` annotated `String`/`&mut String`/`fmt::Formatter`/`Vec<u8>`.
 //!   A fallible `io::Write` writer (`File`, `BufWriter`, socket) or an
 //!   unresolvable writer still fires.
+//! - `let _ = expr.ok()` / `let _ = expr.err()`: the terminal method is the
+//!   `Result::ok`/`Result::err` combinator, which converts a `Result<T, E>` into
+//!   an `Option<T>`/`Option<E>`, structurally discarding the opposite arm. Its
+//!   return type is `Option`, never `Result`, so once `.ok()`/`.err()` has
+//!   stripped the error the value bound by `let _ =` carries none to handle.
+//!   Exempt by the terminal method name (like `write_str`/`write_char`) without
+//!   type inference — a bare `let _ = fallible()` or a chain whose terminal call
+//!   returns a `Result` (`let _ = expr.lookup()`) still fires.
 //! - `let _ = expr.map_err(|e| ...)` / `expr.inspect_err(|e| ...)`: the error is
 //!   explicitly observed/handled (e.g. logged) inside the closure before the
 //!   resulting `Result` is intentionally discarded. The closure argument is
@@ -232,6 +240,14 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // `fmt::Formatter`/`Vec<u8>`): the write is structurally `Ok(())`. A fallible
     // `io::Write` writer (`File`, socket) or an unresolvable writer still fires.
     if is_fmt_write_macro_to_buffer(value, source) {
+        return;
+    }
+
+    // Skip the Result→Option error-discard combinator `let _ = expr.ok()` /
+    // `expr.err()`: `Result::ok`/`Result::err` convert the `Result` into an
+    // `Option`, structurally dropping the opposite arm, so the discarded value
+    // carries no error to handle.
+    if is_result_to_option_combinator(value, source) {
         return;
     }
 
@@ -620,6 +636,33 @@ fn is_fmt_write_method(value: Node, source: &[u8]) -> bool {
         return false;
     };
     matches!(field.utf8_text(source), Ok("write_str" | "write_char"))
+}
+
+/// True if `value`'s terminal (outermost) method is `Result::ok`/`Result::err`
+/// (`let _ = expr.ok()` / `expr.err()`). These std combinators convert a
+/// `Result<T, E>` into an `Option<T>`/`Option<E>`, structurally discarding the
+/// opposite arm — their return type is `Option`, never `Result` — so once the
+/// terminal `.ok()`/`.err()` has stripped the error, the value bound by
+/// `let _ =` carries none to handle. Keyed on the terminal method name (the
+/// outermost `call_expression` → `field_expression` `field`), the same
+/// mechanism as `write_str`/`write_char`, so a bare `let _ = fallible()` (a
+/// `call_expression` whose function is an `identifier`, not a `field_expression`)
+/// or a chain whose terminal call returns a `Result` (`let _ = expr.lookup()`)
+/// still fires.
+fn is_result_to_option_combinator(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let Some(field) = function.child_by_field_name("field") else {
+        return false;
+    };
+    matches!(field.utf8_text(source), Ok("ok" | "err"))
 }
 
 /// True if `value` is a `write!`/`writeln!` macro whose writer (first) argument
@@ -1272,6 +1315,30 @@ mod tests {
         let map_fn = "async fn w() { let _ = do_io().await.map_err(handle); }";
         assert_eq!(run_on(bare).len(), 1);
         assert_eq!(run_on(map_fn).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_ok_err_combinator() {
+        // Regression for #7422: the terminal method is `Result::ok`/`Result::err`,
+        // which converts the `Result` into an `Option`, structurally discarding
+        // the error arm. The value bound by `let _ =` carries no error to handle.
+        // The issue's exact gitui `status.rs` example.
+        let ok = "fn update(&mut self) -> Result<()> { let _ = self.git_branch_name.lookup().ok(); Ok(()) }";
+        let err = "fn f() { let _ = fallible().err(); }";
+        assert!(run_on(ok).is_empty());
+        assert!(run_on(err).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_terminal_result_call() {
+        // Negative space for #7422: the exemption is keyed on the TERMINAL method
+        // being `.ok()`/`.err()`. A chain whose terminal call returns a `Result`
+        // (`lookup()`, no `.ok()`) still genuinely swallows the error, and a bare
+        // `let _ = fallible()` (function is an identifier, not a method) fires.
+        let terminal_result = "fn h(&self) { let _ = self.thing.lookup(); }";
+        let bare = "fn g() { let _ = fallible(); }";
+        assert_eq!(run_on(terminal_result).len(), 1);
+        assert_eq!(run_on(bare).len(), 1);
     }
 
     #[test]
