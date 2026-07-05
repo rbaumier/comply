@@ -4772,6 +4772,25 @@ impl ProjectCtx {
         local_source_exists(&candidate)
     }
 
+    /// True when `spec` matches a `compilerOptions.paths` alias key in the
+    /// tsconfig governing `importer`. A key ending in `*` matches any specifier
+    /// sharing its non-empty literal prefix (`/@/*` matches `/@/utils/domUtils`);
+    /// a bare key matches an exact specifier. A `/`-leading specifier that matches
+    /// such a key is a configured path alias resolving into the project (`/@/* →
+    /// src/*`), not a filesystem-absolute import. A bare `*` catch-all (empty
+    /// prefix) is not treated as an absolute-path alias, so a genuine OS-absolute
+    /// import still flags. Returns `false` when no tsconfig governs `importer` or
+    /// none of its `paths` keys match.
+    pub fn matches_tsconfig_path_alias(&self, importer: &Path, spec: &str) -> bool {
+        let Some(tsconfig) = self.nearest_tsconfig(importer) else {
+            return false;
+        };
+        tsconfig.paths.keys().any(|key| match key.strip_suffix('*') {
+            Some(prefix) => !prefix.is_empty() && spec.starts_with(prefix),
+            None => key == spec,
+        })
+    }
+
     /// Lazily-loaded Tailwind theme. Stub returns `None`; future chantier
     /// populates this from CSS `@theme` blocks and static v3 TS configs.
     pub fn tailwind_theme(&self) -> Option<&TailwindTheme> {
