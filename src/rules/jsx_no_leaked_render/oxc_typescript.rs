@@ -7,9 +7,19 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// True if the identifier (last dot-segment) starts with a boolean-prefix.
+/// True if the identifier starts with a boolean-prefix. A Vue `Ref`/`ComputedRef`
+/// is read through `.value`, so when the last dot-segment is `value` the
+/// booleanness belongs to the underlying object segment (`showText.value` →
+/// `showText`, `virtualConfig.isVirtualScroll.value` → `isVirtualScroll`) — check
+/// that segment instead.
 fn likely_boolean(name: &str) -> bool {
-    let segment = name.rsplit('.').next().unwrap_or(name);
+    let mut segments = name.rsplit('.');
+    let last = segments.next().unwrap_or(name);
+    let segment = if last == "value" {
+        segments.next().unwrap_or(last)
+    } else {
+        last
+    };
     let lower = segment.to_lowercase();
     const PREFIXES: &[&str] = &[
         "is", "has", "should", "can", "will", "did", "show", "hide", "enable", "disable",
@@ -179,5 +189,31 @@ mod tests {
     fn allows_boolean_prefix() {
         let src = "const x = <div>{isReady && <Component />}</div>;";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_ref_read_through_value() {
+        // A Vue `Ref`/`ComputedRef` is read through `.value`; the booleanness
+        // belongs to the underlying object segment (`showText`), so the unwrap
+        // must not flag.
+        let src = "const t = () => <div>{showText.value && <span>hi</span>}</div>;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nested_boolean_ref_read_through_value() {
+        let src =
+            "const u = () => <div>{virtualConfig.isVirtualScroll.value && <span>hi</span>}</div>;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_non_boolean_ref_read_through_value() {
+        // A `.value` unwrap whose base is not boolean-named can still hold a
+        // number/string, so it must still flag.
+        let a = "const a = () => <div>{items.value && <span>hi</span>}</div>;";
+        assert_eq!(run_on(a).len(), 1);
+        let b = "const b = () => <div>{count.value && <span>hi</span>}</div>;";
+        assert_eq!(run_on(b).len(), 1);
     }
 }
