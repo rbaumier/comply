@@ -1,10 +1,20 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, Expression};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when `callee` is the static member `JSON.<method>` (object identifier
+/// `JSON`, property `method`).
+fn is_json_static_call(callee: &Expression, method: &str) -> bool {
+    let Expression::StaticMemberExpression(mem) = callee else {
+        return false;
+    };
+    matches!(&mem.object, Expression::Identifier(obj) if obj.name.as_str() == "JSON")
+        && mem.property.name.as_str() == method
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -25,18 +35,16 @@ impl OxcCheck for Check {
         let Expression::CallExpression(call) = &as_expr.expression else {
             return;
         };
-        let is_json_parse = match &call.callee {
-            Expression::StaticMemberExpression(mem) => {
-                if let Expression::Identifier(obj) = &mem.object {
-                    obj.name.as_str() == "JSON" && mem.property.name.as_str() == "parse"
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        };
-        if !is_json_parse {
+        if !is_json_static_call(&call.callee, "parse") {
             return;
+        }
+        // Skip the deep-clone idiom `JSON.parse(JSON.stringify(x))`: a
+        // serialize/parse round-trip of an already-typed value, not a parse of
+        // external data, so `as T` is a truthful assertion.
+        if let Some(Argument::CallExpression(inner)) = call.arguments.first() {
+            if is_json_static_call(&inner.callee, "stringify") {
+                return;
+            }
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -96,5 +104,26 @@ mod tests {
     #[test]
     fn does_not_flag_other_function_call_cast() {
         assert!(run_on("const u = getRaw() as User;").is_empty());
+    }
+
+    #[test]
+    fn allows_json_parse_stringify_deep_clone() {
+        assert!(
+            run_on("const steps = JSON.parse(JSON.stringify(commandSteps)) as NotificationStep[];")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_json_parse_of_external_string() {
+        assert_eq!(run_on("const data = JSON.parse(raw) as Foo;").len(), 1);
+    }
+
+    #[test]
+    fn flags_json_parse_of_local_storage() {
+        assert_eq!(
+            run_on("const cfg = JSON.parse(localStorage.getItem('k')!) as Config;").len(),
+            1
+        );
     }
 }
