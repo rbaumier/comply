@@ -6781,9 +6781,9 @@ pub fn local_let_binds_buffer(node: Node, var: &str, source: &[u8]) -> bool {
 }
 
 /// Whether `let_node` declares `var` with a `String`-shaped initializer
-/// (`String::new()`/`String::with_capacity(..)`/`String::from(..)`, or
-/// `format!(..)`, which also yields a `String`) or an explicit `String` type
-/// annotation.
+/// (`String::new()`/`String::with_capacity(..)`/`String::from(..)`, `format!(..)`,
+/// or an `<expr>.to_string()` call — all of which yield a `String`) or an explicit
+/// `String` type annotation.
 fn let_binds_string(let_node: Node, var: &str, source: &[u8]) -> bool {
     let Some(pattern) = let_node.child_by_field_name("pattern") else {
         return false;
@@ -6801,8 +6801,34 @@ fn let_binds_string(let_node: Node, var: &str, source: &[u8]) -> bool {
         if text.starts_with("String::") || text.starts_with("format!") {
             return true;
         }
+        // `let buf = <expr>.to_string();` binds a `String`: `ToString::to_string`
+        // (via `Display`) always yields a `String`, so the binding is a `String`
+        // buffer regardless of the receiver expression.
+        if is_to_string_call(value, source) {
+            return true;
+        }
     }
     false
+}
+
+/// Whether `node` is an `<expr>.to_string()` method call — a `call_expression`
+/// whose function is a `field_expression` with field name `to_string`. The
+/// `ToString` trait always returns a `String`, so such an initializer binds a
+/// `String`.
+fn is_to_string_call(node: Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    function
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        == Some("to_string")
 }
 
 /// Whether a `let` pattern (`x` or `mut x`) binds the name `var`.
