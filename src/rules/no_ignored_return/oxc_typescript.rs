@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, IdentifierReference};
 
 pub struct Check;
 
@@ -55,6 +55,16 @@ impl OxcCheck for Check {
         };
         let method_name = member.property.name.as_str();
         if !PURE_METHODS.contains(&method_name) {
+            return;
+        }
+        // Skip when the (possibly chained) receiver resolves to a `new
+        // <UserClass>()` instance: a user-defined type that merely has a
+        // same-named method (e.g. a fluent `MappedCode.concat` that mutates in
+        // place and returns `this`) is not the pure `Array`/`String` built-in,
+        // so its ignored return is a real side effect, not dead code.
+        if let Some(root) = receiver_root_ident(&member.object)
+            && receiver_is_user_class_instance(root, semantic)
+        {
             return;
         }
         // Skip look-alike `.map`/`.filter` on non-Array receivers (see
@@ -119,6 +129,57 @@ fn first_arg_is_function_literal(call: &oxc_ast::ast::CallExpression<'_>) -> boo
             .map(crate::oxc_helpers::peel_parens),
         Some(Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_))
     )
+}
+
+/// Walk a pure-method call's receiver down to the identifier at the root of the
+/// chain. Peels chained calls (`out.concat(a).concat(b)` → `out`) but never
+/// property accesses (`m.items.concat(x)` stays unresolved so `m.items` is not
+/// mistaken for `m`). Returns `None` for any receiver that does not bottom out
+/// in a plain identifier.
+fn receiver_root_ident<'a>(
+    mut receiver: &'a Expression<'a>,
+) -> Option<&'a IdentifierReference<'a>> {
+    loop {
+        match receiver {
+            Expression::Identifier(id) => return Some(id),
+            Expression::CallExpression(call) => match &call.callee {
+                Expression::StaticMemberExpression(member) => receiver = &member.object,
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+}
+
+/// Whether `id` resolves to a binding whose initializer is `new <Ctor>()` where
+/// `<Ctor>` is a user-defined constructor — not the `Array`/`String` built-in
+/// whose pure methods `PURE_METHODS` targets. Such a receiver's same-named
+/// method is a look-alike, so discarding its return is not a dead pure result.
+fn receiver_is_user_class_instance(
+    id: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(Expression::NewExpression(new_expr)) = &decl.init else {
+                return false;
+            };
+            return matches!(&new_expr.callee, Expression::Identifier(ctor)
+                if !matches!(ctor.name.as_str(), "Array" | "String"));
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -256,5 +317,52 @@ mod tests {
         // `router.filter(routes, opts)` look-alike must not be flagged.
         let src = "function f(router, routes, opts) { router.filter(routes, opts); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_chained_concat_on_user_class_instance() {
+        // Regression for rbaumier/comply#7236 — `out` is a `MappedCode`
+        // instance whose fluent `concat` mutates in place and returns `this`;
+        // discarding the chained return is correct, not a dead pure call.
+        let src = "class MappedCode { concat(o) { return this; } } const out = new MappedCode(); out.concat(a).concat(b);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_single_concat_on_user_class_instance() {
+        // Regression for rbaumier/comply#7236 — the single-call form of a
+        // user-defined fluent `concat` receiver.
+        let src = "class MappedCode { concat(o) { return this; } } const out = new MappedCode(); out.concat(a);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_concat_on_array_literal() {
+        // A genuine `Array.prototype.concat` with an ignored return is dead.
+        let src = "[1, 2].concat([3]);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_concat_on_array_literal_binding() {
+        // The receiver resolves to an array-literal binding, not a `new`
+        // instance, so its ignored `concat` result is still dead.
+        let src = "const arr = [1, 2]; arr.concat([3]);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_concat_on_string_literal() {
+        // A genuine `String.prototype.concat` with an ignored return is dead.
+        let src = "\"a\".concat(\"b\");";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_concat_on_builtin_array_ctor_instance() {
+        // `new Array()` is the built-in Array constructor, so its `concat` is
+        // the pure built-in and the ignored return is dead.
+        let src = "const s = new Array(); s.concat([1]);";
+        assert_eq!(run(src).len(), 1);
     }
 }
