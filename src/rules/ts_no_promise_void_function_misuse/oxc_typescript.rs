@@ -114,13 +114,15 @@ fn is_async_arg(arg: &Argument) -> bool {
     }
 }
 
-/// True when the call is `arr.reduce(async ...)` whose result is the operand of
-/// an `await` (`await arr.reduce(...)` or `const x = await arr.reduce(...)`).
+/// True when the call is `arr.reduce(async ...)` whose result is consumed by an
+/// enclosing `await` (`await arr.reduce(...)`, `const x = await arr.reduce(...)`)
+/// or handed to the caller by a `return` (`return arr.reduce(async ...)`).
 ///
 /// `reduce` returns its accumulator, which in the sequential-async idiom is the
 /// threaded `Promise` chain (`(prev, item) => { await prev; ... }`,
-/// `Promise.resolve()` seed); the outer `await` consumes that promise, so it is
-/// not ignored. This is narrowly `reduce`-only: `forEach` returns `undefined`
+/// `Promise.resolve()` seed); an outer `await` consumes that promise in place and
+/// a `return` hands it to whoever awaits the call's result, so neither ignores it.
+/// This is narrowly `reduce`-only: `forEach` returns `undefined`
 /// and the other array methods coerce the callback's promise to a truthy
 /// non-promise value, so awaiting the whole call does not consume the inner
 /// promises — those remain genuine misuses.
@@ -138,15 +140,19 @@ fn is_awaited_reduce(
         return false;
     }
     // An optional-chained receiver (`recv?.reduce(...)`) wraps the CallExpression
-    // in a ChainExpression, so the awaiting `await` is that wrapper's parent rather
-    // than the call's direct parent. Skip past a single ChainExpression before
-    // testing for the AwaitExpression.
+    // in a ChainExpression, so the consuming parent is that wrapper's parent rather
+    // than the call's direct parent. Skip past a single ChainExpression first.
     let nodes = semantic.nodes();
     let mut parent = nodes.parent_node(node.id());
     if matches!(parent.kind(), AstKind::ChainExpression(_)) {
         parent = nodes.parent_node(parent.id());
     }
-    matches!(parent.kind(), AstKind::AwaitExpression(_))
+    // `await` consumes the chain in place; `return` hands it to the caller, who
+    // awaits the returned value — both consume the threaded promise.
+    matches!(
+        parent.kind(),
+        AstKind::AwaitExpression(_) | AstKind::ReturnStatement(_)
+    )
 }
 
 /// True when the promises produced by a `.map()`/`.flatMap()` CallExpression are
@@ -154,6 +160,10 @@ fn is_awaited_reduce(
 ///
 /// - the call is itself an argument of a `Promise.<all|allSettled|race|any>(...)`
 ///   combinator (the inline idiom `Promise.all(arr.map(async ...))`), or
+/// - the call flows into a `return` — directly (`return arr.map(async ...)`) or
+///   through a trailing pass-through method chain that keeps the map result as its
+///   receiver (`return coll.map(async ...).toArray()`) — handing the promises to
+///   the caller, or
 /// - the call is the entire right-hand side of a binding (`const xs = arr.map(...)`
 ///   or `xs = arr.map(...)`) and the bound variable later reaches an awaiting sink
 ///   — passed to one of those combinators, `await`ed, `return`ed, or spread into a
@@ -196,8 +206,56 @@ fn is_consumed_by_promise_combinator(
         }
     }
 
+    // The map result flows out via `return`, handing the promises to the caller
+    // rather than discarding them — the same sink `variable_reaches_awaiting_sink`
+    // recognizes for a `return`ed bound variable.
+    if map_result_is_returned(node, semantic) {
+        return true;
+    }
+
     bound_variable(node, semantic)
         .is_some_and(|symbol_id| variable_reaches_awaiting_sink(symbol_id, semantic))
+}
+
+/// True when the `.map`/`.flatMap` CallExpression at `node` flows into a
+/// `ReturnStatement` — returned directly (`return arr.map(async ...)`) or through
+/// a trailing pass-through method chain that keeps the map result as its receiver
+/// (`return coll.map(async ...).toArray()`). The chain is walked only while the map
+/// result stays the receiver of a called member, so a map result placed as an
+/// *argument* to an unrelated call (`return foo(arr.map(async ...))`) is not
+/// treated as returned.
+fn map_result_is_returned(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    // Walk up trailing method calls while the current node stays the receiver
+    // (`<current>.method(...)`), skipping pass-throughs like `.toArray()`.
+    let mut current = node;
+    loop {
+        let member_node = nodes.parent_node(current.id());
+        let AstKind::StaticMemberExpression(member) = member_node.kind() else {
+            break;
+        };
+        if member.object.span() != current.kind().span() {
+            break;
+        }
+        let call_node = nodes.parent_node(member_node.id());
+        let AstKind::CallExpression(chained) = call_node.kind() else {
+            break;
+        };
+        if chained.callee.span() != member.span {
+            break;
+        }
+        current = call_node;
+    }
+    // An optional-chained call wraps the chain head in a ChainExpression, so the
+    // `return` is that wrapper's parent (mirrors `is_awaited_reduce`).
+    let mut parent = nodes.parent_node(current.id());
+    if matches!(parent.kind(), AstKind::ChainExpression(_)) {
+        parent = nodes.parent_node(parent.id());
+    }
+    matches!(parent.kind(), AstKind::ReturnStatement(_))
 }
 
 /// True when `parent_kind` is a `Promise.<all|allSettled|race|any>(...)` call
@@ -600,6 +658,71 @@ mod tests {
                            await promise;\n\
                            await hook(1);\n\
                        }, Promise.resolve());\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // --- #7259: a returned map/reduce result is a consuming sink ---
+
+    #[test]
+    fn allows_returned_reduce_async() {
+        // `return arr.reduce(async ...)` hands the accumulated promise chain to
+        // whoever awaits the call, exactly as `await arr.reduce(...)` consumes it.
+        let src = "async function applyPipes(value, meta, transforms) {\n\
+                       return transforms.reduce(async (deferredValue, pipe) => {\n\
+                           const val = await deferredValue;\n\
+                           return pipe.transform(val, meta);\n\
+                       }, Promise.resolve(value));\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_returned_map_async_through_toarray_chain() {
+        // `return coll.map(async ...).toArray()` — the array of promises flows out
+        // through the pass-through `.toArray()` receiver chain and the caller awaits
+        // it via `Promise.all(callOperator(...))`.
+        let src = "function callOperator(instances) {\n\
+                       return iterate(instances)\n\
+                           .filter(x => x)\n\
+                           .map(async instance => instance.onModuleInit())\n\
+                           .toArray();\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_returned_map_async_directly() {
+        // `return arr.map(async ...)` with no trailing chain is a return sink too.
+        let src = "function run(arr) {\n\
+                       return arr.map(async (x) => { await save(x); });\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_floating_map_async_in_function_body() {
+        // A bare-statement map inside a function body is discarded, not returned —
+        // the new return sink must not launder it.
+        let src = "function f(arr) { arr.map(async (x) => x.foo()); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_floating_reduce_async_in_function_body() {
+        // A bare-statement reduce inside a function body floats — still a misuse.
+        let src = "function g(arr) {\n\
+                       arr.reduce(async (p, x) => { await p; await x(); }, Promise.resolve());\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_async_returned_as_call_argument() {
+        // The map result is an *argument* to `foo`, not the receiver of the chain,
+        // so `return foo(arr.map(async ...))` does not exempt it — `foo` may discard.
+        let src = "function run(arr) {\n\
+                       return foo(arr.map(async (x) => { await save(x); }));\n\
                    }";
         assert_eq!(run(src).len(), 1);
     }
