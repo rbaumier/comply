@@ -5,9 +5,11 @@
 //! `style_element` children. The content of each `<script>` block is
 //! exposed as a single `raw_text` node; the grammar does NOT re-parse
 //! the script as TypeScript/JavaScript. Rules that want to lint what's
-//! inside `<script>` must extract the `raw_text`, re-parse it with
-//! `tree_sitter_typescript::LANGUAGE_TYPESCRIPT`, and then translate
-//! any diagnostic's `(row, column)` back to the Vue file coordinates.
+//! inside `<script>` must extract the `raw_text`, re-parse it with a
+//! TypeScript grammar (`LANGUAGE_TYPESCRIPT`, or `LANGUAGE_TSX` for a
+//! `lang="tsx"`/`"jsx"` block per its `ScriptBlock::lang`), and then
+//! translate any diagnostic's `(row, column)` back to the Vue file
+//! coordinates.
 //!
 //! This helper handles extraction. A Vue SFC can have two
 //! `<script>` blocks (`<script>` and `<script setup>`); both are
@@ -20,12 +22,16 @@
 /// - `start_row`, `start_column`: the 0-indexed position of the first
 ///   character of `text` inside the original Vue file. Used to
 ///   translate re-parse diagnostics back to file coordinates.
+/// - `lang`: the `<script lang="…">` attribute value (`"ts"`, `"tsx"`,
+///   `"jsx"`, …), or `None` when the tag has no `lang`. Callers that
+///   re-parse `text` use it to pick a JSX-aware grammar for `tsx`/`jsx`.
 #[derive(Debug, Clone)]
 pub struct ScriptBlock<'src> {
     pub text: &'src str,
     pub start_row: usize,
     pub start_column: usize,
     pub is_setup: bool,
+    pub lang: Option<&'src str>,
 }
 
 /// Walk a Vue tree and return every `<script>` block's raw text plus
@@ -168,9 +174,16 @@ fn script_block_from_element<'src>(
 ) -> Option<ScriptBlock<'src>> {
     let mut cursor = node.walk();
     let children: Vec<_> = node.children(&mut cursor).collect();
-    let is_setup = children.iter().any(|c| {
-        c.kind() == "start_tag" && c.utf8_text(source_bytes).is_ok_and(|t| t.contains("setup"))
-    });
+    let start_tag_text = children
+        .iter()
+        .find(|c| c.kind() == "start_tag")
+        .and_then(|t| t.utf8_text(source_bytes).ok());
+    let is_setup = start_tag_text.is_some_and(|t| t.contains("setup"));
+    let lang = start_tag_text
+        .and_then(script_lang)
+        // The slice lives in `source` for `'src` (the same buffer `text` is
+        // read from below), so the borrow outlives `source_bytes`'s scope.
+        .map(|l| unsafe { std::mem::transmute::<&str, &'src str>(l) });
     let raw = children.into_iter().find(|c| c.kind() == "raw_text")?;
     let text = raw.utf8_text(source_bytes).ok()?;
     let text: &'src str = unsafe { std::mem::transmute::<&str, &'src str>(text) };
@@ -180,7 +193,42 @@ fn script_block_from_element<'src>(
         start_row: pos.row,
         start_column: pos.column,
         is_setup,
+        lang,
     })
+}
+
+/// The `lang` attribute value of a `<script>` start tag (e.g. `"tsx"` for
+/// `<script setup lang="tsx">`), or `None` when there is no `lang`. Read from
+/// the raw start-tag text — the same text `is_setup` inspects — because the Vue
+/// grammar exposes a typed node only for langs it special-cases (`ts`, `tsx`)
+/// and emits an error node for others (e.g. `jsx`), whereas the attribute is
+/// always present verbatim in the tag text.
+fn script_lang(tag_text: &str) -> Option<&str> {
+    let bytes = tag_text.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = tag_text[from..].find("lang") {
+        let idx = from + rel;
+        from = idx + "lang".len();
+        // Require a token boundary so `xml:lang` / `data-lang` don't match.
+        if idx != 0 && !bytes[idx - 1].is_ascii_whitespace() {
+            continue;
+        }
+        let rest = tag_text[from..].trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let quote = match rest.as_bytes().first() {
+            Some(&b'"') => '"',
+            Some(&b'\'') => '\'',
+            _ => continue,
+        };
+        let inner = &rest[1..];
+        if let Some(end) = inner.find(quote) {
+            return Some(&inner[..end]);
+        }
+    }
+    None
 }
 
 fn advance(cursor: &mut tree_sitter::TreeCursor) -> bool {
@@ -215,6 +263,26 @@ mod tests {
         // The raw_text starts on the line right after `<script>`,
         // so start_row ≥ 1.
         assert!(blocks[0].start_row >= 1);
+    }
+
+    #[test]
+    fn captures_lang_attribute_from_script_tag() {
+        // `tsx`/`ts` get a typed grammar node; `jsx` is a grammar error node —
+        // all three are read from the raw start-tag text, so all are captured.
+        let cases = [
+            ("<script setup lang=\"tsx\">\nconst x = 1;\n</script>", Some("tsx"), true),
+            ("<script lang=\"ts\">\nconst x = 1;\n</script>", Some("ts"), false),
+            ("<script lang=\"jsx\">\nconst x = 1;\n</script>", Some("jsx"), false),
+            ("<script lang='tsx'>\nconst x = 1;\n</script>", Some("tsx"), false),
+            ("<script setup>\nconst x = 1;\n</script>", None, true),
+        ];
+        for (src, want_lang, want_setup) in cases {
+            let tree = parse(src);
+            let blocks = extract_scripts(&tree, src);
+            assert_eq!(blocks.len(), 1, "one block for {src:?}");
+            assert_eq!(blocks[0].lang, want_lang, "lang for {src:?}");
+            assert_eq!(blocks[0].is_setup, want_setup, "setup for {src:?}");
+        }
     }
 
     #[test]

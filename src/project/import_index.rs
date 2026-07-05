@@ -1420,6 +1420,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
     let blocks = crate::rules::vue_sfc::extract_scripts(&vue_tree, source);
 
     let ts_grammar: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+    let tsx_grammar: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
     let mut exports = Vec::new();
     let mut imports = Vec::new();
     let mut calls = Vec::new();
@@ -1431,7 +1432,16 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
         if block.is_setup {
             has_setup = true;
         }
-        parser.set_language(&ts_grammar).ok()?;
+        // A `lang="tsx"`/`lang="jsx"` block embeds JSX the plain TypeScript
+        // grammar can't parse (it yields an error tree that drops the block's
+        // `import_statement` nodes). Parse those with the TSX grammar (a JSX
+        // superset) so their imports register; plain `ts`/no-lang blocks stay
+        // on the TypeScript grammar.
+        let grammar = match block.lang {
+            Some("tsx" | "jsx") => &tsx_grammar,
+            _ => &ts_grammar,
+        };
+        parser.set_language(grammar).ok()?;
         let Some(tree) = parser.parse(block.text.as_bytes(), None) else {
             continue;
         };
@@ -6036,6 +6046,33 @@ mod tests {
         assert!(
             imports.iter().any(|i| i.specifier == "vue"),
             "Vue SFC should index imports from <script setup>, got: {imports:?}"
+        );
+    }
+
+    // Regression for #7457 — a `<script setup lang="tsx">` block embeds JSX the
+    // plain TypeScript grammar can't parse; its imports must still be indexed
+    // (the block is parsed with the JSX-aware TSX grammar). The `import` is
+    // placed *after* a JSX render function so the non-JSX grammar's error
+    // recovery drops it — the exact node the fix must preserve.
+    #[test]
+    fn vue_sfc_tsx_script_block_imports_indexed() {
+        let dir = TempDir::new().unwrap();
+        let vue_path = dir.path().join("TableColumn.vue");
+        fs::write(
+            &vue_path,
+            "<script setup lang=\"tsx\">\nconst Render = (i: any) => <Item className=\"c\">{i}</Item>;\nimport { formatValue } from './utils';\nconst use = () => formatValue(1);\n</script>\n<template><div/></template>",
+        )
+        .unwrap();
+        let source_file = SourceFile {
+            path: vue_path.clone(),
+            language: Language::Vue,
+        };
+        let index = ImportIndex::build(&[&source_file]);
+        let canon = std::fs::canonicalize(&vue_path).unwrap();
+        let imports = index.get_imports(&canon);
+        assert!(
+            imports.iter().any(|i| i.specifier == "./utils"),
+            "lang=tsx <script setup> should index its imports, got: {imports:?}"
         );
     }
 
