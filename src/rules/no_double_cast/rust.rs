@@ -9,6 +9,15 @@
 //! cases, so the two-step chain is mandatory and has no `From`/`Into`
 //! alternative.
 //!
+//! The symmetric complement: an `<operand> as usize/isize as <int>` chain whose
+//! operand is not provably numeric is exempt. A raw pointer casts directly only
+//! to `usize`/`isize` (E0606 forbids `ptr as u32`), so narrowing a pointer
+//! address to a smaller integer is compiler-mandated to route through the
+//! `usize`/`isize` hop, with no `From`/`Into` single-step form. The operand's
+//! source type is invisible in the cast syntax (a field/variable/method/index
+//! access could be a pointer), so only a provably-numeric operand (a numeric
+//! literal or arithmetic) makes the hop redundant and still fires.
+//!
 //! An integer chain whose inner and outer types have the same bit width but
 //! opposite signedness (`x as u16 as i16`, `x as i8 as u8`) is exempt: it is a
 //! two's-complement bit reinterpretation (reading a bit-packed unsigned field as
@@ -119,6 +128,12 @@ fn is_float_primitive(ty: tree_sitter::Node, source: &[u8]) -> bool {
     ty.kind() == "primitive_type" && matches!(ty.utf8_text(source), Ok("f32") | Ok("f64"))
 }
 
+/// True when `ty` is the pointer-width integer `usize` or `isize` — the only
+/// integer types a raw pointer casts to directly (E0606 forbids `ptr as u32`).
+fn is_ptr_sized_int(ty: tree_sitter::Node, source: &[u8]) -> bool {
+    ty.kind() == "primitive_type" && matches!(ty.utf8_text(source), Ok("usize") | Ok("isize"))
+}
+
 /// Strip `parenthesized_expression` wrappers, returning the inner expression.
 fn peel_parens(node: tree_sitter::Node) -> tree_sitter::Node {
     if node.kind() == "parenthesized_expression"
@@ -225,6 +240,24 @@ crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnosti
     // "misaligned type" double cast. Rust forbids the single-step form, so the
     // two-step chain is mandatory and has no `From`/`Into` alternative. Exempt it.
     if inner_ty.kind() == "pointer_type" {
+        return;
+    }
+
+    // Symmetric complement of the inner-pointer-target exemption: exempt
+    // `<operand> as usize/isize as <int>` when the operand is not provably
+    // numeric. A raw pointer casts directly only to `usize`/`isize` (E0606 forbids
+    // `ptr as u32`), so narrowing a pointer address to a smaller integer is
+    // compiler-mandated to route through the `usize`/`isize` hop and has no
+    // `From`/`Into` single-step form. The operand's source type is invisible in
+    // the cast syntax (a field/variable/method/index access could be a pointer), so
+    // suppress. Requiring an integer outer target keeps `x as usize as *mut c_void`
+    // (pointer-to-pointer needs no bridge) flagged. A provably-numeric operand
+    // (`5 as usize as u32`) makes the hop redundant and still fires.
+    if let Some(outer_ty) = node.child_by_field_name("type")
+        && is_ptr_sized_int(inner_ty, source)
+        && is_int_primitive(outer_ty, source)
+        && !operand_is_provably_numeric(inner, source)
+    {
         return;
     }
 
@@ -653,5 +686,35 @@ mod tests {
         let src = "unsafe fn f(x: X) { \
                    let _ = x.as_ptr() as *const (dyn Trace + Send + Sync) as *mut _; }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_method_ptr_address_narrow_via_usize_bridge() {
+        // #7340, wasmerio/wasmer function/mod.rs: `function.address()` returns a
+        // raw pointer; `ptr as u32` is E0606, so `as usize as u32` is the mandatory
+        // address-narrowing bridge. The method-call operand hides the pointer type.
+        let src = "fn f(function: &Thing) -> u32 { function.address() as usize as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_var_ptr_address_narrow_via_usize_bridge() {
+        // A bare identifier operand: its type is invisible, so it could be a raw
+        // pointer whose `as usize as u32` narrowing is compiler-mandated.
+        assert!(run_on("fn f(ptr: P) -> u32 { let y = ptr as usize as u32; y }").is_empty());
+    }
+
+    #[test]
+    fn flags_integer_literal_usize_bridge() {
+        // Negative-space guard: an integer literal is provably numeric, so
+        // `5 as u32` compiles directly and the `as usize` hop is redundant — fires.
+        assert_eq!(run_on("fn f() { let z = 5 as usize as u32; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_arithmetic_usize_bridge() {
+        // Negative-space guard: an arithmetic operand is provably numeric, so the
+        // `as usize` hop is redundant — fires.
+        assert_eq!(run_on("fn f(a: u8, b: u8) { let w = (a + b) as usize as u32; }").len(), 1);
     }
 }
