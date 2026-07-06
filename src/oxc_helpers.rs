@@ -3473,14 +3473,21 @@ const VUE_REF_FACTORIES: &[&str] = &["ref", "shallowRef", "customRef", "computed
 const VUE_REACTIVE_FACTORIES: &[&str] = &["reactive", "shallowReactive"];
 
 /// True when `ident` resolves to a `const`/`let` binding initialised by one of
-/// `factories` imported from `vue`. Resolves the binding via `reference_id` →
-/// symbol → declaration node, then confirms the declarator initializer is a call
-/// to one of the factory names and that the callee identifier is imported from
-/// `vue` (so a same-named local factory is not mistaken for Vue's).
+/// `factories`, where the factory is Vue's. Resolves the binding via
+/// `reference_id` → symbol → declaration node, then confirms the declarator
+/// initializer is a call to one of the factory names whose callee is Vue's. Vue
+/// origin holds either when the callee is a named import from `vue`
+/// (`import { ref } from 'vue'`), or — in a project using `unplugin-auto-import`
+/// — when the callee is a free/global identifier (auto-import injects
+/// `ref`/`shallowRef`/… with no import statement) that resolves to no local
+/// declaration. The no-local-declaration check keeps a same-named user-defined
+/// local factory from being mistaken for Vue's.
 fn is_vue_factory_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
     factories: &[&str],
+    project: &crate::project::ProjectCtx,
+    path: &Path,
 ) -> bool {
     use oxc_ast::AstKind;
     use oxc_ast::ast::Expression;
@@ -3508,15 +3515,36 @@ fn is_vue_factory_binding(
                 return false;
             };
             let name = callee.name.as_str();
-            return factories.contains(&name) && is_imported_from_vue(name, semantic);
+            if !factories.contains(&name) {
+                return false;
+            }
+            return is_imported_from_vue(name, semantic)
+                || (project.uses_unplugin_auto_import(path)
+                    && callee_resolves_to_no_local_binding(callee, semantic));
         }
     }
     false
 }
 
+/// True when `callee` is a free/global identifier — its reference resolves to no
+/// declared symbol in any lexical scope. In an `unplugin-auto-import` project this
+/// distinguishes an auto-injected Vue global (`shallowRef`, with no import
+/// statement) from a user-defined local of the same name, which resolves to a
+/// binding.
+fn callee_resolves_to_no_local_binding(
+    callee: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = callee.reference_id.get() else {
+        return true;
+    };
+    semantic.scoping().get_reference(ref_id).symbol_id().is_none()
+}
+
 /// True when `ident` resolves to a `const`/`let` binding initialised by a Vue
-/// ref factory imported from `vue` — `ref(...)`, `shallowRef(...)`,
-/// `customRef(...)`, or `computed(...)`. Such a binding is a `Ref<T>` wrapper
+/// ref factory recognised as Vue's — `ref(...)`, `shallowRef(...)`,
+/// `customRef(...)`, or `computed(...)` (imported from `vue`, or auto-injected by
+/// `unplugin-auto-import`; see [`is_vue_factory_binding`]). Such a binding is a `Ref<T>` wrapper
 /// whose `.value` property is the *intended* mutation point: assigning
 /// `count.value = x` / `count.value++` is how Vue's reactivity is driven, not a
 /// mutation of a plain object. Callers gate the `.value` property specifically;
@@ -3525,26 +3553,32 @@ fn is_vue_factory_binding(
 pub fn is_vue_ref_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
 ) -> bool {
-    is_vue_factory_binding(ident, semantic, VUE_REF_FACTORIES)
+    is_vue_factory_binding(ident, semantic, VUE_REF_FACTORIES, project, path)
 }
 
 /// True when `ident` resolves to a `const`/`let` binding initialised by a Vue
-/// reactive-object factory imported from `vue` — `reactive(...)` or
-/// `shallowReactive(...)`. Such a binding is a reactive proxy whose properties
+/// reactive-object factory recognised as Vue's — `reactive(...)` or
+/// `shallowReactive(...)` (imported from `vue`, or auto-injected by
+/// `unplugin-auto-import`; see [`is_vue_factory_binding`]). Such a binding is a reactive proxy whose properties
 /// are the *intended* mutation point: `state.n = x` is how Vue's reactivity is
 /// driven, not a mutation of a plain object.
 #[must_use]
 pub fn is_vue_reactive_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
 ) -> bool {
-    is_vue_factory_binding(ident, semantic, VUE_REACTIVE_FACTORIES)
+    is_vue_factory_binding(ident, semantic, VUE_REACTIVE_FACTORIES, project, path)
 }
 
 /// True when `member` is a `<ref>.value` access where `<ref>` is a direct
 /// identifier bound to a Vue ref factory (`ref`/`shallowRef`/`customRef`/
-/// `computed` imported from `vue`). This is the idiomatic Vue 3 reactive-update
+/// `computed`, imported from `vue` or auto-injected by `unplugin-auto-import`;
+/// see [`is_vue_factory_binding`]). This is the idiomatic Vue 3 reactive-update
 /// target: `count.value = x` / `count.value++`. Restricted to the `value`
 /// property and a direct-identifier base, so `ref.config = x` and `a.b.value = x`
 /// stay flagged.
@@ -3552,6 +3586,8 @@ pub fn is_vue_reactive_binding(
 pub fn is_vue_ref_value_target(
     member: &oxc_ast::ast::StaticMemberExpression,
     semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
 ) -> bool {
     use oxc_ast::ast::Expression;
 
@@ -3561,7 +3597,7 @@ pub fn is_vue_ref_value_target(
     let Expression::Identifier(base) = &member.object else {
         return false;
     };
-    is_vue_ref_binding(base, semantic)
+    is_vue_ref_binding(base, semantic, project, path)
 }
 
 /// True when `member` is a `<ident>.value` access where `<ident>` is destructured
@@ -3623,8 +3659,9 @@ pub fn is_destructured_call_ref_value_target(
 }
 
 /// True when `member` is a property access whose base is a direct identifier
-/// bound to a Vue reactive-object factory (`reactive`/`shallowReactive` imported
-/// from `vue`). Any property of a reactive proxy is a valid mutation target, so
+/// bound to a Vue reactive-object factory (`reactive`/`shallowReactive`, imported
+/// from `vue` or auto-injected by `unplugin-auto-import`; see
+/// [`is_vue_factory_binding`]). Any property of a reactive proxy is a valid mutation target, so
 /// — unlike [`is_vue_ref_value_target`] — the property name is not restricted:
 /// `state.n = x` and `state.incrementedTimes++` are both the idiomatic Vue 3
 /// reactive-update path. The base must be a direct identifier, so a nested
@@ -3634,13 +3671,15 @@ pub fn is_destructured_call_ref_value_target(
 pub fn is_vue_reactive_object_target(
     member: &oxc_ast::ast::StaticMemberExpression,
     semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
 ) -> bool {
     use oxc_ast::ast::Expression;
 
     let Expression::Identifier(base) = &member.object else {
         return false;
     };
-    is_vue_reactive_binding(base, semantic)
+    is_vue_reactive_binding(base, semantic, project, path)
 }
 
 /// True when `ident` resolves to a `const`/`let` binding initialised by a call to

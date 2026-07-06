@@ -466,11 +466,11 @@ impl OxcCheck for Check {
                         // Vue 3 reactive ref: `count.value = x` drives reactivity.
                         // Also covers a `Ref<T>` destructured from a composable call
                         // (`const { error } = useThing(); error.value = x`).
-                        if is_vue_ref_value_target(m, semantic)
+                        if is_vue_ref_value_target(m, semantic, ctx.project, ctx.path)
                             || crate::oxc_helpers::is_destructured_call_ref_value_target(m, semantic)
                         { return; }
                         // Vue 3 reactive() object: `state.n = x` is the idiomatic update.
-                        if is_vue_reactive_object_target(m, semantic) { return; }
+                        if is_vue_reactive_object_target(m, semantic, ctx.project, ctx.path) { return; }
                         if obj_text == "module" || obj_text == "exports" { return; }
                         // Node Module-system object: `mod.loaded = true`,
                         // `Module._cache[id] = …` — mutation is the loader contract.
@@ -581,11 +581,11 @@ impl OxcCheck for Check {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
                         // Vue 3 reactive ref: `count.value++` drives reactivity.
                         // Also covers a `Ref<T>` destructured from a composable call.
-                        if is_vue_ref_value_target(m, semantic)
+                        if is_vue_ref_value_target(m, semantic, ctx.project, ctx.path)
                             || crate::oxc_helpers::is_destructured_call_ref_value_target(m, semantic)
                         { return; }
                         // Vue 3 reactive() object: `state.incrementedTimes++` is the idiomatic update.
-                        if is_vue_reactive_object_target(m, semantic) { return; }
+                        if is_vue_reactive_object_target(m, semantic, ctx.project, ctx.path) { return; }
                         // Own instance state: `this.count++` — see the AssignmentExpression arm.
                         if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }

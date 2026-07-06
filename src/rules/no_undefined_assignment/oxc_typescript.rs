@@ -23,12 +23,14 @@ pub struct Check;
 fn is_member_target_without_remediation(
     target: &AssignmentTarget,
     semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &std::path::Path,
 ) -> bool {
     let AssignmentTarget::StaticMemberExpression(member) = target else {
         return false;
     };
     member.property.name.as_str() == "current"
-        || crate::oxc_helpers::is_vue_ref_value_target(member, semantic)
+        || crate::oxc_helpers::is_vue_ref_value_target(member, semantic, project, path)
         || crate::oxc_helpers::is_destructured_call_ref_value_target(member, semantic)
 }
 
@@ -71,7 +73,12 @@ impl OxcCheck for Check {
                     &assign.left,
                     AssignmentTarget::AssignmentTargetIdentifier(_)
                         | AssignmentTarget::PrivateFieldExpression(_)
-                ) || is_member_target_without_remediation(&assign.left, semantic);
+                ) || is_member_target_without_remediation(
+                    &assign.left,
+                    semantic,
+                    ctx.project,
+                    ctx.path,
+                );
                 if assign.operator == AssignmentOperator::Assign && target_has_no_remediation {
                     return;
                 }
@@ -185,6 +192,76 @@ mod tests {
         assert!(
             run_on("class C { #handle: number | undefined; clear() { this.#handle = undefined; } }")
                 .is_empty()
+        );
+    }
+
+    /// Run the rule on a source file inside a temp project whose root
+    /// `package.json` is `package_json`, so project-context levers (e.g.
+    /// `uses_unplugin_auto_import`) resolve against a real manifest.
+    fn run_in_project(source: &str, package_json: &str) -> Vec<Diagnostic> {
+        use std::fs;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut sources: Vec<crate::files::SourceFile> = Vec::new();
+        for (rel, body) in [("package.json", package_json), ("src/stores/user.ts", source)] {
+            let p = dir.path().join(rel);
+            fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+            fs::write(&p, body).expect("write");
+            if let Some(lang) = crate::files::Language::from_path(&p) {
+                sources.push(crate::files::SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&crate::files::SourceFile> = sources.iter().collect();
+        let project = crate::project::ProjectCtx::load(&refs, &crate::config::Config::default());
+        let src_path = dir.path().join("src/stores/user.ts");
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &src_path,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn allows_auto_imported_vue_ref_value_undefined() {
+        // Issue #7467: `unplugin-auto-import` provides `shallowRef` globally, so
+        // there is no `import { shallowRef } from 'vue'`. Clearing the ref with
+        // `.value = undefined` is still the idiomatic Vue reset — not flagged.
+        let src = "const userInfo = shallowRef();\n\
+                   const logout = () => { userInfo.value = undefined; };";
+        let pkg = r#"{"name":"app","devDependencies":{"unplugin-auto-import":"^0.17.0","vue":"^3.4.0"}}"#;
+        assert!(run_in_project(src, pkg).is_empty());
+    }
+
+    #[test]
+    fn allows_explicitly_imported_shallow_ref_value_undefined() {
+        // The explicit-`vue`-import path (#4731) is preserved for `shallowRef`,
+        // independent of `unplugin-auto-import`.
+        let src = "import { shallowRef } from 'vue';\n\
+                   const x = shallowRef();\n\
+                   x.value = undefined;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_auto_imported_local_shadow_ref_value_undefined() {
+        // A user-defined LOCAL `shallowRef` resolves to a local binding, so it is
+        // not the auto-imported Vue global: `.value = undefined` stays flagged
+        // even under `unplugin-auto-import`.
+        let src = "const shallowRef = () => ({});\n\
+                   const x = shallowRef();\n\
+                   x.value = undefined;";
+        let pkg = r#"{"name":"app","devDependencies":{"unplugin-auto-import":"^0.17.0"}}"#;
+        assert_eq!(run_in_project(src, pkg).len(), 1);
+    }
+
+    #[test]
+    fn flags_global_ref_value_undefined_without_auto_import() {
+        // No `vue` import and no `unplugin-auto-import`: `shallowRef` is an unknown
+        // global, so the Vue-ref exemption does not apply and the assignment flags.
+        assert_eq!(
+            run_on("const userInfo = shallowRef(); userInfo.value = undefined;").len(),
+            1
         );
     }
 }
