@@ -61,6 +61,21 @@ impl OxcCheck for Check {
                 {
                     continue;
                 }
+                // `@typescript-eslint/no-shadow` default `hoist: "functions"`: a
+                // `let`/`const`/`var` (or `class`) outer binding declared
+                // lexically AFTER the inner one is not visible where the inner
+                // name is used, so the inner shadows nothing — e.g. three
+                // mutually-exclusive early-return branches each with a local
+                // result variable, declared before the fallthrough binding they
+                // supposedly shadow. Only a hoisted-visible outer — a function
+                // declaration (visible throughout its scope) or an import (bound
+                // at module load) — is genuinely shadowed by an earlier inner
+                // binding and still fires.
+                if scoping.symbol_span(symbol_id).start < scoping.symbol_span(outer_symbol).start
+                    && !outer_is_hoisted_visible(nodes, outer_decl)
+                {
+                    continue;
+                }
                 // A binding referenced exclusively in decorator-head position
                 // (`@name` / `@name(...)`) is, like a type-only binding, never
                 // used as a plain value that a same-named parameter could be
@@ -142,6 +157,24 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+/// True when `outer_decl` declares a binding visible before its own textual
+/// position — one an earlier inner binding genuinely shadows, so the shadow
+/// still fires. A function declaration is hoisted throughout its scope, matching
+/// `@typescript-eslint/no-shadow`'s default `hoist: "functions"` exemption; an
+/// import is bound at module load, so it too is in scope above its own statement.
+/// A `let`/`const`/`var` or `class` outer is in its temporal dead zone above its
+/// declaration and shadows nothing there, so it falls through.
+fn outer_is_hoisted_visible(nodes: &AstNodes, outer_decl: NodeId) -> bool {
+    match nodes.kind(outer_decl) {
+        AstKind::Function(func) => func.is_declaration(),
+        AstKind::ImportSpecifier(_)
+        | AstKind::ImportDefaultSpecifier(_)
+        | AstKind::ImportNamespaceSpecifier(_)
+        | AstKind::TSImportEqualsDeclaration(_) => true,
+        _ => false,
     }
 }
 
@@ -1032,6 +1065,42 @@ mod tests {
             "const foo = 1;\n\
              const bar = existing || function foo() { return 1; };",
         );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_inner_const_declared_before_outer_const() {
+        // Issue #7435 reproduction: two block-scoped `w` inside early-returning
+        // `if` branches are declared before the function-scoped `w` they
+        // supposedly shadow. `hoist: "functions"` exempts an inner binding
+        // declared before a same-named outer `let`/`const`/`var`, which is in
+        // its temporal dead zone above its declaration.
+        let d = run_on(
+            "const f = (p) => {\n\
+             if (p.a === 'right') { const w = p.x + 1; return w; }\n\
+             if (p.a === 'center') { const w = p.y * 2; return w; }\n\
+             const w = p.z - 1;\n\
+             return w;\n\
+             };",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_inner_const_declared_after_outer_const() {
+        // Negative space: an inner binding declared AFTER the same-named outer
+        // `const` is the normal shadow (the outer is visible where the inner
+        // hides it) and must still fire.
+        let d = run_on("const x = 1; function g() { const x = 2; return x; }");
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_inner_const_declared_before_outer_function_declaration() {
+        // Negative space: a function declaration is hoisted throughout its
+        // scope, so an inner `const` declared before a same-named outer function
+        // declaration genuinely shadows the hoisted binding and still fires.
+        let d = run_on("function outer() { { const y = 1; return y; } function y() {} }");
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
 
