@@ -14,8 +14,10 @@
 //!
 //! The chain is also left alone when the owned iterator *escapes* its
 //! scope — it is a `return`/function-tail value, a struct field
-//! initializer, or the right-hand side of an assignment — rather than
-//! being consumed locally. There the `Vec`
+//! initializer, the right-hand side of an assignment, a `match`-arm value
+//! whose `match` escapes, or a `let` binding whose bound variable later
+//! feeds a struct-field initializer — rather than being consumed locally.
+//! There the `Vec`
 //! materialization is load-bearing: it breaks a borrow so the source's
 //! owner can move into a downstream closure, or yields an owning
 //! `IntoIter` of the right type for the escaping slot. An escaping
@@ -83,7 +85,7 @@ impl AstCheck for Check {
         }
         // The owned iterator is load-bearing when it escapes its scope
         // without being immediately re-collected.
-        if !into_iter_recollected(node, source_bytes) && chain_escapes(node) {
+        if !into_iter_recollected(node, source_bytes) && chain_escapes(node, source_bytes) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -122,11 +124,13 @@ fn into_iter_recollected(node: tree_sitter::Node, source: &[u8]) -> bool {
 
 /// True when the owned iterator (the `into_iter()` result plus any
 /// downstream lazy adapters) escapes its local scope: it is a
-/// `return`/function-tail value, a struct field initializer, or the
-/// right-hand side of an assignment, rather than being consumed locally
-/// (a `let` binding, a `for`/`while`/loop subject, or a discarded `;`
+/// `return`/function-tail value, a struct field initializer, the
+/// right-hand side of an assignment, a `match`-arm value whose `match`
+/// escapes, or a `let` binding whose bound variable later feeds a
+/// struct-field initializer, rather than being consumed locally (a plain
+/// `let` binding, a `for`/`while`/loop subject, or a discarded `;`
 /// statement).
-fn chain_escapes(node: tree_sitter::Node) -> bool {
+fn chain_escapes(node: tree_sitter::Node, source: &[u8]) -> bool {
     let outermost = chain_outermost(node);
 
     let mut current = outermost;
@@ -140,6 +144,16 @@ fn chain_escapes(node: tree_sitter::Node) -> bool {
             // A `collect().into_iter()` is not an assignee expression, so
             // reaching this node from below always means we are in the RHS.
             "assignment_expression" => return true,
+            // A match-arm value: the whole `match` takes the arm's type, so
+            // continue the escape check from the enclosing `match_expression`.
+            "match_arm" => match enclosing_match_expression(parent) {
+                Some(match_expr) => current = match_expr,
+                None => return false,
+            },
+            // A `let` binding escapes only when the bound variable later feeds
+            // a struct-field initializer, filling a field of concrete
+            // `vec::IntoIter` type; otherwise the iterator is consumed locally.
+            "let_declaration" => return let_binding_feeds_struct_field(parent, source),
             "block" => {
                 // The implicit-return tail is the block's last named child
                 // with no trailing `;` — i.e. the child is the expression
@@ -188,6 +202,100 @@ fn chain_outermost(node: tree_sitter::Node) -> tree_sitter::Node {
         }
     }
     current
+}
+
+/// Walks up from a `match_arm` to its enclosing `match_expression`.
+fn enclosing_match_expression(match_arm: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = match_arm;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "match_expression" {
+            return Some(parent);
+        }
+        current = parent;
+    }
+    None
+}
+
+/// True when the `let` binding whose value is the chain feeds the bound
+/// variable into a struct-field initializer somewhere in the enclosing
+/// block (`Self { keys }` shorthand or `field: keys`). There the owned
+/// `vec::IntoIter` fills a field of concrete type, so the `collect` is
+/// load-bearing. A binding to `_`, a non-identifier pattern, or a variable
+/// consumed locally (a `for` subject, a call argument, …) is not an escape.
+fn let_binding_feeds_struct_field(let_decl: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(pattern) = let_decl.child_by_field_name("pattern") else {
+        return false;
+    };
+    let Some(binding) = binding_identifier(pattern) else {
+        return false;
+    };
+    let Ok(name) = binding.utf8_text(source) else {
+        return false;
+    };
+    let Some(scope) = enclosing_block(let_decl) else {
+        return false;
+    };
+    identifier_feeds_struct_field(scope, name, source)
+}
+
+/// Resolves a `let` pattern to its single bound identifier, unwrapping a
+/// `mut` binding (`let mut x`). A `_`, tuple, or struct-destructuring
+/// pattern has no single tracked binding and yields `None`.
+fn binding_identifier(pattern: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    match pattern.kind() {
+        "identifier" => Some(pattern),
+        "mut_pattern" => {
+            let mut cursor = pattern.walk();
+            pattern
+                .named_children(&mut cursor)
+                .find(|child| child.kind() == "identifier")
+        }
+        _ => None,
+    }
+}
+
+/// Nearest enclosing `block` of `node`.
+fn enclosing_block(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "block" {
+            return Some(parent);
+        }
+        current = parent;
+    }
+    None
+}
+
+/// True when any `identifier` named `name` within `scope` is the value of
+/// a struct-field initializer — a `shorthand_field_initializer` or the
+/// `value` of an explicit `field_initializer`.
+fn identifier_feeds_struct_field(scope: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut stack = vec![scope];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "identifier"
+            && node.utf8_text(source) == Ok(name)
+            && is_struct_field_value(node)
+        {
+            return true;
+        }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True when `ident` sits directly in a struct-field initializer slot.
+fn is_struct_field_value(ident: tree_sitter::Node) -> bool {
+    let Some(parent) = ident.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        "shorthand_field_initializer" => true,
+        "field_initializer" => parent.child_by_field_name("value") == Some(ident),
+        _ => false,
+    }
 }
 
 /// True when `node` is a `<expr>.collect::<Vec<_>>()` call.
@@ -415,6 +523,41 @@ mod tests {
         // Negative space: the same round-trip in non-test production code with
         // no load-bearing-type reason is still the rule's genuine perf target.
         let source = "fn f() { let _: Vec<_> = it.collect::<Vec<_>>().into_iter().collect(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_escape_via_match_arm_into_struct_field() {
+        // Issue #6894 case 1 (rust-lang/cargo): the chain is a match-arm value
+        // bound to `keys` and stored in a struct field of concrete
+        // `vec::IntoIter` type; the `collect` breaks the `map.keys()` borrow.
+        let source = "fn new(cv: CV) -> Self { let keys = match &cv { CV::Table(map, _) => map.keys().cloned().collect::<Vec<_>>().into_iter(), _ => unreachable!() }; Self { cv, keys } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_escape_via_let_binding_into_struct_field() {
+        // Issue #6894 case 2 (rust-lang/cargo): the chain is bound to `keys` and
+        // stored in a struct field; the `collect` erases the slice-iter lifetime
+        // to yield the concrete `vec::IntoIter<String>` the field requires.
+        let source = "fn with_struct(cv: CV, given_fields: &[&str]) -> Self { let keys = given_fields.into_iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter(); Self { cv, keys } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_escape_via_mut_let_binding_into_struct_field() {
+        // The same load-bearing escape through a `let mut` binding (iterator
+        // state is often bound `mut` to be advanced later).
+        let source = "fn with_struct(cv: CV, given_fields: &[&str]) -> Self { let mut keys = given_fields.into_iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter(); Self { cv, keys } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_let_binding_consumed_locally() {
+        // A let-bound chain whose variable is consumed locally (a `for` subject,
+        // not a struct field) is still a genuine round-trip — the precise
+        // let-escape check must not exempt it.
+        let source = "fn f() { let v = xs.iter().map(g).collect::<Vec<_>>().into_iter(); for x in v {} }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
