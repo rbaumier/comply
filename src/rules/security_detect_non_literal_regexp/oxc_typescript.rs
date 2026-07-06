@@ -500,4 +500,43 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn allows_module_const_string_template_slot() {
+        // Issue #6888: a module-level `const` string literal used as a template slot
+        // is the same developer-controlled value as the already-exempt direct form
+        // `new RegExp(MIDDLEWARE_MODULE_ID)` — template wrapping does not change safety.
+        let src = r#"
+            export const MIDDLEWARE_MODULE_ID = 'virtual:astro:middleware';
+            const r = new RegExp(`^${MIDDLEWARE_MODULE_ID}$`);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_numeric_literal_template_slot() {
+        // A numeric-literal slot contributes only digits — no metacharacters reach
+        // the pattern, so the template stays safe.
+        let src = r#"const r = new RegExp(`^${42}$`);"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_let_binding_template_slot() {
+        // A `let` binding can be reassigned to runtime input — its value is not a
+        // provably-static const, so the template slot is flagged.
+        let src = r#"
+            let v = getId();
+            const r = new RegExp(`^${v}$`);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_call_expression_template_slot() {
+        // A call-expression slot returns a runtime value that can carry
+        // metacharacters — still flagged.
+        let src = r#"const r = new RegExp(`^${getStr()}$`);"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
