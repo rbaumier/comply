@@ -14,10 +14,11 @@ const LOG_NAMESPACES: &[&str] = &["log", "tracing"];
 
 /// True if any directory segment of `path` names a DDD business-logic layer.
 ///
-/// `core` is special-cased: a Cargo workspace crate literally named `core`
-/// (e.g. `crates/core/flags/config.rs`) is the primary binary, not a DDD layer,
-/// so `core` only counts when it appears under a `src/` ancestor — the layout a
-/// real domain layer (`src/core/`, `crates/app/src/core/`) takes.
+/// `core` is special-cased: it counts as a domain layer only when `src` is its
+/// immediate parent (`src/core/`, `crates/app/src/core/`). A crate literally
+/// named `core` (`crates/core/…`) or a `core` sub-module of a named crate
+/// (`src/<crate>/core/…`) is infrastructure, not a domain layer, so it is not
+/// flagged.
 fn is_business_logic_path(path: &std::path::Path) -> bool {
     let segments: Vec<&str> = path
         .components()
@@ -27,7 +28,7 @@ fn is_business_logic_path(path: &std::path::Path) -> bool {
     let dir_count = segments.len().saturating_sub(1);
     segments[..dir_count].iter().enumerate().any(|(i, &seg)| {
         if seg == "core" {
-            segments[..i].contains(&"src")
+            i > 0 && segments[i - 1] == "src"
         } else {
             BUSINESS_DIRS.contains(&seg)
         }
@@ -178,5 +179,11 @@ mod tests {
     fn flags_log_debug_in_core_layer_under_crate_src() {
         let diags = run_path("crates/app/src/core/service.rs", r#"log::debug!("svc");"#);
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_logging_in_core_submodule_of_crate() {
+        let diags = run_path("src/cargo/core/registry.rs", r#"tracing::warn!("query");"#);
+        assert!(diags.is_empty());
     }
 }
