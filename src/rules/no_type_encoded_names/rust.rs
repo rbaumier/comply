@@ -7,7 +7,13 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const RUST_DOMAIN_PREFIXES: &[&str] = &["str", "arr", "bool"];
+// Prefixes whose abbreviated type has no unambiguous Rust analogue, so a
+// snake_case match can never be a redundant type tag — it always names a
+// domain concept. `str`/`arr`/`bool` read as domain qualifiers in Rust prose
+// (`str_name`, `arr_items`, `bool_flag`); `prom` abbreviates the JavaScript
+// `Promise`, a type Rust does not have (futures are `Future`, never `prom`),
+// so every `prom_*` binding is a domain name (`prom_query: PromQuery`).
+const RUST_DOMAIN_PREFIXES: &[&str] = &["str", "arr", "bool", "prom"];
 
 crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     if !is_declaration_site(node) {
@@ -84,7 +90,7 @@ const INT_TYPES: &[&str] = &[
 /// Hungarian prefix claims the value has. A genuine type-encoded name annotates
 /// the matching primitive (`flt_total: f64`); a domain abbreviation annotates
 /// something else (`flt_id: &T`), so the prefix is not a redundant type tag.
-/// `str`/`arr`/`bool` never reach here — they are filtered out earlier.
+/// `str`/`arr`/`bool`/`prom` never reach here — they are filtered out earlier.
 fn prefix_matches_type(prefix: &str, ty: &str) -> bool {
     let ty = ty.trim();
     match prefix {
@@ -92,9 +98,6 @@ fn prefix_matches_type(prefix: &str, ty: &str) -> bool {
         "lng" => INT_TYPES.contains(&ty),
         "chr" => ty == "char",
         "byt" => ty == "u8",
-        // `prom` (Promise) has no Rust primitive, so an explicit annotation can
-        // never confirm it — an annotated `prom_*` is a domain name.
-        "prom" => false,
         // Unknown prefix: keep the pre-annotation behaviour (flag on prefix).
         _ => true,
     }
@@ -231,5 +234,15 @@ mod tests {
         // prefix is a redundant float type tag.
         assert_eq!(run_on("fn f(flt_total: f64) {}").len(), 1);
         assert_eq!(run_on("fn f() { let flt_total: f32 = 0.0; }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_prom_prefix_promql_domain() {
+        // #7472: `prom` abbreviates the JavaScript `Promise`, a type Rust does
+        // not have (futures are `Future`, never `prom`), so a `prom_*` binding
+        // is always a PromQL/Prometheus domain name, never a redundant type tag.
+        assert!(run_on("fn f() { let prom_query = PromQuery { query: q }; }").is_empty());
+        assert!(run_on("fn f() { let prom_expr = parser::parse(input); }").is_empty());
+        assert!(run_on("fn f() { let prom_param = param.as_deref(); }").is_empty());
     }
 }

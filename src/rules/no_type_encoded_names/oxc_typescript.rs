@@ -88,6 +88,14 @@ mod tests {
         assert_eq!(run("const strValue = 'x';").len(), 1);
     }
 
+    // The `prom` prefix abbreviates the JS `Promise` type, so it stays flagged
+    // in TypeScript even though the Rust backend excludes it (Rust has no
+    // `Promise`). Backend parity: the exclusion is Rust-only (#7472).
+    #[test]
+    fn flags_prom_promise_hungarian() {
+        assert_eq!(run("const promResult = fetch();").len(), 1);
+    }
+
     // Regression for #279: SCREAMING_SNAKE domain constants are not Hungarian.
     #[test]
     fn allows_screaming_snake_domain_constants() {
