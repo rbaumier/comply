@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                 }
                 // Vue 3 reactive ref: `count.value = x` drives reactivity.
                 if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
-                    && is_vue_ref_value_target(member, semantic)
+                    && is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
                 {
                     return;
                 }
@@ -121,7 +121,7 @@ impl OxcCheck for Check {
                 // Vue 3 reactive ref: `count.value++` drives reactivity.
                 if let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
                     &update.argument
-                    && is_vue_ref_value_target(member, semantic)
+                    && is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
                 {
                     return;
                 }
