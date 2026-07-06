@@ -300,6 +300,119 @@ fn is_async_method_override_on_this(
     })
 }
 
+/// Extract the static name of a property key (`foo` / `"foo"`); returns `None`
+/// for computed, numeric, or other non-static keys.
+fn property_key_name<'a>(key: &oxc_ast::ast::PropertyKey<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::PropertyKey;
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+        PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
+    }
+}
+
+/// True when `members` (an interface body or object-`type` literal) declares a
+/// member named `method_name` whose type mentions `Promise<`, covering both the
+/// method form (`get(): Promise<T>`) and the function-property form
+/// (`get: (k: K) => Promise<T>`). Mirrors `has_promise_return_type`'s text scan,
+/// applied to the matched member.
+fn signature_member_returns_promise(
+    members: &[oxc_ast::ast::TSSignature],
+    method_name: &str,
+    source: &str,
+) -> bool {
+    use oxc_ast::ast::TSSignature;
+    members.iter().any(|sig| match sig {
+        TSSignature::TSMethodSignature(m) => {
+            property_key_name(&m.key) == Some(method_name)
+                && has_promise_return_type(source, &m.return_type)
+        }
+        TSSignature::TSPropertySignature(p) => {
+            property_key_name(&p.key) == Some(method_name)
+                && has_promise_return_type(source, &p.type_annotation)
+        }
+        _ => false,
+    })
+}
+
+/// Check if the async function is a shorthand method / arrow value of an object
+/// literal that a factory function RETURNS, whose factory's explicit return-type
+/// annotation names an `interface`/object-`type` declared in the same file that
+/// declares the same-named member as `Promise`-returning. The interface owns the
+/// contract: `async` is what makes the method's return type conform to the
+/// declared `Promise<T>` even when the body never awaits — dropping it would
+/// break every `await factory().method()` call site. This is the
+/// factory-returning-typed-object-literal analog of the class-supertype
+/// exemption (`is_method_of_class_with_supertype`), which grants the same
+/// interface-contract-`async` allowance to a class member. A factory with no
+/// return-type annotation, a return type not declared in this file, an object
+/// literal that is not returned, or a same-named member with a non-`Promise`
+/// return all keep the diagnostic firing.
+fn is_async_method_of_promise_typed_return_object(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+
+    let nodes = semantic.nodes();
+
+    // Step 1: the async function is the value of an object-literal property;
+    // capture the property key (the method name).
+    let property = nodes.parent_node(func_node.id());
+    let AstKind::ObjectProperty(prop) = property.kind() else {
+        return false;
+    };
+    let Some(method_name) = property_key_name(&prop.key) else {
+        return false;
+    };
+    let object = nodes.parent_node(property.id());
+    if !matches!(object.kind(), AstKind::ObjectExpression(_)) {
+        return false;
+    }
+
+    // Step 2: that object literal is the argument of a `return` statement (a
+    // ReturnStatement has only its argument as an expression child).
+    let ret = nodes.parent_node(object.id());
+    if !matches!(ret.kind(), AstKind::ReturnStatement(_)) {
+        return false;
+    }
+
+    // Step 3: the enclosing factory function has an explicit return-type
+    // annotation naming a type; capture that name.
+    let return_type = nodes.ancestors(ret.id()).find_map(|a| match a.kind() {
+        AstKind::Function(f) => Some(&f.return_type),
+        AstKind::ArrowFunctionExpression(f) => Some(&f.return_type),
+        _ => None,
+    });
+    let Some(Some(rt)) = return_type else {
+        return false;
+    };
+    let TSType::TSTypeReference(tref) = &rt.type_annotation else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(type_id) = &tref.type_name else {
+        return false;
+    };
+    let type_name = type_id.name.as_str();
+
+    // Step 4: an `interface`/object-`type` declared in the same file with that
+    // name declares the same-named member as `Promise`-returning.
+    nodes.iter().any(|decl| match decl.kind() {
+        AstKind::TSInterfaceDeclaration(iface) if iface.id.name.as_str() == type_name => {
+            signature_member_returns_promise(&iface.body.body, method_name, source)
+        }
+        AstKind::TSTypeAliasDeclaration(alias) if alias.id.name.as_str() == type_name => {
+            matches!(
+                &alias.type_annotation,
+                TSType::TSTypeLiteral(lit)
+                    if signature_member_returns_promise(&lit.members, method_name, source)
+            )
+        }
+        _ => false,
+    })
+}
+
 /// True if `b` can appear inside a JS/TS identifier, used to require that an
 /// alias name occurs in a type's text as a standalone identifier rather than as
 /// a substring of a longer one (so `Unregister` is not matched inside
@@ -551,6 +664,19 @@ impl OxcCheck for Check {
             // Promise<T>`) even when the body declares resources synchronously or
             // never awaits.
             if is_object_property_in_call_arg(node, semantic) {
+                continue;
+            }
+
+            // Async method/arrow value of an object literal that a factory
+            // function returns, where the factory's explicit return type resolves
+            // (in this file) to an `interface`/object-`type` declaring the
+            // same-named member as `Promise`-returning (e.g. `createAstroPreferences():
+            // AstroPreferences { return { async get() {...} } }`). The interface
+            // owns the contract, exactly as it does for a class that `implements`
+            // it, so `async` is mandatory even when the body never awaits. A
+            // non-Promise member, a return type not declared in this file, or an
+            // object literal that is not returned all stay flagged.
+            if is_async_method_of_promise_typed_return_object(node, semantic, ctx.source) {
                 continue;
             }
 
@@ -1253,5 +1379,79 @@ mod tests {
     fn still_flags_non_generator_async_arrow_without_await() {
         // Control: a plain async arrow with no await stays flagged.
         assert_eq!(run_on("const f = async () => { doSync(); };").len(), 1);
+    }
+
+    #[test]
+    fn allows_async_methods_of_returned_promise_typed_object() {
+        // Regression for rbaumier/comply#6889 — withastro/astro
+        // `preferences/index.ts`. The factory's explicit return type is the
+        // same-file `AstroPreferences` interface, which declares `get`/`getAll` as
+        // `Promise`-returning; `async` is required to satisfy that contract even
+        // though the bodies never await, exactly as it is for a class that
+        // `implements` the interface.
+        let src = r#"interface AstroPreferences {
+            get(key: string): Promise<number>;
+            getAll(): Promise<object>;
+        }
+        function create(): AstroPreferences {
+            return {
+                async get(key) {
+                    const local = store.get(key);
+                    return local ?? fallback.get(key);
+                },
+                async getAll() { return {}; },
+            };
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_method_of_returned_object_typed_by_type_alias() {
+        // The contract type may be an object-`type` alias, not only an interface.
+        let src = r#"type Api = { load(): Promise<string> };
+        function make(): Api {
+            return { async load() { return read(); } };
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_method_of_returned_object_with_non_promise_member() {
+        // Negative space for #6889: the same-named interface member returns a
+        // non-Promise type, so `async` carries no contract — stays flagged.
+        let src = r#"interface Sync { m(): void; }
+        function make(): Sync {
+            return { async m() { doThing(); } };
+        }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_method_of_returned_object_typed_by_external_type() {
+        // Negative space for #6889: the factory's return type is not declared in
+        // this file (not syntactically resolvable), so nothing exempts it.
+        let src = r#"function make2(): ExternalIface {
+            return { async m() { doThing(); } };
+        }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_method_of_unreturned_object_literal() {
+        // Negative space for #6889: the object literal is assigned, not returned,
+        // and its enclosing scope carries no Promise-typed contract — stays flagged.
+        let src = "const o = { async m() { doThing(); } };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_method_of_returned_object_without_return_annotation() {
+        // Negative space for #6889: the factory has no explicit return-type
+        // annotation, so there is no interface contract to resolve — stays flagged.
+        let src = r#"interface Api { m(): Promise<void>; }
+        function make3() {
+            return { async m() { doThing(); } };
+        }"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
