@@ -14,6 +14,12 @@
 //! the `?` short-circuits on the function's own `Option`/`Result` carrier, so
 //! the return type is load-bearing control flow rather than a value that could
 //! be a constant.
+//!
+//! A method of a *trait* implementation (`impl Trait for Type { … }`) is also
+//! left unflagged: the trait contract dictates the return type and its
+//! invariant value (e.g. a callback whose `bool` return is a continue/abort
+//! protocol sentinel), so an invariant return there is contract-mandated rather
+//! than a value that should be a constant.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -53,6 +59,23 @@ fn contains_try(node: tree_sitter::Node) -> bool {
         }
     }
     false
+}
+
+/// Whether `node` (a `function_item`) is a method of a *trait* implementation
+/// (`impl Trait for Type { … }`). A trait method is a direct child of the impl
+/// block's `declaration_list`, whose parent `impl_item` carries a `trait` field
+/// naming the implemented trait; an inherent impl (`impl Type`) has no `trait`
+/// field. Checking this exact two-level parent chain is inherently bounded: a
+/// local function nested in a method body is a child of a `block` (not a
+/// `declaration_list`) and a free function is a child of `source_file` or a
+/// module's `declaration_list`, so neither is matched.
+fn is_trait_impl_method(node: tree_sitter::Node) -> bool {
+    let Some(list) = node.parent() else { return false };
+    if list.kind() != "declaration_list" {
+        return false;
+    }
+    let Some(impl_item) = list.parent() else { return false };
+    impl_item.kind() == "impl_item" && impl_item.child_by_field_name("trait").is_some()
 }
 
 /// Extract a normalized literal text from a `return_expression` value, or
@@ -110,6 +133,16 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     // return type and any invariant status code are fixed by the external ABI
     // contract and cannot be replaced by a constant. Skip it.
     if crate::rules::rust_helpers::fn_is_extern(node, source) {
+        return;
+    }
+
+    // A method inside a trait impl (`impl Trait for Type { … }`) has its return
+    // type and invariant value dictated by the trait contract — e.g. a cURL
+    // `progress` callback whose `bool` return is a continue/abort protocol
+    // sentinel — so an invariant return is contract-mandated, not a value that
+    // should become a constant. Inherent-impl methods and free functions stay
+    // subject to the check.
+    if is_trait_impl_method(node) {
         return;
     }
 
@@ -385,6 +418,71 @@ fn outer(x: i32) -> Option<()> {
     c();
     side_effect();
     None
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #6892 — a cURL `progress` callback (rust-lang/cargo) in a trait impl
+    // returns `true` on every path because `true` is the "continue the transfer"
+    // protocol sentinel mandated by the `Handler` trait, while it does real
+    // side-effecting work. The trait contract fixes the return value, so it must
+    // not be flagged.
+    #[test]
+    fn allows_trait_impl_method_returning_sentinel() {
+        let src = r#"
+impl Handler for Collector {
+    fn progress(&mut self, dltotal: f64, dlnow: f64) -> bool {
+        if dlnow > dltotal {
+            return true;
+        }
+        self.stats.add(1);
+        true
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative space for #6892: an *inherent* impl method (`impl Type`, no
+    // `trait` field) is not trait-constrained, so its invariant returns are a
+    // genuine smell and must still fire.
+    #[test]
+    fn flags_inherent_impl_invariant_returns() {
+        let src = r#"
+impl Foo {
+    fn bar(&self, x: i32) -> i32 {
+        if x > 0 {
+            return 0;
+        }
+        self.side_effect();
+        0
+    }
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Negative space for #6892: the trait-impl guard keys on the *immediate*
+    // enclosing item. A free function declared inside a trait method body is a
+    // child of a `block`, not the impl's `declaration_list`, so its own
+    // invariant returns still fire — the guard must not misattribute the outer
+    // trait impl to a nested local function.
+    #[test]
+    fn flags_local_fn_inside_trait_method() {
+        let src = r#"
+impl Handler for Collector {
+    fn progress(&mut self) -> bool {
+        fn helper(x: i32) -> i32 {
+            if x > 0 {
+                return 0;
+            }
+            side_effect();
+            0
+        }
+        helper(1);
+        true
+    }
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
