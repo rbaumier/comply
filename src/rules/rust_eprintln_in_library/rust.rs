@@ -107,11 +107,16 @@
 //!   no-argument method call — whose final segment names a known flag
 //!   (`verbose`, `debug`, `quiet`, `trace`, …), or
 //! - an environment-variable-presence check — `env::var(KEY).is_ok()` or
-//!   `env::var_os(KEY).is_some()` (with or without a `std::` prefix). The
-//!   `eprintln!` is unreachable unless the consumer has set the variable,
-//!   so it is a runtime opt-in just like a verbosity flag.
+//!   `env::var_os(KEY).is_some()` (with or without a `std::` prefix), or
+//! - an environment-variable value-equality check —
+//!   `env::var(KEY).as_deref() == Ok("…")` or the `!=` form (with or
+//!   without a `std::` prefix): the variable's value is compared against a
+//!   specific string literal, a strictly stronger opt-in than presence.
 //!
-//! Negated, compared, or compound conditions stay flagged.
+//! Both env-var forms make the `eprintln!` a runtime opt-in — it only runs
+//! once the consumer sets the variable — just like a verbosity flag. A
+//! negated verbosity flag, or an env-var check in any other shape, stays
+//! flagged.
 //!
 //! The same opt-in covers the inverted early-return form
 //! `if !self.debug { return; }` written at a function's entry: when the
@@ -595,23 +600,34 @@ fn macro_invocation_name<'a>(mi: tree_sitter::Node, source: &'a [u8]) -> Option<
 /// True when `cond` is a recognised runtime opt-in guard: either a
 /// *simple* flag reference (a bare identifier, a field access, or a
 /// no-argument method call) whose final path segment is a known
-/// verbose/debug flag name, or an environment-variable-presence check
-/// (`env::var(KEY).is_ok()` / `env::var_os(KEY).is_some()`). Negation
-/// (`!self.verbose()`), comparison, or any other compound expression
-/// returns false — those are not plain "is the flag on" guards and stay
-/// flagged.
+/// verbose/debug flag name, or an environment-variable opt-in check
+/// (`env::var(KEY).is_ok()` / `env::var_os(KEY).is_some()`, or
+/// `env::var(KEY).as_deref() ==/!= Ok("…")`). A negated flag
+/// (`!self.verbose()`) or any other compound expression returns false —
+/// those are not plain "is the flag on" guards and stay flagged.
 fn is_verbose_flag_condition(cond: tree_sitter::Node, source: &[u8]) -> bool {
     flag_segment(cond, source).is_some_and(|seg| VERBOSE_FLAG_NAMES.contains(&seg))
         || is_env_var_presence_condition(cond, source)
 }
 
-/// True when `cond` is an environment-variable-presence check:
-/// `env::var(KEY).is_ok()` or `env::var_os(KEY).is_some()`, with or
-/// without a `std::` prefix. The shape is a `.is_ok()` / `.is_some()`
-/// method call whose receiver is a call to `env::var` / `env::var_os`.
-/// Such an `eprintln!` only runs when the consumer has set the variable,
-/// so it is a runtime opt-in like a verbosity flag.
+/// True when `cond` is an environment-variable opt-in check, in either shape:
+///
+/// - presence — `env::var(KEY).is_ok()` / `env::var_os(KEY).is_some()`: a
+///   `.is_ok()` / `.is_some()` method call whose receiver is a call to
+///   `env::var` / `env::var_os`, or
+/// - value-equality — `env::var(KEY).as_deref() == Ok("…")` (or the `!=`
+///   form): an `env::var(...).as_deref()` operand compared against an
+///   `Ok(<string_literal>)`.
+///
+/// Both are `std::`-prefix optional. The value-equality form is a strictly
+/// stronger opt-in — the `eprintln!` fires only when the consumer sets the
+/// variable to that specific value — so it is a runtime opt-in like the
+/// presence form and a verbosity flag.
 fn is_env_var_presence_condition(cond: tree_sitter::Node, source: &[u8]) -> bool {
+    // `env::var(KEY).as_deref() ==/!= Ok("value")`
+    if cond.kind() == "binary_expression" {
+        return is_env_var_value_equality(cond, source);
+    }
     // `<receiver>.is_ok()` / `<receiver>.is_some()`
     if cond.kind() != "call_expression" {
         return false;
@@ -632,6 +648,74 @@ fn is_env_var_presence_condition(cond: tree_sitter::Node, source: &[u8]) -> bool
     // The receiver must be a call to `env::var` / `env::var_os`.
     func.child_by_field_name("value")
         .is_some_and(|recv| is_env_var_call(recv, source))
+}
+
+/// True when `cond` is `env::var(KEY).as_deref() == Ok("…")` or the `!=`
+/// form: a `==`/`!=` `binary_expression` with one operand an
+/// `env::var(...).as_deref()` call and the other an `Ok(<string_literal>)`.
+/// The order of the two operands is not constrained.
+fn is_env_var_value_equality(cond: tree_sitter::Node, source: &[u8]) -> bool {
+    let is_eq_or_ne = cond
+        .child_by_field_name("operator")
+        .and_then(|op| op.utf8_text(source).ok())
+        .is_some_and(|op| op == "==" || op == "!=");
+    if !is_eq_or_ne {
+        return false;
+    }
+    let (Some(left), Some(right)) = (
+        cond.child_by_field_name("left"),
+        cond.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    (is_env_var_as_deref_call(left, source) && is_ok_string_literal(right, source))
+        || (is_env_var_as_deref_call(right, source) && is_ok_string_literal(left, source))
+}
+
+/// True when `node` is `env::var(KEY).as_deref()` — an `.as_deref()` method
+/// call whose receiver is a call to `env::var` / `env::var_os`.
+fn is_env_var_as_deref_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    let is_as_deref = func
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|m| m == "as_deref");
+    if !is_as_deref {
+        return false;
+    }
+    func.child_by_field_name("value")
+        .is_some_and(|recv| is_env_var_call(recv, source))
+}
+
+/// True when `node` is `Ok("<literal>")` — a call to the `Ok` variant (bare
+/// or path-qualified) with a single string-literal argument.
+fn is_ok_string_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let is_ok = node
+        .child_by_field_name("function")
+        .and_then(|f| f.utf8_text(source).ok())
+        .and_then(|name| name.rsplit("::").next())
+        == Some("Ok");
+    if !is_ok {
+        return false;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    args.named_child_count() == 1
+        && args
+            .named_child(0)
+            .is_some_and(|arg| arg.kind() == "string_literal")
 }
 
 /// True when `node` is a call whose callee path ends in `env::var` or
@@ -1153,6 +1237,43 @@ required-features = ["std"]
     #[test]
     fn flags_eprintln_under_non_env_is_some_guard() {
         let source = "pub fn f(o: Option<u8>) { if o.is_some() { eprintln!(\"x\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #6887 (pola-rs/polars
+    /// `crates/polars-mem-engine/src/scan_predicate/functions.rs:127`): an
+    /// `eprintln!` gated behind `env::var(KEY).as_deref() == Ok("1")` fires only
+    /// when the consumer sets the variable to that specific value — a strictly
+    /// stronger opt-in than the presence form, so it is exempt too.
+    #[test]
+    fn allows_eprintln_under_env_var_as_deref_eq_ok_guard() {
+        let source = "pub fn f() { if std::env::var(\"POLARS_OUTPUT_SKIP_BATCH_PRED\").as_deref() == Ok(\"1\") { eprintln!(\"predicate: {}\", x); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The gate exempts an `eprintln!` nested deeper inside the gated block —
+    /// here inside a further `if config::verbose()` (a scoped call the flag-name
+    /// heuristic does not recognise, so only the outer env-var gate clears it),
+    /// mirroring polars `time_zone.rs:68`.
+    #[test]
+    fn allows_eprintln_nested_under_env_var_as_deref_eq_ok_guard() {
+        let source = "pub fn g() { if std::env::var(\"POLARS_IGNORE_TZ\").as_deref() == Ok(\"1\") { if config::verbose() { eprintln!(\"WARN: {}\", err) } } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The `!=` form of the value-equality gate is recognised the same way,
+    /// with the `std::` prefix optional.
+    #[test]
+    fn allows_eprintln_under_env_var_as_deref_ne_ok_guard() {
+        let source = "pub fn h() { if env::var(\"X\").as_deref() != Ok(\"0\") { eprintln!(\"x\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// A plain boolean condition is not an env-var (or flag) opt-in gate, so an
+    /// `eprintln!` under it stays flagged.
+    #[test]
+    fn flags_eprintln_under_non_env_var_bool_guard() {
+        let source = "fn j(cond: bool) { if cond { eprintln!(\"c\"); } }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
