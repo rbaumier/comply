@@ -50,6 +50,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A renamed specifier (`import { X as Y }`) binds the local alias `Y`,
+        // but Nuxt auto-import injects the export only under its original name
+        // (`X`) into module scope — it never provides the alias. Dropping the
+        // import would leave every `Y` reference undefined and break the build,
+        // so a manual import with any aliased specifier is required, not
+        // redundant.
+        if has_aliased_specifier(import) {
+            return;
+        }
+
         let start = import.span.start as usize;
         let len = (import.span.end - import.span.start) as usize;
         let (line, column) = byte_offset_to_line_col(ctx.source, start);
@@ -90,6 +100,32 @@ fn is_type_only_import(import: &oxc_ast::ast::ImportDeclaration) -> bool {
             ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
             | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => false,
         })
+}
+
+/// Whether any named specifier renames its import — the source-module name
+/// (`imported`) differs from the local binding (`local.name`), as in
+/// `import { X as Y }`. Nuxt auto-import injects each export under its original
+/// name only, never the local alias, so an import carrying such a specifier
+/// cannot be dropped without leaving the alias undefined. Default and namespace
+/// specifiers have no `imported` name and are never aliased in this sense.
+fn has_aliased_specifier(import: &oxc_ast::ast::ImportDeclaration) -> bool {
+    use oxc_ast::ast::{ImportDeclarationSpecifier, ModuleExportName};
+
+    let Some(specifiers) = &import.specifiers else {
+        return false;
+    };
+    specifiers.iter().any(|s| match s {
+        ImportDeclarationSpecifier::ImportSpecifier(named) => {
+            let imported = match &named.imported {
+                ModuleExportName::IdentifierName(id) => id.name.as_str(),
+                ModuleExportName::IdentifierReference(id) => id.name.as_str(),
+                ModuleExportName::StringLiteral(lit) => lit.value.as_str(),
+            };
+            imported != named.local.name.as_str()
+        }
+        ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+        | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => false,
+    })
 }
 
 #[cfg(test)]
@@ -197,6 +233,45 @@ mod tests {
     #[test]
     fn still_flags_value_import_from_nuxt_app() {
         let src = "import { useState } from 'nuxt/app';\nconst s = useState('x');";
+        assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
+    }
+
+    /// Regression for issue #7551: a renamed specifier
+    /// (`import { generateUniqueTitle as generateTitle } from '#imports'`) binds
+    /// the local alias `generateTitle`, which Nuxt auto-import never provides —
+    /// it injects only the original name `generateUniqueTitle`. Dropping the
+    /// import would leave `generateTitle` undefined, so it must not be flagged.
+    #[test]
+    fn allows_aliased_specifier_import_issue_7551() {
+        let src =
+            "import { generateUniqueTitle as generateTitle } from '#imports';\ngenerateTitle();";
+        assert!(run_on(src).is_empty(), "unexpected: {:?}", run_on(src));
+    }
+
+    /// A mixed import where ANY specifier is aliased must not be flagged either:
+    /// dropping it would still leave the alias binding undefined.
+    #[test]
+    fn allows_mixed_import_with_one_aliased_specifier_issue_7551() {
+        let src =
+            "import { useFoo, generateUniqueTitle as generateTitle } from '#imports';\nuseFoo();\ngenerateTitle();";
+        assert!(run_on(src).is_empty(), "unexpected: {:?}", run_on(src));
+    }
+
+    /// Negative-space guard for issue #7551: a plain non-aliased value import
+    /// (`import { useFoo }`) is fully auto-imported, so it must STILL fire — only
+    /// aliased specifiers are exempt.
+    #[test]
+    fn still_flags_plain_value_import_issue_7551() {
+        let src = "import { useFoo } from '#imports';\nconst f = useFoo();";
+        assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
+    }
+
+    /// Negative-space guard for issue #7551: multiple non-aliased specifiers
+    /// (`import { useFoo, useBar }`) are all auto-imported, so the statement must
+    /// STILL fire.
+    #[test]
+    fn still_flags_multiple_non_aliased_specifiers_issue_7551() {
+        let src = "import { useFoo, useBar } from '#imports';\nconst f = useFoo();\nconst b = useBar();";
         assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
     }
 
