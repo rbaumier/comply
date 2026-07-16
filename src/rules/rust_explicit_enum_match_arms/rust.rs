@@ -76,6 +76,16 @@
 //! as a braced block whose implicit-return tail is that expression
 //! (`=> { Some(v) }`).
 //!
+//! The idiom is also recognized one newtype layer deep: when both the extracting
+//! arm and the wildcard arm wrap their `Some(v)`/`None` (or `Ok(v)`/`Err(...)`)
+//! in a call to the *same* single-field tuple-struct/enum-tuple constructor —
+//! `Variant(v) => Wrapper(Some(v))` paired with `_ => Wrapper(None)` — the
+//! exemption peels that one constructor layer and re-checks the inner arguments
+//! for the pairing. The constructors must be identical (compared by callee source
+//! text): `WrapperA(Some(v))` paired with `WrapperB(None)` is not the idiom and
+//! still flags. This covers the "typed iterator / adapter wrapping an `Option`"
+//! shape, where a newtype erases the per-branch iterator type.
+//!
 //! We do not descend into nested `match`es here — the walker visits
 //! every `match_expression` independently, so each match is classified
 //! on its own arms.
@@ -118,6 +128,12 @@ impl AstCheck for Check {
         // `_ => Err(...)` form).
         let mut has_some_extracting_arm = false;
         let mut has_ok_extracting_arm = false;
+        // The same idiom one newtype layer deep: callee text of every
+        // `Variant(v) => Ctor(Some(v))` / `Ctor(Ok(v))` extracting arm, keyed so
+        // a `_ => Ctor(None)` / `Ctor(Err(...))` wildcard is exempt only when its
+        // `Ctor` is textually identical to a paired extracting arm's.
+        let mut some_newtype_ctors: Vec<&str> = Vec::new();
+        let mut ok_newtype_ctors: Vec<&str> = Vec::new();
         let mut cursor = match_block.walk();
         for child in match_block.named_children(&mut cursor) {
             if child.kind() != "match_arm" {
@@ -147,6 +163,14 @@ impl AstCheck for Check {
                 }
                 if arm_body_is_ctor_call(child, source_bytes, "Ok") {
                     has_ok_extracting_arm = true;
+                }
+                if let Some((ctor, inner)) = arm_body_newtype_call(child, source_bytes) {
+                    if node_is_ctor_call(inner, source_bytes, "Some") {
+                        some_newtype_ctors.push(ctor);
+                    }
+                    if node_is_ctor_call(inner, source_bytes, "Ok") {
+                        ok_newtype_ctors.push(ctor);
+                    }
                 }
             }
         }
@@ -263,6 +287,20 @@ impl AstCheck for Check {
             }
             if has_ok_extracting_arm && arm_body_is_ctor_call(arm, source_bytes, "Err") {
                 continue;
+            }
+            // Same idiom behind a newtype: a `_ => Ctor(None)` / `Ctor(Err(...))`
+            // wildcard paired with a `Variant(v) => Ctor(Some(v))` / `Ctor(Ok(v))`
+            // extracting arm whose outer constructor `Ctor` is textually
+            // identical. Peel the one shared layer and match on the inner shape.
+            if let Some((ctor, inner)) = arm_body_newtype_call(arm, source_bytes) {
+                if node_is_none(inner, source_bytes) && some_newtype_ctors.contains(&ctor) {
+                    continue;
+                }
+                if node_is_ctor_call(inner, source_bytes, "Err")
+                    && ok_newtype_ctors.contains(&ctor)
+                {
+                    continue;
+                }
             }
             let pos = arm.start_position();
             diagnostics.push(Diagnostic {
@@ -939,17 +977,7 @@ fn arm_body_is_ctor_call(arm: tree_sitter::Node, source: &[u8], ctor: &str) -> b
     let Some(value) = arm.child_by_field_name("value") else {
         return false;
     };
-    let value = unwrap_block_tail(value);
-    if value.kind() != "call_expression" {
-        return false;
-    }
-    let Some(callee) = value.child_by_field_name("function") else {
-        return false;
-    };
-    let Ok(text) = callee.utf8_text(source) else {
-        return false;
-    };
-    text.rsplit("::").next().unwrap_or(text).trim() == ctor
+    node_is_ctor_call(unwrap_block_tail(value), source, ctor)
 }
 
 /// True if the `match_arm`'s body is the bare `None` literal (optionally
@@ -960,14 +988,91 @@ fn arm_body_is_none(arm: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(value) = arm.child_by_field_name("value") else {
         return false;
     };
-    let value = unwrap_block_tail(value);
-    if !matches!(value.kind(), "identifier" | "scoped_identifier") {
+    node_is_none(unwrap_block_tail(value), source)
+}
+
+/// True if `node` is a `call_expression` whose callee's final `::` segment is
+/// exactly `ctor` — bare (`Some(v)`, `Ok(v)`, `Err(e)`) or path-qualified
+/// (`Option::Some`, `Result::Ok`). The node-level core of `arm_body_is_ctor_call`,
+/// also applied to the peeled inner argument of a newtype-wrapped accessor arm.
+fn node_is_ctor_call(node: tree_sitter::Node, source: &[u8], ctor: &str) -> bool {
+    if node.kind() != "call_expression" {
         return false;
     }
-    let Ok(text) = value.utf8_text(source) else {
+    let Some(callee) = node.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(text) = callee.utf8_text(source) else {
+        return false;
+    };
+    text.rsplit("::").next().unwrap_or(text).trim() == ctor
+}
+
+/// True if `node` is the bare `None` literal (optionally path-qualified as
+/// `Option::None`). The node-level core of `arm_body_is_none`, also applied to
+/// the peeled inner argument of a newtype-wrapped accessor arm.
+fn node_is_none(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if !matches!(node.kind(), "identifier" | "scoped_identifier") {
+        return false;
+    }
+    let Ok(text) = node.utf8_text(source) else {
         return false;
     };
     text.rsplit("::").next().unwrap_or(text).trim() == "None"
+}
+
+/// If `arm`'s body is a single-argument tuple-struct/enum-tuple constructor call
+/// `Ctor(inner)`, returns `(ctor_text, inner)` — the constructor's callee source
+/// text (the same-constructor identity key) and its sole argument, ready for an
+/// inner `Some`/`None`/`Ok`/`Err` shape check. This peels exactly one newtype
+/// layer of the variant-accessor idiom (`Wrapper(Some(v))` paired with
+/// `Wrapper(None)`).
+///
+/// `Ctor` must be an `identifier` or `scoped_identifier` whose final segment is
+/// PascalCase — the tuple-struct/enum-tuple constructor convention — so a method
+/// call (`self.wrap(x)`) or lowercase free function (`wrap(x)`) is not a
+/// single-field constructor and returns `None`. The call must take exactly one
+/// argument: a multi-field constructor (`Pair(Some(a), b)`) is not a newtype
+/// wrapper. A braced block body is unwrapped to its implicit-return tail first.
+fn arm_body_newtype_call<'src, 'tree>(
+    arm: tree_sitter::Node<'tree>,
+    source: &'src [u8],
+) -> Option<(&'src str, tree_sitter::Node<'tree>)> {
+    let value = arm.child_by_field_name("value")?;
+    let value = unwrap_block_tail(value);
+    let inner = call_sole_argument(value)?;
+    let callee = value.child_by_field_name("function")?;
+    if !matches!(callee.kind(), "identifier" | "scoped_identifier") {
+        return None;
+    }
+    let text = callee.utf8_text(source).ok()?.trim();
+    let last_seg = text.rsplit("::").next().unwrap_or(text).trim();
+    if !last_seg.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return None;
+    }
+    Some((text, inner))
+}
+
+/// If `node` is a `call_expression` with exactly one argument, returns that
+/// argument node. Used to peel one newtype-constructor layer of the wrapped
+/// variant-accessor idiom; a call with zero or multiple arguments — not a
+/// single-field newtype — returns `None`. tree-sitter surfaces comments as named
+/// children, so they are skipped when counting the argument: `Wrapper(None /* x
+/// */)` still has a single argument.
+fn call_sole_argument(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    if node.kind() != "call_expression" {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let mut named = args
+        .named_children(&mut cursor)
+        .filter(|c| !matches!(c.kind(), "line_comment" | "block_comment"));
+    let first = named.next()?;
+    if named.next().is_some() {
+        return None;
+    }
+    Some(first)
 }
 
 /// True if the `match_arm` node carries a leading `#[cfg(...)]` /
@@ -2048,5 +2153,71 @@ mod tests {
         let src = "fn f(x: MyEnum) -> i32 { match x { \
                    MyEnum::A(v) => 1, MyEnum::B(v) => 2, _ => 3 } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_variant_accessor_wrapped_in_newtype_some_none() {
+        // Issue #7571: vector's `EventArray::iter_logs_mut`. The variant-accessor
+        // idiom behind a single-field newtype (`TypedArrayIterMut`) that erases
+        // the per-branch iterator type — `Variant(a) => Ctor(Some(a.iter_mut()))`
+        // paired with `_ => Ctor(None)`. A new variant still falls through to the
+        // empty iterator, so exhaustive listing adds noise without safety.
+        let src = "fn iter_logs_mut(&mut self) -> Iter { match self { \
+                   Self::Logs(array) => TypedArrayIterMut(Some(array.iter_mut())), \
+                   _ => TypedArrayIterMut(None), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_variant_accessor_wrapped_in_newtype_ok_err() {
+        // Issue #7571: the `Result` form of the same one-layer idiom —
+        // `Variant(v) => Ctor(Ok(v))` paired with `_ => Ctor(Err(self))`.
+        let src = "fn f(self) -> Wrapper { match self { \
+                   Object::Blob(v) => Wrap(Ok(v)), _ => Wrap(Err(self)) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_newtype_wrapped_accessor_with_mismatched_constructors() {
+        // Issue #7571 negative space: the exemption requires the same constructor
+        // on both arms. `WrapperA(Some(a))` paired with `_ => WrapperB(None)` wraps
+        // in different newtypes — not one shared projection — so the `_` arm is a
+        // real catch-all and must still flag.
+        let src = "fn f(&mut self) -> Iter { match self { \
+                   Self::Logs(a) => WrapperA(Some(a)), _ => WrapperB(None) } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_newtype_wildcard_inner_not_none() {
+        // Issue #7571 negative space: same constructor on both arms, but the
+        // wildcard's peeled inner argument is not `None`/`Err(...)`. A
+        // `Wrapper(something_else)` catch-all silently maps every new variant to
+        // that value, so it must still flag — the peel must re-check the inner
+        // shape, not just the outer constructor identity.
+        let src = "fn f(&mut self) -> Iter { match self { \
+                   Self::Logs(a) => Wrapper(Some(a)), _ => Wrapper(something_else) } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_newtype_wildcard_without_some_none_pairing() {
+        // Issue #7571 negative space: a wildcard whose body has no `Some`/`None`
+        // pairing at all (`_ => make_default()`) is an ordinary catch-all over an
+        // enum and must still flag.
+        let src = "fn f(x: Foo) -> Bar { match x { \
+                   Foo::A => Bar::One, _ => make_default() } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_newtype_wrapped_accessor_with_comment_in_argument() {
+        // Issue #7571: tree-sitter surfaces comments as named children, so a
+        // comment inside the newtype constructor argument (`Wrapper(None /* x */)`)
+        // must not displace the sole argument — the idiom is still recognized.
+        let src = "fn f(&mut self) -> Iter { match self { \
+                   Self::Logs(a) => TypedIter(Some(a.iter_mut())), \
+                   _ => TypedIter(None /* empty */), } }";
+        assert!(run_on(src).is_empty());
     }
 }
