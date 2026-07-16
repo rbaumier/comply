@@ -14,6 +14,12 @@
 //! `method` is an arrow-function class property (auto-bound to `this`) declaring
 //! at most one parameter. An argument that resolves to a `for...in` loop
 //! variable is exempt too: such a key is always a `string`, never a function.
+//! A callee imported from a sibling module is exempt when the cross-file import
+//! graph resolves it to an exported callable that binds at most the first
+//! argument (`ExportedSymbol::binds_at_most_one_param`) — the same single-arity
+//! exemption, extended across the module boundary; an import that cannot be
+//! resolved (external package, re-export chain) has unknown arity and stays
+//! flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
@@ -260,6 +266,33 @@ fn is_low_arity_local<'a>(
     }
 }
 
+/// Returns `true` when `name` is a named/default import whose source module,
+/// resolved through the cross-file import graph, exports a callable that binds
+/// only the first argument (`ExportedSymbol::binds_at_most_one_param`) — the
+/// cross-file extension of [`is_low_arity_local`]. Passing such an imported
+/// callee bare to an array-iterator method drops the injected `index`/`array`
+/// exactly as a locally-declared single-arity function does, so `arr.map(f)` is
+/// identical to `arr.map(e => f(e))`. Imports whose specifier does not resolve
+/// to an indexed source file — external packages, unresolved re-export chains —
+/// carry no visible arity and stay flagged, matching the rule's conservative
+/// default for callees of unknown arity.
+fn is_low_arity_imported(name: &str, ctx: &CheckCtx) -> bool {
+    let index = ctx.project.import_index();
+    for imp in index.get_imports(ctx.path) {
+        if imp.local_name != name {
+            continue;
+        }
+        let Some(src_path) = imp.source_path.as_deref() else {
+            return false;
+        };
+        return index
+            .get_exports(src_path)
+            .iter()
+            .any(|export| export.name == imp.imported_name && export.binds_at_most_one_param);
+    }
+    false
+}
+
 /// Returns `true` when `ident` resolves to a namespace-import binding
 /// (`import * as X from '…'`). A `X.method(...)` call on such a binding is a
 /// data-library combinator (fp-ts `O.some(v)` / `O.map(v)`), never
@@ -411,6 +444,12 @@ impl OxcCheck for Check {
                     return;
                 }
                 if is_low_arity_local(ident, semantic) {
+                    return;
+                }
+                // The callee may be imported from a sibling module: resolve its
+                // arity through the cross-file import graph and apply the same
+                // single-arity exemption as a locally-declared callee.
+                if is_low_arity_imported(name, ctx) {
                     return;
                 }
                 let (line, column) =
@@ -994,5 +1033,140 @@ mod tests {
             run_on("const h = maybe || ((x: unknown) => x != null); arr.filter(h);").len(),
             1
         );
+    }
+
+    /// Build a temp project from `(rel_path, source)` pairs, index it so the
+    /// cross-file `ImportIndex` is populated, and run the rule on `target_rel`.
+    fn run_on_project(files: &[(&str, &str)], target_rel: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        let target_path = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let canon = fs::canonicalize(&target_path).unwrap();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_oxc_check(&Check, &source, &canon, &project, file)
+    }
+
+    // #7618 repro (excalidraw/excalidraw `HintViewer.tsx`): `getShortcutKey` is a
+    // single-parameter arrow exported from a sibling module; passing it bare to
+    // `.map` drops the injected `index`/`array`, so it is identical to wrapping
+    // it. The cross-file import graph resolves its arity — must not flag.
+    #[test]
+    fn allows_imported_single_arity_const_arrow() {
+        let files = &[
+            ("shortcut.ts", "export const getShortcutKey = (shortcut: string): string => shortcut;"),
+            (
+                "consumer.ts",
+                "import { getShortcutKey } from './shortcut';\nconst keys: string[] = [];\nexport const out = keys.map(getShortcutKey);",
+            ),
+        ];
+        assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #7618: single-parameter imported type-guards passed to `.some` / `.filter`
+    // (`isTextElement`, `isArrowElement`) resolve cross-file — must not flag.
+    #[test]
+    fn allows_imported_single_arity_type_guards() {
+        let files = &[
+            (
+                "guards.ts",
+                "export const isTextElement = (element: unknown): boolean => true;\nexport const isArrowElement = (element: unknown): boolean => true;",
+            ),
+            (
+                "consumer.ts",
+                "import { isTextElement, isArrowElement } from './guards';\nconst els: unknown[] = [];\nexport const a = els.some(isTextElement);\nexport const b = els.filter(isArrowElement);",
+            ),
+        ];
+        assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #7618: an imported single-parameter `function` declaration resolves the
+    // same way as an arrow binding — must not flag.
+    #[test]
+    fn allows_imported_single_arity_function_declaration() {
+        let files = &[
+            ("copy.ts", "export function deepCopyElement(el: unknown) { return el; }"),
+            (
+                "consumer.ts",
+                "import { deepCopyElement } from './copy';\nconst els: unknown[] = [];\nexport const out = els.map(deepCopyElement);",
+            ),
+        ];
+        assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #7618: an aliased import (`import { isTextElement as isText }`) resolves via
+    // the import's original `imported_name` — must not flag.
+    #[test]
+    fn allows_imported_single_arity_renamed() {
+        let files = &[
+            ("guards.ts", "export const isTextElement = (element: unknown): boolean => true;"),
+            (
+                "consumer.ts",
+                "import { isTextElement as isText } from './guards';\nconst els: unknown[] = [];\nexport const out = els.some(isText);",
+            ),
+        ];
+        assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #7618 negative space: an imported *two*-parameter arrow exposes the
+    // `(element, index)` footgun — must stay flagged even though it is imported.
+    #[test]
+    fn flags_imported_multi_arity_const_arrow() {
+        let files = &[
+            ("combine.ts", "export const combine = (a: number, b: number): number => a + b;"),
+            (
+                "consumer.ts",
+                "import { combine } from './combine';\nconst nums: number[] = [];\nexport const out = nums.map(combine);",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
+    }
+
+    // #7618 negative space: an imported callee whose sole positional parameter is
+    // *followed* by a rest (`(first, ...rest)`) sees the injected `index` in
+    // `rest` — two parameters total — so it stays flagged, mirroring the local
+    // `flags_param_plus_rest_function` case.
+    #[test]
+    fn flags_imported_positional_plus_rest() {
+        let files = &[
+            (
+                "collect.ts",
+                "export const collect = (first: number, ...rest: number[]): number => first;",
+            ),
+            (
+                "consumer.ts",
+                "import { collect } from './collect';\nconst nums: number[] = [];\nexport const out = nums.map(collect);",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
+    }
+
+    // #7618 negative space: an import whose specifier does not resolve to an
+    // indexed source file (external package) has unknown arity, so it stays
+    // conservatively flagged — the resolution never exempts it.
+    #[test]
+    fn flags_imported_unresolvable_external() {
+        let files = &[(
+            "consumer.ts",
+            "import { transform } from 'some-external-pkg';\nconst xs: number[] = [];\nexport const out = xs.map(transform);",
+        )];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
     }
 }
