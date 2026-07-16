@@ -378,6 +378,65 @@ mod tests {
         );
     }
 
+    // Regression for #7606: the nearest tsconfig `extends` a workspace/published
+    // package by its package name (`@scope/base/tsconfig.json`), and the
+    // inherited `moduleResolution:bundler` lives only in that extended base.
+    // Node-module resolution of the package `extends` surfaces the inherited
+    // option, so extensionless relative imports (Backstage's house style) stay
+    // silent.
+    #[test]
+    fn skips_when_bundler_resolution_inherited_via_package_extends_issue_7606() {
+        let diags = run_with_files(
+            &[
+                ("package.json", r#"{"type":"module"}"#),
+                ("tsconfig.json", r#"{"extends":"@scope/base/tsconfig.json"}"#),
+                (
+                    "node_modules/@scope/base/package.json",
+                    r#"{"name":"@scope/base"}"#,
+                ),
+                (
+                    "node_modules/@scope/base/tsconfig.json",
+                    r#"{"compilerOptions":{"moduleResolution":"bundler"}}"#,
+                ),
+            ],
+            "src/app.ts",
+            "import { x } from './util';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "moduleResolution:bundler inherited via package `extends` must silence the rule: {diags:?}"
+        );
+    }
+
+    // Negative space for #7606: the same package-`extends` shape whose base sets
+    // `moduleResolution:nodenext` (ESM, not bundler) still flags the
+    // extensionless import — the real inherited value is read, not blanket-
+    // suppressed by the presence of a package `extends`.
+    #[test]
+    fn still_flags_when_nodenext_inherited_via_package_extends_issue_7606() {
+        let diags = run_with_files(
+            &[
+                ("package.json", r#"{"type":"module"}"#),
+                ("tsconfig.json", r#"{"extends":"@scope/base/tsconfig.json"}"#),
+                (
+                    "node_modules/@scope/base/package.json",
+                    r#"{"name":"@scope/base"}"#,
+                ),
+                (
+                    "node_modules/@scope/base/tsconfig.json",
+                    r#"{"compilerOptions":{"moduleResolution":"nodenext"}}"#,
+                ),
+            ],
+            "src/app.ts",
+            "import { x } from './util';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "nodenext inherited via package `extends` is not bundler — still flag: {diags:?}"
+        );
+    }
+
     // Regression for #1712: Angular's build toolchain resolves extensionless
     // relative imports, so the rule must stay silent when Angular is detected.
 
