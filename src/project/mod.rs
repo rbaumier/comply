@@ -2344,14 +2344,32 @@ impl CargoManifest {
     }
 
     /// True when the crate builds at least one binary target: a `[[bin]]`
-    /// table is declared, or `src/main.rs` exists next to the manifest. Unlike
+    /// table is declared, `src/main.rs` exists next to the manifest, or a
+    /// `.rs` file sits directly under `src/bin/` (a binary target Cargo
+    /// auto-discovers on the 2018+ edition, the default). Unlike
     /// [`is_binary_only`], this stays true for application crates (e.g. CLIs)
     /// that also carry a `[lib]` purely to share code between their own
     /// binaries — those crates still own their stdout.
     ///
+    /// `autobins = false` (which disables `src/bin/` auto-discovery) is not
+    /// honored: the manifest parser does not track it, and turning off
+    /// auto-discovery while still shipping `src/bin/*.rs` is rare.
+    ///
     /// [`is_binary_only`]: CargoManifest::is_binary_only
     pub fn declares_binary(&self) -> bool {
-        self.has_bin_table || self.manifest_dir.join("src/main.rs").is_file()
+        if self.has_bin_table || self.manifest_dir.join("src/main.rs").is_file() {
+            return true;
+        }
+        // Any `.rs` file directly under `src/bin/` is an auto-discovered binary
+        // target. Only direct-child files count (not nested dirs, not non-`.rs`
+        // entries); a missing `src/bin/` yields `Err` and no match.
+        let Ok(entries) = std::fs::read_dir(self.manifest_dir.join("src/bin")) else {
+            return false;
+        };
+        entries.filter_map(Result::ok).any(|entry| {
+            entry.file_type().is_ok_and(|file_type| file_type.is_file())
+                && entry.path().extension().is_some_and(|ext| ext == "rs")
+        })
     }
 
     /// True when `file_path` is the explicit `path` of an executable target
@@ -8110,6 +8128,68 @@ path = "tools/tool.rs"
         assert!(
             !no_targets.declares_executable_at(Path::new("src/lib.rs")),
             "no explicit target tables => no executable targets"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_declares_binary_recognizes_src_bin_auto_discovery() {
+        // A `lib.rs` + `src/bin/*.rs` crate with no `[[bin]]` and no
+        // `src/main.rs` (the lapce-app layout): Cargo auto-discovers the
+        // binary, so the crate ships an executable and declares_binary() is true.
+        let auto_bin = TempDir::new().unwrap();
+        std::fs::create_dir_all(auto_bin.path().join("src/bin")).unwrap();
+        std::fs::write(auto_bin.path().join("src/lib.rs"), "").unwrap();
+        std::fs::write(auto_bin.path().join("src/bin/lapce.rs"), "fn main() {}").unwrap();
+        let manifest =
+            CargoManifest::parse("[package]\nname = \"lapce-app\"\n", auto_bin.path().to_path_buf())
+                .unwrap();
+        assert!(
+            manifest.declares_binary(),
+            "a `.rs` file under src/bin/ is an auto-discovered binary target"
+        );
+
+        // A pure library (only src/lib.rs, no src/bin, no [[bin]], no main.rs)
+        // ships no binary and must still be treated as a library.
+        let pure_lib = TempDir::new().unwrap();
+        std::fs::create_dir_all(pure_lib.path().join("src")).unwrap();
+        std::fs::write(pure_lib.path().join("src/lib.rs"), "").unwrap();
+        let lib_manifest =
+            CargoManifest::parse("[package]\nname = \"purelib\"\n", pure_lib.path().to_path_buf())
+                .unwrap();
+        assert!(
+            !lib_manifest.declares_binary(),
+            "a crate with only src/lib.rs declares no binary"
+        );
+
+        // A src/bin/ holding only non-`.rs` entries (a README, a nested dir) is
+        // not a binary target.
+        let no_rs = TempDir::new().unwrap();
+        std::fs::create_dir_all(no_rs.path().join("src/bin/helper")).unwrap();
+        std::fs::write(no_rs.path().join("src/lib.rs"), "").unwrap();
+        std::fs::write(no_rs.path().join("src/bin/README.md"), "").unwrap();
+        let no_rs_manifest =
+            CargoManifest::parse("[package]\nname = \"nors\"\n", no_rs.path().to_path_buf())
+                .unwrap();
+        assert!(
+            !no_rs_manifest.declares_binary(),
+            "src/bin/ without a direct-child .rs file declares no binary"
+        );
+
+        // The pre-existing forms still hold: an explicit [[bin]] table, and a
+        // src/main.rs on disk, each declare a binary.
+        let bin_table =
+            CargoManifest::parse("[[bin]]\nname = \"t\"\n", pure_lib.path().to_path_buf()).unwrap();
+        assert!(bin_table.declares_binary(), "[[bin]] table declares a binary");
+
+        let main_rs = TempDir::new().unwrap();
+        std::fs::create_dir_all(main_rs.path().join("src")).unwrap();
+        std::fs::write(main_rs.path().join("src/main.rs"), "fn main() {}").unwrap();
+        let main_manifest =
+            CargoManifest::parse("[package]\nname = \"app\"\n", main_rs.path().to_path_buf())
+                .unwrap();
+        assert!(
+            main_manifest.declares_binary(),
+            "src/main.rs on disk declares a binary"
         );
     }
 
