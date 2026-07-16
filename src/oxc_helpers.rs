@@ -1665,15 +1665,19 @@ pub fn is_local_fresh_array_binding(
         std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
+            // `(await fn()) as T[]`, `fn()!`, `fn() satisfies T` all evaluate to
+            // the same array the inner call/literal produces, so peel those
+            // transparent wrappers before deciding freshness.
+            let init = decl.init.as_ref().map(peel_value_wrappers);
             is_fresh_local = matches!(
                 decl.kind,
                 VariableDeclarationKind::Const | VariableDeclarationKind::Let
             ) && matches!(
-                decl.init,
+                init,
                 Some(Expression::CallExpression(_) | Expression::ArrayExpression(_))
             );
             init_is_fresh_copy =
-                is_fresh_local && decl.init.as_ref().is_some_and(initializer_is_fresh_array_copy);
+                is_fresh_local && init.is_some_and(initializer_is_fresh_array_copy);
             break;
         }
     }
@@ -4489,6 +4493,33 @@ pub fn peel_parens<'a>(
         current = &p.expression;
     }
     current
+}
+
+/// Peel transparent, value-preserving wrappers off `expr`, returning the first
+/// inner expression that is none of them: parentheses, a `as T` / `<T>` /
+/// `satisfies T` type cast, a `!` non-null assertion, or an `await`. Each
+/// evaluates to the very object its operand produces, so a value-shape check (is
+/// this a fresh array?) must see through arbitrary nesting of them —
+/// `(await fetch()) as Item[]` holds the same array `fetch()` resolves to. Unlike
+/// [`peel_parens`], this also strips the cast/`await` layers; the cast rules keep
+/// `peel_parens` because they must still observe the `as`.
+#[must_use]
+fn peel_value_wrappers<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+) -> &'a oxc_ast::ast::Expression<'a> {
+    use oxc_ast::ast::Expression;
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::ParenthesizedExpression(p) => &p.expression,
+            Expression::TSAsExpression(a) => &a.expression,
+            Expression::TSSatisfiesExpression(s) => &s.expression,
+            Expression::TSNonNullExpression(n) => &n.expression,
+            Expression::TSTypeAssertion(a) => &a.expression,
+            Expression::AwaitExpression(a) => &a.argument,
+            _ => return current,
+        };
+    }
 }
 
 /// True when `object` (the receiver of a `<object>.postMessage(...)` call) is a
