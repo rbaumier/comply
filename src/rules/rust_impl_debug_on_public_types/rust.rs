@@ -21,9 +21,12 @@
 //! mirrors — whether spelled as an item-level outer attribute, an outer
 //! attribute on an enclosing `mod`, or a file/module-level inner attribute
 //! `#![allow(missing_debug_implementations)]` (which suppresses every item in
-//! that file/module, as rustc does), PyO3 `#[pyclass]` types (Python extension
-//! objects whose debug surface is Python's `__repr__`/`__str__`, not Rust
-//! `Debug`), types with
+//! that file/module, as rustc does), types under an opaque proc-macro whose
+//! expansion this check cannot observe — an attribute macro on the item (typst
+//! `#[elem]`, which emits `#[derive(Hash, Debug, Clone)]`; PyO3 `#[pyclass]`,
+//! whose debug surface is Python's `__repr__`/`__str__`) or a non-standard
+//! `#[derive(...)]` (prost `::prost::Message`, whose codegen omits `Debug`) —
+//! since such a macro may inject or omit a `Debug` impl invisibly, types with
 //! raw-pointer fields, and types that store a closure/function in a field
 //! whose generic type parameter carries an `Fn`/`FnMut`/`FnOnce` bound (the
 //! combinator pattern in poem/tower/axum — closures don't implement `Debug`,
@@ -52,14 +55,63 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    has_clippy_allow, has_doc_hidden, has_outer_attribute_path, has_test_attribute,
-    is_effectively_pub, is_in_test_context, macro_body, split_top_level_args,
+    has_clippy_allow, has_doc_hidden, has_test_attribute, is_effectively_pub, is_in_test_context,
+    macro_body, split_top_level_args,
 };
 
-/// PyO3 `#[pyclass]` attribute spellings: the bare form and the fully-qualified
-/// path. A type carrying it is a Python extension class whose debug surface is
-/// the Python `__repr__`/`__str__` protocol, not Rust's `Debug`.
-const PYCLASS_ATTRS: &[&str] = &["pyclass", "pyo3::pyclass"];
+/// Outer attributes that are language/std built-ins or a well-known derive-helper
+/// attribute — none rewrites the item, so each is transparent to the derive/impl
+/// scans and must NOT be read as an opaque proc-macro. Membership is matched on
+/// the attribute path's final `::` segment.
+///
+/// `derive` is listed for completeness but routed to a derive-entry check (its
+/// `Debug` entry is read by `has_debug_derive`, its non-standard entries by
+/// `derive_lists_opaque_entry`). `serde` is its derive-helper attribute
+/// (`#[serde(rename_all = "…")]`): inert wrt `Debug` and ubiquitous on public
+/// data types that must still be flagged when they lack `Debug`.
+const INERT_ATTRIBUTES: &[&str] = &[
+    "derive",
+    "cfg",
+    "cfg_attr",
+    "doc",
+    "repr",
+    "allow",
+    "warn",
+    "deny",
+    "expect",
+    "forbid",
+    "must_use",
+    "non_exhaustive",
+    "inline",
+    "cold",
+    "deprecated",
+    "automatically_derived",
+    "no_mangle",
+    "used",
+    "link_section",
+    "export_name",
+    "serde",
+];
+
+/// Derive macros whose expansion is fully known to this check: the standard
+/// derivable traits plus serde's `Serialize`/`Deserialize`. None generates a
+/// `Debug` impl (`Debug` itself is read separately by `has_debug_derive`), so a
+/// type deriving only these still needs its own `Debug`. Any other derive entry
+/// is a proc-macro derive whose expansion is opaque. Matched on the entry's
+/// final `::` segment.
+const TRANSPARENT_DERIVES: &[&str] = &[
+    "Debug",
+    "Clone",
+    "Copy",
+    "PartialEq",
+    "Eq",
+    "PartialOrd",
+    "Ord",
+    "Hash",
+    "Default",
+    "Serialize",
+    "Deserialize",
+];
 
 #[derive(Debug)]
 pub struct Check;
@@ -121,27 +173,20 @@ impl AstCheck for Check {
         if has_doc_hidden(node, source_bytes) {
             return;
         }
-        // A PyO3 `#[pyclass]` type is a Python extension object: its public-facing
-        // debug surface is Python's `__repr__`/`__str__` (defined in
-        // `#[pymethods]`), a distinct contract from Rust's `Debug`. PyO3 itself
-        // does not require `Debug`, so the rule's premise — "Rust consumers can't
-        // log it" — does not apply.
-        if has_outer_attribute_path(node, source_bytes, PYCLASS_ATTRS) {
-            return;
-        }
         // The author opted out of the rustc lint this rule mirrors, at item,
         // enclosing-module, or file/module scope (`#[allow(...)]` /
         // `#![allow(...)]`).
         if has_clippy_allow(node, source_bytes, "missing_debug_implementations") {
             return;
         }
-        // A prost-generated protobuf message type derives `::prost::Message`, and
-        // prost's codegen intentionally omits `Debug` — these `.rs` files are
-        // regenerated from `.proto` schemas, so `Debug` can only be added by
-        // changing the generation pipeline, not the Rust source. The
-        // `prost::Message` derive path is the unambiguous structural marker
-        // (prost is the sole crate using this trait path).
-        if has_prost_message_derive(node, source_bytes) {
+        // The type's `Debug`-ness is decided by a proc-macro whose expansion this
+        // check cannot observe: an attribute macro on the item (typst `#[elem]`
+        // emits `#[derive(Hash, Debug, Clone)]`; PyO3 `#[pyclass]` routes Debug
+        // through Python's `__repr__`) or a non-standard `#[derive(...)]` (prost
+        // `::prost::Message`, whose codegen omits `Debug`). The injected impl — or
+        // its intended omission — is invisible to the derive/impl scans below, so
+        // skip rather than emit a false positive.
+        if carries_opaque_proc_macro(node, source_bytes) {
             return;
         }
         if has_raw_pointer_field(node) {
@@ -233,20 +278,24 @@ fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-/// True when a preceding `#[derive(...)]` sibling lists a `prost::Message` entry.
+/// True when the type carries a proc-macro invocation whose post-expansion
+/// tokens tree-sitter cannot observe, so any `Debug` impl it injects — or its
+/// deliberate omission of one — is invisible to the derive/impl scans.
 ///
 /// Walks the preceding `attribute_item` siblings exactly like `has_debug_derive`
-/// (skipping interleaved comments), and for each `#[derive(...)]` attribute
-/// tests whether one of its derive-list entries is a path resolving to
-/// `prost::Message`. The check is scoped to the derive attribute's argument
-/// list, so a field named `message`, a `#[prost(uint32, tag = "1")]` field
-/// attribute, or a comment never triggers it.
-fn has_prost_message_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
+/// (skipping interleaved comments, stopping where the attribute block ends), and
+/// treats an attribute as opaque when it is either an attribute macro on the
+/// item whose path is not a language/std built-in (`#[elem(...)]`, `#[pyclass]`,
+/// `#[pyo3::pyclass]`) or a `#[derive(...)]` listing a non-standard derive
+/// (`::prost::Message`, a custom proc-macro derive). Both keyed structurally on
+/// the inversion of a known-transparent allowlist — unknown ⇒ opaque — so the
+/// skip generalizes to any derive-injecting macro without a per-name list.
+fn carries_opaque_proc_macro(item: tree_sitter::Node, source: &[u8]) -> bool {
     let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
         match s.kind() {
             "attribute_item" => {
-                if derive_lists_prost_message(s, source) {
+                if attribute_is_opaque_proc_macro(s, source) {
                     return true;
                 }
             }
@@ -258,11 +307,37 @@ fn has_prost_message_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-/// True if `attribute_item` is `#[derive(...)]` and one of its top-level derive
-/// entries is a path resolving to `prost::Message`. Reads the `derive` path via
-/// the AST (not raw text), then splits the `arguments` token tree into
-/// entries with the shared derive/macro-argument idiom.
-fn derive_lists_prost_message(attribute_item: tree_sitter::Node, source: &[u8]) -> bool {
+/// True if `attribute_item` is an opaque proc-macro invocation: a `#[derive(...)]`
+/// listing a non-transparent derive, or any other outer attribute whose path's
+/// final `::` segment is not in `INERT_ATTRIBUTES`.
+fn attribute_is_opaque_proc_macro(attribute_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(path) = attribute_path(attribute_item, source) else {
+        return false;
+    };
+    let final_segment = path.rsplit("::").next().unwrap_or(path);
+    if final_segment == "derive" {
+        return derive_lists_opaque_entry(attribute_item, source);
+    }
+    !INERT_ATTRIBUTES.contains(&final_segment)
+}
+
+/// The attribute path text of an `attribute_item` (the identifier or scoped
+/// identifier before any `(...)` arguments or `= value`), read from the AST.
+fn attribute_path<'a>(attribute_item: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = attribute_item.walk();
+    let attribute = attribute_item
+        .children(&mut cursor)
+        .find(|child| child.kind() == "attribute")?;
+    attribute.named_child(0)?.utf8_text(source).ok()
+}
+
+/// True if `attribute_item` is `#[derive(...)]` and one of its top-level entries
+/// is a non-transparent derive — a path whose final `::` segment is not in
+/// `TRANSPARENT_DERIVES`, i.e. a proc-macro derive whose expansion is opaque.
+/// Reads the `arguments` token tree and splits it with the shared derive/macro
+/// idiom, so a `#[prost(...)]` field attribute or a field named `message` (both
+/// outside the derive list) never triggers it.
+fn derive_lists_opaque_entry(attribute_item: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = attribute_item.walk();
     let Some(attribute) = attribute_item
         .children(&mut cursor)
@@ -270,12 +345,6 @@ fn derive_lists_prost_message(attribute_item: tree_sitter::Node, source: &[u8]) 
     else {
         return false;
     };
-    let Some(path) = attribute.named_child(0) else {
-        return false;
-    };
-    if path.utf8_text(source) != Ok("derive") {
-        return false;
-    }
     let Some(arguments) = attribute.child_by_field_name("arguments") else {
         return false;
     };
@@ -285,22 +354,14 @@ fn derive_lists_prost_message(attribute_item: tree_sitter::Node, source: &[u8]) 
     let Some(body) = macro_body(args_text) else {
         return false;
     };
-    split_top_level_args(body)
-        .iter()
-        .any(|entry| path_is_prost_message(entry.trim()))
-}
-
-/// True if `path` is a derive entry resolving to `prost::Message`: its final
-/// `::` segment is `Message` and one of its segments is `prost`. Matches
-/// `prost::Message` and `::prost::Message`; a bare `Message` or any unrelated
-/// `*::Message` does not match, since prost is the sole owner of this path.
-fn path_is_prost_message(path: &str) -> bool {
-    let segments: Vec<&str> = path
-        .split("::")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-    segments.last() == Some(&"Message") && segments.iter().any(|&s| s == "prost")
+    split_top_level_args(body).iter().any(|entry| {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            return false;
+        }
+        let final_segment = entry.rsplit("::").next().unwrap_or(entry);
+        !TRANSPARENT_DERIVES.contains(&final_segment)
+    })
 }
 
 /// True when the file contains a hand-written `Debug` impl for `name`.
@@ -1232,15 +1293,15 @@ edition = "2021"
         );
     }
 
-    /// Load-bearing negative: an ordinary public type with no `#[pyclass]` is a
-    /// Rust-facing type and must still be flagged — the exemption is
-    /// `#[pyclass]`-specific, not a blanket carve-out.
+    /// Load-bearing negative: an ordinary public type with no attribute macro is
+    /// a Rust-facing type and must still be flagged — the skip triggers only on a
+    /// proven opaque proc-macro, not as a blanket carve-out.
     #[test]
     fn still_flags_plain_pub_struct_without_pyclass() {
         assert_eq!(
             run_on("pub struct Api { name: String }").len(),
             1,
-            "a public type without #[pyclass] must still flag"
+            "a public type without any attribute macro must still flag"
         );
     }
 
@@ -1665,16 +1726,16 @@ name = "anyhow_like"
         );
     }
 
-    /// Load-bearing negative: deriving unrelated traits (`Clone`,
-    /// `serde::Serialize`) with no `Debug` and no `prost::Message` must still
-    /// flag — the exemption keys on the `prost::Message` derive path, not on
-    /// merely having a derive list.
+    /// Load-bearing negative: a derive list of only standard / serde-transparent
+    /// derives (`Clone`, `serde::Serialize`) with no `Debug` must still flag —
+    /// the skip keys on a *non-standard* (proc-macro) derive, not on merely
+    /// having a derive list.
     #[test]
     fn still_flags_non_prost_derive() {
         assert_eq!(
             run_on("#[derive(Clone, serde::Serialize)]\npub struct Baz { pub x: u32 }").len(),
             1,
-            "a non-prost derive list with no Debug must still flag"
+            "a derive list of only transparent derives with no Debug must still flag"
         );
     }
 
@@ -1693,6 +1754,72 @@ name = "anyhow_like"
             run_on(source).len(),
             1,
             "a #[prost(...)] field attr / `message` field without a prost::Message derive must still flag"
+        );
+    }
+
+    /// Closes #7616 (issue repro): typst's `#[elem]` attribute proc-macro rewrites
+    /// the struct and emits `#[derive(Hash, Debug, Clone)]`, so every `#[elem]`
+    /// type genuinely derives `Debug` — but the injected derive is invisible to
+    /// tree-sitter. The type must not be flagged.
+    #[test]
+    fn suppresses_elem_attribute_macro_struct() {
+        let source = "#[elem(title = \"Alignment Point\", since = \"forever\", Mathy)]\n\
+                      pub struct AlignPointElem {}";
+        assert!(
+            run_on(source).is_empty(),
+            "a #[elem] attribute-proc-macro struct must not be flagged for missing Debug"
+        );
+    }
+
+    /// Closes #7616: the second repro (`GridElem`), an `#[elem]` struct with a
+    /// body and a different argument shape, is the same opaque attribute macro
+    /// and must not be flagged.
+    #[test]
+    fn suppresses_elem_attribute_macro_struct_with_body() {
+        let source = "#[elem(scope, since = \"forever\", Synthesize, Tagged)]\n\
+                      pub struct GridElem { rows: u32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "a #[elem] struct with a body must not be flagged for missing Debug"
+        );
+    }
+
+    /// The predicate is structural, not a name allowlist: any outer attribute
+    /// whose path is not a language/std built-in is an opaque proc-macro whose
+    /// expansion may inject `Debug`, so the type is skipped.
+    #[test]
+    fn suppresses_generic_attribute_proc_macro() {
+        assert!(
+            run_on("#[some_attr_macro]\npub struct Foo {}").is_empty(),
+            "a struct under an arbitrary attribute proc-macro must not be flagged"
+        );
+    }
+
+    /// Load-bearing negative: a type carrying only inert built-in attributes
+    /// (`#[repr(C)]`, `#[derive(Clone)]`) with no `Debug` is the rule's genuine
+    /// target and must still be flagged — inert attributes do not force a skip.
+    #[test]
+    fn still_flags_type_with_only_inert_attributes() {
+        let source = "#[repr(C)]\n#[derive(Clone)]\npub struct OnlyInert { x: u32 }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a type with only inert attributes and no Debug must still flag"
+        );
+    }
+
+    /// Load-bearing negative for the inert-set decision: `#[serde(...)]` is a
+    /// derive-helper attribute (inert wrt Debug) and `Serialize` is a transparent
+    /// derive, so a serde data type with no `Debug` must still be flagged.
+    #[test]
+    fn still_flags_serde_type_without_debug() {
+        let source = "#[derive(serde::Serialize)]\n\
+                      #[serde(rename_all = \"camelCase\")]\n\
+                      pub struct Dto { name: String }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a serde type (transparent derive + inert helper attr) with no Debug must still flag"
         );
     }
 }
