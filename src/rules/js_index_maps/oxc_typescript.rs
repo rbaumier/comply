@@ -115,10 +115,10 @@ impl OxcCheck for Check {
 
         // Skip when the receiver is itself a property access (e.g. product.correspondences.find(...))
         // — relation fields are typically small and bounded; Map materialisation would be worse.
-        if matches!(
-            &member.object,
-            Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
-        ) {
+        // Transparent wrappers (a TS cast, `satisfies`, non-null `!`, parentheses, or an
+        // optional-chain node) are peeled first, so a wrapped property access such as
+        // `(curr?.extension as Extension[] | undefined)?.find(...)` is recognized too.
+        if receiver_is_property_access(&member.object) {
             return;
         }
 
@@ -179,14 +179,49 @@ impl OxcCheck for Check {
     }
 }
 
+/// Peel transparent expression wrappers that do not change the structural
+/// identity of the receiver: a TS cast (`x as T` / `<T>x`), `x satisfies T`, a
+/// non-null assertion (`x!`), and parentheses. An optional-chain node
+/// (`ChainExpression`) is left in place — its inner member access is matched
+/// directly by [`receiver_is_property_access`] — because its `ChainElement`
+/// payload is not an `Expression` to recurse into.
+fn unwrap_expr<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    match expr {
+        Expression::ParenthesizedExpression(x) => unwrap_expr(&x.expression),
+        Expression::TSAsExpression(x) => unwrap_expr(&x.expression),
+        Expression::TSSatisfiesExpression(x) => unwrap_expr(&x.expression),
+        Expression::TSNonNullExpression(x) => unwrap_expr(&x.expression),
+        Expression::TSTypeAssertion(x) => unwrap_expr(&x.expression),
+        _ => expr,
+    }
+}
+
+/// True when `expr`, after peeling transparent wrappers ([`unwrap_expr`]), is a
+/// property access — a `foo.bar` / `foo[bar]` member expression, or an
+/// optional-chained one (`foo?.bar`). The wrappers do not change what the
+/// receiver structurally is, so `(curr?.extension as Extension[])?.find(...)` has
+/// the same property-access receiver as the bare `curr.extension.find(...)`.
+fn receiver_is_property_access(expr: &Expression<'_>) -> bool {
+    match unwrap_expr(expr) {
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => true,
+        Expression::ChainExpression(chain) => matches!(
+            &chain.expression,
+            ChainElement::StaticMemberExpression(_) | ChainElement::ComputedMemberExpression(_)
+        ),
+        _ => false,
+    }
+}
+
 /// True when the root receiver of a method-call chain is an inline array literal.
 /// Walks `CallExpression` chains down through each call's member-expression callee
 /// (`[a, b].flat().filter(...)` → `[a, b].flat()` → `[a, b]`) until it reaches the
 /// ultimate receiver, returning true iff that root is an `Expression::ArrayExpression`.
-/// The base case is the direct `[...].filter(...)` receiver; intermediate method
-/// calls (`.flat()`, `.slice()`, …) are walked through to reach the root.
+/// Transparent wrappers ([`unwrap_expr`]) are peeled at each step, so a cast
+/// literal array (`([a, b] as T[]).find(...)`) is still recognized. The base case
+/// is the direct `[...].filter(...)` receiver; intermediate method calls
+/// (`.flat()`, `.slice()`, …) are walked through to reach the root.
 fn root_receiver_is_literal_array(expr: &Expression<'_>) -> bool {
-    match expr {
+    match unwrap_expr(expr) {
         Expression::ArrayExpression(_) => true,
         Expression::CallExpression(call) => match &call.callee {
             Expression::StaticMemberExpression(m) => root_receiver_is_literal_array(&m.object),
@@ -1784,6 +1819,78 @@ function scan(obj) {
     for (const row of rows) {
         const kept = candidates.filter((c) => obj.has(c.id));
     }
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_cast_optional_chained_property_access_receiver_find_in_loop() {
+        // Regression for #7505: `(curr?.extension as Extension[] | undefined)?.find(...)`
+        // — the `.find()` receiver is a property access (`curr.extension`) wrapped in a
+        // TS cast and an optional chain. Once the wrappers are peeled, the existing
+        // property-access skip guard fires. (`curr` is also reassigned each iteration,
+        // so there is no invariant array to hoist a Map from.)
+        assert!(
+            run(r#"
+let curr = resource;
+for (let i = 0; i < urls.length && curr; i++) {
+    curr = (curr?.extension as Extension[] | undefined)?.find((e) => e.url === urls[i]);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_cast_property_access_receiver_find_in_loop() {
+        // A property access wrapped in a plain (non-optional) TS cast peels to the
+        // `x.items` member access, so the skip guard fires.
+        assert!(
+            run(r#"
+for (const x of xs) {
+    const m = (x.items as T[]).find((v) => v.id === key);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_nonnull_optional_chained_property_access_receiver_find_in_loop() {
+        // A non-null-asserted property access behind an optional chain.
+        assert!(
+            run(r#"
+for (const x of xs) {
+    const m = (x.items!)?.find((v) => v.id === key);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_paren_optional_chained_property_access_receiver_find_in_loop() {
+        // A parenthesized property access behind an optional chain.
+        assert!(
+            run(r#"
+for (const x of xs) {
+    const m = (x.items)?.find((v) => v.id === key);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_bare_array_local_binding_find_in_loop() {
+        // #7505 negative space: the unwrap must NOT exempt a genuine bare-identifier
+        // array receiver — `arr` is a plain local collection scanned per iteration,
+        // the true positive the rule targets.
+        let diags = run(r#"
+const arr = getItems();
+for (const item of items) {
+    const match = arr.find((x) => x.id === item.id);
 }
 "#);
         assert_eq!(diags.len(), 1);
