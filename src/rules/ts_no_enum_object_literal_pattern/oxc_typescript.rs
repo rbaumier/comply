@@ -6,8 +6,8 @@ use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     BindingPattern, CallExpression, Expression, FormalParameters, FunctionBody,
-    IdentifierReference, Statement, TSTupleElement, TSType, TSTypeAnnotation, TSTypeOperatorOperator,
-    TSTypeParameterDeclaration, TSTypeQueryExprName, VariableDeclarationKind,
+    IdentifierReference, Statement, TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
+    TSTypeOperatorOperator, TSTypeParameterDeclaration, TSTypeQueryExprName, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -25,6 +25,21 @@ fn collect_as_const_objects<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> FxH
         }
         for declarator in &decl.declarations {
             let Some(init) = &declarator.init else { continue };
+            // An explicit type annotation replaces the narrow `as const` literal
+            // with the annotated type. Only a closed object-literal annotation
+            // (fixed named keys, no index signature) restates the same fixed-key
+            // shape the rule targets, so it stays registered. Any other
+            // annotation is treated as no longer that pattern: an index signature
+            // or mapped type genuinely opens the key space, and a named reference
+            // (`Record<K, V>`, an interface, an alias) is left unresolved and
+            // conservatively excluded (favouring no false positive).
+            if declarator
+                .type_annotation
+                .as_ref()
+                .is_some_and(|ann| !is_closed_object_literal(&ann.type_annotation))
+            {
+                continue;
+            }
             // Must be `expr as const` — a TSAsExpression.
             let Expression::TSAsExpression(as_expr) = init else { continue };
             // The type annotation must be TSTypeReference for `const` keyword.
@@ -44,6 +59,18 @@ fn collect_as_const_objects<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> FxH
         }
     }
     names
+}
+
+/// True when `ty` is an object-literal type with a closed set of named keys — a
+/// `TSTypeLiteral` carrying no index signature. Such an annotation restates the
+/// same fixed-key shape an `as const` object already has, so indexing it with an
+/// arbitrary key is still the enum-replacement pattern. Any other annotation is
+/// not that pattern: an index signature or mapped type opens the key space, and
+/// a named reference (`Record<K, V>`, an interface, an alias) is left unresolved
+/// and conservatively excluded.
+fn is_closed_object_literal(ty: &TSType) -> bool {
+    let TSType::TSTypeLiteral(lit) = ty else { return false };
+    !lit.members.iter().any(|m| matches!(m, TSSignature::TSIndexSignature(_)))
 }
 
 /// Collect `type Alias = keyof typeof Obj` declarations as `alias -> obj`.
@@ -946,6 +973,69 @@ mod tests {
                    const states = { a: 1, b: 2 } as const;\n\
                    const other = { c: 3 } as const;\n\
                    keysOf(other).forEach((key) => { states[key]; });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_record_annotated_as_const_object() {
+        // Regression for issue #7531: `grantTypeMap` carries an explicit
+        // `Record<GrantTypes, V>` annotation, so its type is the annotation, not
+        // the narrow `as const` literal — indexing with a `GrantTypes` key never
+        // widens and is not the enum-replacement pattern.
+        let src = "type GrantTypes = 'AUTHORIZATION_CODE' | 'CLIENT_CREDENTIALS' | 'IMPLICIT' | 'PASSWORD';\n\
+                   const grantTypeMap: Record<GrantTypes, 'authCode' | 'clientCredentials' | 'password' | 'implicit'> = {\n\
+                   AUTHORIZATION_CODE: 'authCode',\n\
+                   CLIENT_CREDENTIALS: 'clientCredentials',\n\
+                   IMPLICIT: 'implicit',\n\
+                   PASSWORD: 'password',\n\
+                   } as const;\n\
+                   function f(currentGrantType: GrantTypes) { return grantTypeMap[currentGrantType]; }\n\
+                   function g(key: GrantTypes) { return grantTypeMap[key]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_simple_record_annotated_as_const_object() {
+        let src = "const m: Record<string, number> = { a: 1 } as const;\n\
+                   function f(k: string) { return m[k]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_signature_annotated_as_const_object() {
+        // An index-signature annotation opens the key space, so the binding's
+        // type is not the fixed-key `as const` shape — not the enum pattern.
+        let src = "const m: { [k: string]: number } = { a: 1 } as const;\n\
+                   function f(k: string) { return m[k]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_closed_object_literal_annotation() {
+        // A closed object-literal annotation (fixed named keys, no index
+        // signature) restates the same narrow shape as the `as const` object, so
+        // indexing it with an arbitrary key is still the enum-replacement pattern.
+        let src = "const x: { readonly a: 'x'; readonly b: 'y' } = { a: 'x', b: 'y' } as const;\n\
+                   function f(k: string) { return x[k]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unannotated_as_const_indexed_with_string() {
+        // Contrast with the annotated cases: the same object with NO annotation
+        // keeps its narrow `as const` type, so an arbitrary-string index widens.
+        let src = "const m = { a: 1 } as const;\n\
+                   function f(k: string) { return m[k]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unannotated_sibling_in_multi_declarator() {
+        // The guard skips only the annotated declarator: the `Record`-annotated
+        // `a` is not the pattern, but the unannotated `as const` sibling `b` in
+        // the same statement still flags.
+        let src = "const a: Record<string, number> = { x: 1 } as const, b = { y: 2 } as const;\n\
+                   function f(k: string) { return a[k] + b[k]; }";
         assert_eq!(run(src).len(), 1);
     }
 }
