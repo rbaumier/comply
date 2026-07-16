@@ -29,10 +29,11 @@
 //! - A target ref assigned at another site in the file is mutable interactive
 //!   state, not a derived value; converting it to `computed()` would break the
 //!   other assignment.
-//! - A target ref initialized by a composable call (`const t = use<Uppercase>(…)`)
-//!   may back its `.value` setter with an external store (localStorage, cookies,
-//!   IndexedDB, ...) and read it back on init; `computed()` is read-only and can't
-//!   express that side effect.
+//! - A target ref owned by a composable call — bound directly
+//!   (`const t = use<Uppercase>(…)`) or destructured from its return value
+//!   (`const { t } = use<Uppercase>(…)`) — may back its `.value` setter with an
+//!   external store (localStorage, cookies, IndexedDB, ...) and read it back on
+//!   init; `computed()` is read-only and can't express that side effect.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -353,10 +354,12 @@ fn value_assignment_count(src: &str, ident: &str) -> usize {
     count
 }
 
-/// Returns true when `ident` is declared in `src` and initialized by a
-/// composable call — `const <ident> = use<Uppercase>...(`. The match is tied to
-/// this exact identifier (word boundary on both sides), so a composable bound to
-/// a different name does not exempt the watch target.
+/// Returns true when `ident` is a composable-owned ref in `src`: either bound
+/// directly (`const <ident> = use<Uppercase>...(`) or destructured from a
+/// composable call (`const { <ident> } = use<Uppercase>...(`, including the
+/// aliased `const { key: <ident> } = ...`). The match is tied to this exact
+/// identifier (word boundary on both sides), so a composable bound to a
+/// different name does not exempt the watch target.
 ///
 /// By the universal Vue/VueUse convention every composable is `use`-prefixed
 /// (`useLocalStorage`, `useSessionStorage`, custom `use*`), and the ref it
@@ -391,7 +394,142 @@ fn target_initialized_by_composable(src: &str, ident: &str) -> bool {
             return true;
         }
     }
+    target_destructured_from_composable(src, ident)
+}
+
+/// Returns true when `ident` is a local binding introduced by an object
+/// destructuring pattern whose initializer is a composable call —
+/// `const { …, <ident>, … } = use<Uppercase>…(…)` or the aliased
+/// `const { <key>: <ident> } = use<Uppercase>…(…)`. A ref destructured from a
+/// composable is owned by it exactly like the direct-binding form, so a
+/// read-only `computed()` can't replace it. Multi-line patterns, trailing
+/// commas, default values, and `//` comments inside the pattern are tolerated.
+fn target_destructured_from_composable(src: &str, ident: &str) -> bool {
+    let mut search = 0;
+    while let Some(rel) = src[search..].find('{') {
+        let open = search + rel;
+        search = open + 1;
+        // The `{` must open a `const`/`let` destructuring pattern, not an
+        // object literal, a block, or a parameter list.
+        if !opens_destructuring_binding(src, open) {
+            continue;
+        }
+        let Some(close) = matching_brace(src, open) else {
+            continue;
+        };
+        // The pattern must carry its own initializer: a plain `= …` or a
+        // `: <type> = …` annotation directly after `}`. This rejects a
+        // `for (const { x } of …)` binding — whose `}` is followed by `of` —
+        // so the scan can't latch onto a later statement's `=`.
+        let after = &src[close + 1..];
+        let head = after.trim_start();
+        if !(head.starts_with('=') || head.starts_with(':')) {
+            continue;
+        }
+        // Past any `: <type>` annotation, the initializer must be a composable
+        // call — the same predicate the direct-binding form uses.
+        let Some(eq) = find_assignment_eq(after) else {
+            continue;
+        };
+        if !is_composable_call(after[eq + 1..].trim_start()) {
+            continue;
+        }
+        if destructuring_binds_local(&src[open + 1..close], ident) {
+            return true;
+        }
+    }
     false
+}
+
+/// Returns true when the `{` at byte offset `open` in `src` opens a
+/// `const`/`let` object-destructuring pattern — the token immediately before it
+/// (ignoring whitespace) is the `const` or `let` keyword. Object literals
+/// (`= {`), blocks, and parameter destructuring (`({`) do not qualify.
+fn opens_destructuring_binding(src: &str, open: usize) -> bool {
+    let head = src[..open].trim_end();
+    for kw in ["const", "let"] {
+        let Some(prefix) = head.strip_suffix(kw) else {
+            continue;
+        };
+        // Word boundary: the char before the keyword must not continue it, so
+        // an identifier ending in `const`/`let` is not mistaken for a keyword.
+        let has_ident_before = prefix
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        if !has_ident_before {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns the byte offset of the `}` matching the `{` at byte offset `open`,
+/// tracking nested brace depth. Returns `None` when the braces are unbalanced.
+fn matching_brace(src: &str, open: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    for (rel, c) in src[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + rel);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Returns true when the destructuring pattern text `pattern` (the content
+/// between `{` and `}`) binds a local named `ident`: the shorthand
+/// `{ ident }`, the aliased `{ key: ident }` (the local name is the alias), or
+/// either with a default value (`{ ident = d }`). Rest elements, nested
+/// patterns, `//` comments, trailing commas, and line breaks are tolerated.
+fn destructuring_binds_local(pattern: &str, ident: &str) -> bool {
+    // Strip `//` comments and flatten to a single line so multi-line patterns
+    // split uniformly on commas.
+    let cleaned: String = pattern
+        .lines()
+        .map(|l| l.split_once("//").map_or(l, |(code, _)| code))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    for part in split_top_level_commas(&cleaned) {
+        let part = part.trim();
+        let part = part.strip_prefix("...").unwrap_or(part);
+        // The local binding is the alias when a `key: local` rename is present.
+        let local_side = part.split_once(':').map_or(part, |(_key, alias)| alias);
+        // Drop any `= default`; the binding name is what precedes it.
+        let local = local_side.split('=').next().unwrap_or(local_side).trim();
+        if local == ident {
+            return true;
+        }
+    }
+    false
+}
+
+/// Splits `s` on commas that sit at brace/bracket/paren depth zero, so commas
+/// inside nested `{}`/`[]`/`()` (default values, nested patterns) don't split.
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth: i32 = 0;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
 }
 
 /// Returns the byte offset of the declaration's assignment `=` in a tail like
@@ -612,6 +750,72 @@ mod tests {
                    },\n\
                    { immediate: true },\n\
                    )";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_destructured_from_composable() {
+        // The composable owns and internally mutates `activeKey`; a read-only
+        // `computed()` can't replace it. Multi-line pattern with a comment.
+        let src = "const {\n\
+                   layout,\n\
+                   activeKey,               // ref destructured out of the composable\n\
+                   } = useLayoutMenu({ mode: layoutMode, accordion: true, menus: routeStore.menus })\n\
+                   watch(() => route.path, () => {\n\
+                   activeKey.value = routeStore.activeMenu\n\
+                   }, { immediate: true })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_aliased_ref_destructured_from_composable() {
+        // `const { key: local }` — the LOCAL name (`activeKey`) is the target.
+        let src = "const { current: activeKey } = useLayoutMenu()\n\
+                   watch(() => route.path, () => {\n  activeKey.value = routeStore.activeMenu\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_target_destructured_from_non_composable() {
+        // Destructured from a plain object, not a composable — still a
+        // derivation, so the destructuring must not exempt it.
+        let src = "const { doubled } = someObject\n\
+                   watch(count, (v) => {\n  doubled.value = v * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plain_ref_alongside_unrelated_non_composable_destructuring() {
+        // A non-composable destructuring elsewhere must not exempt a plain-ref
+        // derivation target.
+        let src = "const { x } = someObject\n\
+                   const doubled = ref(0)\n\
+                   watch(count, (v) => {\n  doubled.value = v * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_destructured_composable_ref() {
+        let src = "let { theme } = useTheme()\n\
+                   watch(scheme, () => {\n  theme.value = scheme.value\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_defaulted_destructured_composable_ref() {
+        let src = "const { theme = 'dark' } = useTheme()\n\
+                   watch(scheme, () => {\n  theme.value = scheme.value\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_for_of_destructured_binding_not_exempted_by_later_composable() {
+        // A `for (const { x } of …)` loop binding has no initializer of its
+        // own; the composable scan must not latch onto a later statement's
+        // `= useX()` and wrongly exempt the watch target.
+        let src = "for (const { doubled } of rows) {}\n\
+                   const stored = useLocalStorage('k', false)\n\
+                   watch(count, (v) => {\n  doubled.value = v * 2\n})";
         assert_eq!(run(src).len(), 1);
     }
 }
