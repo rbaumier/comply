@@ -1,5 +1,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, is_node_module_system_target};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, is_array_initializer, is_locally_owned_array_binding,
+    is_node_module_system_target,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -60,8 +63,8 @@ impl OxcCheck for Check {
         // return v.pipe(...actions)`). A parameter array, a module-scope
         // array, or a property (`this.items`, `obj.list`) is not exempt —
         // those may be observed by other code.
-        if matches!(&member.object, Expression::Identifier(_))
-            && is_locally_owned_array(member, semantic)
+        if let Expression::Identifier(receiver) = &member.object
+            && is_locally_owned_array_binding(receiver, semantic)
         {
             return;
         }
@@ -246,55 +249,6 @@ fn receiver_initializer<'a>(
             _ => None,
         })
         .flatten()
-}
-
-/// `true` when the member receiver is a plain identifier that resolves to a
-/// `const`/`let` binding declared in an inner (non-module) scope whose
-/// initialiser is an array literal (`[...]`, `[]`) or `new Array(...)`.
-///
-/// Such an array is locally owned: a mutation of it is not observable outside
-/// the declaring function. A receiver that is a parameter or a module-scope
-/// binding (no `VariableDeclarator` initialiser, or declared at the root
-/// scope) is not exempt.
-fn is_locally_owned_array(
-    member: &oxc_ast::ast::StaticMemberExpression,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let Expression::Identifier(receiver) = &member.object else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(ref_id) = receiver.reference_id.get() else {
-        return false;
-    };
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    if scoping.symbol_scope_id(sym_id) == scoping.root_scope_id() {
-        return false;
-    }
-    let decl_id = scoping.symbol_declaration(sym_id);
-    let nodes = semantic.nodes();
-    std::iter::once(nodes.kind(decl_id))
-        .chain(nodes.ancestor_kinds(decl_id))
-        .find_map(|kind| match kind {
-            AstKind::VariableDeclarator(decl) => Some(decl.init.as_ref()),
-            _ => None,
-        })
-        .flatten()
-        .is_some_and(is_array_initializer)
-}
-
-/// `true` when `expr` is an array literal (`[...]`, `[]`) or a `new Array(...)`
-/// construction.
-fn is_array_initializer(expr: &Expression) -> bool {
-    match expr {
-        Expression::ArrayExpression(_) => true,
-        Expression::NewExpression(new_expr) => {
-            matches!(&new_expr.callee, Expression::Identifier(id) if id.name.as_str() == "Array")
-        }
-        _ => false,
-    }
 }
 
 /// `true` when `expr` is a call to a router/history factory hook, e.g.

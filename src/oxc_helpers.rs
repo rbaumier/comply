@@ -1351,6 +1351,63 @@ fn is_object_create_null(call: &oxc_ast::ast::CallExpression) -> bool {
         )
 }
 
+/// `true` when `expr` is an array literal (`[...]`, `[]`) or a `new Array(...)`
+/// construction.
+#[must_use]
+pub fn is_array_initializer(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::ArrayExpression(_) => true,
+        Expression::NewExpression(new_expr) => {
+            matches!(&new_expr.callee, Expression::Identifier(id) if id.name.as_str() == "Array")
+        }
+        _ => false,
+    }
+}
+
+/// True when `ident` resolves to a `VariableDeclarator` binding declared in an
+/// inner (non-module) scope whose initializer is an array literal (`[...]`,
+/// `[]`) or a `new Array(...)` construction — a locally-owned fresh array.
+///
+/// Mutating such an array (`push`/`unshift`/`sort`/…) is not observable outside
+/// the declaring function: the "build up a local accumulator, then return or
+/// consume it" pattern (`const items = []; items.push(x); return items`). The
+/// array analogue of [`is_local_object_builder_binding`].
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node. A
+/// function parameter, imported binding, or `this` resolves to a
+/// non-`VariableDeclarator` declaration; a module/root-scope binding or a
+/// non-array initializer is rejected, so a mutation of a potentially-shared
+/// array stays flagged.
+#[must_use]
+pub fn is_locally_owned_array_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    if scoping.symbol_scope_id(sym_id) == scoping.root_scope_id() {
+        return false;
+    }
+    let decl_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_id))
+        .chain(nodes.ancestor_kinds(decl_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(decl) => Some(decl.init.as_ref()),
+            _ => None,
+        })
+        .flatten()
+        .is_some_and(is_array_initializer)
+}
+
 /// True when `call` is `JSON.<method>(...)` — a `StaticMemberExpression` callee
 /// whose object is the identifier `JSON` and whose property is `method`.
 pub fn is_json_method_call(call: &oxc_ast::ast::CallExpression, method: &str) -> bool {
