@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ignore::gitignore::Gitignore;
+use oxc_resolver::{ResolveOptions, Resolver};
 use serde_json::Value;
 
 use crate::config::Config;
@@ -1918,27 +1919,64 @@ fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
 
     let mut merged = parse_tsconfig_value(&json);
 
-    if let Some(extends) = json.get("extends").and_then(|v| v.as_str()) {
-        let parent_path = resolve_extends(path, extends);
-        if let Some(parent) = load_tsconfig_file(&parent_path, depth + 1) {
-            merged = merge_tsconfig(parent, merged);
-        }
+    if let Some(extends) = json.get("extends").and_then(|v| v.as_str())
+        && let Some(parent_path) = resolve_extends(path, extends)
+        && let Some(parent) = load_tsconfig_file(&parent_path, depth + 1)
+    {
+        merged = merge_tsconfig(parent, merged);
     }
 
     Some(merged)
 }
 
-/// Resolve an `extends` reference relative to the directory containing the
-/// referring tsconfig. Only relative-path strings are handled here; package
-/// references (e.g. `"@tsconfig/node20/tsconfig.json"`) require node_modules
-/// resolution which isn't wired up yet.
-fn resolve_extends(referrer: &Path, extends: &str) -> PathBuf {
-    let dir = referrer.parent().unwrap_or_else(|| Path::new("."));
-    let mut candidate = dir.join(extends);
-    if candidate.extension().is_none() && !candidate.is_file() {
-        candidate.set_extension("json");
+/// Resolve an `extends` reference to the tsconfig file it names, or `None` when
+/// a package specifier resolves to nothing (the caller then keeps only the
+/// referrer's own options, degrading exactly as an unreadable file does).
+///
+/// Relative (`./…`, `../…`) and absolute references resolve against the
+/// directory containing the referring tsconfig, appending `.json` when the
+/// reference carries no extension. Non-relative references — a bare `pkg/…` or
+/// scoped `@scope/pkg/…` specifier — are resolved through Node module
+/// resolution against `node_modules` (the same algorithm TypeScript applies),
+/// so a config centralized in a workspace or published package
+/// (`@backstage/cli/config/tsconfig.json`) is found and its inherited
+/// `compilerOptions` participate in the merge.
+fn resolve_extends(referrer: &Path, extends: &str) -> Option<PathBuf> {
+    if extends.starts_with('.') || Path::new(extends).is_absolute() {
+        let dir = referrer.parent().unwrap_or_else(|| Path::new("."));
+        let mut candidate = dir.join(extends);
+        if candidate.extension().is_none() && !candidate.is_file() {
+            candidate.set_extension("json");
+        }
+        return Some(candidate);
     }
-    candidate
+    resolve_package_extends(referrer, extends)
+}
+
+/// Resolve a non-relative `extends` specifier (`@scope/pkg/config/tsconfig.json`,
+/// `pkg/tsconfig.json`) to the on-disk tsconfig it names, walking `node_modules`
+/// upward from the referring tsconfig's directory and following workspace
+/// symlinks. Reuses `oxc_resolver` — already a dependency for the import graph —
+/// so no separate node_modules walk is maintained. Returns `None` when the
+/// specifier resolves to nothing (missing package, or a subpath the package's
+/// `exports` map does not expose).
+fn resolve_package_extends(referrer: &Path, specifier: &str) -> Option<PathBuf> {
+    let referrer_dir = referrer.parent()?;
+    let resolver = Resolver::new(ResolveOptions {
+        // A tsconfig `extends` names a `.json`; listing the extension lets an
+        // extensionless subpath (`@scope/pkg/config/tsconfig`) resolve to
+        // `…/config/tsconfig.json`.
+        extensions: vec![".json".into()],
+        condition_names: vec![
+            "import".into(),
+            "require".into(),
+            "node".into(),
+            "default".into(),
+        ],
+        ..Default::default()
+    });
+    let resolved = resolver.resolve(referrer_dir, specifier).ok()?;
+    Some(resolved.path().to_path_buf())
 }
 
 /// Parse a single tsconfig JSON value into a `Tsconfig`. Splitting this out
