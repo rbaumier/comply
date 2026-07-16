@@ -152,7 +152,8 @@ fn collect_returns_stmt(
                 match classify_return_expr(arg, source) {
                     ReturnKind::Sync => *has_sync = true,
                     ReturnKind::Async => *has_async = true,
-                    ReturnKind::Unknown => {}
+                    // Error channel and unclassifiable returns count as neither.
+                    ReturnKind::Error | ReturnKind::Unknown => {}
                 }
             }
         }
@@ -205,6 +206,10 @@ fn collect_returns_stmt(
 enum ReturnKind {
     Sync,
     Async,
+    /// The rejection/error channel — `Promise.reject(...)`, semantically a
+    /// `throw`. It never resolves to a usable value, so like a `throw` statement
+    /// it counts toward neither `has_sync` nor `has_async`.
+    Error,
     Unknown,
 }
 
@@ -220,11 +225,15 @@ fn classify_return_expr(expr: &Expression, source: &str) -> ReturnKind {
             }
         }
         Expression::CallExpression(call) => {
-            let callee_text = &source[call.callee.span().start as usize..call.callee.span().end as usize];
-            if callee_text.starts_with("Promise.") {
-                ReturnKind::Async
+            if is_promise_reject_callee(&call.callee) {
+                ReturnKind::Error
             } else {
-                ReturnKind::Unknown
+                let callee_text = &source[call.callee.span().start as usize..call.callee.span().end as usize];
+                if callee_text.starts_with("Promise.") {
+                    ReturnKind::Async
+                } else {
+                    ReturnKind::Unknown
+                }
             }
         }
         Expression::StringLiteral(_)
@@ -237,6 +246,20 @@ fn classify_return_expr(expr: &Expression, source: &str) -> ReturnKind {
         Expression::Identifier(_) => ReturnKind::Sync,
         _ => ReturnKind::Unknown,
     }
+}
+
+/// True when `callee` is the static member expression `Promise.reject` (object
+/// identifier `Promise`, property `reject`). Keyed on the member-expression
+/// structure rather than a substring so `foo.reject(...)` or a `reject(...)`
+/// free call are not mistaken for it.
+fn is_promise_reject_callee(callee: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "reject" {
+        return false;
+    }
+    matches!(&member.object, Expression::Identifier(ident) if ident.name.as_str() == "Promise")
 }
 
 #[cfg(test)]
@@ -382,6 +405,50 @@ mod tests {
         // genuinely mix sync `T` and async `Promise<T>`, so it is a `TSUnionType`,
         // not a single `Promise` reference, and is not skipped.
         let src = "function f(c: boolean): number | Promise<number> { if (c) return 1; return Promise.resolve(2); }";
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_sync_value_with_promise_reject_error_channel() {
+        // Regression for #7518 — zxwk1998/vue-admin-better axios response
+        // interceptor. `Promise.reject(...)` is the rejection/error channel
+        // (equivalent to `throw`), not a resolvable async value, so a happy-path
+        // sync `return data` (identifier) mixed only with error-path rejections
+        // is not a mix. Without the fix the reject branches count as async and,
+        // combined with the sync `return data`, the arrow is wrongly flagged.
+        let src = "const f = (response) => { const data = response.data; if (data == null) return Promise.reject('empty'); if (data.code === 0) { return data; } else { return Promise.reject('error'); } };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_function_decl_sync_value_with_promise_reject() {
+        // Function-declaration form of #7518.
+        let src = "function f(c: boolean) { if (!c) return Promise.reject('bad'); return 1; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_sync_value_mixed_with_promise_resolve() {
+        // Control for #7518: `Promise.resolve(...)` is a real resolvable async
+        // value, so mixing it with a sync return still flags.
+        let src = "function f(c: boolean) { if (c) return 1; return Promise.resolve(2); }";
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_sync_value_mixed_with_new_promise() {
+        // Control for #7518: a real `new Promise(...)` value mixed with a sync
+        // return still flags — only the reject channel is exempt.
+        let src = "function f(c: boolean) { if (c) return 1; return new Promise((resolve) => resolve(2)); }";
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_promise_reject_mixed_with_real_promise_value() {
+        // A `Promise.reject(...)` error branch does not launder a genuine
+        // sync/async mix: sync `return 1` plus a resolvable `Promise.resolve(2)`
+        // still flags even when a reject branch is also present.
+        let src = "function f(a: number) { if (a === 0) return Promise.reject('x'); if (a === 1) return 1; return Promise.resolve(2); }";
         assert!(!run(src).is_empty());
     }
 }
