@@ -708,4 +708,58 @@ mod tests {
         "#;
         assert!(!run(src).is_empty());
     }
+
+    #[test]
+    fn no_fp_on_array_of_type_parameter_union() {
+        // Regression #7504 (medplum/medplum, array.ts) — the union `T[] | undefined`
+        // repeats across `arrayify`'s overload and implementation signatures, but
+        // the member `T[]` (a `TSArrayType`) wraps the enclosing type parameter
+        // `T`, which is not in scope at module level. TypeScript also requires an
+        // overload and its implementation to be written identically, so there is
+        // nothing to extract.
+        let src = r#"
+            export function arrayify<T>(value: NonNullable<T> | NonNullable<T>[]): T[];
+            export function arrayify<T>(value: T | T[] | undefined): T[] | undefined;
+            export function arrayify<T>(value: T | T[] | undefined): T[] | undefined {
+              if (value === undefined) {
+                return undefined;
+              } else if (Array.isArray(value)) {
+                return value;
+              } else {
+                return [value];
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_keyof_and_tuple_of_type_parameter_union() {
+        // Regression #7504 — the same class for the other element-wrapping forms:
+        // `keyof T` (a `TSTypeOperatorType`) and the tuple `[T, string]` (a
+        // `TSTupleType`) each hold the enclosing `T` and are equally unhoistable,
+        // so a union repeated across overload signatures must not be flagged.
+        let src = r#"
+            function pick<T>(x: keyof T | undefined): keyof T | undefined;
+            function pick<T>(x: keyof T | undefined): keyof T | undefined { return x; }
+            function pair<T>(x: [T, string] | undefined): [T, string] | undefined;
+            function pair<T>(x: [T, string] | undefined): [T, string] | undefined { return x; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_concrete_array_union() {
+        // Control for #7504 — a repeated union whose array member is a concrete
+        // type (`string[]`, no enclosing type parameter anywhere) is hoistable, so
+        // the array recursion must resolve to `false` here and still flag the
+        // repetition. The new element-wrapping arms must not suppress concrete-type
+        // arrays.
+        let src = r#"
+            function a(x: string[] | undefined) {}
+            function b(x: string[] | undefined) {}
+            function c(x: string[] | undefined) {}
+        "#;
+        assert!(!run(src).is_empty());
+    }
 }

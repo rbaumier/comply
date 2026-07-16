@@ -4673,12 +4673,13 @@ fn ident_resolves_to_type_parameter(
 
 /// True when `t` references at least one enclosing-scope type parameter, or the
 /// polymorphic `this` type, looking through union/intersection members,
-/// parentheses, generic type arguments, conditional types, and indexed accesses
-/// (so `ReturnType<CallFunction>`, `CTEBuilderCallback<N>`,
-/// `T extends A ? T['x'] : string`, and `this['_']['data']` are all seen to
-/// reference their parameter or `this`). Such a type is instantiation-dependent:
-/// its concrete form is deferred to whatever the parameter (or `this`) is bound
-/// to per call, so it cannot be lifted to a module-level alias.
+/// parentheses, generic type arguments, conditional types, indexed accesses,
+/// array/tuple element types, and type operators (so `ReturnType<CallFunction>`,
+/// `CTEBuilderCallback<N>`, `T extends A ? T['x'] : string`, `this['_']['data']`,
+/// `T[]`, `keyof T`, and `[T, U]` are all seen to reference their parameter or
+/// `this`). Such a type is instantiation-dependent: its concrete form is deferred
+/// to whatever the parameter (or `this`) is bound to per call, so it cannot be
+/// lifted to a module-level alias.
 #[must_use]
 pub fn type_references_enclosing_type_parameter(
     t: &oxc_ast::ast::TSType,
@@ -4730,7 +4731,47 @@ pub fn type_references_enclosing_type_parameter(
         TSType::TSParenthesizedType(p) => {
             type_references_enclosing_type_parameter(&p.type_annotation, semantic)
         }
+        // Element-wrapping forms inherit scope dependence from the type they
+        // wrap: `T[]` (array), `keyof T` / `readonly T[]` (type operator), and
+        // `[T, U]` (tuple) each hold an enclosing type parameter that is equally
+        // unhoistable, so recurse into the wrapped element type(s).
+        TSType::TSArrayType(arr) => {
+            type_references_enclosing_type_parameter(&arr.element_type, semantic)
+        }
+        TSType::TSTypeOperatorType(op) => {
+            type_references_enclosing_type_parameter(&op.type_annotation, semantic)
+        }
+        TSType::TSTupleType(tuple) => tuple
+            .element_types
+            .iter()
+            .any(|el| tuple_element_references_enclosing_type_parameter(el, semantic)),
+        // A named tuple member (`[first: T]`) labels its element; the scope
+        // dependence lives in the inner element type.
+        TSType::TSNamedTupleMember(member) => {
+            tuple_element_references_enclosing_type_parameter(&member.element_type, semantic)
+        }
         _ => false,
+    }
+}
+
+/// Recurse into a single tuple element, unwrapping optional (`[T?]`) and rest
+/// (`[...T[]]`) markers, so an enclosing type parameter held anywhere inside a
+/// tuple member is seen.
+fn tuple_element_references_enclosing_type_parameter(
+    el: &oxc_ast::ast::TSTupleElement,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::TSTupleElement;
+    match el {
+        TSTupleElement::TSOptionalType(opt) => {
+            type_references_enclosing_type_parameter(&opt.type_annotation, semantic)
+        }
+        TSTupleElement::TSRestType(rest) => {
+            type_references_enclosing_type_parameter(&rest.type_annotation, semantic)
+        }
+        other => other
+            .as_ts_type()
+            .is_some_and(|inner| type_references_enclosing_type_parameter(inner, semantic)),
     }
 }
 
