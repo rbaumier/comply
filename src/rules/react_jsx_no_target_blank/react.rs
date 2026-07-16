@@ -21,12 +21,22 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_element"] => |node, sou
     let mut cursor = tag_node.walk();
     let mut has_target_blank = false;
     let mut has_safe_rel = false;
+    let mut has_href = false;
 
     for child in tag_node.children(&mut cursor) {
         if child.kind() != "jsx_attribute" {
             continue;
         }
         let Some(name_text) = crate::rules::jsx::jsx_attribute_name(child, source) else { continue };
+
+        // A navigating anchor is the only one that can leak `window.opener`; its
+        // href may be a static string or a bound `href={expr}`, so key on the
+        // attribute name rather than the value form.
+        if name_text == "href" {
+            has_href = true;
+            continue;
+        }
+
         let Some(value_text) = crate::rules::jsx::jsx_attribute_string_value(child, source) else {
             continue;
         };
@@ -46,7 +56,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_element"] => |node, sou
         }
     }
 
-    if has_target_blank && !has_safe_rel {
+    if has_target_blank && has_href && !has_safe_rel {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -137,6 +147,21 @@ mod tests {
     #[test]
     fn allows_no_target_blank() {
         let src = r#"const x = <a href="https://example.com">link</a>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bound_href_without_rel() {
+        // A bound `href={url}` still navigates, so an unsafe/absent rel is a risk.
+        let src = r#"const x = <a href={url} target="_blank">link</a>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_target_blank_without_href() {
+        // Issue #7517: a non-navigating anchor opens no document, so there is no
+        // `window.opener` to leak.
+        let src = r#"const x = <a target="_blank">link</a>;"#;
         assert!(run(src).is_empty());
     }
 }

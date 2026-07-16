@@ -3,7 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::html_rel_helpers::rel_is_safe;
-use crate::rules::vue_template_helpers::{attr_value, extract_elements, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    attr_value, collect_attr_names, extract_elements, is_vue_file,
+};
 
 #[derive(Debug)]
 pub struct Check;
@@ -21,6 +23,17 @@ impl TextCheck for Check {
         for elem in extract_elements(ctx.source) {
             let target = attr_value(elem.attrs, "target");
             if target != Some("_blank") {
+                continue;
+            }
+            // Reverse-tabnabbing needs a document to open: only an anchor that
+            // navigates can leak `window.opener`. Require a navigable href —
+            // static `href` or a bound `:href`/`v-bind:href` — so a
+            // `target="_blank"` element with no href (e.g. a popover trigger)
+            // is not flagged.
+            let has_href = collect_attr_names(elem.attrs)
+                .iter()
+                .any(|name| *name == "href" || name.ends_with(":href"));
+            if !has_href {
                 continue;
             }
             let has_safe_rel = attr_value(elem.attrs, "rel").is_some_and(rel_is_safe);
@@ -89,6 +102,21 @@ mod tests {
     fn flags_substring_trap() {
         // `notnoopener` merely contains `noopener` as a substring; it is not the token.
         let source = "<template>\n  <a href=\"https://example.com\" target=\"_blank\" rel=\"notnoopener\">link</a>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn ignores_target_blank_without_href() {
+        // A non-navigating anchor (no href) opens no document, so there is no
+        // `window.opener` to leak — issue #7517 (an `el-popover` reference).
+        let source = "<template>\n  <a slot=\"reference\" target=\"_blank\">\n    <el-button>QQ</el-button>\n  </a>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bound_href_without_safe_rel() {
+        // A bound `:href` still navigates, so an unsafe `rel` is a real risk.
+        let source = "<template>\n  <a :href=\"url\" target=\"_blank\">link</a>\n</template>";
         assert_eq!(run(source).len(), 1);
     }
 }
