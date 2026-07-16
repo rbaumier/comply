@@ -4,11 +4,23 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{CallExpression, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when `call` is `JSON.<method>(...)` — a `StaticMemberExpression` callee
+/// whose object is the identifier `JSON` and whose property is `method`.
+fn is_json_method_call(call: &CallExpression, method: &str) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    obj.name.as_str() == "JSON" && member.property.name.as_str() == method
+}
 
 /// Walk up semantic parents to check if node is inside a try body.
 /// Stop at function boundaries (outer try can't catch inner function throws
@@ -64,14 +76,23 @@ impl OxcCheck for Check {
             return;
         };
         // Callee must be `JSON.parse`.
-        let Expression::StaticMemberExpression(member) = &call.callee else {
+        if !is_json_method_call(call, "parse") {
             return;
-        };
-        let Expression::Identifier(obj) = &member.object else {
-            return;
-        };
-        if obj.name.as_str() != "JSON" || member.property.name.as_str() != "parse" {
-            return;
+        }
+
+        // Skip the deep-clone idiom `JSON.parse(JSON.stringify(x))`: for any
+        // serializable `x`, `JSON.stringify` yields valid JSON, so the parse is
+        // not the untrusted-input risk this rule targets. (A top-level
+        // `undefined`/function/symbol stringifies to `undefined` and
+        // `JSON.parse(undefined)` does throw, but flagging the clone idiom over
+        // that edge is net noise.) A spread or non-call first argument stays
+        // flagged (`.as_expression()` yields `None` for a spread).
+        if let Some(Expression::CallExpression(arg_call)) =
+            call.arguments.first().and_then(|arg| arg.as_expression())
+        {
+            if is_json_method_call(arg_call, "stringify") {
+                return;
+            }
         }
 
         if is_inside_try_body(node, semantic) {
@@ -138,5 +159,39 @@ mod gated_tests {
         // The remediation (wrap in try) keeps the rule silent in production.
         let src = r#"export function handle(text: string) { try { return JSON.parse(text); } catch { return null; } }"#;
         assert!(run_rule_gated(&Check, src, "src/api/middleware/handler.ts").is_empty());
+    }
+
+    #[test]
+    fn skips_json_parse_of_json_stringify_round_trip() {
+        // #7560: `JSON.parse(JSON.stringify(x))` is the deep-clone idiom. For
+        // any serializable `x`, `JSON.stringify` yields valid JSON, so the parse
+        // is not the untrusted-input risk this rule targets — flagging it would
+        // be noise.
+        let src = r#"export const clone = <T>(obj: T): T => JSON.parse(JSON.stringify(obj));"#;
+        assert!(run_rule_gated(&Check, src, "src/utils/clone.ts").is_empty());
+    }
+
+    #[test]
+    fn skips_json_parse_of_json_stringify_with_as_cast() {
+        // The `as T` cast wraps the parse call, not its argument — the safe
+        // round-trip argument shape is unchanged, so it stays silent.
+        let src = r#"export const clone = <T extends object>(obj: T): T => JSON.parse(JSON.stringify(obj)) as T;"#;
+        assert!(run_rule_gated(&Check, src, "src/utils/clone.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_json_parse_of_awaited_text() {
+        // An awaited `res.text()` is untrusted input, not a stringify round-trip
+        // — keep flagging.
+        let src = r#"export async function load(res: Response) { return JSON.parse(await res.text()); }"#;
+        assert_eq!(run_rule_gated(&Check, src, "src/api/load.ts").len(), 1);
+    }
+
+    #[test]
+    fn flags_json_parse_of_non_json_stringify() {
+        // The skip is specific to `JSON.stringify`: a `stringify` method on any
+        // other object gives no validity guarantee, so it stays flagged.
+        let src = r#"export function load(notJson: { stringify: (x: unknown) => string }, x: unknown) { return JSON.parse(notJson.stringify(x)); }"#;
+        assert_eq!(run_rule_gated(&Check, src, "src/api/load.ts").len(), 1);
     }
 }
