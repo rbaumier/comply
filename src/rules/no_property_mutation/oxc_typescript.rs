@@ -736,6 +736,35 @@ mod tests {
         crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "crypto.js", crate::project::default_static_project_ctx(), &file)
     }
 
+    /// Build a temp project from `(rel_path, source)` pairs, index it so the
+    /// cross-file `ImportIndex` is populated, and run the rule on `target_rel`.
+    fn run_on_project(files: &[(&str, &str)], target_rel: &str) -> Vec<Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        let target_path = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let canon = fs::canonicalize(&target_path).unwrap();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_oxc_check(&Check, &source, &canon, &project, file)
+    }
+
     #[test]
     fn skips_in_benchmark_file_issue_4797() {
         // Benchmark scripts (`benches/scripts/v8-benches/crypto.js`) are
@@ -1606,6 +1635,114 @@ mod tests {
             function f() { cfg.enabled = true; }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Vue ref via Ref-typed parameter / imported ref — issue #7603
+
+    #[test]
+    fn allows_value_mutation_on_ref_typed_parameter_issue_7603() {
+        // A composable receives a `Ref<T>` / `ModelRef<T>` as a parameter; the
+        // caller produced the ref, and `.value` assignment is the only way to
+        // update it. The parameter's type annotation is the structural signal.
+        let src = r#"
+            export function useIME(content: ModelRef<string>) {
+                content.value = 'x';
+            }
+            function useNavBase(queryClicks: Ref<number>) {
+                queryClicks.value += 1;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_ref_factory_defaulted_parameter_issue_7603() {
+        // An annotation-less parameter defaulting to a Vue ref factory call is a
+        // `Ref<T>` regardless of the caller's argument.
+        let src = r#"
+            import { ref } from 'vue'
+            function useNavBase(queryClicks = ref(0)) {
+                queryClicks.value += 1;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_plain_object_typed_parameter_issue_7603() {
+        // Negative space: a parameter typed `{ value: number }` is a plain object,
+        // not a ref — the ref-type match is on the ref-wrapper name set only, so
+        // its `.value =` write is a genuine mutation and stays flagged.
+        let src = r#"
+            function f(box: { value: number }) {
+                box.value = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_value_mutation_on_imported_ref_issue_7603() {
+        // `isDark` / `hmrSkipTransition` are refs exported from centralized state
+        // modules; a `.value =` write on the imported binding is a reactive write.
+        let files = &[
+            (
+                "logic/dark.ts",
+                "import { computed } from 'vue'\nexport const isDark = computed({ get() { return true }, set(_v) {} })",
+            ),
+            (
+                "state/index.ts",
+                "import { ref } from 'vue'\nexport const hmrSkipTransition = ref(false)",
+            ),
+            (
+                "composables/useEmbeddedCtrl.ts",
+                "import { isDark } from '../logic/dark'\n\
+                 import { hmrSkipTransition } from '../state'\n\
+                 export function useCtrl(color: string) {\n\
+                     isDark.value = color === 'dark';\n\
+                     hmrSkipTransition.value = false;\n\
+                 }",
+            ),
+        ];
+        assert!(run_on_project(files, "composables/useEmbeddedCtrl.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_imported_non_ref_const_issue_7603() {
+        // Negative space: an imported const bound to a plain object (not a ref
+        // factory) is a real object; its `.value =` write stays flagged.
+        let files = &[
+            ("state/plain.ts", "export const box = { value: 0 };"),
+            (
+                "composables/useThing.ts",
+                "import { box } from '../state/plain'\n\
+                 export function useThing() { box.value = 1; }",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "composables/useThing.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_local_shadow_of_imported_ref_issue_7603() {
+        // Negative space: a local binding that shadows an imported ref name is a
+        // distinct value, not the ref. The imported-ref exemption resolves the
+        // actual binding (not a name match), so the local's `.value =` stays
+        // flagged even though a same-named import is a ref.
+        let files = &[
+            (
+                "state/index.ts",
+                "import { ref } from 'vue'\nexport const flag = ref(false)",
+            ),
+            (
+                "composables/useThing.ts",
+                "import { flag } from '../state'\n\
+                 export function useThing() {\n\
+                     const flag = getThing();\n\
+                     flag.value = 1;\n\
+                 }",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "composables/useThing.ts").len(), 1);
     }
 
     #[test]

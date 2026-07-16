@@ -82,9 +82,14 @@ impl OxcCheck for Check {
                 if is_react_display_name_assignment(assign) {
                     return;
                 }
-                // Vue 3 reactive ref: `count.value = x` drives reactivity.
+                // Vue 3 reactive ref: `count.value = x` drives reactivity. Also
+                // covers a `Ref<T>` destructured from a composable call
+                // (`const { error } = useThing(); error.value = x`).
                 if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
-                    && is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
+                    && (is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
+                        || crate::oxc_helpers::is_destructured_call_ref_value_target(
+                            member, semantic,
+                        ))
                 {
                     return;
                 }
@@ -118,10 +123,14 @@ impl OxcCheck for Check {
             }
             // obj.count++, --obj.count
             AstKind::UpdateExpression(update) => {
-                // Vue 3 reactive ref: `count.value++` drives reactivity.
+                // Vue 3 reactive ref: `count.value++` drives reactivity. Also
+                // covers a `Ref<T>` destructured from a composable call.
                 if let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
                     &update.argument
-                    && is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
+                    && (is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
+                        || crate::oxc_helpers::is_destructured_call_ref_value_target(
+                            member, semantic,
+                        ))
                 {
                     return;
                 }
@@ -646,6 +655,35 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
+    /// Build a temp project from `(rel_path, source)` pairs, index it so the
+    /// cross-file `ImportIndex` is populated, and run the rule on `target_rel`.
+    fn run_on_project(files: &[(&str, &str)], target_rel: &str) -> Vec<Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        let target_path = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let canon = fs::canonicalize(&target_path).unwrap();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_oxc_check(&Check, &source, &canon, &project, file)
+    }
+
     #[test]
     fn ignores_push_inside_result_gen_with_loop() {
         // Regression for rbaumier/comply#23 — canonical Result.gen accumulator.
@@ -1072,6 +1110,64 @@ mod tests {
             r.config = 5;
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Vue ref via destructured composable / Ref-typed param / imported ref — issue #7603
+
+    #[test]
+    fn allows_value_mutation_on_composable_destructured_ref_issue_7603() {
+        // Parity with no-property-mutation: a `Ref<T>` destructured from a
+        // composable call is mutated only through `.value`.
+        let src = r#"
+            const { queryClicks } = useNav();
+            function bump() { queryClicks.value += 1; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_ref_typed_parameter_issue_7603() {
+        // A `Ref<T>` / `ModelRef<T>` parameter is a ref by its type annotation;
+        // `.value` assignment is the intended reactive update.
+        let src = r#"
+            function useNavBase(queryClicks: Ref<number>) {
+                queryClicks.value += 1;
+            }
+            export function useIME(content: ModelRef<string>) {
+                content.value = 'x';
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_value_property_on_composable_destructured_binding_issue_7603() {
+        // Negative space for the parity fallback: the destructured-composable
+        // exemption is `.value`-restricted, so a non-`.value` property write on a
+        // const call-destructured binding stays flagged.
+        let src = r#"
+            const { cfg } = useThing();
+            cfg.enabled = true;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_value_mutation_on_imported_ref_issue_7603() {
+        // A ref exported from a centralized state module; `.value =` on the
+        // imported binding is a reactive write.
+        let files = &[
+            (
+                "state/index.ts",
+                "import { ref } from 'vue'\nexport const hmrSkipTransition = ref(false)",
+            ),
+            (
+                "composables/useNav.ts",
+                "import { hmrSkipTransition } from '../state'\n\
+                 export function useNav() { hmrSkipTransition.value = false; }",
+            ),
+        ];
+        assert!(run_on_project(files, "composables/useNav.ts").is_empty());
     }
 
     // TypedArray indexed element assignment — issue #5328
