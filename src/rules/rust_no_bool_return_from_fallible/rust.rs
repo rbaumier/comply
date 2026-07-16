@@ -37,6 +37,16 @@
 //!   the `BTreeSet::remove` idiom. `Option` carries no error, so the literal
 //!   is structural state, not a swallowed failure. A `Result` match
 //!   (`Ok`/`Err`) keeps flagging — its `Err` is a genuine failure path.
+//! - Total guard-clause predicates: every `return`ed value and the tail is a
+//!   *direct* boolean literal — bare `return false;` guards and a literal tail
+//!   (`if <cmp> { return false; } … true`), not the `if op() { true } else {
+//!   false }` collapse — *and* the body performs no operation whose failure it
+//!   could swallow: no `?` (`try_expression`), no `Ok`/`Err` construction or
+//!   match pattern, no `.is_ok()`/`.is_err()` call, no discarded call statement
+//!   (`persist(x);`). With a provably infallible body there is no error to hoist
+//!   into `Result::Err`, so `bool` is correct (generalizes the `Some`/`None`
+//!   case to guard clauses). A body that maps a condition onto literals or
+//!   swallows an operation keeps flagging — that is the rule's real target.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -170,6 +180,16 @@ impl AstCheck for Check {
         // `Result`, so the literal is structural state, not a swallowed
         // failure. A `Result` match (`Ok`/`Err`) is not exempted here.
         if returns_option_presence_bool(node, source_bytes) {
+            return;
+        }
+        // A total guard-clause predicate: every `return`ed value and the tail is
+        // a direct bool literal (`if <cmp> { return false; } … true`) and the
+        // body performs no operation whose failure it could swallow. With a
+        // provably infallible body there is no error to surface as a `Result`,
+        // so the `bool` is correct — the `Some`/`None` case generalized to guard
+        // clauses. A condition-to-literal collapse or a swallowed operation
+        // still flags below.
+        if returns_total_predicate(node, source_bytes) {
             return;
         }
         // mdBook tutorial example code (an ancestor `book.toml`) is
@@ -310,11 +330,18 @@ fn branch_body_is_computed(body: tree_sitter::Node) -> bool {
 }
 
 /// Records the boolean-literal outcomes a function can return.
+///
+/// `saw_indirect` marks that at least one literal was reached by descending
+/// into an `if`/`match` expression in *value* position (`if c { true } else {
+/// false }`). `returns_single_constant_bool` ignores it; `returns_total_predicate`
+/// uses it to tell a guard-clause predicate (bare `return false;` / literal
+/// tail) from that condition-to-literal mapping, which is the rule's smell.
 #[derive(Default)]
 struct BoolReturns {
     saw_true: bool,
     saw_false: bool,
     saw_non_literal: bool,
+    saw_indirect: bool,
 }
 
 /// True if every boolean value the function can return is the *same*
@@ -461,6 +488,9 @@ fn classify_return_value(expr: tree_sitter::Node, source: &[u8], returns: &mut B
 /// `else` cannot yield a bool literal on the missing arm, so it counts as a
 /// non-literal outcome.
 fn classify_if_branches(if_expr: tree_sitter::Node, source: &[u8], returns: &mut BoolReturns) {
+    // A literal reached through an `if`/`else` value is not a direct guard-clause
+    // return — it is the `if c { true } else { false }` collapse the rule targets.
+    returns.saw_indirect = true;
     match if_expr.child_by_field_name("consequence") {
         Some(cons) => classify_return_value(cons, source, returns),
         None => returns.saw_non_literal = true,
@@ -489,6 +519,9 @@ fn classify_if_branches(if_expr: tree_sitter::Node, source: &[u8], returns: &mut
 
 /// Classifies every arm body of a `match` expression.
 fn classify_match_arms(match_expr: tree_sitter::Node, source: &[u8], returns: &mut BoolReturns) {
+    // A literal reached through a `match` value is not a direct guard-clause
+    // return (see `classify_if_branches`).
+    returns.saw_indirect = true;
     let Some(body) = match_expr.child_by_field_name("body") else {
         returns.saw_non_literal = true;
         return;
@@ -528,6 +561,109 @@ fn collect_explicit_returns(node: tree_sitter::Node, source: &[u8], returns: &mu
     for child in node.children(&mut cursor) {
         collect_explicit_returns(child, source, returns);
     }
+}
+
+/// True if the function is a *total guard-clause predicate*: every value it can
+/// return — its tail expression and every `return <expr>;` in its own body — is
+/// a **direct** boolean literal (a bare `true` / `false`, not one produced by an
+/// `if`/`match` value expression), *and* its body performs no operation whose
+/// failure it could be swallowing. A guard-clause predicate (`if <cmp> { return
+/// false; } … true`) collapses no operation's failure into its `bool`: with a
+/// provably infallible body there is no error to surface as `Result::Err`, so
+/// `bool` is the correct return type. This generalizes
+/// `returns_option_presence_bool` ("no `Result` to offer instead") from the
+/// `Some`/`None` tail idiom to guard clauses.
+///
+/// Every condition is required, and each guards a distinct true-positive:
+/// - `saw_non_literal` — a forwarded/computed return is a real value.
+/// - `saw_indirect` — a literal produced by an `if`/`match` *value* is the
+///   `if op() { true } else { false }` collapse the rule exists to flag.
+/// - `body_swallows_operation` — a `?`, `Ok`/`Err`, `.is_ok()`/`.is_err()`, or a
+///   discarded call statement is an operation whose failure is being dropped.
+fn returns_total_predicate(func: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    let mut returns = BoolReturns::default();
+    if let Some(tail) = block_tail_expression(body) {
+        classify_return_value(tail, source, &mut returns);
+    }
+    collect_explicit_returns(body, source, &mut returns);
+
+    if returns.saw_non_literal
+        || returns.saw_indirect
+        || !(returns.saw_true || returns.saw_false)
+    {
+        return false;
+    }
+    !body_swallows_operation(body, source)
+}
+
+/// True if `node`'s subtree performs an operation whose failure a total
+/// predicate could be swallowing: the `?` operator (`try_expression`), an
+/// `Ok(..)`/`Err(..)` construction or match pattern, a `.is_ok()`/`.is_err()`
+/// call, or a bare call/`await` statement whose result is discarded
+/// (`persist(x);`). Closures, `async` blocks, and nested `fn`s are not descended
+/// into — an operation there belongs to that inner boundary, not this function
+/// (mirrors `collect_explicit_returns`).
+fn body_swallows_operation(node: tree_sitter::Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "closure_expression" | "async_block" | "function_item" => return false,
+        "try_expression" => return true,
+        "call_expression" => {
+            if let Some(function) = node.child_by_field_name("function")
+                && call_is_fallible(function, source)
+            {
+                return true;
+            }
+        }
+        "tuple_struct_pattern" => {
+            if let Some(type_node) = node.child_by_field_name("type")
+                && path_tail_is_result_variant(type_node, source)
+            {
+                return true;
+            }
+        }
+        "expression_statement" => {
+            // A call/`await` performed for effect with its result dropped is an
+            // operation that could be failing silently (`persist(x);`). A macro
+            // statement (`debug_assert!`, `println!`) is not counted.
+            if node
+                .named_child(0)
+                .is_some_and(|inner| matches!(inner.kind(), "call_expression" | "await_expression"))
+            {
+                return true;
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| body_swallows_operation(child, source))
+}
+
+/// True if a `call_expression`'s `function` operand marks a fallible call: a
+/// `.is_ok()`/`.is_err()` method (the callee is a `field_expression` whose
+/// `field` is `is_ok`/`is_err`), or an `Ok(..)`/`Err(..)` construction (the
+/// callee path ends in `Ok`/`Err`).
+fn call_is_fallible(function: tree_sitter::Node, source: &[u8]) -> bool {
+    if function.kind() == "field_expression" {
+        return function
+            .child_by_field_name("field")
+            .and_then(|f| f.utf8_text(source).ok())
+            .is_some_and(|f| f == "is_ok" || f == "is_err");
+    }
+    path_tail_is_result_variant(function, source)
+}
+
+/// True if a path node's final `::`-segment names a `Result` variant — `Ok` or
+/// `Err`, plain or module-qualified (`Result::Ok`, `std::result::Result::Err`).
+fn path_tail_is_result_variant(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
+    let tail = text.rsplit("::").next().unwrap_or(text).trim();
+    tail == "Ok" || tail == "Err"
 }
 
 fn looks_like_action(name: &str) -> bool {
@@ -1236,6 +1372,111 @@ mod tests {
         let src = "\
             /// Updates the config.\n\
             fn update_config(&mut self) -> bool { if write() { true } else { false } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #7563: a total guard-clause predicate — every return/tail is a bool
+    // literal (mixed `true`/`false`) and the body has no fallible construct —
+    // has no error to hoist into a `Result`, so `bool` is correct ---
+
+    #[test]
+    fn allows_total_guard_clause_predicate() {
+        // meilisearch `ListFields::apply_filter` — a pure total predicate:
+        // every `return`/tail is a bool literal, the guards are pure
+        // comparisons, and the body has no `?`/`Ok`/`Err`/`.is_err()`.
+        let src = "\
+            fn apply_filter(&self, field: &Field) -> bool {\n\
+                if let Some(filter) = &self.filter {\n\
+                    if let Some(patterns) = &filter.attribute_patterns {\n\
+                        if matches!(patterns.match_str(field.name), PatternMatch::NoMatch) { return false; }\n\
+                    }\n\
+                    if let Some(displayed) = &filter.displayed {\n\
+                        if *displayed != field.displayed.enabled { return false; }\n\
+                    }\n\
+                    return true;\n\
+                }\n\
+                true\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_condition_to_literal_collapse_despite_pure_condition() {
+        // Direct guard-clause returns are exempt, but `if <cond> { true } else
+        // { false }` maps a condition straight onto literals — the collapse the
+        // rule targets — so it still flags even with a pure condition and no
+        // operation in the body. Only bare `return <literal>;` guards qualify.
+        let src = "fn apply_rule(&self, x: &str) -> bool { if x.is_empty() { true } else { false } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #7563: negative space — bool-literal guards but the body swallows an
+    // operation, so it keeps flagging (the rule's true target) ---
+
+    #[test]
+    fn flags_total_shape_swallowing_try_operator() {
+        // Both literals reachable via direct guards and a `?` in the body: the
+        // error is being discarded into the `bool`, exactly the smell.
+        let src = "\
+            fn apply_write(&self, x: &str) -> bool {\n\
+                if x.is_empty() { return false; }\n\
+                self.flush()?;\n\
+                true\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_total_shape_swallowing_is_err() {
+        // `.is_err()` in a guard condition swallows the `Result` — the operation
+        // is in condition position, so only the fallibility-marker check catches
+        // it, not the discarded-statement one.
+        let src = "\
+            fn apply_config(&self, x: &str) -> bool {\n\
+                if x.is_empty() { return false; }\n\
+                if self.load().is_err() { return false; }\n\
+                true\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_total_shape_if_let_err_guard() {
+        // An `Err(_)` match pattern in a guard proves a real failure path even
+        // though every return is a direct literal — the pattern check is the
+        // load-bearing detector here.
+        let src = "\
+            fn apply_record(&self, x: &str) -> bool {\n\
+                if x.is_empty() { return false; }\n\
+                if let Err(_) = self.db.write() { return false; }\n\
+                true\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_total_shape_constructing_err() {
+        // `Err(..)` construction (bound, not a discarded statement) is a
+        // fallible marker: only the construction check catches it.
+        let src = "\
+            fn apply_event(&self, x: &str) -> bool {\n\
+                if x.is_empty() { return false; }\n\
+                let _pending = Err(x);\n\
+                true\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_total_shape_swallowing_discarded_call() {
+        // Direct-literal guards but a discarded call statement (`persist(x);`):
+        // an operation performed for effect whose failure is dropped.
+        let src = "\
+            fn apply_change(&self, x: &str) -> bool {\n\
+                if x.is_empty() { return false; }\n\
+                persist(x);\n\
+                true\n\
+            }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
