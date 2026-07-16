@@ -42,13 +42,30 @@
 //! `iter.map(gdbus_parse_color)`) is also left alone: such a reference uses the
 //! function as a pointer, so its signature is locked by the pointer type and
 //! relaxing `String` to `&str`/`Cow` would no longer match it (a compile error).
+//!
+//! A function carrying `#[allow(clippy::needless_pass_by_value)]` (or the
+//! `#[expect(...)]` form) is skipped entirely: that clippy lint is the canonical
+//! upstream check for the same "takes owned, only borrows" premise, so an author
+//! allowing it has already made the explicit statement that the by-value
+//! parameter is intentional.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_pub};
+use crate::rules::rust_helpers::{has_clippy_allow, is_in_test_context, is_pub};
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     if is_in_test_context(node, source) { return; }
     if !is_pub(node, source) { return; }
+
+    // The author explicitly opted out of `clippy::needless_pass_by_value` — the
+    // canonical upstream lint for "takes an owned value it only borrows", which
+    // is exactly this rule's premise — by allowing/expecting it on the function.
+    // That is the strongest acknowledgement that the by-value parameter is
+    // deliberate, so defer to it rather than double-flag a lint they already
+    // suppressed. `node` is the `function_item`, so a fn-level `#[allow(...)]` is
+    // seen directly.
+    if has_clippy_allow(node, source, "needless_pass_by_value") {
+        return;
+    }
 
     let Some(params) = node.child_by_field_name("parameters") else { return; };
     let body = node.child_by_field_name("body");
@@ -789,6 +806,37 @@ mod tests {
         // borrowed, so the warning holds.
         assert_eq!(
             run("pub fn f(s: String) -> usize { if s.is_empty() { one() } else { two() }; g() }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_fn_with_needless_pass_by_value_allow() {
+        // Repro of #7549 (surrealdb `register_physical`): the author allowed
+        // `clippy::needless_pass_by_value` — the canonical upstream lint for this
+        // rule's premise — on the fn, so the by-value `String` is deliberate.
+        // The body only borrows `s` (`s.len()`), yet the warning must stay silent.
+        assert!(
+            run("#[allow(clippy::needless_pass_by_value)]\npub fn f(s: String) -> usize { s.len() }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fn_with_needless_pass_by_value_expect() {
+        // The `#[expect(...)]` form is honored the same way as `#[allow(...)]`.
+        assert!(
+            run("#[expect(clippy::needless_pass_by_value)]\npub fn f(s: String) -> usize { s.len() }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_fn_with_unrelated_clippy_allow() {
+        // The opt-out keys on the specific lint name: an unrelated allow does not
+        // suppress the warning, so a borrowed-only `String` still flags.
+        assert_eq!(
+            run("#[allow(clippy::something_else)]\npub fn f(s: String) -> usize { s.len() }").len(),
             1
         );
     }
