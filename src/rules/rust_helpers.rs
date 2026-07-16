@@ -939,12 +939,13 @@ fn comment_has_panics_heading(text: &str) -> bool {
     })
 }
 
-/// True if `node` is preceded by a `// SAFETY:` / `// Safety:` comment on the
-/// lines directly above it. Scans upward from the node's start row, skipping
-/// blank lines, other comment lines, and outer/inner attributes (`#[cfg(...)]`,
-/// `#[allow(...)]`, …), and stops at the first line of real code. tree-sitter
-/// doesn't attach comments to the items they document, so the scan is by source
-/// text rather than by AST sibling.
+/// True if `node` is preceded by a safety-marker comment on the lines directly
+/// above it — any comment `is_safety_marker` accepts (a leading `SAFETY:` /
+/// `Safety:` / `safety.` token, or a rustdoc `# Safety` heading). Scans upward
+/// from the node's start row, skipping blank lines, other comment lines, and
+/// outer/inner attributes (`#[cfg(...)]`, `#[allow(...)]`, …), and stops at the
+/// first line of real code. tree-sitter doesn't attach comments to the items
+/// they document, so the scan is by source text rather than by AST sibling.
 ///
 /// Skipping attribute lines matters for platform-conditional impls — a
 /// `// SAFETY:` comment routinely sits above one or more `#[cfg(...)]`
@@ -969,7 +970,7 @@ pub fn has_adjacent_safety_comment(node: Node, source: &str) -> bool {
             continue;
         }
         if trimmed.starts_with("//") || trimmed.starts_with("/*") {
-            if trimmed.contains("SAFETY:") || trimmed.contains("Safety:") {
+            if is_safety_marker(trimmed) {
                 return true;
             }
             continue;
@@ -992,21 +993,18 @@ pub fn has_adjacent_safety_comment(node: Node, source: &str) -> bool {
 ///    whitespace, or end-of-comment). Covers `// SAFETY:`, `// Safety:`,
 ///    `// safety.`, `// SAFETY,`, `//SAFETY - …`, and `// SAFETY we are …`,
 ///    whose casing and terminator vary across projects;
-///  - the rustdoc `# Safety` heading (`/// # Safety`), where the
-///    keyword stands alone after a `#` with no terminator.
+///  - the rustdoc `# Safety` heading at any heading level (`/// # Safety`,
+///    `/// ## Safety`): the comment body opens with one or more `#` followed
+///    by the sole word `safety`, the section title the Rust API Guidelines
+///    and clippy's `missing_safety_doc` recognize.
 ///
 /// The `safety` keyword must lead the comment, so a comment that merely
 /// mentions the word in prose (`// the safety of this depends on X`) or
 /// embeds it in a longer word (`// safetycheck: …`) does not count.
 pub fn is_safety_marker(trimmed: &str) -> bool {
     let lower = trimmed.to_ascii_lowercase();
-    // `# Safety` rustdoc heading: a `#` heading whose sole word is `safety`.
-    if lower.split_once('#').is_some_and(|(_, after)| after.trim() == "safety") {
-        return true;
-    }
-    // `safety` as the leading token once the comment sigil and any leading
-    // whitespace are stripped, so a genuine SAFETY-documentation comment is
-    // recognized regardless of the punctuation that terminates the keyword.
+    // Strip the comment sigil and leading whitespace so both forms below
+    // inspect the comment body itself.
     let body = lower
         .strip_prefix("///")
         .or_else(|| lower.strip_prefix("//!"))
@@ -1016,6 +1014,16 @@ pub fn is_safety_marker(trimmed: &str) -> bool {
         .or_else(|| lower.strip_prefix("/*"))
         .unwrap_or(&lower)
         .trim_start();
+    // `# Safety` rustdoc heading at any level: the body opens with one or more
+    // `#` followed by the sole word `safety`.
+    if let Some(after_hashes) = body.strip_prefix('#') {
+        if after_hashes.trim_start_matches('#').trim() == "safety" {
+            return true;
+        }
+    }
+    // `safety` as the leading token of the comment body, so a genuine
+    // SAFETY-documentation comment is recognized regardless of the punctuation
+    // that terminates the keyword.
     let Some(rest) = body.strip_prefix("safety") else {
         return false;
     };

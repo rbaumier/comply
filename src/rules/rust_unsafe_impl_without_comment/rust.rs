@@ -185,4 +185,53 @@ mod tests {
                       unsafe impl Sync for Foo {}";
         assert_eq!(run_on(source).len(), 2);
     }
+
+    #[test]
+    fn allows_unsafe_impl_with_rustdoc_safety_heading_issue_7529() {
+        // Issue #7529 (apache/opendal copy.rs:54): the safety justification is
+        // written as the standard rustdoc `# Safety` section above the impl.
+        let source = "struct Copier;\n\
+                      /// # Safety\n\
+                      ///\n\
+                      /// Copier will only be accessed by &mut Self.\n\
+                      unsafe impl Sync for Copier {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_send_sync_pair_with_rustdoc_safety_headings_issue_7529() {
+        // Issue #7529 (http_transport/body.rs:49/54): each impl of the
+        // Send + Sync pair carries its own rustdoc `# Safety` section.
+        let source = "struct HttpBody;\n\
+                      /// # Safety\n\
+                      ///\n\
+                      /// HttpBody is Send on non-wasm targets.\n\
+                      unsafe impl Send for HttpBody {}\n\
+                      \n\
+                      /// # Safety\n\
+                      ///\n\
+                      /// HttpBody is Sync on non-wasm targets.\n\
+                      unsafe impl Sync for HttpBody {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unsafe_impl_with_level_two_safety_heading() {
+        let source = "struct Foo;\n\
+                      /// ## Safety\n\
+                      ///\n\
+                      /// Foo holds only Send fields.\n\
+                      unsafe impl Send for Foo {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unsafe_impl_with_prose_mentioning_safety() {
+        // A doc line that merely mentions "safety" in prose, without the
+        // `# Safety` heading, does not document the upheld invariant.
+        let source = "struct Foo;\n\
+                      /// This is safety-critical code.\n\
+                      unsafe impl Send for Foo {}";
+        assert_eq!(run_on(source).len(), 1);
+    }
 }

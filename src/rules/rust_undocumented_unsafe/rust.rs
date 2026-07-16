@@ -369,6 +369,16 @@ mod tests {
     }
 
     #[test]
+    fn allows_rustdoc_level_two_safety_heading() {
+        let source = "fn f(p: *const u8) {\n\
+                      /// ## Safety\n\
+                      /// p must be valid\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
     fn allows_lowercase_safety_comment() {
         let source = "fn f(p: *const u8) {\n\
                       // Safety: p checked above\n\
