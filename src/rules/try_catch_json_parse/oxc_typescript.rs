@@ -2,25 +2,13 @@
 //! in a `try` statement.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_json_method_call};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{CallExpression, Expression};
+use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
-
-/// True when `call` is `JSON.<method>(...)` — a `StaticMemberExpression` callee
-/// whose object is the identifier `JSON` and whose property is `method`.
-fn is_json_method_call(call: &CallExpression, method: &str) -> bool {
-    let Expression::StaticMemberExpression(member) = &call.callee else {
-        return false;
-    };
-    let Expression::Identifier(obj) = &member.object else {
-        return false;
-    };
-    obj.name.as_str() == "JSON" && member.property.name.as_str() == method
-}
 
 /// Walk up semantic parents to check if node is inside a try body.
 /// Stop at function boundaries (outer try can't catch inner function throws
