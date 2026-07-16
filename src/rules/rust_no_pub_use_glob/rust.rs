@@ -107,8 +107,10 @@ impl AstCheck for Check {
         // Module-flattening: `mod foo; pub use foo::*;` re-exports a submodule
         // the author owns in this same file to keep file layout separate from
         // the public API shape — not the dependency-surface mirroring this rule
-        // targets. (External / cross-module globs like `pub use serde::*;` or
-        // `pub use crate::types::*;` are not exempt — no local `mod` matches.)
+        // targets. A leading `self::`/`crate::` names the same crate-local module,
+        // so `pub use crate::foo::*;` flattens the local `mod foo;` identically.
+        // (External globs like `pub use serde::*;` are not exempt — no local
+        // `mod` matches.)
         // The same first segment also identifies a proc-macro companion crate
         // (`pub use thiserror_impl::*;`), the only way a parent crate can expose
         // a `proc-macro = true` crate's derive macro — see the helper below.
@@ -169,13 +171,19 @@ fn is_prelude_module(path: &Path) -> bool {
     false
 }
 
-/// First path segment of a `pub use` target, skipping a leading `self::`.
+/// First path segment of a `pub use` target, skipping a leading `self::` or
+/// `crate::`. Both roots name the current crate, so stripping either yields the
+/// crate-local module path — `pub use self::foo::*;` and `pub use crate::foo::*;`
+/// both flatten the same owned `mod foo;`.
 /// `pub use execution_state::*;` -> `Some("execution_state")`
 /// `pub use self::foo::*;`       -> `Some("foo")`
-/// `pub use crate::types::*;`    -> `Some("crate")`
+/// `pub use crate::foo::*;`      -> `Some("foo")`
 fn first_use_segment(trimmed: &str) -> Option<&str> {
     let after = trimmed.strip_prefix("pub use")?.trim_start();
-    let after = after.strip_prefix("self::").unwrap_or(after);
+    let after = after
+        .strip_prefix("self::")
+        .or_else(|| after.strip_prefix("crate::"))
+        .unwrap_or(after);
     let seg = after.split("::").next()?.trim();
     (!seg.is_empty()).then_some(seg)
 }
@@ -473,6 +481,36 @@ mod tests {
     #[test]
     fn exempts_self_prefixed_submodule_flattening() {
         assert!(run_on("mod foo;\npub use self::foo::*;").is_empty());
+    }
+
+    #[test]
+    fn exempts_crate_prefixed_submodule_flattening_issue_7515() {
+        // Issue #7515: databend src/query/expression/src/lib.rs flattens owned
+        // submodules with an explicit `crate::` prefix. `aggregate`/`block` are
+        // declared as `pub mod`/`mod` in this same file, so `pub use crate::…::*;`
+        // is local flattening, identical to the bare/`self::` forms.
+        let src = "pub mod aggregate;\nmod block;\n\
+                   pub use crate::aggregate::*;\npub use crate::block::*;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_crate_prefixed_glob_without_local_mod_issue_7515() {
+        // `crate::types` with no `mod types;` in this file is not local
+        // flattening — stripping the `crate::` prefix must not blanket-exempt
+        // every `crate::` glob.
+        assert_eq!(run_on("pub use crate::types::*;\npub struct Marker;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_external_crate_multi_segment_glob_issue_7515() {
+        // An external dependency's module (`databend_common_column::bitmap`) is
+        // not declared in this file, so it stays flagged — broadening the prefix
+        // strip must not weaken real dependency-surface mirroring.
+        assert_eq!(
+            run_on("pub use databend_common_column::bitmap::*;\npub struct Marker;").len(),
+            1
+        );
     }
 
     #[test]
