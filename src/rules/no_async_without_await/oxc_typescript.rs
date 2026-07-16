@@ -335,30 +335,87 @@ fn signature_member_returns_promise(
     })
 }
 
-/// Check if the async function is a shorthand method / arrow value of an object
-/// literal that a factory function RETURNS, whose factory's explicit return-type
-/// annotation names an `interface`/object-`type` declared in the same file that
-/// declares the same-named member as `Promise`-returning. The interface owns the
-/// contract: `async` is what makes the method's return type conform to the
-/// declared `Promise<T>` even when the body never awaits — dropping it would
-/// break every `await factory().method()` call site. This is the
-/// factory-returning-typed-object-literal analog of the class-supertype
-/// exemption (`is_method_of_class_with_supertype`), which grants the same
-/// interface-contract-`async` allowance to a class member. A factory with no
-/// return-type annotation, a return type not declared in this file, an object
-/// literal that is not returned, or a same-named member with a non-`Promise`
-/// return all keep the diagnostic firing.
-fn is_async_method_of_promise_typed_return_object(
-    func_node: &oxc_semantic::AstNode,
+/// True when `ts_type` is a named type reference that serves as an object
+/// literal's `Promise` contract for the method `method_name`. Mirrors the
+/// class-supertype principle (`is_method_of_class_with_supertype`): what matters
+/// is the presence of the contract, not fully resolving it.
+///
+/// - A qualified (namespaced) name — e.g. `Modules.EntityService.EntityService`
+///   or `Core.CoreAPI.Controller.Base` — cannot be a same-file top-level
+///   `interface`/`type` declaration, so it is structurally unresolvable in a
+///   single-file linter, exactly like a class's imported base in an
+///   `implements`/`extends` clause. Its presence alone is the contract.
+/// - A bare identifier may name a same-file `interface`/object-`type`; it counts
+///   as a contract only when that declaration is found in this file and declares
+///   the same-named member as `Promise`-returning. An unresolved bare identifier
+///   (e.g. an imported interface referenced by its plain name) stays flagged,
+///   preserving the conservative single-file behavior.
+fn type_reference_is_object_literal_contract(
+    ts_type: &oxc_ast::ast::TSType,
+    method_name: &str,
     semantic: &oxc_semantic::Semantic,
     source: &str,
 ) -> bool {
     use oxc_ast::ast::{TSType, TSTypeName};
 
+    let TSType::TSTypeReference(tref) = ts_type else {
+        return false;
+    };
+    match &tref.type_name {
+        TSTypeName::QualifiedName(_) => true,
+        TSTypeName::IdentifierReference(type_id) => {
+            let type_name = type_id.name.as_str();
+            semantic.nodes().iter().any(|decl| match decl.kind() {
+                AstKind::TSInterfaceDeclaration(iface)
+                    if iface.id.name.as_str() == type_name =>
+                {
+                    signature_member_returns_promise(&iface.body.body, method_name, source)
+                }
+                AstKind::TSTypeAliasDeclaration(alias)
+                    if alias.id.name.as_str() == type_name =>
+                {
+                    matches!(
+                        &alias.type_annotation,
+                        TSType::TSTypeLiteral(lit)
+                            if signature_member_returns_promise(&lit.members, method_name, source)
+                    )
+                }
+                _ => false,
+            })
+        }
+        TSTypeName::ThisExpression(_) => false,
+    }
+}
+
+/// Check if the async function is a shorthand method / arrow value of an object
+/// literal whose binding contract carries an explicit named type annotation, in
+/// either of two positions:
+///
+/// - the object literal is the direct initializer of a type-annotated
+///   `VariableDeclarator` (`const proto: Core.CoreAPI.Controller.Base = { async
+///   m() {...} }`); or
+/// - the object literal is returned by — or is the concise arrow body of — a
+///   factory whose explicit return type is a named type reference (`function
+///   make(): Api { return { async m() {...} } }`, `const make = ():
+///   Modules.EntityService.EntityService => ({ async m() {...} })`).
+///
+/// In both positions the named type is the contract, exactly as `implements I`
+/// is for a class (`is_method_of_class_with_supertype`): `async` is what makes
+/// the method conform to the declared `Promise<T>` member even when the body
+/// never awaits — dropping it would break every `await` call site.
+/// `type_reference_is_object_literal_contract` decides when a type reference
+/// counts as such a contract. An object literal with no binding/return type
+/// annotation, one whose annotation is not a named type reference, or a nested
+/// inner object under a typed outer binding all keep the diagnostic firing.
+fn is_async_method_of_contract_typed_object_literal(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
     let nodes = semantic.nodes();
 
-    // Step 1: the async function is the value of an object-literal property;
-    // capture the property key (the method name).
+    // The async function is the value of an object-literal property; capture the
+    // property key (the method name) and the enclosing object expression.
     let property = nodes.parent_node(func_node.id());
     let AstKind::ObjectProperty(prop) = property.kind() else {
         return false;
@@ -371,46 +428,67 @@ fn is_async_method_of_promise_typed_return_object(
         return false;
     }
 
-    // Step 2: that object literal is the argument of a `return` statement (a
-    // ReturnStatement has only its argument as an expression child).
-    let ret = nodes.parent_node(object.id());
-    if !matches!(ret.kind(), AstKind::ReturnStatement(_)) {
-        return false;
+    // Axis A: the object literal is the direct initializer of a type-annotated
+    // `VariableDeclarator`. The object's direct AST parent being the declarator
+    // guarantees the object is that declarator's initializer (its only
+    // expression slot), never a nested inner object under a typed outer binding.
+    let parent = nodes.parent_node(object.id());
+    if let AstKind::VariableDeclarator(decl) = parent.kind() {
+        return decl.type_annotation.as_ref().is_some_and(|ann| {
+            type_reference_is_object_literal_contract(
+                &ann.type_annotation,
+                method_name,
+                semantic,
+                source,
+            )
+        });
     }
 
-    // Step 3: the enclosing factory function has an explicit return-type
-    // annotation naming a type; capture that name.
-    let return_type = nodes.ancestors(ret.id()).find_map(|a| match a.kind() {
-        AstKind::Function(f) => Some(&f.return_type),
-        AstKind::ArrowFunctionExpression(f) => Some(&f.return_type),
+    // Axis B: the object literal is in the return position of an enclosing
+    // factory — the argument of a `return` statement or the concise body of an
+    // arrow (`=> ({...})`). Unwrap the parentheses oxc preserves directly above
+    // the object literal, then read the factory's explicit return type.
+    let mut wrapped = object;
+    let mut above = nodes.parent_node(wrapped.id());
+    while matches!(above.kind(), AstKind::ParenthesizedExpression(_)) {
+        wrapped = above;
+        above = nodes.parent_node(wrapped.id());
+    }
+    let return_type = match above.kind() {
+        // `return { ... }` — the factory is the nearest enclosing function.
+        AstKind::ReturnStatement(_) => {
+            nodes.ancestors(above.id()).find_map(|a| match a.kind() {
+                AstKind::Function(f) => Some(&f.return_type),
+                AstKind::ArrowFunctionExpression(f) => Some(&f.return_type),
+                _ => None,
+            })
+        }
+        // `=> ({ ... })` — reaching an `ExpressionStatement` straight up through
+        // the parens means the object is the sole statement of a concise arrow
+        // body (a concise body holds exactly one expression), so require the
+        // nearest enclosing function to be a concise arrow and read its return
+        // type. A block-body arrow's discarded `({...});` statement has
+        // `expression == false` and is excluded.
+        AstKind::ExpressionStatement(_) => nodes
+            .ancestors(above.id())
+            .find(|a| {
+                matches!(
+                    a.kind(),
+                    AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+                )
+            })
+            .and_then(|f| match f.kind() {
+                AstKind::ArrowFunctionExpression(arrow) if arrow.expression => {
+                    Some(&arrow.return_type)
+                }
+                _ => None,
+            }),
         _ => None,
-    });
+    };
     let Some(Some(rt)) = return_type else {
         return false;
     };
-    let TSType::TSTypeReference(tref) = &rt.type_annotation else {
-        return false;
-    };
-    let TSTypeName::IdentifierReference(type_id) = &tref.type_name else {
-        return false;
-    };
-    let type_name = type_id.name.as_str();
-
-    // Step 4: an `interface`/object-`type` declared in the same file with that
-    // name declares the same-named member as `Promise`-returning.
-    nodes.iter().any(|decl| match decl.kind() {
-        AstKind::TSInterfaceDeclaration(iface) if iface.id.name.as_str() == type_name => {
-            signature_member_returns_promise(&iface.body.body, method_name, source)
-        }
-        AstKind::TSTypeAliasDeclaration(alias) if alias.id.name.as_str() == type_name => {
-            matches!(
-                &alias.type_annotation,
-                TSType::TSTypeLiteral(lit)
-                    if signature_member_returns_promise(&lit.members, method_name, source)
-            )
-        }
-        _ => false,
-    })
+    type_reference_is_object_literal_contract(&rt.type_annotation, method_name, semantic, source)
 }
 
 /// True if `b` can appear inside a JS/TS identifier, used to require that an
@@ -667,16 +745,17 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Async method/arrow value of an object literal that a factory
-            // function returns, where the factory's explicit return type resolves
-            // (in this file) to an `interface`/object-`type` declaring the
-            // same-named member as `Promise`-returning (e.g. `createAstroPreferences():
-            // AstroPreferences { return { async get() {...} } }`). The interface
-            // owns the contract, exactly as it does for a class that `implements`
-            // it, so `async` is mandatory even when the body never awaits. A
-            // non-Promise member, a return type not declared in this file, or an
-            // object literal that is not returned all stay flagged.
-            if is_async_method_of_promise_typed_return_object(node, semantic, ctx.source) {
+            // Async method/arrow value of an object literal whose binding
+            // contract is an explicit named type annotation — either the object
+            // is the initializer of a type-annotated variable (`const proto:
+            // Core.CoreAPI.Controller.Base = { async m() {...} }`) or it is
+            // returned by / is the concise body of a factory with an explicit
+            // return type (`(): Modules.EntityService.EntityService => ({ async
+            // m() {...} })`). The named type owns the contract exactly as it does
+            // for a class that `implements` it, so `async` is mandatory even when
+            // the body never awaits. An object literal with no such annotation
+            // stays flagged.
+            if is_async_method_of_contract_typed_object_literal(node, semantic, ctx.source) {
                 continue;
             }
 
@@ -1452,6 +1531,91 @@ mod tests {
         function make3() {
             return { async m() { doThing(); } };
         }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_async_method_of_interface_annotated_assigned_object_literal() {
+        // Regression for rbaumier/comply#7579 (Variant A) — strapi/strapi
+        // core-api controller. The object literal is assigned to a binding whose
+        // explicit type annotation is the qualified interface
+        // `Core.CoreAPI.Controller.Base`; `async` satisfies that Promise-returning
+        // contract even though the body has a helper line before the forwarding
+        // return (so `body_is_single_return_call` does not spare it), exactly as it
+        // would for a class that `implements` the interface.
+        let src = r#"const proto: Core.CoreAPI.Controller.Base = {
+            async sanitizeOutput(data, ctx) {
+                const auth = getAuthFromKoaContext(ctx);
+                return sanitize.output(data, contentType, { auth });
+            },
+        };"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_methods_of_concise_factory_returning_qualified_typed_object() {
+        // Regression for rbaumier/comply#7579 (Variant B) — strapi/strapi
+        // entity-service. A factory arrow with a concise object body (`=> ({...})`)
+        // whose explicit return type is the imported qualified interface
+        // `Modules.EntityService.EntityService`. The interface owns the Promise
+        // contract; `async` is mandatory even though the bodies never await (they
+        // return a bare identifier, not a forwarded call). comply cannot resolve
+        // the imported/namespaced type, so — as with a class's imported base — its
+        // presence is the contract.
+        let src = r#"const make = ({ strapi, db }: { strapi: Core.Strapi; db: Database }): Modules.EntityService.EntityService => ({
+            async wrapParams(options: any = {}) {
+                return options;
+            },
+            async wrapResult(result: any = {}) {
+                return result;
+            },
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_method_of_assigned_object_typed_by_same_file_interface() {
+        // #7579: a binding-annotated object literal whose annotation is a bare
+        // same-file interface declaring the member as `Promise`-returning is
+        // exempt via the resolved-contract path, mirroring the factory-return
+        // case. The helper line before the return keeps it out of the
+        // single-return-call exemption, so only the interface contract spares it.
+        let src = r#"interface Api { load(): Promise<string>; }
+        const impl: Api = {
+            async load() {
+                const key = compute();
+                return read(key);
+            },
+        };"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_method_of_untyped_assigned_object_literal() {
+        // Negative space for #7579: an object literal with no binding type
+        // annotation has no interface contract — its async method with no await
+        // and a body that is not a single forwarding call stays flagged.
+        let src = "const o = { async m() { const x = 1; return x; } };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_method_of_untyped_inner_object_under_typed_binding() {
+        // Negative space for #7579: only the object literal DIRECTLY bound to the
+        // typed declarator is a contract. An async method of a nested inner object
+        // literal (whose own binding is untyped) stays flagged even though the
+        // outer binding carries a (qualified) type annotation that would otherwise
+        // exempt a direct method.
+        let src = r#"const outer: Ns.Wrapper = { inner: { async m() { doThing(); } } };"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_method_of_concise_factory_without_return_annotation() {
+        // Negative space for #7579: a concise-arrow factory with no explicit
+        // return type has no interface contract — its object literal's async
+        // method (no await, not a single forwarding call) stays flagged.
+        let src = "const make = () => ({ async m() { const x = 1; return x; } });";
         assert_eq!(run_on(src).len(), 1);
     }
 }
