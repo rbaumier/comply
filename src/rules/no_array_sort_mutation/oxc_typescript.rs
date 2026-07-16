@@ -224,4 +224,56 @@ mod oxc_tests {
         let src = "const p = store.items.slice(); process(p); p.sort(); return p;";
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
+
+    #[test]
+    fn skips_sort_on_awaited_as_cast_fresh_binding_issue_7553() {
+        // `(await api.list()) as T[]` is a fresh local array that never escapes
+        // (only a `.sort()` receiver and a `for…of` read); the `await`/`as`
+        // wrappers must not defeat the non-aliasing exemption.
+        let src = "async function f() { \
+                   const items = (await api.list()) as Item[]; \
+                   items.sort((a, b) => a.order - b.order); \
+                   for (const it of items) { use(it); } }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_awaited_call_fresh_binding() {
+        // A bare `await` wrapper over a fresh call result is still a private array.
+        let src = "async function f() { const xs = await api.list(); xs.sort(); }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_as_cast_fresh_binding() {
+        // An `as T[]` cast over a fresh call result does not change aliasing.
+        let src = "const xs = getItems() as Item[]; xs.sort();";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_non_null_asserted_fresh_binding() {
+        // `(getItems())!` peels to the fresh call result underneath.
+        let src = "const xs = (getItems())!; xs.sort();";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_angle_bracket_cast_fresh_binding() {
+        // `<Item[]>getItems()` is the legacy cast form of `getItems() as Item[]`,
+        // equally value-preserving, so it peels to the fresh call result too.
+        let src = "const xs = <Item[]>getItems(); xs.sort();";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_sort_on_awaited_as_cast_binding_escaping_via_call_arg() {
+        // The wrapper peel recognizes the fresh initializer but must not suppress
+        // a genuine escape: the array is handed to `sink` before sorting, so a
+        // pre-sort alias could observe the reorder and it stays flagged.
+        let src = "async function f() { \
+                   const xs = (await api.list()) as Item[]; \
+                   sink(xs); xs.sort(); }";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
 }
