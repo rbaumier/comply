@@ -5878,6 +5878,11 @@ fn byte_literal_value(text: &str) -> Option<i128> {
 ///   is inspected directly, so a bare name resolving to a data-carrying enum or to
 ///   a numeric type alias (no matching `enum_item`) stays flagged.
 ///
+/// Each of these operand forms is also recognized through a single leading deref
+/// (`*self`, `*code`): a `Copy` fieldless enum behind a `&self`/`&E` reference is
+/// idiomatically read as `*x as <integer>`, so the deref `*` is peeled (never
+/// negation) and the inner operand re-dispatched.
+///
 /// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
 /// otherwise flag the cast because a fieldless-enum operand resolves to no
 /// numeric type and falls through to their conservative "unknown source" branch.
@@ -5885,10 +5890,35 @@ pub fn cast_operand_is_enum_discriminant(cast: Node, source: &[u8]) -> bool {
     let Some(value) = cast.child_by_field_name("value") else {
         return false;
     };
+    operand_is_enum_discriminant(cast, value, source)
+}
+
+/// Dispatch on an operand node's kind to recognize a fieldless-enum discriminant
+/// read, peeling a single deref (`*self`, `*code`) so a `Copy` enum read through
+/// a `&self`/`&E` reference is treated identically to the bare operand. `cast`
+/// stays the anchor for the ancestor-walk (`impl_item` Self type) and the
+/// binding-type lookup, so peeling the deref does not shift resolution scope.
+fn operand_is_enum_discriminant(cast: Node, value: Node, source: &[u8]) -> bool {
     match value.kind() {
         "self" => self_enum_is_fieldless(cast, source),
         "scoped_identifier" => scoped_operand_is_enum_discriminant(cast, value, source),
         "identifier" => identifier_operand_is_enum_value(cast, value, source),
+        // `*self` / `*code`: a `Copy` fieldless enum read through a reference.
+        // `as` on a deref only type-checks when the referent is itself
+        // as-castable, so peel the deref `*` (never negation `-`/`!`) and
+        // re-dispatch on the inner operand, running the same fieldless-enum
+        // check as the bare form. Recursion re-dispatches through any nested
+        // deref node.
+        "unary_expression" => {
+            let is_deref = value
+                .child(0)
+                .and_then(|op| op.utf8_text(source).ok())
+                .is_some_and(|op| op == "*");
+            is_deref
+                && value
+                    .named_child(0)
+                    .is_some_and(|inner| operand_is_enum_discriminant(cast, inner, source))
+        }
         _ => false,
     }
 }
@@ -5915,8 +5945,10 @@ pub fn cast_operand_is_enum_discriminant(cast: Node, source: &[u8]) -> bool {
 ///   rejected and a bare numeric type alias (no matching `enum_item`) stays
 ///   flagged.
 ///
-/// A reference operand never reaches here — `&E as u32` does not compile, so a
-/// directly-`as`-castable enum binding is never a reference type.
+/// The declared type's leading `&`/`&mut` is stripped first: a bare operand is
+/// never a reference (`&E as u32` does not compile), but a dereferenced binding
+/// (`*code` where `code: &Code`) reaches here through the deref peel and reads
+/// the `Code` referent.
 fn identifier_operand_is_enum_value(cast: Node, value: Node, source: &[u8]) -> bool {
     let Ok(name) = value.utf8_text(source) else {
         return false;
@@ -5924,7 +5956,7 @@ fn identifier_operand_is_enum_value(cast: Node, value: Node, source: &[u8]) -> b
     let Some(declared) = find_identifier_type(cast, name, source) else {
         return false;
     };
-    let declared = declared.trim();
+    let declared = strip_leading_borrow(declared.trim());
     match declared.rsplit_once("::") {
         // Module-qualified path (`spirv::SourceLanguage`): an imported enum whose
         // repr the AST cannot see. A PascalCase final segment confirms it names a
@@ -7095,6 +7127,23 @@ mod tests {
             ("struct W(u32); fn f(w: W) -> u8 { w as u8 }", false),
             // A bare numeric local stays flagged — `i32` names no in-file enum.
             ("fn f() -> u8 { let n: i32 = 0; n as u8 }", false),
+            // `*self as u8` reads the discriminant of a `Copy` fieldless enum
+            // through a `&self` method — the dereferenced form of `self as u8`
+            // is peeled and treated identically (issue #7555).
+            (
+                "#[repr(u8)] enum DelAdd { Deletion = 0, Addition = 1 } \
+                 impl DelAdd { fn read(&self) -> u8 { *self as u8 } }",
+                true,
+            ),
+            // `*code as i32` — a dereferenced fieldless-enum binding (`code:
+            // &Code`) resolves to its referent, the same discriminant-read idiom.
+            (
+                "enum Code { Ok = 0, Err = 1 } fn f(code: &Code) -> i32 { *code as i32 }",
+                true,
+            ),
+            // A dereferenced non-enum binding still truncates: `*x` where
+            // `x: &u64` reads a u64, so `as u8` is a real narrowing cast.
+            ("fn f(x: &u64) -> u8 { *x as u8 }", false),
         ];
         for (src, expected) in cases {
             let tree = parse(src);

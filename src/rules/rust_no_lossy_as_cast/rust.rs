@@ -997,6 +997,34 @@ mod tests {
     }
 
     #[test]
+    fn repro_7555_deref_self_as_u8_in_impl_fieldless_enum_not_flagged() {
+        // `*self as u8` in a `&self` method of a `Copy` fieldless `#[repr(u8)]`
+        // enum reads the discriminant — the dereferenced form of `self as u8`;
+        // `as` is the only conversion the language offers (no `TryFrom` exists).
+        // A `unary_expression` operand is owned by this rule, so it is where the
+        // deref FP surfaces.
+        let src = "#[repr(u8)] enum DelAdd { Deletion = 0, Addition = 1 } \
+                   impl DelAdd { fn to_be_bytes(&self) -> u8 { *self as u8 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_7555_deref_self_as_u8_in_impl_data_enum_still_flagged() {
+        // A data-carrying enum has no discriminant `as`-cast semantics: peeling
+        // the deref still runs the fieldless check, so the cast keeps flagging.
+        let src = "enum E { A(u32), B } impl E { fn bit(&self) -> u8 { *self as u8 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_7555_deref_non_enum_binding_still_flagged() {
+        // `*x` where `x: &u64` reads a u64, so `as u8` is a real narrowing —
+        // the deref peel resolves the referent, finds no enum, and keeps flagging.
+        let src = "fn f(x: &u64) -> u8 { *x as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn repro_1254_method_call_as_u8_suppressed_numeric_cast_owns_it() {
         // A method-call narrowing both rules used to flag (`.value()` is not a
         // size accessor, so the collection-size exemption does not apply) —
