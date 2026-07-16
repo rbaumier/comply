@@ -16,7 +16,7 @@
 //! variable is exempt too: such a key is always a `string`, never a function.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     ClassElement, Expression, ForStatementLeft, FormalParameters, StaticMemberExpression,
@@ -158,6 +158,37 @@ fn is_provably_non_callable_init(expr: &Expression) -> bool {
     }
 }
 
+/// Returns `true` when a variable initializer provably ignores the extra
+/// iterator arguments, so a bare reference to the binding is identical to
+/// wrapping it in an arrow. This holds when the initializer is:
+///   - a single-arity arrow/function expression that binds only `element`
+///     (see [`callee_ignores_extra_args`]);
+///   - a value that can never be a function (see
+///     [`is_provably_non_callable_init`]); or
+///   - a `ConditionalExpression` (`cond ? a : b`) or short-circuiting
+///     `LogicalExpression` (`a || b`, `a ?? b`, `a && b`) whose *every* selectable branch
+///     independently satisfies this predicate. Exactly one branch becomes the
+///     binding's runtime value, so all of them must be arity-safe: a single
+///     multi-arity arm (`cond ? (a, b) => … : …`) or an opaque branch (a bare
+///     identifier or call whose arity is unknown) leaves the binding potentially
+///     arity-unsafe and is not exempt.
+/// Recursion resolves nested ternaries (`cond ? a : cond2 ? b : c`) and peels
+/// parentheses off every branch. It terminates because each recursive call
+/// descends into a strict sub-expression of a finite AST.
+fn init_ignores_extra_args<'a>(expr: &'a Expression<'a>) -> bool {
+    match peel_parens(expr) {
+        Expression::ArrowFunctionExpression(f) => callee_ignores_extra_args(&f.params),
+        Expression::FunctionExpression(f) => callee_ignores_extra_args(&f.params),
+        Expression::ConditionalExpression(cond) => {
+            init_ignores_extra_args(&cond.consequent) && init_ignores_extra_args(&cond.alternate)
+        }
+        Expression::LogicalExpression(logical) => {
+            init_ignores_extra_args(&logical.left) && init_ignores_extra_args(&logical.right)
+        }
+        inner => is_provably_non_callable_init(inner),
+    }
+}
+
 /// Returns `true` when `ident` resolves to a locally-declared function whose
 /// formal parameter list ignores the extra iterator arguments
 /// (see [`callee_ignores_extra_args`]), or to a parameter/variable whose type
@@ -198,16 +229,12 @@ fn is_low_arity_local<'a>(
             {
                 return true;
             }
+            // The binding is exempt when its initializer provably ignores the
+            // extra iterator arguments: a single-arity arrow/function, a
+            // provably-non-callable value, or a ternary/logical selection whose
+            // every branch is itself arity-safe (see [`init_ignores_extra_args`]).
             match decl.init.as_ref() {
-                Some(Expression::ArrowFunctionExpression(f)) => {
-                    callee_ignores_extra_args(&f.params)
-                }
-                Some(Expression::FunctionExpression(f)) => callee_ignores_extra_args(&f.params),
-                // A binding whose init is provably non-callable (an array/object
-                // literal, a template/primitive literal, or `Array.from(…)`)
-                // can never hold a function reference, so passing it bare is not
-                // the callback-reference footgun — exempt.
-                Some(init) => is_provably_non_callable_init(init),
+                Some(init) => init_ignores_extra_args(init),
                 None => false,
             }
         }
@@ -891,6 +918,80 @@ mod tests {
     fn flags_two_param_function_init_binding() {
         assert_eq!(
             run_on("const fn = (x: number, y: number) => x + y; arr.map(fn);").len(),
+            1
+        );
+    }
+
+    // #7567 repro: a `const` whose init is a ternary selecting between two
+    // single-arity arrows binds only `element` on either branch, so passing it
+    // bare to `.filter` drops the injected `index`/`array` just like a direct
+    // arrow — must not flag.
+    #[test]
+    fn allows_ternary_of_single_arity_arrows() {
+        assert!(run_on(
+            "const f = cond ? (x) => x != null : (x) => x !== undefined; arr.filter(f);"
+        )
+        .is_empty());
+    }
+
+    // #7567 repro (payloadcms/payload): the exact `notNull` shape — a ternary of
+    // single-arity predicates, one arm reading a nested optional `?.value`.
+    #[test]
+    fn allows_ternary_predicate_optional_chain_payload() {
+        assert!(run_on(
+            "const notNull = Array.isArray(field.relationTo) ? (v: unknown) => v !== null && (v as Record<string, unknown>)?.value !== null : (v: unknown) => v !== null; arr.filter(notNull);"
+        )
+        .is_empty());
+    }
+
+    // #7567: a nested ternary (`cond ? a : cond2 ? b : c`) resolves recursively —
+    // every arm is a single-arity arrow, so the binding stays exempt.
+    #[test]
+    fn allows_nested_ternary_of_single_arity_arrows() {
+        assert!(run_on(
+            "const f = cond ? (x) => x != null : cond2 ? (y) => y !== undefined : (z) => z != 0; arr.filter(f);"
+        )
+        .is_empty());
+    }
+
+    // #7567: a short-circuiting logical selection is exempt only when *every*
+    // operand is arity-safe — here both operands are single-arity arrows.
+    #[test]
+    fn allows_logical_of_single_arity_arrows() {
+        assert!(run_on(
+            "const h = ((x: unknown) => x != null) || ((y: unknown) => y !== undefined); arr.filter(h);"
+        )
+        .is_empty());
+    }
+
+    // #7567 negative space: a ternary whose arms are *multi*-arity arrows exposes
+    // the real `(element, index)` footgun on either branch — must stay flagged.
+    #[test]
+    fn flags_ternary_of_multi_arity_arrows() {
+        assert_eq!(
+            run_on("const g = cond ? (a, b) => a > b : (a, b) => a < b; arr.filter(g);").len(),
+            1
+        );
+    }
+
+    // #7567 negative space: a ternary arm that is neither a function nor a
+    // provably-non-callable value (an opaque call whose arity is unknown) leaves
+    // the binding potentially arity-unsafe — must stay flagged.
+    #[test]
+    fn flags_ternary_with_opaque_arm() {
+        assert_eq!(
+            run_on("const t = cond ? (x) => x != null : getPred(); arr.filter(t);").len(),
+            1
+        );
+    }
+
+    // #7567 negative space: `||` requires *every* operand to be arity-safe. A bare
+    // identifier left operand could resolve to a multi-arity function, so the
+    // selection is not provably arity-ignoring — must stay flagged.
+    #[test]
+    fn flags_logical_with_opaque_left_operand() {
+        assert_eq!(
+            run_on("const h = maybe || ((x: unknown) => x != null); arr.filter(h);").len(),
             1
         );
     }
