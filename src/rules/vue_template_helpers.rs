@@ -177,6 +177,74 @@ pub fn extract_elements(source: &str) -> Vec<VueElement<'_>> {
     elements
 }
 
+/// Return the attributes of the innermost `<label>` element that is still open
+/// (its `</label>` not yet seen) at byte offset `pos` in `source`, or `None`
+/// when `pos` sits inside no `<label>`.
+///
+/// Scans `<label …>` open tags and `</label>` close tags before `pos`, keeping a
+/// stack, so a `<label>` that already closed before `pos` is never mistaken for
+/// an ancestor. Only `<label>` nesting is tracked: it is the idiomatic wrapper
+/// that makes a nested custom-styled checkbox writable via its own click/change
+/// handler. The `>`-search is quote-aware, so a wrapping tag whose attributes
+/// span several lines (or contain `>` inside a value) is handled.
+pub fn enclosing_label(source: &str, pos: usize) -> Option<&str> {
+    let bytes = source.as_bytes();
+    let limit = pos.min(bytes.len());
+    let mut open_labels: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < limit {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        if source[i..].starts_with("</label") && is_tag_boundary(bytes, i + 7) {
+            open_labels.pop();
+            i += 7;
+        } else if source[i..].starts_with("<label") && is_tag_boundary(bytes, i + 6) {
+            let attrs_start = i + 6;
+            let Some(tag_end) = opening_tag_end(source, attrs_start) else {
+                break;
+            };
+            let attrs = source[attrs_start..tag_end].trim();
+            if !attrs.ends_with('/') {
+                open_labels.push(attrs);
+            }
+            i = tag_end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    open_labels.pop()
+}
+
+/// Byte offset of the `>` terminating an opening tag whose attributes start at
+/// `from`, skipping any `>` that appears inside a quoted attribute value.
+/// Returns `None` if the tag is never terminated.
+fn opening_tag_end(source: &str, from: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut in_string: Option<u8> = None;
+    for (offset, &b) in bytes[from..].iter().enumerate() {
+        match in_string {
+            Some(quote) if b == quote => in_string = None,
+            Some(_) => {}
+            None if b == b'"' || b == b'\'' => in_string = Some(b),
+            None if b == b'>' => return Some(from + offset),
+            None => {}
+        }
+    }
+    None
+}
+
+/// True when the byte at `idx` cannot continue a tag name, i.e. `<label` is the
+/// whole tag name rather than a prefix of `<labelled>`. A missing byte (end of
+/// input) counts as a boundary.
+fn is_tag_boundary(bytes: &[u8], idx: usize) -> bool {
+    match bytes.get(idx) {
+        Some(c) => !(c.is_ascii_alphanumeric() || *c == b'-'),
+        None => true,
+    }
+}
+
 /// Check if an element's attributes contain a specific attribute name.
 ///
 /// Handles both `attr="value"` and bare `attr` forms.
@@ -190,6 +258,28 @@ pub fn has_attr(attrs: &str, attr_name: &str) -> bool {
         return true;
     }
     false
+}
+
+/// True when `attrs` binds the Vue event `event` (e.g. `"click"`), in either
+/// the `@click` shorthand or the `v-on:click` long form, with or without
+/// modifiers (`@click.stop`, `v-on:click.prevent`). Names are read with
+/// [`collect_attr_names`], so multi-line and quoted attribute values are
+/// handled the same way as elsewhere.
+pub fn has_event_binding(attrs: &str, event: &str) -> bool {
+    let shorthand = format!("@{event}");
+    let long_form = format!("v-on:{event}");
+    collect_attr_names(attrs)
+        .into_iter()
+        .any(|name| binding_matches(name, &shorthand) || binding_matches(name, &long_form))
+}
+
+/// True when `attr_name` is `prefix` exactly or `prefix` followed by a `.`
+/// modifier chain, so `@click` matches `@click` and `@click.stop` but not
+/// `@clicker`.
+fn binding_matches(attr_name: &str, prefix: &str) -> bool {
+    attr_name
+        .strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
 /// Extract the value of a specific attribute from an attributes string.
@@ -481,6 +571,41 @@ mod tests {
         assert!(has_attr("alt=\"hello\" src=\"x.png\"", "alt"));
         assert!(has_attr("src=\"x.png\" alt=\"\"", "alt"));
         assert!(!has_attr("src=\"x.png\"", "alt"));
+    }
+
+    #[test]
+    fn has_event_binding_matches_forms_and_modifiers() {
+        assert!(has_event_binding("@click=\"f\"", "click"));
+        assert!(has_event_binding("@click.stop=\"f\"", "click"));
+        assert!(has_event_binding("v-on:click=\"f\"", "click"));
+        assert!(has_event_binding("v-on:click.prevent.stop=\"f\"", "click"));
+        assert!(has_event_binding("class=\"x\" @change=\"f\"", "change"));
+        assert!(!has_event_binding("@clicker=\"f\"", "click"));
+        assert!(!has_event_binding("class=\"x\"", "click"));
+    }
+
+    #[test]
+    fn enclosing_label_reports_open_wrapper_only() {
+        // `pos` inside the input, wrapped by an open <label>: returns its attrs.
+        let src = "<label @click.stop=\"t\">\n  <input :checked=\"f\" />\n</label>";
+        let pos = src.find("/>").unwrap();
+        assert_eq!(enclosing_label(src, pos), Some("@click.stop=\"t\""));
+    }
+
+    #[test]
+    fn enclosing_label_ignores_closed_sibling_label() {
+        // A <label> that closes before `pos` is not an ancestor.
+        let src = "<label @click=\"t\">x</label>\n<input :checked=\"f\" />";
+        let pos = src.find("/>").unwrap();
+        assert_eq!(enclosing_label(src, pos), None);
+    }
+
+    #[test]
+    fn enclosing_label_handles_multiline_attrs() {
+        // The wrapping tag's `>` is several lines down; the scan still finds it.
+        let src = "<label\n  class=\"a\"\n  @click.stop=\"t\"\n>\n  <input :checked=\"f\" />\n</label>";
+        let pos = src.find("/>").unwrap();
+        assert!(enclosing_label(src, pos).is_some_and(|a| a.contains("@click.stop")));
     }
 
     #[test]
