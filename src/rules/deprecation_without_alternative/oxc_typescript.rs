@@ -10,6 +10,35 @@ fn is_test_file(path: &std::path::Path) -> bool {
     TEST_MARKERS.iter().any(|m| s.contains(m))
 }
 
+/// Returns `true` when the `@deprecated` tag carries a migration message,
+/// whether written inline on the tag line or wrapped onto the following JSDoc
+/// continuation lines. `rest` is the comment text after the `@deprecated` tag,
+/// running to the end of the block comment (it may still include the closing
+/// `*/`).
+///
+/// Each continuation line's JSDoc decoration (leading whitespace + a single
+/// `*`) is stripped before inspection; scanning stops at the next block tag (a
+/// line whose stripped content starts with `@`) or the end of the comment. The
+/// tag has a message when any line before that boundary holds non-tag text.
+fn has_migration_message(rest: &str) -> bool {
+    let body = rest.strip_suffix("*/").unwrap_or(rest);
+    for (idx, raw_line) in body.split('\n').enumerate() {
+        // The first segment is the tail of the `@deprecated` line itself and
+        // carries no `*` decoration; continuation lines do.
+        let line = if idx == 0 {
+            raw_line.trim()
+        } else {
+            let stripped = raw_line.trim_start();
+            stripped.strip_prefix('*').unwrap_or(stripped).trim()
+        };
+        if line.is_empty() {
+            continue;
+        }
+        return !line.starts_with('@');
+    }
+    false
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -50,8 +79,8 @@ impl OxcCheck for Check {
                 continue;
             };
 
-            let after = text[dep_pos + "@deprecated".len()..].trim_start();
-            if !after.is_empty() && !after.starts_with('*') && !after.starts_with('\n') {
+            let rest = &text[dep_pos + "@deprecated".len()..];
+            if has_migration_message(rest) {
                 continue;
             }
 
@@ -107,6 +136,35 @@ mod tests {
     fn allows_deprecated_with_message() {
         let d = run_on("/**\n * @deprecated use g() instead\n */\nexport function f() {}");
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_deprecated_with_inline_message_single_line_block() {
+        let d = run_on("/** @deprecated Use bar() instead. */\nexport function f() {}");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_deprecated_with_continuation_line_message() {
+        // #7566: the migration message is wrapped onto the next JSDoc line
+        // rather than sitting inline on the `@deprecated` line.
+        let d = run_on("/**\n * @deprecated\n * Use `bar()` instead.\n */\nexport function f() {}");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_deprecated_with_wrapped_continuation_message() {
+        let d = run_on(
+            "/**\n * @deprecated\n * Use `req.payload` instead. This will be removed in the next major version.\n */\nexport function f() {}",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_deprecated_followed_by_another_tag() {
+        // The continuation line is a new block tag, not a migration message.
+        let d = run_on("/**\n * @deprecated\n * @see somethingElse\n */\nexport function f() {}");
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
