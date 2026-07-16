@@ -55,6 +55,13 @@
 //! receiver and the same type `T`: `Any::downcast` succeeds exactly when
 //! `is::<T>()` is true, so the type check proves the downcast cannot fail. A
 //! mismatched type or receiver is still flagged.
+//! An entire `From` impl is skipped when it carries an
+//! `#[allow(clippy::fallible_impl_from)]` / `#[expect(clippy::fallible_impl_from)]`
+//! attribute: `clippy::fallible_impl_from` is the exact upstream lint this rule
+//! reimplements, so allowing it on the impl is the author's canonical, explicit
+//! opt-out — the strongest author-acknowledgement signal, stronger than the
+//! per-call `# Panics` / `.expect("invariant")` signals below. An impl with no
+//! such allow (or one allowing an unrelated lint) still flags.
 //! A `.unwrap()` / `.expect()` is also skipped when the enclosing `from` method
 //! carries a `# Panics` rustdoc section: the author has documented the panic as
 //! an explicit API contract (the canonical Rust convention for a panicking
@@ -83,7 +90,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    has_panics_doc_section, is_under_cfg_debug_assertions, local_let_binds_buffer,
+    has_clippy_allow, has_panics_doc_section, is_under_cfg_debug_assertions, local_let_binds_buffer,
 };
 
 const KINDS: &[&str] = &["impl_item"];
@@ -114,6 +121,15 @@ impl AstCheck for Check {
             return;
         };
         if !is_from_impl(trait_text) {
+            return;
+        }
+        // The author explicitly opted out of `clippy::fallible_impl_from` — the
+        // exact upstream lint this rule reimplements — by allowing/expecting it on
+        // the impl. That is the canonical, strongest acknowledgement that this
+        // `From` is deliberately fallible, so we defer to it rather than
+        // double-flag a lint they already suppressed. Checked on the `impl_item`
+        // node so the impl-level attribute (a preceding sibling) is seen.
+        if has_clippy_allow(node, source_bytes, "fallible_impl_from") {
             return;
         }
         // Walk the impl body looking for `.unwrap()` / `.expect()`.
@@ -1310,6 +1326,49 @@ mod tests {
     fn allows_clean_from_impl() {
         let source = "impl From<u32> for u64 { fn from(x: u32) -> Self { x as u64 } }";
         assert!(run_on(source).is_empty());
+    }
+
+    /// Closes #7547: an `#[allow(clippy::fallible_impl_from)]` on the impl is the
+    /// author's explicit opt-out of the exact lint this rule reimplements.
+    #[test]
+    fn allows_expect_under_clippy_allow_on_impl() {
+        let source = r#"#[allow(clippy::fallible_impl_from)]
+        impl From<String> for Url {
+            fn from(s: String) -> Self { Url::parse(&s).expect("bad url") }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// The `#[expect(...)]` form of the same opt-out is honored too
+    /// (`has_clippy_allow` covers both `allow` and `expect`).
+    #[test]
+    fn allows_expect_under_clippy_expect_on_impl() {
+        let source = r#"#[expect(clippy::fallible_impl_from)]
+        impl From<String> for Url {
+            fn from(s: String) -> Self { Url::parse(&s).expect("bad url") }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// The SAME impl without the allow attribute still flags — the exemption keys
+    /// on the presence of the opt-out, not on the code shape.
+    #[test]
+    fn flags_expect_without_clippy_allow_on_impl() {
+        let source = r#"impl From<String> for Url {
+            fn from(s: String) -> Self { Url::parse(&s).expect("bad url") }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// An impl allowing an *unrelated* clippy lint still flags — the exemption
+    /// keys on the specific `fallible_impl_from` lint name.
+    #[test]
+    fn flags_expect_under_unrelated_clippy_allow_on_impl() {
+        let source = r#"#[allow(clippy::needless_lifetimes)]
+        impl From<String> for Url {
+            fn from(s: String) -> Self { Url::parse(&s).expect("bad url") }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     /// Closes #3228: `FromRequest`/`FromRequestParts` are axum extractor traits
