@@ -25,6 +25,12 @@
 //! bits, and the chain has no `From`/`Into` alternative (`i8::from(u8)` does not
 //! exist).
 //!
+//! An `<expr> as u8 as char` chain is exempt: Rust's `as` only casts a `u8` to
+//! `char` (E0604 forbids `<anything else> as char`), so the `u8` intermediate is
+//! the compiler-mandated way to build a `char` from an integer's low byte, not a
+//! hidden misalignment. `<int> as char` does not compile, and `char::from`
+//! likewise accepts only `u8`, so there is no single-step alternative.
+//!
 //! An `<expr> as <int> as <float>` chain is exempt unless the operand is
 //! provably numeric (a numeric literal or an arithmetic expression). `bool`
 //! (E0606) and `char` (E0604) can only reach a float type *through* an integer,
@@ -275,6 +281,20 @@ crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnosti
     // field, not a redundant cast, and has no `From`/`Into` alternative.
     if let Some(outer_ty) = node.child_by_field_name("type")
         && int_sign_reinterpret(inner_ty, outer_ty, source)
+    {
+        return;
+    }
+
+    // Exempt the compiler-mandated `<expr> as u8 as char` bridge. Rust's `as`
+    // only casts a `u8` to `char` (E0604 forbids `<anything else> as char`), so
+    // the `u8` intermediate is load-bearing, not a hidden misalignment:
+    // `<int> as char` does not compile, and `char::from` likewise accepts only
+    // `u8`, so there is no `From`/`Into` single-step alternative.
+    if let Some(outer_ty) = node.child_by_field_name("type")
+        && outer_ty.kind() == "primitive_type"
+        && outer_ty.utf8_text(source) == Ok("char")
+        && inner_ty.kind() == "primitive_type"
+        && inner_ty.utf8_text(source) == Ok("u8")
     {
         return;
     }
@@ -716,5 +736,43 @@ mod tests {
         // Negative-space guard: an arithmetic operand is provably numeric, so the
         // `as usize` hop is redundant — fires.
         assert_eq!(run_on("fn f(a: u8, b: u8) { let w = (a + b) as usize as u32; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_u8_to_char_bridge() {
+        // #7582, wezterm xkeysyms.rs: `i as u8 as char` where `i` is a u32 keysym.
+        // `<u32> as char` is E0604 (only `u8` casts to `char`), so the `as u8` hop
+        // is the compiler-mandated way to build a `char` from an integer's low byte.
+        assert!(run_on("fn f(i: u32) -> char { i as u8 as char }").is_empty());
+    }
+
+    #[test]
+    fn flags_u16_to_char_chain() {
+        // Negative-space guard: the inner target is `u16`, not `u8`. Only `u8 as
+        // char` is the compiler-mandated bridge, so this chain still fires.
+        assert_eq!(run_on("fn f(x: u32) { let _ = x as u16 as char; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_i8_to_char_chain() {
+        // Negative-space guard: the inner target is `i8`, not `u8`, so the
+        // `as u8 as char` bridge exemption must not catch it — still fires.
+        assert_eq!(run_on("fn f(x: u32) { let _ = x as i8 as char; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_numeric_literal_u8_to_char_bridge() {
+        // Unlike the int→float / usize bridges (where a provably-numeric operand
+        // makes the hop redundant and still fires), `5 as u8 as char` stays exempt:
+        // an integer literal defaults to `i32`, and `5 as char` is E0604, so the
+        // `as u8` step is mandatory regardless of the operand being a literal.
+        assert!(run_on("fn f() { let _ = 5 as u8 as char; }").is_empty());
+    }
+
+    #[test]
+    fn flags_int_widen_then_narrow_double_cast() {
+        // Negative-space guard: `x as u32 as u8` widens then narrows (32 > 8), not
+        // the truncate-then-widen idiom — a genuinely misaligned chain that fires.
+        assert_eq!(run_on("fn f(x: u16) { let _ = x as u32 as u8; }").len(), 1);
     }
 }
