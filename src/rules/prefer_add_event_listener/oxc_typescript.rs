@@ -105,6 +105,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `recv.onX = null` / `= undefined` DETACHES a handler; there is no
+        // single-statement `addEventListener` form for removal (its counterpart
+        // is `removeEventListener(type, ref)`, needing a stored reference this
+        // site never created), so `.onX = null` is the canonical idiom.
+        if rhs_is_detach(&assign.right) {
+            return;
+        }
+
         let event_name = &prop_name[2..]; // strip "on"
         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -139,6 +147,18 @@ fn rhs_is_self_bind(lhs: &StaticMemberExpression, rhs: &Expression) -> bool {
     };
     bound.property.name.as_str() == lhs.property.name.as_str()
         && receivers_equal(&bound.object, &lhs.object)
+}
+
+/// True when `rhs` ultimately assigns `null` or the `undefined` identifier —
+/// a handler removal (detach). Follows chained assignments (`a = b = null`, where
+/// the outer RHS is itself an `AssignmentExpression`) down to the terminal value.
+fn rhs_is_detach(rhs: &Expression) -> bool {
+    let mut terminal = rhs.without_parentheses();
+    while let Expression::AssignmentExpression(inner) = terminal {
+        terminal = inner.right.without_parentheses();
+    }
+    matches!(terminal, Expression::NullLiteral(_))
+        || matches!(terminal, Expression::Identifier(id) if id.name.as_str() == "undefined")
 }
 
 /// Structural equality for member-access receivers, limited to the forms that
@@ -209,5 +229,33 @@ mod tests {
         // The bound receiver `other` ≠ the target receiver `el` → not a self-bind.
         let d = run_on("el.onclick = other.onclick.bind(this);");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_null_detach() {
+        // #7507: `.onX = null` removes a handler; no `addEventListener` form exists.
+        assert!(run_on("document.onmouseup = null;").is_empty());
+    }
+
+    #[test]
+    fn allows_undefined_detach() {
+        // #7507: `.onX = undefined` is likewise a removal, not an attachment.
+        assert!(run_on("el.onclick = undefined;").is_empty());
+    }
+
+    #[test]
+    fn allows_chained_null_detach() {
+        // #7507 exact case: both `onmousemove` and `onmouseup` are detached — the
+        // outer RHS is itself an assignment whose terminal value is `null`, so both
+        // sites must be suppressed (not just the innermost `onmouseup = null`).
+        assert!(run_on("document.onmousemove = document.onmouseup = null;").is_empty());
+    }
+
+    #[test]
+    fn flags_chained_real_handler() {
+        // Chained assignment whose terminal is a real handler still attaches at
+        // both sites → both flagged.
+        let d = run_on("a.onclick = b.onclick = someHandler;");
+        assert_eq!(d.len(), 2);
     }
 }
