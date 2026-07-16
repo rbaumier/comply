@@ -7,7 +7,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{
-    extract_elements, has_attr, is_custom_component_tag, is_vue_file,
+    extract_elements, has_attr, is_custom_component_tag, is_vue_builtin_element, is_vue_file,
 };
 
 #[derive(Debug)]
@@ -20,9 +20,11 @@ impl TextCheck for Check {
         }
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
-            // A `@click` on a custom component is a component event binding, not a
-            // DOM click handler, so the keyboard-handler requirement does not apply.
-            if is_custom_component_tag(elem.tag) {
+            // A `@click` on a custom component or a Vue built-in meta element
+            // (`<component :is>`, `<transition>`, `<template>`, …) is a component
+            // event binding forwarded to the resolved/rendered content, not a DOM
+            // click handler, so the keyboard-handler requirement does not apply.
+            if is_custom_component_tag(elem.tag) || is_vue_builtin_element(elem.tag) {
                 continue;
             }
             // Native interactive elements (button, input, a, …) have built-in
@@ -91,6 +93,29 @@ mod tests {
     fn ignores_hyphenated_custom_element() {
         let source = "<template>\n  <my-widget @click=\"handler\" />\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_dynamic_component_is() {
+        // Regression for rbaumier/comply#7580 — `<component :is>` is Vue's
+        // built-in dynamic element; `@click` forwards to the resolved component
+        // (which supplies its own keyboard interaction), so no `@keydown` is
+        // required. `component` is lowercase and un-hyphenated, so it slips past
+        // `is_custom_component_tag` and needs the Vue-built-in guard.
+        let source = "<template>\n  <component :is=\"DefaultButton || VbenButton\" @click=\"() => onCancel()\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_vue_builtin_meta_elements() {
+        // Spot-check the built-in meta set: these are rendering wrappers /
+        // fragments, not native DOM elements, so a `@click` on them is not a
+        // native click handler.
+        for tag in ["transition", "teleport", "template"] {
+            let source =
+                format!("<template>\n  <{tag} @click=\"handler\">x</{tag}>\n</template>");
+            assert!(run(&source).is_empty(), "<{tag}> should be ignored");
+        }
     }
 
     #[test]

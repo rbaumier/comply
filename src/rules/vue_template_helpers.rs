@@ -272,6 +272,35 @@ pub fn is_custom_component_tag(tag: &str) -> bool {
     tag.contains('-') || tag.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// Vue's built-in non-native meta elements, as authored (lowercase, kebab-case).
+/// `<component :is>` renders whatever `:is` resolves to; the rest are rendering
+/// wrappers (`<transition>`, `<transition-group>`, `<keep-alive>`), a portal
+/// (`<teleport>`), an async boundary (`<suspense>`), or a fragment/placeholder
+/// (`<template>`, `<slot>`). None is a native HTML element. Vue also accepts
+/// PascalCase forms (`<Transition>`, `<KeepAlive>`), which are already classified
+/// as components by [`is_custom_component_tag`]'s uppercase branch.
+const VUE_BUILTIN_ELEMENTS: &[&str] = &[
+    "component",
+    "slot",
+    "template",
+    "transition",
+    "transition-group",
+    "keep-alive",
+    "teleport",
+    "suspense",
+];
+
+/// True when `tag` names one of Vue's built-in non-native meta elements
+/// (see [`VUE_BUILTIN_ELEMENTS`]). Several are lowercase without a hyphen
+/// (`component`, `slot`, `transition`, `teleport`, `suspense`), so they slip
+/// past [`is_custom_component_tag`]'s PascalCase/hyphen heuristic and would
+/// otherwise be misclassified as native HTML. Rules keying on a
+/// native-vs-component distinction consult this to treat these tags as
+/// non-native.
+pub fn is_vue_builtin_element(tag: &str) -> bool {
+    VUE_BUILTIN_ELEMENTS.contains(&tag)
+}
+
 /// Collect all attribute names from an attributes string.
 pub fn collect_attr_names(attrs: &str) -> Vec<&str> {
     let mut names = Vec::new();
@@ -469,6 +498,23 @@ mod tests {
         assert!(!is_custom_component_tag("div"));
         assert!(!is_custom_component_tag("img"));
         assert!(!is_custom_component_tag(""));
+    }
+
+    #[test]
+    fn is_vue_builtin_element_works() {
+        // Lowercase, non-hyphenated built-ins that `is_custom_component_tag`
+        // misses are the ones this predicate must catch.
+        assert!(is_vue_builtin_element("component"));
+        assert!(is_vue_builtin_element("slot"));
+        assert!(is_vue_builtin_element("template"));
+        assert!(is_vue_builtin_element("transition"));
+        assert!(is_vue_builtin_element("transition-group"));
+        assert!(is_vue_builtin_element("keep-alive"));
+        assert!(is_vue_builtin_element("teleport"));
+        assert!(is_vue_builtin_element("suspense"));
+        assert!(!is_vue_builtin_element("div"));
+        assert!(!is_vue_builtin_element("button"));
+        assert!(!is_vue_builtin_element("Transition"));
     }
 
     #[test]
