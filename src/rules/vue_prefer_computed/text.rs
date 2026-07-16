@@ -23,12 +23,16 @@
 //! when a value it directly reads changes. The shallow read of a `computed`
 //! can't replicate deep watching, so such a watch can't be replaced.
 //!
-//! Three further usage-context exemptions, because `computed()` is read-only:
+//! Four further usage-context exemptions, because `computed()` is read-only:
 //! - A constant RHS (`''`, `0`, `true`, ...) is a reset on a trigger, not a
 //!   derivation; `computed()` would freeze the ref to that constant.
 //! - A target ref assigned at another site in the file is mutable interactive
 //!   state, not a derived value; converting it to `computed()` would break the
 //!   other assignment.
+//! - A target ref bound by `v-model` in the template is two-way interactive
+//!   state: the user's input writes its `.value` too — a second write site the
+//!   textual assignment scan can't see (it appears as `v-model="ref"`, never as
+//!   `ref.value =`). A read-only `computed()` would break the binding.
 //! - A target ref owned by a composable call — bound directly
 //!   (`const t = use<Uppercase>(…)`) or destructured from its return value
 //!   (`const { t } = use<Uppercase>(…)`) — may back its `.value` setter with an
@@ -86,6 +90,14 @@ impl TextCheck for Check {
                 // interactive state, not a derived value; `computed()` is
                 // read-only and would break it.
                 if value_assignment_count(src, &ident) >= 2 {
+                    continue;
+                }
+                // A ref bound by `v-model` in the template is two-way
+                // interactive state: the user's input writes its `.value` too.
+                // That write appears as `v-model="<ident>"`, never as
+                // `<ident>.value =`, so `value_assignment_count` can't see it.
+                // Converting to a read-only `computed()` breaks the binding.
+                if has_v_model_binding(src, &ident) {
                     continue;
                 }
                 // A ref initialized by a composable (`const t = use<Uppercase>(…)`)
@@ -352,6 +364,59 @@ fn value_assignment_count(src: &str, ident: &str) -> usize {
         from = pos + needle.len();
     }
     count
+}
+
+/// Returns true when `src` contains a `v-model` directive bound to exactly
+/// `ident` — the template write site the textual `value_assignment_count` can't
+/// observe. Matches every binding shape (`v-model="ident"`,
+/// `v-model:arg="ident"`, `v-model.mod="ident"`, `v-model:arg.mod="ident"`, and
+/// single- or double-quoted values), but the bound value must equal `ident`
+/// exactly, so `v-model="identOther"` or `v-model="ident.foo"` does not match.
+fn has_v_model_binding(src: &str, ident: &str) -> bool {
+    let bytes = src.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = src[from..].find("v-model") {
+        let pos = from + rel;
+        from = pos + "v-model".len();
+        // Word boundary before `v-model` so `data-v-model` and the like don't
+        // count as the directive.
+        if pos > 0
+            && matches!(
+                bytes[pos - 1],
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' | b'.' | b':' | b'$'
+            )
+        {
+            continue;
+        }
+        // Word boundary after `v-model` so `v-modelValue` isn't read as the
+        // directive followed by an argument. Only `=`, `:`, `.` or whitespace
+        // may follow the directive name.
+        if src[from..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        {
+            continue;
+        }
+        // Consume the optional argument (`:arg`, `:[dyn]`) and modifiers
+        // (`.mod`) up to the `=`, then require an exact-value quoted binding.
+        let tail = src[from..].trim_start_matches(|c: char| {
+            c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '-' | '$' | '[' | ']')
+        });
+        let Some(after_eq) = tail.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let after_eq = after_eq.trim_start();
+        for quote in ['"', '\''] {
+            if let Some(inner) = after_eq.strip_prefix(quote)
+                && let Some(end) = inner.find(quote)
+                && inner[..end].trim() == ident
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Returns true when `ident` is a composable-owned ref in `src`: either bound
@@ -816,6 +881,98 @@ mod tests {
         let src = "for (const { doubled } of rows) {}\n\
                    const stored = useLocalStorage('k', false)\n\
                    watch(count, (v) => {\n  doubled.value = v * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_v_model_bound_ref() {
+        // A select-all checkbox: the ref is written by the watcher AND by the
+        // user via `v-model`. It's two-way interactive state, not a derivation.
+        let src = "<script setup>\n\
+                   const checkAll = ref(false)\n\
+                   watch(() => selected.value, (v) => {\n\
+                   checkAll.value = v.length === items.value.length\n\
+                   })\n\
+                   </script>\n\
+                   <template>\n\
+                   <input type=\"checkbox\" v-model=\"checkAll\" />\n\
+                   </template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_v_model_arg_bound_ref() {
+        let src = "<script setup>\n\
+                   const checkAll = ref(false)\n\
+                   watch(() => selected.value, (v) => {\n\
+                   checkAll.value = v.length === items.value.length\n\
+                   })\n\
+                   </script>\n\
+                   <template>\n\
+                   <MyCheckbox v-model:value=\"checkAll\" />\n\
+                   </template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_v_model_modifier_bound_ref() {
+        let src = "<script setup>\n\
+                   const checkAll = ref(false)\n\
+                   watch(() => selected.value, (v) => {\n\
+                   checkAll.value = v.length === items.value.length\n\
+                   })\n\
+                   </script>\n\
+                   <template>\n\
+                   <input v-model.trim=\"checkAll\" />\n\
+                   </template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_watcher_only_ref_with_template_but_no_v_model() {
+        // No `v-model`: the ref is a pure derivation that should become
+        // `computed()`, even though the template renders it.
+        let src = "<script setup>\n\
+                   const doubled = ref(0)\n\
+                   watch(() => count.value, (v) => {\n\
+                   doubled.value = v * 2\n\
+                   })\n\
+                   </script>\n\
+                   <template>\n\
+                   <span>{{ doubled }}</span>\n\
+                   </template>";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_v_model_binds_a_different_identifier() {
+        // The watcher writes `checkAll`, but the only `v-model` binds
+        // `checkAllOther`. The exact-value match must not exempt `checkAll`.
+        let src = "<script setup>\n\
+                   const checkAll = ref(false)\n\
+                   watch(() => selected.value, (v) => {\n\
+                   checkAll.value = v.length === items.value.length\n\
+                   })\n\
+                   </script>\n\
+                   <template>\n\
+                   <input type=\"checkbox\" v-model=\"checkAllOther\" />\n\
+                   </template>";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_v_model_binds_a_nested_property_of_the_ref() {
+        // `v-model="checkAll.foo"` writes a nested property, not `checkAll.value`,
+        // so it must not exempt a watcher deriving `checkAll` itself.
+        let src = "<script setup>\n\
+                   const checkAll = ref(false)\n\
+                   watch(() => selected.value, (v) => {\n\
+                   checkAll.value = v.length === items.value.length\n\
+                   })\n\
+                   </script>\n\
+                   <template>\n\
+                   <input type=\"checkbox\" v-model=\"checkAll.foo\" />\n\
+                   </template>";
         assert_eq!(run(src).len(), 1);
     }
 }
