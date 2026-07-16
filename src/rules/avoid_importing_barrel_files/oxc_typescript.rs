@@ -418,6 +418,7 @@ mod tests {
             is_type_only: false,
             local_name: None,
             is_primitive_literal: false,
+            is_vue_ref_factory: false,
         };
         let own = ExportedSymbol {
             name: "addBusinessDays".into(),
@@ -428,6 +429,7 @@ mod tests {
             is_type_only: false,
             local_name: None,
             is_primitive_literal: false,
+            is_vue_ref_factory: false,
         };
         // Pure re-export hub → barrel.
         assert!(target_is_genuine_barrel(&[reexport.clone()]));

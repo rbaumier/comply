@@ -120,6 +120,16 @@ pub struct ExportedSymbol {
     /// `false` for any other export shape (destructuring binding, function,
     /// class, call/member/template/compound initializer, re-export, type).
     pub is_primitive_literal: bool,
+    /// `true` when this is a single `const`/`let`/`var` binding initialized
+    /// directly with a Vue ref factory call — `ref()` / `shallowRef()` /
+    /// `customRef()` / `computed()` (the `oxc_helpers::VUE_REF_FACTORIES` set).
+    /// The exported value is a `Ref<T>` wrapper whose `.value` property is the
+    /// intended mutation point, so a consumer's `<import>.value = x` write is a
+    /// reactive write, not a plain object-property mutation — the cross-file
+    /// analogue of `oxc_helpers::is_vue_ref_binding`. `false` for any other
+    /// export shape (destructuring binding, function, class, non-factory or
+    /// compound initializer, re-export, type).
+    pub is_vue_ref_factory: bool,
 }
 
 /// Kind of an imported symbol.
@@ -1496,6 +1506,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             is_type_only: false,
             local_name: None,
             is_primitive_literal: false,
+            is_vue_ref_factory: false,
         });
     }
 
@@ -2243,6 +2254,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_type_only: false,
                 local_name: None,
                 is_primitive_literal: false,
+                is_vue_ref_factory: false,
             });
             return;
         }
@@ -2255,6 +2267,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_type_only: false,
             local_name: None,
             is_primitive_literal: false,
+            is_vue_ref_factory: false,
         });
         return;
     }
@@ -2297,6 +2310,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_type_only: false,
                 local_name,
                 is_primitive_literal: false,
+                is_vue_ref_factory: false,
             });
         }
         return;
@@ -2316,6 +2330,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_type_only: false,
             local_name: None,
             is_primitive_literal: false,
+            is_vue_ref_factory: false,
         });
         return;
     }
@@ -2351,6 +2366,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             is_type_only: false,
                             local_name: None,
                             is_primitive_literal: false,
+                            is_vue_ref_factory: false,
                         });
                     }
                 } else {
@@ -2399,6 +2415,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_type_only: false,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
         }
@@ -2416,6 +2433,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_type_only: false,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
         }
@@ -2442,6 +2460,8 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                 // literal.
                 let is_primitive_literal = name_node.kind() == "identifier"
                     && declarator_binds_primitive_literal(decl, source);
+                let is_vue_ref_factory = name_node.kind() == "identifier"
+                    && declarator_binds_vue_ref_factory(decl, source);
                 let mut names = Vec::new();
                 collect_pattern_names(name_node, source, &mut names);
                 for name in names {
@@ -2454,6 +2474,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                         is_type_only: false,
                         local_name: None,
                         is_primitive_literal,
+                        is_vue_ref_factory,
                     });
                 }
             }
@@ -2472,6 +2493,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_type_only: true,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
         }
@@ -2489,6 +2511,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_type_only: false,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
         }
@@ -2507,6 +2530,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_type_only: false,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
         }
@@ -2559,6 +2583,27 @@ fn declarator_binds_primitive_literal(decl: Node, source: &[u8]) -> bool {
         "number" => value.utf8_text(source).is_ok_and(|t| !t.ends_with('n')),
         _ => false,
     }
+}
+
+/// True when the declarator's initializer is a direct call to a Vue ref factory
+/// (`ref(…)` / `shallowRef(…)` / `customRef(…)` / `computed(…)`, the shared
+/// `oxc_helpers::VUE_REF_FACTORIES` set). The exported binding is then a `Ref<T>`
+/// wrapper mutated through `.value`. The callee must be a plain identifier, so a
+/// member call (`vue.ref(…)`) or non-factory call is not matched.
+fn declarator_binds_vue_ref_factory(decl: Node, source: &[u8]) -> bool {
+    let Some(value) = decl.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = value.child_by_field_name("function") else {
+        return false;
+    };
+    callee.kind() == "identifier"
+        && callee
+            .utf8_text(source)
+            .is_ok_and(|name| crate::oxc_helpers::VUE_REF_FACTORIES.contains(&name))
 }
 
 /// Walk a destructuring binding pattern and push every introduced
@@ -2749,6 +2794,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     is_type_only: false,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
             // `declare module '<specifier>' { … }` — a TypeScript module
@@ -3277,6 +3323,7 @@ fn oxc_extract_export_named(
                 is_type_only: false,
                 local_name,
                 is_primitive_literal: false,
+                is_vue_ref_factory: false,
             });
         }
         return;
@@ -3304,6 +3351,7 @@ fn oxc_extract_export_named(
                     is_type_only: false,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
         }
@@ -3318,6 +3366,7 @@ fn oxc_extract_export_named(
                     is_type_only: false,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
         }
@@ -3339,6 +3388,12 @@ fn oxc_extract_export_named(
                                     | Expression::BooleanLiteral(_)
                             )
                         });
+                // Parity with the tree-sitter `declarator_binds_vue_ref_factory`:
+                // a single plain-identifier binding initialized directly with a
+                // Vue ref factory call (`export const x = ref()`).
+                let is_vue_ref_factory =
+                    matches!(&decl.id, BindingPattern::BindingIdentifier(_))
+                        && decl.init.as_ref().is_some_and(oxc_init_is_vue_ref_factory);
                 let mut names = Vec::new();
                 oxc_collect_pattern_names(&decl.id, &mut names);
                 for name in names {
@@ -3351,6 +3406,7 @@ fn oxc_extract_export_named(
                         is_type_only: false,
                         local_name: None,
                         is_primitive_literal,
+                        is_vue_ref_factory,
                     });
                 }
             }
@@ -3365,6 +3421,7 @@ fn oxc_extract_export_named(
                 is_type_only: true,
                 local_name: None,
                 is_primitive_literal: false,
+                is_vue_ref_factory: false,
             });
         }
         Declaration::TSInterfaceDeclaration(decl) => {
@@ -3377,6 +3434,7 @@ fn oxc_extract_export_named(
                 is_type_only: true,
                 local_name: None,
                 is_primitive_literal: false,
+                is_vue_ref_factory: false,
             });
         }
         Declaration::TSEnumDeclaration(decl) => {
@@ -3389,6 +3447,7 @@ fn oxc_extract_export_named(
                 is_type_only: false,
                 local_name: None,
                 is_primitive_literal: false,
+                is_vue_ref_factory: false,
             });
         }
         Declaration::TSModuleDeclaration(decl) => {
@@ -3406,6 +3465,7 @@ fn oxc_extract_export_named(
                     is_type_only: false,
                     local_name: None,
                     is_primitive_literal: false,
+                    is_vue_ref_factory: false,
                 });
             }
         }
@@ -3444,6 +3504,7 @@ fn oxc_extract_cjs_export(
             is_type_only: false,
             local_name: None,
             is_primitive_literal: false,
+            is_vue_ref_factory: false,
         });
     };
 
@@ -3558,6 +3619,7 @@ fn oxc_extract_export_all(
                 is_type_only: false,
                 local_name: None,
                 is_primitive_literal: false,
+                is_vue_ref_factory: false,
             });
         }
         // A string-literal namespace name (`export * as "ns"`) has no
@@ -3574,6 +3636,7 @@ fn oxc_extract_export_all(
         is_type_only: false,
         local_name: None,
         is_primitive_literal: false,
+        is_vue_ref_factory: false,
     });
 }
 
@@ -3588,6 +3651,16 @@ fn oxc_extract_params(func: &oxc_ast::ast::Function) -> Vec<String> {
         }
     }
     result
+}
+
+/// oxc equivalent of tree-sitter `declarator_binds_vue_ref_factory`: true when
+/// `init` is a direct call to a Vue ref factory (the shared
+/// `oxc_helpers::VUE_REF_FACTORIES` set) whose callee is a plain identifier.
+fn oxc_init_is_vue_ref_factory(init: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    matches!(init, Expression::CallExpression(call) if matches!(&call.callee,
+        Expression::Identifier(callee)
+            if crate::oxc_helpers::VUE_REF_FACTORIES.contains(&callee.name.as_str())))
 }
 
 /// oxc equivalent of tree-sitter `collect_pattern_names` over a binding pattern.
@@ -4680,6 +4753,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         is_type_only: false,
         local_name: None,
         is_primitive_literal: false,
+        is_vue_ref_factory: false,
     });
 }
 
@@ -4755,6 +4829,7 @@ fn extract_rust_use(
                 is_type_only: false,
                 local_name: None,
                 is_primitive_literal: false,
+                is_vue_ref_factory: false,
             });
         }
     }

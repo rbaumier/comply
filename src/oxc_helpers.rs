@@ -3538,13 +3538,24 @@ fn file_imports_draft_from_immer(semantic: &oxc_semantic::Semantic) -> bool {
 
 /// Vue 3 ref factories whose return value is a `Ref<T>` wrapper mutated
 /// through its `.value` property. `customRef` and (writable) `computed` follow
-/// the same `ref.value = x` contract.
-const VUE_REF_FACTORIES: &[&str] = &["ref", "shallowRef", "customRef", "computed"];
+/// the same `ref.value = x` contract. Shared with the cross-file `ImportIndex`
+/// extractor (`import_index.rs`) so a `.value` write on an imported ref is
+/// recognized against the same factory set — the single source of truth.
+pub(crate) const VUE_REF_FACTORIES: &[&str] = &["ref", "shallowRef", "customRef", "computed"];
 
 /// Vue 3 reactive-object factories whose return value is a reactive proxy whose
 /// *properties* are the intended mutation point — `state.n = x` is how reactivity
 /// is driven, unlike a ref's single `.value` property.
 const VUE_REACTIVE_FACTORIES: &[&str] = &["reactive", "shallowReactive"];
+
+/// Vue 3 ref-wrapper type-annotation names. A function parameter annotated with
+/// one of these receives a `Ref<T>` whose `.value` property is the intended
+/// mutation point, exactly like a locally-created `ref()` binding: the caller
+/// produced the ref elsewhere, so `param.value = x` is a reactive write, not a
+/// plain object-property mutation. The match is on the ref-wrapper name only, so
+/// a plain `{ value: T }`-typed parameter stays flagged.
+const VUE_REF_TYPE_NAMES: &[&str] =
+    &["Ref", "ShallowRef", "ComputedRef", "WritableComputedRef", "ModelRef"];
 
 /// True when `ident` resolves to a `const`/`let` binding initialised by one of
 /// `factories`, where the factory is Vue's. Resolves the binding via
@@ -3588,16 +3599,30 @@ fn is_vue_factory_binding(
             let Expression::Identifier(callee) = &call.callee else {
                 return false;
             };
-            let name = callee.name.as_str();
-            if !factories.contains(&name) {
-                return false;
-            }
-            return is_imported_from_vue(name, semantic)
-                || (project.uses_unplugin_auto_import(path)
-                    && callee_resolves_to_no_local_binding(callee, semantic));
+            return callee_is_vue_factory(callee, factories, semantic, project, path);
         }
     }
     false
+}
+
+/// True when `callee` names one of `factories` AND that name is Vue's — either a
+/// named import from `vue` (`import { ref } from 'vue'`), or, in a project using
+/// `unplugin-auto-import`, a free/global identifier that resolves to no local
+/// declaration (auto-import injects `ref`/`computed`/… with no import statement).
+/// The no-local-declaration check keeps a same-named user-defined factory from
+/// being mistaken for Vue's.
+fn callee_is_vue_factory(
+    callee: &oxc_ast::ast::IdentifierReference,
+    factories: &[&str],
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    let name = callee.name.as_str();
+    factories.contains(&name)
+        && (is_imported_from_vue(name, semantic)
+            || (project.uses_unplugin_auto_import(path)
+                && callee_resolves_to_no_local_binding(callee, semantic)))
 }
 
 /// True when `callee` is a free/global identifier — its reference resolves to no
@@ -3615,14 +3640,152 @@ fn callee_resolves_to_no_local_binding(
     semantic.scoping().get_reference(ref_id).symbol_id().is_none()
 }
 
-/// True when `ident` resolves to a `const`/`let` binding initialised by a Vue
-/// ref factory recognised as Vue's — `ref(...)`, `shallowRef(...)`,
-/// `customRef(...)`, or `computed(...)` (imported from `vue`, or auto-injected by
-/// `unplugin-auto-import`; see [`is_vue_factory_binding`]). Such a binding is a `Ref<T>` wrapper
-/// whose `.value` property is the *intended* mutation point: assigning
-/// `count.value = x` / `count.value++` is how Vue's reactivity is driven, not a
-/// mutation of a plain object. Callers gate the `.value` property specifically;
-/// any other property write on the ref stays flagged.
+/// The final identifier of a `TSTypeReference`'s name — `Ref` for `Ref<T>` and
+/// for a qualified `Vue.Ref<T>` (final segment). `None` for a non-reference type
+/// or a `this`-qualified name.
+fn ref_type_reference_name<'a>(ty: &'a oxc_ast::ast::TSType<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSTypeReference(tref) = ty else {
+        return None;
+    };
+    match &tref.type_name {
+        TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
+        TSTypeName::QualifiedName(q) => Some(q.right.name.as_str()),
+        TSTypeName::ThisExpression(_) => None,
+    }
+}
+
+/// True when `ident` resolves to a function parameter that is a Vue ref — either
+/// by its syntactic type annotation (`Ref<…>` / `ShallowRef<…>` / `ComputedRef<…>`
+/// / `WritableComputedRef<…>` / `ModelRef<…>`; see [`VUE_REF_TYPE_NAMES`]), or an
+/// annotation-less parameter whose default initializer is a Vue ref factory call
+/// (`queryClicks = ref(0)`). Such a parameter holds a `Ref<T>` whose `.value` is
+/// the intended mutation point regardless of how the caller produced it. The
+/// annotation match is on the ref-wrapper name only, so a plain `{ value: T }`-
+/// typed parameter stays flagged; the default-init match requires a Vue factory
+/// (see [`callee_is_vue_factory`]).
+fn binding_is_ref_typed_parameter(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let AstKind::FormalParameter(param) = semantic.nodes().kind(scoping.symbol_declaration(sym_id))
+    else {
+        return false;
+    };
+    // (a) `param: Ref<…>` — a ref-wrapper type annotation.
+    if let Some(ann) = &param.type_annotation
+        && ref_type_reference_name(&ann.type_annotation)
+            .is_some_and(|name| VUE_REF_TYPE_NAMES.contains(&name))
+    {
+        return true;
+    }
+    // (b) `param = ref(0)` — an annotation-less parameter defaulting to a Vue
+    // ref factory call.
+    if let Some(init) = &param.initializer
+        && let Expression::CallExpression(call) = &**init
+        && let Expression::Identifier(callee) = &call.callee
+        && callee_is_vue_factory(callee, VUE_REF_FACTORIES, semantic, project, path)
+    {
+        return true;
+    }
+    false
+}
+
+/// True when `ident` is imported from another project module whose matching
+/// export binds a Vue ref factory call (`export const x = ref()/shallowRef()/
+/// customRef()/computed()`). Confirms `ident` actually resolves to an import
+/// binding (so a same-named local that shadows the import is not treated as the
+/// import), then resolves its source module and original export name via the
+/// [`ImportIndex`](crate::project::ImportIndex) and checks that module's export
+/// table — following one `export { name } from './origin'` re-export hop — for a
+/// ref-factory binding. A binding that does not resolve to a known exporting
+/// file, or resolves to a non-ref-factory export, does not match. Resolution is
+/// purely structural (binding provenance + import records + the exporting
+/// module's declaration shape).
+fn binding_is_imported_vue_ref(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    if !binding_resolves_to_import(ident, semantic) {
+        return false;
+    }
+    let name = ident.name.as_str();
+    let index = project.import_index();
+    if index.is_empty() {
+        return false;
+    }
+    let canon = index.canonical(path);
+    index.get_imports(&canon).iter().any(|imp| {
+        imp.local_name == name
+            && imp
+                .source_path
+                .as_deref()
+                .is_some_and(|src| export_is_vue_ref_factory(index, src, &imp.imported_name))
+    })
+}
+
+/// True when `ident` resolves to a binding introduced by an `import` declaration
+/// (its declaration node is, or is nested under, an `ImportDeclaration`). Keeps a
+/// same-named local binding that shadows an import from being resolved through
+/// the import records.
+fn binding_resolves_to_import(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .any(|kind| matches!(kind, AstKind::ImportDeclaration(_)))
+}
+
+/// True when `file` exports `name` as a Vue ref factory binding, directly or
+/// through a single `export { name } from './origin'` re-export hop (the
+/// centralized-state-module + barrel pattern common in Vue codebases).
+fn export_is_vue_ref_factory(
+    index: &crate::project::ImportIndex,
+    file: &Path,
+    name: &str,
+) -> bool {
+    let exports_ref_factory =
+        |f: &Path| index.get_exports(f).iter().any(|e| e.name == name && e.is_vue_ref_factory);
+    exports_ref_factory(file)
+        || index.reexport_target(file, name).is_some_and(exports_ref_factory)
+}
+
+/// True when `ident` denotes a Vue `Ref<T>` wrapper whose `.value` property is
+/// the *intended* mutation point: assigning `count.value = x` / `count.value++`
+/// drives Vue's reactivity, not a plain-object mutation. Recognized when `ident`:
+/// resolves to a `const`/`let` binding initialised by a Vue ref factory —
+/// `ref(...)`, `shallowRef(...)`, `customRef(...)`, or `computed(...)` (imported
+/// from `vue` or auto-injected by `unplugin-auto-import`; see
+/// [`is_vue_factory_binding`]); is a Ref-typed / ref-factory-defaulted function
+/// parameter (see [`binding_is_ref_typed_parameter`]); or is imported from a
+/// module that exports a ref-factory binding (see [`binding_is_imported_vue_ref`]).
+/// Callers gate the `.value` property specifically; any other property write on
+/// the ref stays flagged.
 #[must_use]
 pub fn is_vue_ref_binding(
     ident: &oxc_ast::ast::IdentifierReference,
@@ -3631,6 +3794,8 @@ pub fn is_vue_ref_binding(
     path: &Path,
 ) -> bool {
     is_vue_factory_binding(ident, semantic, VUE_REF_FACTORIES, project, path)
+        || binding_is_ref_typed_parameter(ident, semantic, project, path)
+        || binding_is_imported_vue_ref(ident, semantic, project, path)
 }
 
 /// True when `ident` resolves to a `const`/`let` binding initialised by a Vue
