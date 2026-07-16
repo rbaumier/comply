@@ -130,6 +130,20 @@ pub struct ExportedSymbol {
     /// export shape (destructuring binding, function, class, non-factory or
     /// compound initializer, re-export, type).
     pub is_vue_ref_factory: bool,
+    /// `true` when this export is a callable — a `function` declaration or a
+    /// `const`/`let`/`var` binding initialized directly with an arrow or
+    /// function expression — whose formal parameter list binds at most the first
+    /// argument passed to it: zero or one parameters total, a lone rest
+    /// (`(...args)`) counting as the single sink parameter. Passing such a callee
+    /// bare to an array-iterator method (`arr.map(f)`) binds only `element` and
+    /// drops the injected `index`/`array`, so it is identical to
+    /// `arr.map(e => f(e))` — the cross-file analogue of
+    /// `no_array_callback_reference::callee_ignores_extra_args`. `false` for a
+    /// multi-parameter callable (including `(x, ...rest)`, where `rest` captures
+    /// `index`) and for every non-callable export (class, type, enum, re-export,
+    /// non-function binding), where the extra-args footgun may apply or arity is
+    /// unknown.
+    pub binds_at_most_one_param: bool,
 }
 
 /// Kind of an imported symbol.
@@ -1507,6 +1521,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             local_name: None,
             is_primitive_literal: false,
             is_vue_ref_factory: false,
+            binds_at_most_one_param: false,
         });
     }
 
@@ -2255,6 +2270,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 local_name: None,
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
+                binds_at_most_one_param: false,
             });
             return;
         }
@@ -2268,6 +2284,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             local_name: None,
             is_primitive_literal: false,
             is_vue_ref_factory: false,
+            binds_at_most_one_param: false,
         });
         return;
     }
@@ -2311,6 +2328,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 local_name,
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
+                binds_at_most_one_param: false,
             });
         }
         return;
@@ -2331,6 +2349,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             local_name: None,
             is_primitive_literal: false,
             is_vue_ref_factory: false,
+            binds_at_most_one_param: false,
         });
         return;
     }
@@ -2367,6 +2386,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             local_name: None,
                             is_primitive_literal: false,
                             is_vue_ref_factory: false,
+                            binds_at_most_one_param: fn_binds_at_most_one_param(inner),
                         });
                     }
                 } else {
@@ -2416,6 +2436,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: fn_binds_at_most_one_param(child),
                 });
             }
         }
@@ -2434,6 +2455,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: false,
                 });
             }
         }
@@ -2462,6 +2484,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     && declarator_binds_primitive_literal(decl, source);
                 let is_vue_ref_factory = name_node.kind() == "identifier"
                     && declarator_binds_vue_ref_factory(decl, source);
+                let binds_at_most_one_param = declarator_binds_low_arity_callable(decl);
                 let mut names = Vec::new();
                 collect_pattern_names(name_node, source, &mut names);
                 for name in names {
@@ -2475,6 +2498,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                         local_name: None,
                         is_primitive_literal,
                         is_vue_ref_factory,
+                        binds_at_most_one_param,
                     });
                 }
             }
@@ -2494,6 +2518,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: false,
                 });
             }
         }
@@ -2512,6 +2537,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: false,
                 });
             }
         }
@@ -2531,6 +2557,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: false,
                 });
             }
         }
@@ -2651,6 +2678,50 @@ fn collect_pattern_names(node: Node, source: &[u8], out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+/// True when a callable's formal parameter list binds at most the first
+/// argument passed to it — zero or one parameters total. A lone rest
+/// (`(...args)`) counts as one: it is a sink that ignores every argument (#825).
+/// The tree-sitter analogue of
+/// `no_array_callback_reference::callee_ignores_extra_args`: such a callee,
+/// passed bare to an array-iterator method, drops the injected `index`/`array`.
+/// Two or more parameters — including a positional param followed by a rest
+/// (`(x, ...rest)`, where `rest` captures `index`) — expose the
+/// `parseInt(string, radix)` extra-args footgun and return `false`.
+fn fn_binds_at_most_one_param(fn_node: Node) -> bool {
+    // A single unparenthesized arrow parameter (`x => …`) is exactly one param.
+    if fn_node.child_by_field_name("parameter").is_some() {
+        return true;
+    }
+    let Some(params) = fn_node.child_by_field_name("parameters") else {
+        return true; // no parameter list → zero parameters
+    };
+    // Every named child of the parameter list is a formal parameter (a rest
+    // parameter counts as one) except an interleaved comment.
+    let mut count = 0usize;
+    let mut cursor = params.walk();
+    for child in params.named_children(&mut cursor) {
+        if child.kind() != "comment" {
+            count += 1;
+            if count > 1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// True when a `variable_declarator`'s initializer is an arrow or function
+/// expression that binds at most one parameter (see
+/// [`fn_binds_at_most_one_param`]). Any other initializer — or none — is not a
+/// statically-known single-arity callable and returns `false`.
+fn declarator_binds_low_arity_callable(decl: Node) -> bool {
+    let Some(value) = decl.child_by_field_name("value") else {
+        return false;
+    };
+    matches!(value.kind(), "arrow_function" | "function_expression")
+        && fn_binds_at_most_one_param(value)
 }
 
 /// Extract parameter names from a function declaration node.
@@ -2795,6 +2866,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: false,
                 });
             }
             // `declare module '<specifier>' { … }` — a TypeScript module
@@ -3324,6 +3396,7 @@ fn oxc_extract_export_named(
                 local_name,
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
+                binds_at_most_one_param: false,
             });
         }
         return;
@@ -3352,6 +3425,7 @@ fn oxc_extract_export_named(
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: oxc_binds_at_most_one_param(&func.params),
                 });
             }
         }
@@ -3367,6 +3441,7 @@ fn oxc_extract_export_named(
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: false,
                 });
             }
         }
@@ -3394,6 +3469,11 @@ fn oxc_extract_export_named(
                 let is_vue_ref_factory =
                     matches!(&decl.id, BindingPattern::BindingIdentifier(_))
                         && decl.init.as_ref().is_some_and(oxc_init_is_vue_ref_factory);
+                // Parity with the tree-sitter `declarator_binds_low_arity_callable`:
+                // a binding initialized with an arrow or function expression that
+                // binds at most one parameter (`export const f = (x) => …`).
+                let binds_at_most_one_param =
+                    decl.init.as_ref().is_some_and(oxc_init_binds_low_arity_callable);
                 let mut names = Vec::new();
                 oxc_collect_pattern_names(&decl.id, &mut names);
                 for name in names {
@@ -3407,6 +3487,7 @@ fn oxc_extract_export_named(
                         local_name: None,
                         is_primitive_literal,
                         is_vue_ref_factory,
+                        binds_at_most_one_param,
                     });
                 }
             }
@@ -3422,6 +3503,7 @@ fn oxc_extract_export_named(
                 local_name: None,
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
+                binds_at_most_one_param: false,
             });
         }
         Declaration::TSInterfaceDeclaration(decl) => {
@@ -3435,6 +3517,7 @@ fn oxc_extract_export_named(
                 local_name: None,
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
+                binds_at_most_one_param: false,
             });
         }
         Declaration::TSEnumDeclaration(decl) => {
@@ -3448,6 +3531,7 @@ fn oxc_extract_export_named(
                 local_name: None,
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
+                binds_at_most_one_param: false,
             });
         }
         Declaration::TSModuleDeclaration(decl) => {
@@ -3466,6 +3550,7 @@ fn oxc_extract_export_named(
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
+                    binds_at_most_one_param: false,
                 });
             }
         }
@@ -3505,6 +3590,7 @@ fn oxc_extract_cjs_export(
             local_name: None,
             is_primitive_literal: false,
             is_vue_ref_factory: false,
+            binds_at_most_one_param: false,
         });
     };
 
@@ -3620,6 +3706,7 @@ fn oxc_extract_export_all(
                 local_name: None,
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
+                binds_at_most_one_param: false,
             });
         }
         // A string-literal namespace name (`export * as "ns"`) has no
@@ -3637,6 +3724,7 @@ fn oxc_extract_export_all(
         local_name: None,
         is_primitive_literal: false,
         is_vue_ref_factory: false,
+        binds_at_most_one_param: false,
     });
 }
 
@@ -3661,6 +3749,25 @@ fn oxc_init_is_vue_ref_factory(init: &oxc_ast::ast::Expression) -> bool {
     matches!(init, Expression::CallExpression(call) if matches!(&call.callee,
         Expression::Identifier(callee)
             if crate::oxc_helpers::VUE_REF_FACTORIES.contains(&callee.name.as_str())))
+}
+
+/// oxc analogue of tree-sitter `fn_binds_at_most_one_param`: a callable binds at
+/// most the first argument when it declares zero or one formal parameters total
+/// (a rest parameter, held separately in `params.rest`, counts as one). Mirrors
+/// `no_array_callback_reference::callee_ignores_extra_args`.
+fn oxc_binds_at_most_one_param(params: &oxc_ast::ast::FormalParameters) -> bool {
+    params.items.len() + usize::from(params.rest.is_some()) <= 1
+}
+
+/// oxc equivalent of tree-sitter `declarator_binds_low_arity_callable`: true when
+/// `init` is an arrow or function expression binding at most one parameter.
+fn oxc_init_binds_low_arity_callable(init: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match init {
+        Expression::ArrowFunctionExpression(f) => oxc_binds_at_most_one_param(&f.params),
+        Expression::FunctionExpression(f) => oxc_binds_at_most_one_param(&f.params),
+        _ => false,
+    }
 }
 
 /// oxc equivalent of tree-sitter `collect_pattern_names` over a binding pattern.
@@ -4754,6 +4861,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         local_name: None,
         is_primitive_literal: false,
         is_vue_ref_factory: false,
+        binds_at_most_one_param: false,
     });
 }
 
@@ -4830,6 +4938,7 @@ fn extract_rust_use(
                 local_name: None,
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
+                binds_at_most_one_param: false,
             });
         }
     }
