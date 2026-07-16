@@ -4540,24 +4540,34 @@ impl ProjectCtx {
             .is_some_and(|src| src != "react")
     }
 
-    /// True when the project governing `path` positively declares CommonJS as
-    /// its module system, where the resolver supplies extensions and relative
-    /// imports therefore need none. The positive signal is the nearest tsconfig
-    /// selecting CommonJS output or classic resolution: `compilerOptions.module`
-    /// is `commonjs`, or `compilerOptions.module` / `moduleResolution` is one of
-    /// `node`/`node10`/`classic`.
+    /// True when the project governing `path` resolves relative imports as
+    /// CommonJS, where the resolver supplies extensions and extensionless
+    /// relative imports are therefore correct. Two signals from the nearest
+    /// tsconfig make this true:
     ///
-    /// The **nearest config wins**: a `package.json` declaring `"type":"module"`
-    /// vetoes the CommonJS signal *only* when no tsconfig opting into classic
-    /// resolution sits strictly closer to the file. A subtree (e.g. `tests/`)
-    /// with its own tsconfig selecting `moduleResolution:node` is governed by
-    /// that closer tsconfig even when a farther-up `package.json` is ESM.
+    /// - **Classic emit/resolution**: `compilerOptions.module` is `commonjs`, or
+    ///   `compilerOptions.module` / `moduleResolution` is one of
+    ///   `node`/`node10`/`classic`. Here the **nearest config wins**: a
+    ///   `package.json` declaring `"type":"module"` vetoes the signal *only* when
+    ///   no tsconfig opting into classic resolution sits strictly closer to the
+    ///   file. A subtree (e.g. `tests/`) with its own tsconfig selecting
+    ///   `moduleResolution:node` is governed by that closer tsconfig even when a
+    ///   farther-up `package.json` is ESM.
     ///
-    /// Conservative by construction: dual-mode signals (`node16`/`nodenext`)
-    /// are ESM-capable and want explicit extensions, so they are not CommonJS
-    /// here. Absent or ambiguous config returns false — callers keep their
-    /// default (ESM) behavior rather than silently assuming CommonJS.
+    /// - **`node16`/`nodenext`**: TypeScript/Node derive each file's module
+    ///   format from the nearest `package.json` `type` (marker `{"type":"module"}`
+    ///   manifests included; see [`nearest_package_type`]). Without
+    ///   `"type":"module"` the file is CommonJS; with it, ESM — so this returns
+    ///   true exactly when that manifest does not opt into ESM.
+    ///
+    /// Any other config returns false — callers keep their default (ESM)
+    /// behavior rather than silently assuming CommonJS.
+    ///
+    /// [`nearest_package_type`]: ProjectCtx::nearest_package_type
     pub fn is_commonjs_project(&self, path: &Path) -> bool {
+        fn is_node_next(m: &str) -> bool {
+            m.eq_ignore_ascii_case("node16") || m.eq_ignore_ascii_case("nodenext")
+        }
         let Some(tsc) = self.nearest_tsconfig(path) else {
             return false;
         };
@@ -4570,7 +4580,15 @@ impl ProjectCtx {
             .as_deref()
             .is_some_and(|m| CLASSIC.iter().any(|c| m.eq_ignore_ascii_case(c)));
         if !(module_is_cjs || resolution_is_classic) {
-            return false;
+            // No classic/commonjs-emit signal. Under `node16`/`nodenext`
+            // resolution TypeScript/Node derive each file's module format from
+            // the nearest `package.json` `type`: without `"type":"module"` the
+            // file is CommonJS (require-based, so extensionless relative imports
+            // resolve); with it the file is ESM. Any other module setting keeps
+            // the ESM default.
+            let module_is_node_next = tsc.module.as_deref().is_some_and(is_node_next)
+                || tsc.module_resolution.as_deref().is_some_and(is_node_next);
+            return module_is_node_next && self.nearest_package_type(path) != ModuleType::Module;
         }
 
         // The tsconfig positively selects CommonJS/classic resolution. An ESM
@@ -4591,6 +4609,32 @@ impl ProjectCtx {
         };
         // `ts_dir` strictly under `pkg_dir` ⇒ closer tsconfig governs ⇒ CommonJS.
         ts_dir != pkg_dir && ts_dir.starts_with(&pkg_dir)
+    }
+
+    /// The package-scope module type governing `path` under `node16`/`nodenext`
+    /// resolution: the `type` of the nearest enclosing `package.json`, counting
+    /// bare `{"type":"module"}` marker manifests (whose sole purpose is to flag
+    /// an ESM subtree, so they are authoritative here — unlike
+    /// [`nearest_package_json`], which walks past them to the nearest package
+    /// boundary). Mirrors Node's `LOOKUP_PACKAGE_SCOPE`: the closest manifest
+    /// decides, and a missing `type` field means CommonJS.
+    ///
+    /// This is the package-scope half of the format decision only; Node's
+    /// per-file `ESM_FILE_FORMAT` first honors explicit `.mts`/`.mjs` (ESM) and
+    /// `.cts`/`.cjs` (CommonJS) extensions, which callers do not yet apply.
+    ///
+    /// [`nearest_package_json`]: ProjectCtx::nearest_package_json
+    // TODO(#7587): honor `.mts`/`.mjs`/`.cts`/`.cjs` explicit-format extensions.
+    fn nearest_package_type(&self, path: &Path) -> ModuleType {
+        let Some(start_dir) = path.parent() else {
+            return ModuleType::CommonJs;
+        };
+        let Some(dir) = walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "package.json")
+        else {
+            return ModuleType::CommonJs;
+        };
+        nearest_parsed_at(&self.package_json_cache, &dir, "package.json", PackageJson::parse)
+            .map_or(ModuleType::CommonJs, |pkg| pkg.module_type)
     }
 
     /// True when the tsconfig governing `path` selects CommonJS module *emit*
