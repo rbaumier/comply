@@ -2,7 +2,7 @@
 //! on a camelCase boundary.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, type_annotation_is_type_predicate};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
@@ -27,6 +27,14 @@ impl OxcCheck for Check {
         let (name, span_start) = match node.kind() {
             AstKind::Function(func) => {
                 let Some(id) = &func.id else { return };
+                // A `x is T` type-predicate return type marks a pure boolean type
+                // guard (`isNullAndUnDef(v): v is null | undefined`). It is a query
+                // with no side effect, so the CQS "two responsibilities" premise
+                // cannot apply and the `And` merely joins conditions in one
+                // compound predicate.
+                if type_annotation_is_type_predicate(func.return_type.as_deref()) {
+                    return;
+                }
                 (id.name.as_str(), id.span.start)
             }
             AstKind::MethodDefinition(method) => {
@@ -35,6 +43,11 @@ impl OxcCheck for Check {
                 // functions" remediation is impossible without breaking the
                 // override contract (e.g. TypeORM `Repository.findAndCount`).
                 if method.r#override {
+                    return;
+                }
+                // A type-guard method (`isFooAndBar(v): v is Foo`) is a pure query;
+                // see the `Function` arm above.
+                if type_annotation_is_type_predicate(method.value.return_type.as_deref()) {
                     return;
                 }
                 let (name, span_start) = match &method.key {
@@ -47,14 +60,18 @@ impl OxcCheck for Check {
             }
             AstKind::VariableDeclarator(decl) => {
                 // Only flag when the value is an arrow or function expression.
-                let has_fn_value = decl.init.as_ref().is_some_and(|v| {
-                    matches!(
-                        v,
-                        oxc_ast::ast::Expression::ArrowFunctionExpression(_)
-                            | oxc_ast::ast::Expression::FunctionExpression(_)
-                    )
-                });
-                if !has_fn_value {
+                let fn_return_type = match decl.init.as_ref() {
+                    Some(oxc_ast::ast::Expression::ArrowFunctionExpression(arrow)) => {
+                        arrow.return_type.as_deref()
+                    }
+                    Some(oxc_ast::ast::Expression::FunctionExpression(func)) => {
+                        func.return_type.as_deref()
+                    }
+                    _ => return,
+                };
+                // A type-guard arrow/function (`const isFooAndBar = (v): v is Foo
+                // => ...`) is a pure query; see the `Function` arm above.
+                if type_annotation_is_type_predicate(fn_return_type) {
                     return;
                 }
                 let oxc_ast::ast::BindingPattern::BindingIdentifier(ref id) = decl.id else {
@@ -174,5 +191,53 @@ mod tests {
         // The `override` exemption is scoped to method definitions; an
         // arrow-assigned const (the VariableDeclarator arm) stays flagged.
         assert_eq!(run_on("const doFooAndBar = () => {};").len(), 1);
+    }
+
+    #[test]
+    fn allows_function_type_guard_predicate() {
+        // Regression for rbaumier/comply#7508 — jekip/naive-ui-admin
+        // `isNullAndUnDef`. A `val is T` return type marks a pure boolean type
+        // guard; CQS (which separates commands from queries) cannot apply, so
+        // the `And` joining two conditions in one compound predicate is fine.
+        let src = "export function isNullAndUnDef(val: unknown): val is null | undefined {\n\
+                   return isUnDef(val) && isNull(val);\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_type_guard_predicate() {
+        // #7508: the exemption reaches the VariableDeclarator arm — an arrow
+        // whose return type is a type predicate is a pure query.
+        assert!(run_on("const isFooAndBar = (v: unknown): v is Foo => true;").is_empty());
+    }
+
+    #[test]
+    fn allows_method_type_guard_predicate() {
+        // #7508: the exemption reaches the MethodDefinition arm — a method whose
+        // return type is a type predicate is a pure query.
+        let src = "class C { isFooAndBar(v: unknown): v is Foo { return true; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_command_function_with_non_predicate_return() {
+        // Negative space for #7508: a `void`-returning command with an `And`
+        // boundary is exactly the CQS violation the rule targets — still flagged.
+        assert_eq!(run_on("function saveAndNotify(): void {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_function_with_and_boundary_and_no_return_annotation() {
+        // Negative space for #7508: no return-type annotation means no type
+        // predicate, so the exemption does not apply.
+        assert_eq!(run_on("function loadAndParse() {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_predicate_arrow_with_and_boundary() {
+        // Negative space for #7508: an arrow with a non-predicate return type
+        // stays flagged.
+        assert_eq!(run_on("const doFooAndBar = (): void => {};").len(), 1);
     }
 }
