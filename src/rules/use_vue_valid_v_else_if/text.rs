@@ -87,6 +87,22 @@ fn owning_element(directive: tree_sitter::Node) -> Option<tree_sitter::Node> {
     directive.parent().and_then(|tag| tag.parent())
 }
 
+/// Whether an `ERROR` node lies between directives `a` and `b` within `tag`.
+///
+/// The vendored Vue grammar does not recognize the self-closing form of the
+/// special `<template …/>` element, so error-recovery folds the following
+/// sibling's opening tag into the self-closed template's `start_tag`, marking the
+/// seam with an `ERROR` node. Directives on opposite sides of that seam belong to
+/// two distinct physical elements, not one.
+fn separated_by_error(tag: tree_sitter::Node, a: tree_sitter::Node, b: tree_sitter::Node) -> bool {
+    let gap_start = a.end_byte().min(b.end_byte());
+    let gap_end = a.start_byte().max(b.start_byte());
+    let mut cursor = tag.walk();
+    tag.children(&mut cursor).any(|child| {
+        child.kind() == "ERROR" && child.start_byte() >= gap_start && child.start_byte() < gap_end
+    })
+}
+
 /// Iterate the `directive_attribute` children of an element's opening tag
 /// (`start_tag` for normal elements, `self_closing_tag` for self-closing ones).
 fn start_tag_directives<'a>(
@@ -104,15 +120,20 @@ fn start_tag_directives<'a>(
     })
 }
 
-/// Whether the directive shares its element with a `v-if` or `v-else` sibling
-/// directive.
+/// Whether the directive shares its physical element with a `v-if` or `v-else`
+/// sibling directive. A sibling separated from `directive` by an error seam
+/// belongs to an adjacent element, not this one, so it does not conflict.
 fn conflicts_with_other_directive(directive: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(element) = owning_element(directive) else {
+        return false;
+    };
+    let Some(tag) = directive.parent() else {
         return false;
     };
     start_tag_directives(element).any(|sibling| {
         sibling.id() != directive.id()
             && matches!(directive_name(sibling, source), Some("v-if" | "v-else"))
+            && !separated_by_error(tag, directive, sibling)
     })
 }
 
@@ -180,11 +201,35 @@ fn source_is_directive_boundary(bytes: &[u8], start: usize) -> bool {
     }
 }
 
+/// Whether a valid `v-if`/`v-else-if` directive sits before an error seam that
+/// precedes `directive` within its own tag.
+///
+/// When error-recovery folds a self-closing `<template …/>` together with the
+/// following sibling's opening tag, the self-closed template's conditional
+/// directive lands before the `ERROR` seam and this `v-else-if` after it. That
+/// pre-seam directive is the preceding element's conditional, so it satisfies the
+/// chain even though no separate predecessor element node survives the merge.
+fn merged_predecessor_is_conditional(directive: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(tag) = directive.parent() else {
+        return false;
+    };
+    let mut cursor = tag.walk();
+    tag.children(&mut cursor).any(|sibling| {
+        sibling.kind() == "directive_attribute"
+            && sibling.start_byte() < directive.start_byte()
+            && separated_by_error(tag, directive, sibling)
+            && is_valid_chain_directive(sibling, source)
+    })
+}
+
 /// Whether the previous sibling element carries a valid `v-if`/`v-else-if`
 /// directive, forming a valid conditional chain.
 ///
-/// When the AST lookup fails and `element`'s own subtree contains a built-in
-/// `<component>` — whose directive-carrying form the Vue grammar mangles into a
+/// A self-closing `<template …/>` predecessor is dissolved by grammar
+/// error-recovery into `directive`'s own tag, before an `ERROR` seam; its
+/// conditional is then recovered from that pre-seam directive. When the AST
+/// lookup fails and `element`'s own subtree contains a built-in `<component>` —
+/// whose directive-carrying form the Vue grammar mangles into a
 /// `vue_component`/`ERROR` node that corrupts tree-sitter's sibling links — the
 /// predecessor is recovered from the raw source instead. A genuinely orphaned
 /// `v-else-if` still finds no preceding conditional sibling and is reported.
@@ -193,6 +238,9 @@ fn has_previous_conditional(directive: tree_sitter::Node, source: &[u8]) -> bool
         return false;
     };
     if ast_has_previous_conditional(element, source) {
+        return true;
+    }
+    if merged_predecessor_is_conditional(directive, source) {
         return true;
     }
     if !subtree_has_component(element, source) {
@@ -527,6 +575,24 @@ mod tests {
              <template v-else-if=\"otherCondition\"><span>Other</span></template>",
         );
         assert!(run(&source).is_empty());
+    }
+
+    #[test]
+    fn allows_self_closing_template_v_if_before_v_else_if_div() {
+        // Regression for #7557: the grammar does not close a self-closing
+        // `<template …/>`, so error-recovery folds the following `<div>`'s
+        // directives into the template's start tag past an `ERROR` seam. The
+        // `v-else-if` neither conflicts with the pre-seam `v-if` (a different
+        // element) nor is orphaned (that `v-if` is its predecessor's conditional).
+        let source = wrap("<template v-if=\"pending\"/>\n<div v-else-if=\"account\">y</div>");
+        assert!(run(&source).is_empty(), "got {:?}", run(&source));
+    }
+
+    #[test]
+    fn allows_self_closing_template_v_if_before_v_else_if_template() {
+        let source =
+            wrap("<template v-if=\"pending\"/>\n<template v-else-if=\"account\">z</template>");
+        assert!(run(&source).is_empty(), "got {:?}", run(&source));
     }
 
     #[test]
