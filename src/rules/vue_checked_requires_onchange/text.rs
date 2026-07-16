@@ -5,7 +5,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{
-    enclosing_label, extract_elements, has_attr, has_event_binding, is_vue_file,
+    attr_value, collect_attr_names, enclosing_label, extract_elements, has_attr, has_event_binding,
+    is_vue_file,
 };
 
 #[derive(Debug)]
@@ -28,10 +29,18 @@ impl TextCheck for Check {
             // either form and with any modifiers, or v-model) make it
             // controllable; readonly opts out. @input fires on every
             // checkbox/radio toggle just like @change, so it is accepted too.
+            // A `disabled` input is inert — the user cannot toggle it — so the
+            // "must be controllable" premise does not apply either, the same
+            // rationale as `readonly`. A static `disabled` (bare boolean or
+            // `disabled="..."`) or a `:disabled` pinned to the literal `true`
+            // opts out; a dynamic `:disabled="expr"` is not statically inert and
+            // is still flagged.
             if has_event_binding(elem.attrs, "change")
                 || has_event_binding(elem.attrs, "input")
                 || has_attr(elem.attrs, "v-model")
                 || has_attr(elem.attrs, "readonly")
+                || collect_attr_names(elem.attrs).contains(&"disabled")
+                || attr_value(elem.attrs, ":disabled") == Some("true")
             {
                 continue;
             }
@@ -100,6 +109,38 @@ mod tests {
     fn allows_checked_with_v_on_input() {
         let src = "<template>\n  <input type=\"checkbox\" checked v-on:input=\"onInput\" />\n</template>";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_checked_disabled() {
+        // A disabled checkbox is inert (read-only status indicator); requiring a
+        // write-back handler is meaningless. Repro from halo-dev/halo.
+        let src = "<template>\n  <input type=\"checkbox\" checked disabled />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_disabled_checked_reordered() {
+        // Attribute order must not matter. Repro from halo-dev/halo.
+        let src = "<template>\n  <input type=\"checkbox\" disabled checked />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_checked_with_bound_disabled_true() {
+        // `:disabled="true"` is statically inert, the same as a bare `disabled`.
+        let src =
+            "<template>\n  <input type=\"checkbox\" checked :disabled=\"true\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_checked_with_dynamic_disabled() {
+        // A dynamic `:disabled="expr"` is not statically inert — the input may be
+        // enabled at runtime — so an uncontrolled `checked` is still frozen.
+        let src =
+            "<template>\n  <input type=\"checkbox\" checked :disabled=\"isLocked\" />\n</template>";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
