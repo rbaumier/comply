@@ -3775,7 +3775,8 @@ fn is_imported_from_valtio(local_name: &str, semantic: &oxc_semantic::Semantic) 
 
 /// True when `local_name` is the local binding of a named import from `vue`
 /// (`import { ref } from 'vue'`).
-fn is_imported_from_vue(local_name: &str, semantic: &oxc_semantic::Semantic) -> bool {
+#[must_use]
+pub fn is_imported_from_vue(local_name: &str, semantic: &oxc_semantic::Semantic) -> bool {
     use oxc_ast::AstKind;
     use oxc_ast::ast::ImportDeclarationSpecifier;
 
