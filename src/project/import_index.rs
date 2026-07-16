@@ -378,7 +378,7 @@ impl ImportIndex {
                         .glob_imports
                         .iter()
                         .flat_map(|(pattern, line)| {
-                            resolve_glob_import_targets(&path, pattern, &known_paths)
+                            resolve_glob_import_targets(&path, pattern, &known_paths, &path_resolver)
                                 .into_iter()
                                 .map(move |target| ImportedSymbol {
                                     local_name: String::new(),
@@ -3872,35 +3872,47 @@ fn resolve_dynamic_dir(importer: &Path, rel: &str) -> Option<PathBuf> {
 }
 
 /// Resolve an `import.meta.glob` pattern declared in `importer` to the set of
-/// indexed project files it matches. Vite resolves the pattern against the
-/// calling module's directory, so the pattern's leading literal segments (up to
-/// the first glob metacharacter) fix a base directory under `importer`'s parent,
-/// and the remaining `*` / `**` segments are matched against each candidate's
-/// path relative to that base. `literal_separator` keeps `*` within a single
-/// path segment while `**` crosses segments — matching Vite's fast-glob
-/// semantics, so `./modules/*.ts` matches the direct `.ts` children of
-/// `modules/` but not nested ones. Bare / absolute patterns name no relative
-/// project file and resolve to nothing.
+/// indexed project files it matches. The pattern's leading literal segments (up
+/// to the first glob metacharacter) fix a base directory, and the remaining `*`
+/// / `**` segments are matched against each candidate's path relative to that
+/// base. `literal_separator` keeps `*` within a single path segment while `**`
+/// crosses segments — matching Vite's fast-glob semantics, so `./modules/*.ts`
+/// matches the direct `.ts` children of `modules/` but not nested ones.
+///
+/// A relative pattern (`./modules/*.ts`) fixes its base under `importer`'s
+/// parent; an alias-prefixed pattern (`@/directives/*.ts`) resolves its leading
+/// segment through the same tsconfig-paths / framework aliases as static imports
+/// (`@/directives` → `<root>/src/directives`). A bare / absolute pattern names
+/// no configured alias and resolves to nothing.
 fn resolve_glob_import_targets(
     importer: &Path,
     pattern: &str,
     known: &FxHashSet<PathBuf>,
+    resolver: &OxcPathResolver,
 ) -> Vec<PathBuf> {
     use globset::GlobBuilder;
-    if !pattern.starts_with('.') {
-        return Vec::new();
-    }
-    let Some(base_dir) = importer.parent() else {
-        return Vec::new();
-    };
     let (static_prefix, remainder) = split_glob_pattern(pattern);
+    // Relative patterns fix their base under the importer's directory; an
+    // alias-prefixed pattern resolves its static prefix through the same alias
+    // resolver as static imports. A bare specifier matches no alias and yields
+    // no targets, leaving the pre-alias behaviour unchanged.
+    let base = if pattern.starts_with('.') {
+        let Some(base_dir) = importer.parent() else {
+            return Vec::new();
+        };
+        base_dir.join(static_prefix)
+    } else {
+        let Some(dir) = resolver.resolve_alias_dir(importer, static_prefix) else {
+            return Vec::new();
+        };
+        dir
+    };
     // Canonicalize the base so it matches the canonical `known` paths even when a
     // directory in the static prefix is a symlink; fall back to lexical
     // normalization for synthetic paths that don't exist on disk (mirrors
     // `resolve_dynamic_dir`).
-    let joined = base_dir.join(static_prefix);
     let resolved_base =
-        std::fs::canonicalize(&joined).unwrap_or_else(|_| lexical_normalize(&joined));
+        std::fs::canonicalize(&base).unwrap_or_else(|_| lexical_normalize(&base));
     let Ok(glob) = GlobBuilder::new(remainder).literal_separator(true).build() else {
         return Vec::new();
     };
@@ -4558,32 +4570,53 @@ impl OxcPathResolver {
         aliases: &[(String, Vec<PathBuf>)],
         known: &FxHashSet<PathBuf>,
     ) -> Option<PathBuf> {
-        for (pattern, targets) in aliases {
-            let matched_suffix = if let Some(prefix) = pattern.strip_suffix('*') {
-                specifier.strip_prefix(prefix)
-            } else if pattern == specifier {
-                Some("")
-            } else {
-                None
-            };
-            let Some(suffix) = matched_suffix else {
-                continue;
-            };
-            for target in targets {
-                let target_str = target.to_string_lossy();
-                let expanded = if let Some(base) = target_str.strip_suffix('*') {
-                    PathBuf::from(format!("{base}{suffix}"))
+        Self::expand_alias_targets(specifier, aliases).find_map(|expanded| {
+            probe_path(&expanded, known).or_else(|| probe_decl_sibling(&expanded))
+        })
+    }
+
+    /// Resolve the static directory prefix of an alias-prefixed
+    /// `import.meta.glob` pattern (`@/directives`) to its on-disk base directory
+    /// (`<root>/src/directives`) through the same tsconfig-paths / framework
+    /// aliases as static-import resolution, so a glob's matched files are treated
+    /// as consumed exactly like the relative-pattern case. Returns the first
+    /// alias whose expansion is an existing directory (mirroring how
+    /// [`Self::resolve_alias`] selects the first alias whose expansion names a
+    /// real file); `None` when no alias maps the prefix to a directory.
+    fn resolve_alias_dir(&self, importer: &Path, prefix: &str) -> Option<PathBuf> {
+        let entry = self.resolvers.iter().find(|e| importer.starts_with(&e.dir))?;
+        Self::expand_alias_targets(prefix, &entry.aliases).find(|dir| dir.is_dir())
+    }
+
+    /// Expand `specifier` against each alias pattern in order, yielding the
+    /// target path with the matched wildcard suffix substituted in (`@/x` against
+    /// `@/*` → `<root>/src/*` yields `<root>/src/x`). No filesystem probing: the
+    /// caller decides whether the expansion should name a file (static import) or
+    /// a base directory (glob-import pattern).
+    fn expand_alias_targets<'a>(
+        specifier: &'a str,
+        aliases: &'a [(String, Vec<PathBuf>)],
+    ) -> impl Iterator<Item = PathBuf> + 'a {
+        aliases
+            .iter()
+            .filter_map(move |(pattern, targets)| {
+                let suffix = if let Some(prefix) = pattern.strip_suffix('*') {
+                    specifier.strip_prefix(prefix)?
+                } else if pattern == specifier {
+                    ""
                 } else {
-                    target.clone()
+                    return None;
                 };
-                if let Some(resolved) =
-                    probe_path(&expanded, known).or_else(|| probe_decl_sibling(&expanded))
-                {
-                    return Some(resolved);
-                }
-            }
-        }
-        None
+                Some(targets.iter().map(move |target| {
+                    let target_str = target.to_string_lossy();
+                    if let Some(base) = target_str.strip_suffix('*') {
+                        PathBuf::from(format!("{base}{suffix}"))
+                    } else {
+                        target.clone()
+                    }
+                }))
+            })
+            .flatten()
     }
 }
 
