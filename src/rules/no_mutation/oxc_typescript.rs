@@ -4,8 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding,
-    is_react_display_name_assignment, is_rtk_reducer_draft_param, is_typed_array_binding,
-    is_valtio_proxy_binding, is_vue_ref_value_target,
+    is_locally_owned_array_binding, is_react_display_name_assignment, is_rtk_reducer_draft_param,
+    is_typed_array_binding, is_valtio_proxy_binding, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
@@ -243,6 +243,22 @@ impl OxcCheck for Check {
                     && matches!(&member.object, Expression::Identifier(_))
                     && (is_inside_loop_body(node, semantic)
                         || is_inside_result_gen(node, semantic))
+                {
+                    return;
+                }
+
+                // Skip `.push()` / `.unshift()` on a locally-owned fresh array —
+                // a `VariableDeclarator` array-literal (or `new Array(...)`)
+                // binding in a non-module scope — regardless of loop context.
+                // Nothing outside the declaring function observes the mutation
+                // (the "build a local array, then return/consume it" pattern), so
+                // it is not the shared-state mutation this rule targets. Mirrors
+                // the sibling `no-mutating-methods` exemption. A parameter,
+                // module-scope, or member-expression receiver is not locally
+                // owned and stays flagged.
+                if matches!(method, "push" | "unshift")
+                    && let Expression::Identifier(receiver) = &member.object
+                    && is_locally_owned_array_binding(receiver, semantic)
                 {
                     return;
                 }
@@ -1302,6 +1318,104 @@ mod tests {
             function proxy(x) { return x; }
             const state = proxy({ n: 0 });
             state.n = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Locally-owned fresh-array accumulator, conditional push outside a loop —
+    // issue #7593
+
+    #[test]
+    fn ignores_conditional_push_on_local_array_literal_issue_7593() {
+        // Regression for rbaumier/comply#7593 — documenso search filters: a fresh
+        // function-scope array literal built up with a conditional push, then
+        // consumed locally (Prisma `where`). Not observable outside the function.
+        let src = r#"
+            function searchDocuments(user, teamIds, query) {
+                const filters = [
+                    { recipients: { some: { email: user.email } }, title: { contains: query } },
+                ];
+                if (teamIds.length > 0) {
+                    filters.push({ teamId: { in: teamIds } });
+                }
+                return prisma.document.findMany({ where: { OR: filters } });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_conditional_push_on_typed_empty_local_array_issue_7593() {
+        // Regression for rbaumier/comply#7593 — documenso audit logs: a typed
+        // empty local array (`const auditLogs: T[] = []`) accumulated via
+        // conditional pushes, then returned.
+        let src = r#"
+            type AuditLog = { type: string };
+            function updateEnvelope(isTitleSame, isExternalIdSame) {
+                const auditLogs: AuditLog[] = [];
+                if (!isTitleSame) {
+                    auditLogs.push({ type: "title" });
+                }
+                if (!isExternalIdSame) {
+                    auditLogs.push({ type: "externalId" });
+                }
+                return auditLogs;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_top_of_function_push_on_local_array_issue_7593() {
+        // Regression for rbaumier/comply#7593 — documenso breadcrumbs: a fresh
+        // local array pushed at the top of the function body (no loop). The
+        // receiver is a locally-owned identifier, so it is exempt.
+        let src = r#"
+            function getFolderBreadcrumbs(currentFolder) {
+                const breadcrumbs = [];
+                breadcrumbs.push(currentFolder);
+                return breadcrumbs;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_push_on_const_from_opaque_call_issue_7593() {
+        // Negative space: a `const` initialised from a call (not an array literal)
+        // may reference a shared array — its `.push` stays flagged.
+        let src = r#"
+            function collect() {
+                const list = getList();
+                list.push(1);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_push_on_module_scope_const_array_issue_7593() {
+        // Negative space: a module-scope array is reachable by other code in the
+        // module, so its mutation stays observable and flagged.
+        let src = r#"
+            const registry: number[] = [];
+            export function register(x: number) {
+                registry.push(x);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_push_on_member_property_array_issue_7593() {
+        // Negative space: `store.items.push(x)` mutates shared object state — the
+        // receiver is a member access, not a plain local identifier, so the
+        // locally-owned exemption does not apply.
+        let src = r#"
+            function add(x) {
+                const store = getStore();
+                store.items.push(x);
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
