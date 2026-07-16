@@ -164,12 +164,18 @@ fn is_awaited_reduce(
 ///   through a trailing pass-through method chain that keeps the map result as its
 ///   receiver (`return coll.map(async ...).toArray()`) — handing the promises to
 ///   the caller, or
+/// - the call is a direct argument to an enclosing `CallExpression` whose own result
+///   reaches an awaiting sink (`await promiseAll(arr.map(async ...))`,
+///   `return pMap(arr.map(async ...))`) — the enclosing combinator wrapper receives
+///   the promise array and its result is awaited, so rejections propagate; this
+///   generalizes the first case to any user-defined wrapper without keying on the
+///   callee's name, or
 /// - the call is the entire right-hand side of a binding (`const xs = arr.map(...)`
 ///   or `xs = arr.map(...)`) and the bound variable later reaches an awaiting sink
 ///   — passed to one of those combinators, `await`ed, `return`ed, or spread into a
 ///   `.push(...)`/`.unshift(...)` accumulator array that itself reaches such a sink.
 ///
-/// The second case is resolved through the semantic model, so it holds whatever
+/// The binding case is resolved through the semantic model, so it holds whatever
 /// the variable is named, whichever combinator awaits it, and regardless of the
 /// binding sitting in a different (e.g. conditional) block from the sink.
 fn is_consumed_by_promise_combinator(
@@ -213,6 +219,66 @@ fn is_consumed_by_promise_combinator(
         return true;
     }
 
+    // The map result is a direct argument to an enclosing call whose own result is
+    // awaited/returned/bound-to-awaited (`await promiseAll(arr.map(async ...))`), so
+    // the wrapper receives the promises and its awaited result propagates rejections.
+    if map_result_is_awaited_call_argument(node, semantic) {
+        return true;
+    }
+
+    bound_variable(node, semantic)
+        .is_some_and(|symbol_id| variable_reaches_awaiting_sink(symbol_id, semantic))
+}
+
+/// True when the `.map`/`.flatMap` CallExpression at `node` is a direct argument to
+/// an enclosing `CallExpression` whose own result reaches an awaiting sink — the
+/// enclosing call is `await`ed (`await promiseAll(arr.map(async ...))`), `return`ed
+/// (`return promiseAll(arr.map(async ...))`), or bound to a variable later awaited.
+/// The enclosing call receives the promise array and its result is awaited, so
+/// rejections propagate; this generalizes the literal `Promise.all(...)` case to any
+/// user-defined combinator wrapper (`promiseAll`, `pMap`, ...) name-independently.
+fn map_result_is_awaited_call_argument(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let enclosing_node = nodes.parent_node(node.id());
+    let AstKind::CallExpression(enclosing) = enclosing_node.kind() else {
+        return false;
+    };
+    // The map result must be a direct argument of the enclosing call (not its callee
+    // or a member receiver), so the enclosing call actually receives the promises.
+    if !enclosing
+        .arguments
+        .iter()
+        .any(|arg| arg.span() == node.kind().span())
+    {
+        return false;
+    }
+    call_reaches_awaiting_sink(enclosing_node, semantic)
+}
+
+/// True when the CallExpression at `node` is itself consumed by an awaiting sink: its
+/// result is `await`ed, `return`ed, or bound to a variable that reaches an awaiting
+/// sink. Mirrors the sinks [`is_consumed_by_promise_combinator`] recognizes for a
+/// `.map`/`.flatMap` result, applied one level up to the enclosing call.
+fn call_reaches_awaiting_sink(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    // An optional-chained call (`await obj?.wrap(...)`) wraps the call in a
+    // ChainExpression, so its consuming parent is that wrapper's parent.
+    let mut parent = nodes.parent_node(node.id());
+    if matches!(parent.kind(), AstKind::ChainExpression(_)) {
+        parent = nodes.parent_node(parent.id());
+    }
+    if matches!(
+        parent.kind(),
+        AstKind::AwaitExpression(_) | AstKind::ReturnStatement(_)
+    ) {
+        return true;
+    }
     bound_variable(node, semantic)
         .is_some_and(|symbol_id| variable_reaches_awaiting_sink(symbol_id, semantic))
 }
@@ -222,8 +288,9 @@ fn is_consumed_by_promise_combinator(
 /// a trailing pass-through method chain that keeps the map result as its receiver
 /// (`return coll.map(async ...).toArray()`). The chain is walked only while the map
 /// result stays the receiver of a called member, so a map result placed as an
-/// *argument* to an unrelated call (`return foo(arr.map(async ...))`) is not
-/// treated as returned.
+/// *argument* to a call (`return promiseAll(arr.map(async ...))`) is not treated as
+/// returned here — that case is handled by `map_result_is_awaited_call_argument`,
+/// which additionally requires the enclosing call to reach an awaiting sink.
 fn map_result_is_returned(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -717,14 +784,75 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    // --- #7559: `.map(async ...)` as an argument to an awaited combinator wrapper ---
+
     #[test]
-    fn flags_map_async_returned_as_call_argument() {
-        // The map result is an *argument* to `foo`, not the receiver of the chain,
-        // so `return foo(arr.map(async ...))` does not exempt it — `foo` may discard.
+    fn allows_awaited_wrapper_call_map_async() {
+        // Repro: the map result is a direct argument to `promiseAll`, whose own
+        // result is awaited. The wrapper is a plain-identifier call (not literal
+        // `Promise.all`), so the exemption must not key on the callee's name.
+        let src = "async function run(candidates) {\n\
+                       const checked = await promiseAll(\n\
+                           candidates.map(async (p) => ({ p, x: await f(p) }))\n\
+                       );\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_awaited_wrapper_call_map_async_this_find() {
+        // mikro-orm repro: async body calls `this.find`; still consumed by the
+        // awaited wrapper.
+        let src = "async function run(keys) {\n\
+                       return await promiseAll(keys.map(async (k) => await this.find(k)));\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_returned_wrapper_call_map_async() {
+        // `return promiseAll(arr.map(async ...))` hands the wrapper's awaited result
+        // to the caller — a returned sink, exempt like the awaited form.
         let src = "function run(arr) {\n\
-                       return foo(arr.map(async (x) => { await save(x); }));\n\
+                       return promiseAll(arr.map(async (x) => { await save(x); }));\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bound_wrapper_call_map_async_then_awaited() {
+        // The wrapper call is bound to a variable that is later awaited.
+        let src = "async function run(arr) {\n\
+                       const results = promiseAll(arr.map(async (x) => { await save(x); }));\n\
+                       await results;\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_map_async_argument_to_unawaited_call() {
+        // Control: the enclosing call is a bare expression statement — not awaited,
+        // returned, or bound — so the promise array still floats.
+        let src = "function run(arr) {\n\
+                       logSomething(arr.map(async (x) => { await save(x); }));\n\
                    }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_filter_async_argument_to_awaited_call() {
+        // `filter` is not `map`/`flatMap`: its callback promise is coerced to truthy,
+        // so even inside an awaited wrapper the inner promises are not consumed.
+        let src = "async function run(pending) {\n\
+                       await keep(pending.filter(async (x) => await g(x)));\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_filter_async_discarded() {
+        // Genuine TP from the issue: a bare `.filter(async ...)` floats.
+        assert_eq!(run("pending.filter(async (x) => await g(x));").len(), 1);
     }
 
     #[test]
