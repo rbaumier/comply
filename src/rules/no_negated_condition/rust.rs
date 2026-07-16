@@ -8,6 +8,15 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
+    // Skip else-if arms: an `if_expression` whose parent is an `else_clause` is
+    // an arm of an else-if chain. Its negation cannot be dropped by swapping the
+    // if/else branches without reordering the whole chain.
+    if let Some(parent) = node.parent()
+        && parent.kind() == "else_clause"
+    {
+        return;
+    }
+
     // Must have an else clause.
     let Some(alt) = node.child_by_field_name("alternative") else { return };
 
@@ -192,6 +201,30 @@ mod tests {
     #[test]
     fn allows_else_if() {
         assert!(run_on("fn f(x: bool, y: bool) { if !x { a(); } else if y { b(); } }").is_empty());
+    }
+
+    #[test]
+    fn allows_negated_else_if_arm() {
+        // The negated condition lives in an `else if` arm (parent is an
+        // `else_clause`). Swapping its branches would require reordering the
+        // chain, so it is not flagged.
+        assert!(
+            run_on("fn f(a: bool, b: bool) { if a { x(); } else if !b { y(); } else { z(); } }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_negated_terminal_else_if_arm() {
+        // Terminal arm of an else-if chain: `else if !y { .. } else { .. }`. Its
+        // own alternative is a plain `else` (block), so the else-if-head walk
+        // does not catch it; the parent-is-`else_clause` guard does.
+        let src = "fn f(a: i32, b: i32, x: bool, y: bool) { \
+            let r = if a != b { p() } \
+            else if !x { q() } \
+            else if !y { s() } \
+            else { t() }; }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
