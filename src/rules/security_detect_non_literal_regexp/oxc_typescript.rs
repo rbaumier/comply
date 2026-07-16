@@ -4,8 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Expression, ObjectPropertyKind, TSType, TSTypeAnnotation, TemplateLiteral,
-    VariableDeclarationKind,
+    ArrayExpressionElement, BindingPattern, Expression, ObjectPropertyKind, Statement, TSType,
+    TSTypeAnnotation, TemplateLiteral, VariableDeclarationKind,
 };
 use std::sync::Arc;
 
@@ -77,6 +77,12 @@ impl OxcCheck for Check {
 ///   object literal with statically-written keys (no computed `[expr]` key, no
 ///   `...spread`) has author-fixed keys, so the joined string is fixed at author
 ///   time, not runtime input.
+/// - A `<const-string-array>.join(<string literal>)` or
+///   `<const-string-array>.map(<safe callback>).join(<string literal>)` chain — a
+///   local `const` array literal whose every element is a string literal has
+///   author-fixed elements, so joining them (optionally after mapping each through a
+///   callback whose only free value is the element) yields a string fixed at author
+///   time.
 fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
     match expr {
         Expression::StringLiteral(_) | Expression::RegExpLiteral(_) => true,
@@ -89,7 +95,10 @@ fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool
         Expression::StaticMemberExpression(member) if member.property.name.as_str() == "source" => {
             is_safe_pattern(&member.object, semantic)
         }
-        Expression::CallExpression(call) => is_object_keys_join_of_const(call, semantic),
+        Expression::CallExpression(call) => {
+            is_object_keys_join_of_const(call, semantic)
+                || is_const_string_array_join(call, semantic)
+        }
         _ => false,
     }
 }
@@ -179,6 +188,130 @@ fn is_object_keys_of_const(
     obj.properties
         .iter()
         .all(|prop| matches!(prop, ObjectPropertyKind::ObjectProperty(p) if !p.computed))
+}
+
+/// True when `call` is `<arr>.join(<string literal>)` or
+/// `<arr>.map(<callback>).join(<string literal>)`, where `<arr>` is a local `const`
+/// array literal (or an inline array literal) whose every element is a string
+/// literal. Joining author-fixed string literals with a literal separator yields a
+/// string fixed at author time — no attacker input can reach the resulting pattern.
+/// For the `.map` variant the callback body must itself be a safe pattern that treats
+/// its element parameter (bound to those string literals) as a safe leaf.
+fn is_const_string_array_join(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    // Outer call must be `<receiver>.join(<StringLiteral>)`.
+    let Expression::StaticMemberExpression(join_member) = &call.callee else {
+        return false;
+    };
+    if join_member.property.name.as_str() != "join" {
+        return false;
+    }
+    if call.arguments.len() != 1 {
+        return false;
+    }
+    let Some(Expression::StringLiteral(_)) =
+        call.arguments.first().and_then(|arg| arg.as_expression())
+    else {
+        return false;
+    };
+    // `<receiver>` is either `<arr>.map(<callback>)` or `<arr>` directly.
+    match &join_member.object {
+        Expression::CallExpression(map_call) => is_const_string_array_map(map_call, semantic),
+        receiver => is_const_string_literal_array(receiver, semantic),
+    }
+}
+
+/// True when `call` is `<arr>.map(<arrow>)` where `<arr>` is a const string-literal
+/// array and `<arrow>` is an expression-bodied arrow whose body is a safe pattern,
+/// treating the arrow's first (element) parameter as a safe leaf. A block-bodied
+/// arrow, a non-arrow callback, or a destructured element parameter is not provably
+/// safe and stays flagged.
+fn is_const_string_array_map(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::StaticMemberExpression(map_member) = &call.callee else {
+        return false;
+    };
+    if map_member.property.name.as_str() != "map" {
+        return false;
+    }
+    if !is_const_string_literal_array(&map_member.object, semantic) {
+        return false;
+    }
+    if call.arguments.len() != 1 {
+        return false;
+    }
+    let Some(Expression::ArrowFunctionExpression(arrow)) =
+        call.arguments.first().and_then(|arg| arg.as_expression())
+    else {
+        return false;
+    };
+    if !arrow.expression {
+        return false;
+    }
+    let Some(BindingPattern::BindingIdentifier(param)) =
+        arrow.params.items.first().map(|item| &item.pattern)
+    else {
+        return false;
+    };
+    let Some(Statement::ExpressionStatement(body)) = arrow.body.statements.first() else {
+        return false;
+    };
+    is_safe_pattern_with_param(&body.expression, param.name.as_str(), semantic)
+}
+
+/// True when `expr` is an inline array literal, or an identifier resolving to a local
+/// `const` binding initialized to an array literal, whose every element is a string
+/// literal. A `let`/`var`, parameter, imported binding, non-array initializer, or an
+/// array with a spread, a hole, or any non-string-literal element is not provably
+/// author-fixed.
+fn is_const_string_literal_array(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind as AK;
+
+    let array = match expr {
+        Expression::ArrayExpression(array) => array,
+        Expression::Identifier(ident) => {
+            let Some(AK::VariableDeclarator(decl)) = resolve_binding_declarator(ident, semantic)
+            else {
+                return false;
+            };
+            if decl.kind != VariableDeclarationKind::Const {
+                return false;
+            }
+            let Some(Expression::ArrayExpression(array)) = &decl.init else {
+                return false;
+            };
+            array
+        }
+        _ => return false,
+    };
+    array
+        .elements
+        .iter()
+        .all(|el| matches!(el, ArrayExpressionElement::StringLiteral(_)))
+}
+
+/// True when `expr` is a safe pattern, additionally treating a bare reference to
+/// `element_param` — the `.map` callback's element parameter, bound to the const
+/// array's string-literal elements — as a safe leaf. Every other interpolation slot
+/// must independently satisfy `is_safe_pattern`, so a captured outer variable of
+/// unknown provenance is not exempted.
+fn is_safe_pattern_with_param(
+    expr: &Expression,
+    element_param: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    match expr {
+        Expression::Identifier(ident) if ident.name.as_str() == element_param => true,
+        Expression::TemplateLiteral(tpl) => tpl.expressions.iter().all(|slot| {
+            is_static_numeric_expr(slot, semantic)
+                || is_safe_pattern_with_param(slot, element_param, semantic)
+        }),
+        _ => is_safe_pattern(expr, semantic),
+    }
 }
 
 /// True when `expr` can only evaluate to a `number` — a numeric literal, or an
@@ -537,6 +670,104 @@ mod tests {
         // A call-expression slot returns a runtime value that can carry
         // metacharacters — still flagged.
         let src = r#"const r = new RegExp(`^${getStr()}$`);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_const_string_array_map_join_in_template() {
+        // Issue #7617: a const array of string literals mapped through an arrow that
+        // returns a template built only from the element, then joined with a literal
+        // separator, is a string fixed at author time — no runtime input reaches it.
+        let src = r#"
+            export const isMaybeMermaidDefinition = (text) => {
+              const chartTypes = ["flowchart", "graph", "sequenceDiagram", "block"];
+              const re = new RegExp(
+                `^(?:%%{.*?}%%[\\s\\n]*)?\\b(?:${chartTypes
+                  .map((x) => `\\s*${x}(-beta)?`)
+                  .join("|")})\\b`,
+              );
+              return re.test(text);
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_string_array_join_direct() {
+        // The simpler `<const-string-array>.join(<literal>)` chain with no `.map`.
+        let src = r#"
+            const arr = ["a", "b", "c"];
+            const r = new RegExp(arr.join("|"));
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_string_array_map_join() {
+        // An inline array literal receiver is as author-fixed as a const binding.
+        let src = r#"const r = new RegExp(["a", "b"].map((x) => `${x}?`).join("|"));"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_escape_regexp_of_user_input() {
+        // A sanitizer call is not a const-array join chain — recognizing it by name
+        // would be a name allowlist. It stays flagged.
+        let src = r#"const r = new RegExp(escapeRegExp(userInput));"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_join_of_let_array() {
+        // A `let` array can be reassigned to runtime input — not provably fixed.
+        let src = r#"
+            let arr = ["a", "b"];
+            arr = req.query.list;
+            const r = new RegExp(arr.map((x) => `${x}`).join("|"));
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_join_of_array_with_non_literal_element() {
+        // An array element that is not a string literal can carry runtime input.
+        let src = r#"
+            const arr = ["a", req.query.b];
+            const r = new RegExp(arr.map((x) => `${x}`).join("|"));
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_join_of_param_array() {
+        // A function parameter is runtime input — its elements can carry metacharacters.
+        let src = r#"
+            function build(arr) {
+              return new RegExp(arr.map((x) => `${x}`).join("|"));
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_join_of_const_array_with_spread() {
+        // A spread pulls runtime elements into the array — not provably author-fixed.
+        let src = r#"
+            const arr = [...req.query.list, "b"];
+            const r = new RegExp(arr.join("|"));
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_map_callback_interpolates_outer_variable() {
+        // The callback interpolates a captured outer variable of runtime provenance,
+        // not just its bound element — the joined string is not provably fixed.
+        let src = r#"
+            const arr = ["a", "b"];
+            const suffix = getInput();
+            const r = new RegExp(arr.map((x) => `${x}${suffix}`).join("|"));
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 }
