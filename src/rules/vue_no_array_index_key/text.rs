@@ -23,6 +23,51 @@ fn is_loop_index_name(name: &str) -> bool {
     name == "i" || name == "j" || name == "n" || name.contains("index") || name.contains("idx")
 }
 
+fn is_id_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+/// The iterable half of a `v-for` value: the text right of the top-level
+/// `in`/`of` keyword, outside any bracket nesting (so an `in`/`of` inside the
+/// alias tuple or a nested expression does not split). Mirrors the top-level
+/// scan of the sibling `vue_valid_v_for` rule's `split_for`.
+fn vfor_iterable(vfor_val: &str) -> Option<&str> {
+    let bytes = vfor_val.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'i' | b'o' if depth == 0 => {
+                let after = i + 2;
+                let kw = &vfor_val[i..after.min(vfor_val.len())];
+                let prev_boundary = i == 0 || !is_id_char(bytes[i - 1]);
+                let next_boundary = after >= bytes.len() || !is_id_char(bytes[after]);
+                if (kw == "in" || kw == "of") && prev_boundary && next_boundary {
+                    return Some(vfor_val[after..].trim());
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Whether a `v-for` iterable is a bare numeric literal (`6`, `10`, `3.0`).
+/// Vue renders such a range with a fixed length, so the loop index is a
+/// permanently stable identity and index-as-key is correct. A variable or
+/// member expression that merely evaluates to a number (`count`,
+/// `items.length`) is not a literal — its length is not fixed by the template —
+/// so it is not treated as a stable range.
+fn is_numeric_literal(iterable: &str) -> bool {
+    let s = iterable.trim();
+    !s.is_empty()
+        && s.bytes().any(|b| b.is_ascii_digit())
+        && s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -45,6 +90,13 @@ impl TextCheck for Check {
                 continue;
             };
             let vfor_val = &vfor_rest[..vfor_end];
+
+            // A numeric-literal iterable (`v-for="(_, i) in 6"`, `v-for="n in 10"`)
+            // renders a fixed-length range: the loop index is a permanently stable
+            // identity, so index-as-key is correct (Vue's documented range form).
+            if vfor_iterable(vfor_val).is_some_and(is_numeric_literal) {
+                continue;
+            }
 
             // Extract the loop index variable. The first slot is always the
             // item/value; the numeric index lives in a later slot, but object
@@ -152,6 +204,39 @@ mod tests {
     #[test]
     fn flags_suffixed_index_name() {
         let source = "<template>\n  <div v-for=\"(item, idx2) in items\" :key=\"idx2\">{{ item }}</div>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_numeric_literal_range_index_key() {
+        // `v-for="(_, i) in 6"` iterates a numeric literal — a fixed-length
+        // range where the loop index is a stable identity, so index-as-key
+        // is correct.
+        let source = "<template>\n  <input v-for=\"(_, i) in 6\" :key=\"i\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_single_alias_numeric_range() {
+        // Vue's documented `v-for="n in 10"` range form: the alias itself is
+        // the 1-based counter over a fixed literal range.
+        let source = "<template>\n  <li v-for=\"n in 10\" :key=\"n\">{{ n }}</li>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_dotlength_iterable_index_key() {
+        // `list.length` is not a numeric literal — the render length is not
+        // fixed by the template, so an index `:key` stays unstable and flagged.
+        let source = "<template>\n  <li v-for=\"(item, i) in list.length\" :key=\"i\">{{ item }}</li>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_variable_numeric_iterable() {
+        // A variable holding a number at runtime (`count`) is not a literal
+        // range visible in the template, so index-as-key stays flagged.
+        let source = "<template>\n  <li v-for=\"(item, i) in count\" :key=\"i\">{{ item }}</li>\n</template>";
         assert_eq!(run(source).len(), 1);
     }
 }
