@@ -25,11 +25,12 @@ impl OxcCheck for Check {
 
         // Type-only imports bring in TypeScript types, which Nuxt never
         // auto-imports (auto-imports are runtime composables/components, erased
-        // types are not). `import type { NuxtError } from 'nuxt/app'` is always
+        // types are not). `import type { NuxtError } from 'nuxt/app'` — and the
+        // equivalent all-inline-type `import { type A, type B }` — is always
         // required to compile — dropping it is not an option — so it is never a
         // redundant manual import. This also exempts the Nuxt framework's own
         // internals, which import their public types from `nuxt/app`.
-        if import.import_kind.is_type() {
+        if is_type_only_import(import) {
             return;
         }
 
@@ -62,6 +63,33 @@ impl OxcCheck for Check {
             span: Some((start, len)),
         });
     }
+}
+
+/// Whether every binding this import introduces is an erased TypeScript type,
+/// so nothing survives to runtime and it can never be a redundant Nuxt
+/// auto-import.
+///
+/// True for a statement-level `import type { A } from '...'` and for the
+/// all-inline-type form `import { type A, type B } from '...'` (every named
+/// specifier carries its own `type` qualifier). A default or namespace binding,
+/// or any value named specifier — including the mixed `import { a, type B }`,
+/// which keeps `a` at runtime — is not type-only. A side-effect `import "pkg"`
+/// (no specifiers) runs at runtime and is likewise not type-only.
+fn is_type_only_import(import: &oxc_ast::ast::ImportDeclaration) -> bool {
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+
+    if import.import_kind.is_type() {
+        return true;
+    }
+    let Some(specifiers) = &import.specifiers else {
+        return false;
+    };
+    !specifiers.is_empty()
+        && specifiers.iter().all(|s| match s {
+            ImportDeclarationSpecifier::ImportSpecifier(named) => named.import_kind.is_type(),
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+            | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => false,
+        })
 }
 
 #[cfg(test)]
@@ -123,6 +151,43 @@ mod tests {
     fn allows_type_only_import_from_pound_app() {
         let src = "import type { NuxtApp } from '#app';";
         assert!(run_on(src).is_empty(), "unexpected: {:?}", run_on(src));
+    }
+
+    /// Regression for issue #7550: an all-inline-type import
+    /// (`import { type A, type B } from '#imports'`) is semantically identical to
+    /// a statement-level `import type { A, B }` — every specifier is erased, so
+    /// dropping it breaks the TypeScript build. It must not be flagged.
+    #[test]
+    fn allows_all_inline_type_import_issue_7550() {
+        let src = "import { type CellRange, type Row } from '#imports';";
+        assert!(run_on(src).is_empty(), "unexpected: {:?}", run_on(src));
+    }
+
+    /// A single all-inline-type specifier is likewise fully erased and required
+    /// to compile.
+    #[test]
+    fn allows_single_inline_type_import_issue_7550() {
+        let src = "import { type Foo } from '#imports';";
+        assert!(run_on(src).is_empty(), "unexpected: {:?}", run_on(src));
+    }
+
+    /// Negative-space guard for issue #7550: the mixed form
+    /// (`import { useFoo, type Bar }`) keeps a runtime value binding (`useFoo`)
+    /// that Nuxt auto-imports, so the statement must STILL fire — only the
+    /// all-inline-type case is exempt.
+    #[test]
+    fn still_flags_mixed_value_and_inline_type_import_issue_7550() {
+        let src = "import { useFoo, type Bar } from '#imports';\nconst f = useFoo();";
+        assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
+    }
+
+    /// Negative-space guard for issue #7550: a namespace binding
+    /// (`import * as app from '#app'`) is a runtime value, not an erased type, so
+    /// the all-inline-type exemption must not swallow it — it must STILL fire.
+    #[test]
+    fn still_flags_namespace_import_issue_7550() {
+        let src = "import * as app from '#app';\nconst a = app;";
+        assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
     }
 
     /// Negative-space guard: an ordinary Nuxt *application* file that manually
