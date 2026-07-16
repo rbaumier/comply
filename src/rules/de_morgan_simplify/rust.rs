@@ -2,24 +2,48 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// True when this `!` unary_expression's effective parent (peeling parentheses)
-/// is another `!` unary_expression — the inner negation of a `!!(a && b)`
-/// double-negation. Distributing De Morgan there leaves the outer `!` in place,
-/// so `!!(a && b)` becomes `!(!a || !b)`, no simpler than the original.
-fn is_inner_of_double_negation(node: tree_sitter::Node, source: &[u8]) -> bool {
+/// The nearest ancestor of `node` that is not a `parenthesized_expression`,
+/// i.e. the effective parent once redundant parentheses are peeled away.
+fn effective_parent(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
     let mut parent = node.parent();
     while let Some(p) = parent {
-        match p.kind() {
-            "parenthesized_expression" => parent = p.parent(),
-            "unary_expression" => {
-                return p
-                    .child(0)
-                    .is_some_and(|op| op.utf8_text(source).unwrap_or("") == "!");
-            }
-            _ => return false,
+        if p.kind() == "parenthesized_expression" {
+            parent = p.parent();
+        } else {
+            return Some(p);
         }
     }
-    false
+    None
+}
+
+/// True when a `!(a && b)` / `!(a || b)` negation sits where distributing De
+/// Morgan does not simplify the expression, keyed on the effective parent
+/// (parentheses peeled). Two such positions:
+///
+/// - inner of a double negation (`!!(a && b)`): the effective parent is another
+///   `!` unary_expression, so distributing leaves the outer `!` in place and
+///   yields `!(!a || !b)`, no simpler than the original.
+/// - operand of an enclosing `&&`/`||` (`!(a && b) && c`): the effective parent
+///   is a `&&`/`||` binary_expression, so the distributed form `(!a || !b) && c`
+///   needs a new pair of parentheses to preserve precedence and grows the
+///   operator count instead of shrinking it.
+fn is_in_non_simplifying_position(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = effective_parent(node) else {
+        return false;
+    };
+    match parent.kind() {
+        "unary_expression" => parent
+            .child(0)
+            .is_some_and(|op| op.utf8_text(source).unwrap_or("") == "!"),
+        "binary_expression" => {
+            let Some(op) = parent.child_by_field_name("operator") else {
+                return false;
+            };
+            let op_text = &source[op.byte_range()];
+            op_text == b"&&" || op_text == b"||"
+        }
+        _ => false,
+    }
 }
 
 crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
@@ -49,7 +73,7 @@ crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    if is_inner_of_double_negation(node, source) {
+    if is_in_non_simplifying_position(node, source) {
         return;
     }
 
@@ -131,5 +155,39 @@ mod tests {
     fn allows_inner_negation_across_parens() {
         // `!(!(a && b))`: a parenthesized_expression sits between the two `!`.
         assert!(run_on("fn f(a: bool, b: bool) { let _ = !(!(a && b)); }").is_empty());
+    }
+
+    #[test]
+    fn allows_negation_as_left_operand_of_and() {
+        // `!(a && b)` is the LEFT operand of an enclosing `&&`: distributing
+        // needs new parentheses (`(!a || !b) && c`), so it does not simplify.
+        assert!(
+            run_on("fn f(a: bool, b: bool, c: bool) { if !(a && b) && c {} }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_negation_as_operand_of_or() {
+        // `!(a || b)` as an operand of an enclosing `||`.
+        assert!(
+            run_on("fn f(a: bool, b: bool, c: bool) { if c || !(a || b) {} }").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_standalone_negation_in_condition() {
+        // A standalone `!(a && b)` condition is the rule's legitimate target.
+        let d = run_on("fn f(a: bool, b: bool) { if !(a && b) { let _ = 1; } }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("!a || !b"));
+    }
+
+    #[test]
+    fn flags_standalone_negation_with_paths() {
+        // `if !(passthrough_nullable && B::FOR_FACTORY)` — standalone, still fires.
+        let d = run_on(
+            "fn f<B>(passthrough_nullable: bool) { if !(passthrough_nullable && B::FOR_FACTORY) {} }",
+        );
+        assert_eq!(d.len(), 1);
     }
 }
