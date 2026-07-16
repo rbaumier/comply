@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_array_initializer, is_locally_owned_array_binding,
-    is_node_module_system_target,
+    byte_offset_to_line_col, expression_is_array, is_array_initializer,
+    is_locally_owned_array_binding, is_node_module_system_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
@@ -41,6 +41,12 @@ impl OxcCheck for Check {
         };
         let name = member.property.name.as_str();
         if !MUTATING.contains(&name) {
+            return;
+        }
+        // `super.push(...)` inside an `override async push(...)` dispatches to the
+        // superclass's overriding method, never `Array.prototype.push`; a `super`
+        // receiver is structurally never an array.
+        if matches!(&member.object, Expression::Super(_)) {
             return;
         }
         if name == "fill" && is_non_array_fill(member, call, ctx, semantic) {
@@ -106,6 +112,21 @@ impl OxcCheck for Check {
         if matches!(name, "push" | "unshift")
             && matches!(&member.object, Expression::Identifier(_))
             && (is_inside_loop_body(node, semantic) || is_inside_result_gen(node, semantic))
+        {
+            return;
+        }
+
+        // A plain-identifier receiver is an `Array.prototype` mutation only with
+        // positive evidence that the binding is array-typed: an array-literal /
+        // `new Array(...)` / array-returning initialiser, or an explicit array
+        // type annotation (`T[]`, `readonly T[]`, `Array<T>`, `ReadonlyArray<T>`)
+        // on its declarator or parameter. A receiver bound to a non-array factory
+        // (`const adapter = this.selectAdapter(...)`) carries no such evidence and
+        // calls a same-named method on a custom object, not an array append.
+        // Member receivers (`this.items`, `node.children`) are not gated here —
+        // their element type is not locally resolvable — so they stay flagged.
+        if matches!(&member.object, Expression::Identifier(_))
+            && !expression_is_array(&member.object, semantic)
         {
             return;
         }
@@ -491,11 +512,11 @@ mod tests {
     #[test]
     fn still_flags_array_push_on_non_router_identifier() {
         // Negative space for rbaumier/comply#1692 — a genuine `arr.push(x)`
-        // array mutation outside any loop, on an identifier that is neither a
-        // conventional navigation name nor bound to a navigation factory, must
-        // still be flagged.
+        // array mutation outside any loop, on an array-typed identifier that is
+        // neither a conventional navigation name nor bound to a navigation
+        // factory, must still be flagged.
         let src = r#"
-            function collect(arr) {
+            function collect(arr: number[]) {
                 arr.push(1);
             }
         "#;
@@ -711,10 +732,10 @@ mod tests {
 
     #[test]
     fn still_flags_reverse_on_plain_array_identifier() {
-        // Negative space for #3831 — `arr.reverse()` on a plain array identifier
+        // Negative space for #3831 — `arr.reverse()` on an array-typed identifier
         // (not a fresh-array call) mutates a possibly-shared array, so it fires.
         let src = r#"
-            function flip(arr) {
+            function flip(arr: number[]) {
                 arr.reverse();
             }
         "#;
@@ -853,6 +874,57 @@ mod tests {
         let src = r#"
             function attach(node, child) {
                 node.parent.children.push(child);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_super_push_in_override_method() {
+        // Regression for rbaumier/comply#7491 — `super.push(...)` inside an
+        // `override async push(...)` dispatches to the superclass's overriding
+        // method, never `Array.prototype.push`; a `super` receiver is
+        // structurally not an array.
+        let src = r#"
+            class Gateway extends Base {
+                override async push(spaceId: string, docId: string, updates: Buffer[], editorId: string) {
+                    return await super.push(spaceId, docId, updates, editorId);
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_on_non_array_factory_binding() {
+        // Regression for rbaumier/comply#7491 — `adapter.push(...)` where
+        // `adapter` is bound to a non-array factory (`this.selectAdapter(...)`)
+        // calls the adapter object's own `push` method, not
+        // `Array.prototype.push`. The binding carries no array evidence (no
+        // array-evident initialiser, no array type annotation), so it is not
+        // flagged.
+        let src = r#"
+            class Sync {
+                async run(client: string, spaceType: string, spaceId: string, docId: string, updates: Buffer[], editorId: string) {
+                    const adapter = this.selectAdapter(client, spaceType);
+                    const timestamp = await adapter.push(spaceId, docId, updates, editorId);
+                    return timestamp;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_push_on_array_typed_binding_without_array_initializer() {
+        // Negative space for rbaumier/comply#7491 — an explicit array type
+        // annotation (`number[]`) is positive array evidence even when the
+        // initialiser is a non-array-evident call, so a genuine `xs.push(3)`
+        // mutation must stay flagged.
+        let src = r#"
+            function collect(): void {
+                const xs: number[] = getThem();
+                xs.push(3);
             }
         "#;
         assert_eq!(run(src).len(), 1);
