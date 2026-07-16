@@ -24,11 +24,12 @@
 //! is still detected).
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, BinaryExpression, BinaryOperator, CallExpression, Expression, LogicalOperator,
-    NewExpression, Statement, UnaryOperator, VariableDeclarationKind,
+    Argument, BinaryExpression, BinaryOperator, CallExpression, ChainElement, Expression,
+    LogicalOperator, NewExpression, Statement, TSSignature, TSType, TSTypeAnnotation, TSTypeName,
+    TSTypeReference, UnaryOperator, VariableDeclarationKind,
 };
 use oxc_semantic::ReferenceFlags;
 use oxc_span::GetSpan;
@@ -230,6 +231,22 @@ fn receiver_is_const_bound_nonempty_array<'a>(
     matches!(&decl.init, Some(Expression::ArrayExpression(arr)) if !arr.elements.is_empty())
 }
 
+/// Peel a possibly parenthesized / optional-chained predicate down to the
+/// innermost `CallExpression`. An optional-chained membership call
+/// (`set?.has(x)`) parses as a `ChainExpression` wrapping the `CallExpression`,
+/// and `(set.has(x))` wraps it in parentheses — both are the same O(1)
+/// membership call as the bare `set.has(x)` form.
+fn unwrap_to_call<'a>(expr: &'a Expression<'a>) -> Option<&'a CallExpression<'a>> {
+    match peel_parens(expr) {
+        Expression::CallExpression(call) => Some(call),
+        Expression::ChainExpression(chain) => match &chain.expression {
+            ChainElement::CallExpression(call) => Some(call),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// True when `call`'s callback predicate is a (possibly negated) `.has()`
 /// lookup whose receiver is structurally known to be a `Set` or `Map`. Such a
 /// lookup is O(1), so the flagged method does no O(n*m) scan.
@@ -255,7 +272,7 @@ fn callback_is_known_set_lookup<'a>(
         predicate = &unary.argument;
     }
 
-    let Expression::CallExpression(lookup) = predicate else {
+    let Some(lookup) = unwrap_to_call(predicate) else {
         return false;
     };
     let Expression::StaticMemberExpression(lookup_member) = &lookup.callee else {
@@ -353,8 +370,12 @@ fn operand_is_free_variable<'a>(
 }
 
 /// True when `expr` is structurally a `Set`/`Map`: a direct `new Set(...)` /
-/// `new Map(...)`, or an identifier whose declaration initializer is one and
-/// which is never reassigned.
+/// `new Map(...)`, or an identifier — never reassigned — that is either
+/// initialized to one of those or carries a `Set<…>`/`Map<…>` type annotation.
+/// The annotation may sit on a variable declaration (`const s: Set<string> =
+/// …`), directly on a parameter (`(s: Set<string>) => …`), or on a member
+/// destructured from a typed params object (`{ excludedColumns }:
+/// WriteRowsOptions` where `excludedColumns: Set<string>`).
 fn is_known_set_or_map<'a>(expr: &Expression<'a>, semantic: &'a oxc_semantic::Semantic<'a>) -> bool {
     match expr {
         Expression::NewExpression(new_expr) => is_set_or_map_constructor(new_expr),
@@ -366,18 +387,42 @@ fn is_known_set_or_map<'a>(expr: &Expression<'a>, semantic: &'a oxc_semantic::Se
             let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
                 return false;
             };
+            // A reassigned binding loses its declared-type / initializer guarantee.
             if scoping
                 .get_resolved_references(sym_id)
                 .any(|reference| reference.flags().contains(ReferenceFlags::Write))
             {
                 return false;
             }
-            let AstKind::VariableDeclarator(decl) =
-                semantic.nodes().kind(scoping.symbol_declaration(sym_id))
-            else {
-                return false;
-            };
-            matches!(&decl.init, Some(Expression::NewExpression(n)) if is_set_or_map_constructor(n))
+            let nodes = semantic.nodes();
+            let decl_node_id = scoping.symbol_declaration(sym_id);
+            // `const m = new Set(…)` / `new Map(…)` initializer, or a `Set<…>` /
+            // `Map<…>` variable annotation (`const s: Set<string> = …`).
+            if let AstKind::VariableDeclarator(decl) = nodes.kind(decl_node_id) {
+                let init_is_constructor = matches!(
+                    &decl.init,
+                    Some(Expression::NewExpression(n)) if is_set_or_map_constructor(n)
+                );
+                let annotation_is_set_or_map = decl
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| type_is_set_or_map(&ann.type_annotation));
+                return init_is_constructor || annotation_is_set_or_map;
+            }
+            // A parameter (or a member destructured from a typed params object)
+            // whose declared type resolves to `Set<…>` / `Map<…>`.
+            let binding_name = scoping.symbol_name(sym_id);
+            std::iter::once(nodes.kind(decl_node_id))
+                .chain(nodes.ancestor_kinds(decl_node_id))
+                .any(|kind| match kind {
+                    AstKind::FormalParameter(param) => param
+                        .type_annotation
+                        .as_ref()
+                        .is_some_and(|ann| {
+                            param_binding_is_set_or_map(ann, binding_name, semantic)
+                        }),
+                    _ => false,
+                })
         }
         _ => false,
     }
@@ -388,6 +433,97 @@ fn is_set_or_map_constructor(new_expr: &NewExpression<'_>) -> bool {
         &new_expr.callee,
         Expression::Identifier(id) if matches!(id.name.as_str(), "Set" | "Map")
     )
+}
+
+/// True when a TS type is a built-in generic `Set<…>` / `Map<…>` reference —
+/// the collections whose `.has()` is O(1). The built-ins are always applied to
+/// type arguments, so a reference without them (a bare, non-generic
+/// user-declared `Set`/`Map` alias) is not matched. Parenthesized types
+/// (`(Set<string>)`) are unwrapped.
+fn type_is_set_or_map(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSTypeReference(type_ref) => {
+            type_ref.type_arguments.is_some()
+                && matches!(
+                    &type_ref.type_name,
+                    TSTypeName::IdentifierReference(id)
+                        if matches!(id.name.as_str(), "Set" | "Map")
+                )
+        }
+        TSType::TSParenthesizedType(p) => type_is_set_or_map(&p.type_annotation),
+        _ => false,
+    }
+}
+
+/// True when an object-type member list declares `binding_name` as a `Set<…>` /
+/// `Map<…>` property — the shape behind a destructured params object
+/// (`{ excludedColumns }: { excludedColumns?: Set<string> }`).
+fn members_declare_set_or_map(members: &[TSSignature], binding_name: &str) -> bool {
+    members.iter().any(|member| match member {
+        TSSignature::TSPropertySignature(prop) => {
+            prop.key.static_name().as_deref() == Some(binding_name)
+                && prop
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| type_is_set_or_map(&ann.type_annotation))
+        }
+        _ => false,
+    })
+}
+
+/// True when a named type reference (`WriteRowsOptions` in `{ excludedColumns }:
+/// WriteRowsOptions`) resolves to a `type`/`interface` declaration whose
+/// `binding_name` member is a `Set<…>` / `Map<…>` property. The declaration is
+/// matched by name across the module — the established resolution shape in this
+/// codebase (cf. `no_array_callback_reference`'s `named_type_member_is_low_arity`).
+/// A reference carrying its own type arguments is skipped: the member type may
+/// depend on a type parameter not statically visible here.
+fn named_type_member_is_set_or_map<'a>(
+    type_ref: &TSTypeReference<'a>,
+    binding_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    if type_ref.type_arguments.is_some() {
+        return false;
+    }
+    let TSTypeName::IdentifierReference(id) = &type_ref.type_name else {
+        return false;
+    };
+    let type_name = id.name.as_str();
+    semantic.nodes().iter().any(|node| match node.kind() {
+        AstKind::TSTypeAliasDeclaration(alias) if alias.id.name.as_str() == type_name => {
+            matches!(&alias.type_annotation, TSType::TSTypeLiteral(lit)
+                if members_declare_set_or_map(&lit.members, binding_name))
+        }
+        AstKind::TSInterfaceDeclaration(iface) if iface.id.name.as_str() == type_name => {
+            members_declare_set_or_map(&iface.body.body, binding_name)
+        }
+        _ => false,
+    })
+}
+
+/// True when a parameter's type annotation makes `binding_name` a `Set<…>` /
+/// `Map<…>`. Covers a direct annotation on the parameter itself
+/// (`s: Set<string>`), the destructured inline-object case
+/// (`{ s }: { s: Set<string> }`), and the destructured named-type case
+/// (`{ excludedColumns }: WriteRowsOptions`).
+fn param_binding_is_set_or_map<'a>(
+    ann: &TSTypeAnnotation<'a>,
+    binding_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    // Direct annotation on the parameter itself (`(s: Set<string>) => …`).
+    if type_is_set_or_map(&ann.type_annotation) {
+        return true;
+    }
+    // Destructured from a typed params object.
+    match &ann.type_annotation {
+        TSType::TSTypeLiteral(lit) => members_declare_set_or_map(&lit.members, binding_name),
+        TSType::TSTypeReference(type_ref) => {
+            named_type_member_is_set_or_map(type_ref, binding_name, semantic)
+        }
+        _ => false,
+    }
 }
 
 /// Methods that exist ONLY on `String.prototype` and return a `string`. A call
@@ -1514,6 +1650,139 @@ for (const x of xs) {
 function scan(customKeywords) {
     for (const k of ks) {
         if (customKeywords.includes(k)) {}
+    }
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_optional_chained_has_typed_set_param_destructured() {
+        // Regression for #7548: `excludedColumns` is a `Set<string>` destructured
+        // from a typed params object and `?.has()` is O(1), so the `.filter()`
+        // over the column names is not the O(n*m) scan the rule targets. Combines
+        // both fixes — the typed-binding recognition and the ChainExpression unwrap.
+        assert!(
+            run(r#"
+interface WriteRowsOptions {
+    excludedColumns?: Set<string>;
+}
+function writeRows({ excludedColumns }: WriteRowsOptions) {
+    for (const batch of batches) {
+        const names = Object.keys(batch).filter(
+            (columnName) => !excludedColumns?.has(columnName),
+        );
+    }
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_has_map_typed_param_via_type_alias() {
+        // #7548: a `Map<…>` destructured from a `type` alias resolves the same way
+        // as the interface case — `.has()` on it is O(1).
+        assert!(
+            run(r#"
+type Ctx = { seen: Map<string, number> };
+function scan({ seen }: Ctx) {
+    for (const row of rows) {
+        const hit = candidates.find((c) => seen.has(c.id));
+    }
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_has_inline_object_type_destructured_set_param() {
+        // #7548: a member destructured from an INLINE object type
+        // (`{ s }: { s: Set<string> }`) is a known Set via the type-literal arm.
+        assert!(
+            run(r#"
+function scan({ s }: { s: Set<string> }) {
+    for (const row of rows) {
+        const kept = candidates.filter((c) => s.has(c.id));
+    }
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_has_variable_annotated_set_in_loop() {
+        // #7548: a `const s: Set<string>` variable annotation identifies a known
+        // Set even without a `new Set()` initializer, so `s.has()` is O(1).
+        assert!(
+            run(r#"
+const s: Set<string> = getSet();
+for (const row of rows) {
+    const kept = candidates.filter((c) => s.has(c.id));
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_has_typed_set_param_non_optional() {
+        // #7548 gap-1-only: a `Set<string>` parameter with a plain (non-optional)
+        // `.has()` is O(1) — the typed-binding recognition alone must exempt it.
+        assert!(
+            run(r#"
+function scan(excluded: Set<string>) {
+    for (const row of rows) {
+        const kept = candidates.filter((c) => !excluded.has(c.id));
+    }
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_optional_chained_has_local_new_set() {
+        // #7548 gap-2-only: an optional-chained `?.has()` on a local `new Set()`
+        // binding — the ChainExpression unwrap alone must reach the known-Set
+        // receiver behind the `?.`.
+        assert!(
+            run(r#"
+const seen = new Set(getIds());
+for (const row of rows) {
+    const kept = candidates.filter((c) => !seen?.has(c.id));
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_includes_on_typed_string_array_param_in_loop() {
+        // #7548 negative space: `bigArray` is a `string[]` — `.includes()` is the
+        // genuine O(n*m) scan a Set would replace, and a `string[]` annotation must
+        // not be mistaken for a Set/Map.
+        let diags = run(r#"
+function scan(bigArray: string[]) {
+    for (const row of rows) {
+        const kept = candidates.filter((x) => bigArray.includes(x.id));
+    }
+}
+"#);
+        assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_has_on_untyped_unknown_binding_in_loop() {
+        // #7548 negative space: `obj` has neither a `new Set()` init nor a Set/Map
+        // type annotation — it is not provably a Set, so the `.filter()` that runs
+        // per loop iteration stays flagged.
+        let diags = run(r#"
+function scan(obj) {
+    for (const row of rows) {
+        const kept = candidates.filter((c) => obj.has(c.id));
     }
 }
 "#);
