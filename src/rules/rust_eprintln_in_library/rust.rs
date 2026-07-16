@@ -88,15 +88,17 @@
 //! the hook body stays flagged.
 //!
 //! An `eprintln!` / `eprint!` whose immediately-following statement in the
-//! enclosing block is an `unreachable!()` or `panic!(…)` invocation is a
-//! pre-panic diagnostic: the process unconditionally terminates on that very
-//! next statement, so the rule's premise — consumers can't redirect or
-//! capture the output — is moot, there is nothing left to redirect. This is
-//! the same category as the panic-hook exemption (output written just before
-//! the process dies). The next statement must itself be the
-//! `unreachable!`/`panic!` macro; an `eprintln!` followed by ordinary code,
-//! or one that is the last statement of its block with no panic after it,
-//! stays flagged.
+//! enclosing block unconditionally terminates the process is a
+//! pre-termination diagnostic: the process dies on that very next statement,
+//! so the rule's premise — consumers can't redirect or capture the output —
+//! is moot, there is nothing left to redirect. This is the same category as
+//! the panic-hook exemption (output written just before the process dies).
+//! The terminator is either an `unreachable!()` / `panic!(…)` invocation
+//! (matched on the macro's final path segment) or a `std::process::exit(…)` /
+//! `std::process::abort()` call (the callee's final segment is `exit`/`abort`
+//! qualified by a `process` segment). The next statement must itself be the
+//! terminator; an `eprintln!` followed by ordinary code, or one that is the
+//! last statement of its block with no terminator after it, stays flagged.
 //!
 //! Output gated behind a runtime verbosity flag is opt-in diagnostics,
 //! not unconditional library noise: the consumer only sees it after
@@ -258,7 +260,7 @@ impl AstCheck for Check {
         if is_in_panic_hook_closure(node, source_bytes) {
             return;
         }
-        if is_pre_unreachable_diagnostic(node, source_bytes) {
+        if is_pre_termination_diagnostic(node, source_bytes) {
             return;
         }
         if is_suppressed_by_clippy_allow(node, &["disallowed_macros"], source_bytes) {
@@ -526,9 +528,10 @@ fn callee_ends_in_set_hook(func: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 /// True when `node` (an `eprintln!` / `eprint!` `macro_invocation`) is the
-/// direct predecessor of a guaranteed panic in its enclosing block: the
-/// statement immediately following it is an `unreachable!()` or `panic!(…)`
-/// invocation. Such an `eprintln!` is a pre-panic diagnostic — the process
+/// direct predecessor of an unconditional process termination in its enclosing
+/// block: the statement immediately following it is an `unreachable!()` /
+/// `panic!(…)` invocation, or a `std::process::exit(…)` / `std::process::abort()`
+/// call. Such an `eprintln!` is a pre-termination diagnostic — the process
 /// terminates on the next statement, so there is nothing for a consumer to
 /// redirect or capture, the same rationale as the panic-hook exemption.
 ///
@@ -536,16 +539,63 @@ fn callee_ends_in_set_hook(func: tree_sitter::Node, source: &[u8]) -> bool {
 /// direct child of a `block`), then its next sibling statement, skipping
 /// comments. An `eprintln!` that is its block's last statement has no
 /// following sibling and is not exempted, so it still fires.
-fn is_pre_unreachable_diagnostic(node: tree_sitter::Node, source: &[u8]) -> bool {
+fn is_pre_termination_diagnostic(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(stmt) = statement_in_block(node) else {
         return false;
     };
     let Some(next) = next_statement(stmt) else {
         return false;
     };
-    macro_invocation_of(next)
+    let terminates_via_macro = macro_invocation_of(next)
         .and_then(|mi| macro_invocation_name(mi, source))
-        .is_some_and(|name| name == "unreachable" || name == "panic")
+        .is_some_and(|name| name == "unreachable" || name == "panic");
+    terminates_via_macro || is_process_exit_call(next, source)
+}
+
+/// True when `stmt` is a `std::process::exit(…)` / `std::process::abort()`
+/// call — an unconditional process termination. The callee must be a
+/// `scoped_identifier` whose final segment is `exit`/`abort` and whose
+/// preceding segment is `process` (matching `std::process::exit`,
+/// `process::exit`, `std::process::abort`, …). Requiring the `process`
+/// qualifier keeps this a structural match on the standard-library terminators
+/// rather than a bare-name match over any local `exit`/`abort` function.
+/// Reuses `trailing_path_segment` to read the qualifier, mirroring
+/// `is_env_var_call`'s `env::var` check.
+fn is_process_exit_call(stmt: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(call) = call_expression_of(stmt) else {
+        return false;
+    };
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "scoped_identifier" {
+        return false;
+    }
+    let Some(name) = func
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    if name != "exit" && name != "abort" {
+        return false;
+    }
+    func.child_by_field_name("path")
+        .is_some_and(|path| trailing_path_segment(path, source) == Some("process"))
+}
+
+/// The `call_expression` a statement node carries: the node itself when it is a
+/// trailing-expression `call_expression` (`process::exit(1)` with no `;`), or
+/// the sole inner call of an `expression_statement` (`process::exit(1);`). Any
+/// other statement shape yields `None`. Mirrors `macro_invocation_of`.
+fn call_expression_of(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    match node.kind() {
+        "call_expression" => Some(node),
+        "expression_statement" => node
+            .named_child(0)
+            .filter(|inner| inner.kind() == "call_expression"),
+        _ => None,
+    }
 }
 
 /// The ancestor of `node` that is a direct child of a `block` — the statement
@@ -1430,6 +1480,62 @@ required-features = ["std"]
     #[test]
     fn flags_eprintln_followed_by_ordinary_statement() {
         let source = "fn f() { eprintln!(\"oops\"); do_more(); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #7605 (lapce/lapce `lapce-app/src/app.rs:3794`): an
+    /// `eprintln!` immediately followed by `std::process::exit(1)` is a
+    /// pre-termination diagnostic — the process terminates unconditionally on
+    /// the next statement, so there is nothing left for a consumer to redirect
+    /// or capture, the same category as the pre-`panic!` exemption. Exempt.
+    #[test]
+    fn allows_eprintln_immediately_before_process_exit() {
+        let source = "fn f() { eprintln!(\"Failed to launch: {why}\"); std::process::exit(1); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/app.rs", source).is_empty());
+    }
+
+    /// The `std::` prefix is optional: a `process::exit(1)` call is recognised
+    /// the same way — final segment `exit` qualified by `process`.
+    #[test]
+    fn allows_eprintln_immediately_before_bare_qualified_process_exit() {
+        let source = "fn f() { eprintln!(\"bye\"); process::exit(1); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// `std::process::abort()` is the same unconditional termination as `exit`
+    /// and exempts the preceding `eprintln!` too.
+    #[test]
+    fn allows_eprintln_immediately_before_process_abort() {
+        let source = "fn f() { eprintln!(\"fatal\"); std::process::abort(); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The pre-termination exemption is the IMMEDIATELY-following statement
+    /// only: an `eprintln!` separated from a later `process::exit` by ordinary
+    /// code is unconditional library output at the point it runs and stays
+    /// flagged.
+    #[test]
+    fn flags_eprintln_with_process_exit_after_other_statements() {
+        let source = "fn f() { eprintln!(\"oops\"); do_more(); std::process::exit(1); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// The call form requires the `process` qualifier: an unqualified `exit(…)`
+    /// (a local function, not `std::process::exit`) is not a recognised
+    /// terminator, so the preceding `eprintln!` stays flagged. This keeps the
+    /// exemption a structural `process::exit` match, not a bare-name allowlist.
+    #[test]
+    fn flags_eprintln_before_unqualified_exit_call() {
+        let source = "fn f() { eprintln!(\"oops\"); exit(1); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// The qualifier must be `process`: a scoped `exit` under a different path
+    /// (`libc::exit`) is not the std process terminator this exemption covers,
+    /// so the preceding `eprintln!` stays flagged.
+    #[test]
+    fn flags_eprintln_before_non_process_qualified_exit_call() {
+        let source = "fn f() { eprintln!(\"oops\"); libc::exit(1); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
