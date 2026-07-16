@@ -16,6 +16,11 @@ pub struct Check;
 enum ReturnKind {
     Sync,
     Promise,
+    /// The rejection/error channel — `Promise.reject(...)`, semantically a
+    /// `throw`. It never resolves to a usable value, so it participates in
+    /// neither the sync nor the promise side of the mix, exactly like a `throw`
+    /// statement that produces no return value at all.
+    Error,
 }
 
 impl OxcCheck for Check {
@@ -207,13 +212,17 @@ fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
     // `Promise.<combinator>(...)`
     if let Expression::Identifier(obj) = &member.object
         && obj.name.as_str() == "Promise"
-            && matches!(
-                method,
-                "resolve" | "reject" | "all" | "allSettled" | "race" | "any"
-            )
-        {
+    {
+        // `Promise.reject(...)` is the rejection/error channel — semantically a
+        // `throw`, never a resolvable value — so it does not count as a
+        // promise-value branch (and must not be miscounted as sync either).
+        if method == "reject" {
+            return ReturnKind::Error;
+        }
+        if matches!(method, "resolve" | "all" | "allSettled" | "race" | "any") {
             return ReturnKind::Promise;
         }
+    }
 
     ReturnKind::Sync
 }
@@ -1017,6 +1026,74 @@ mod tests {
         // the sync branch returns `c`, so the branches do not passthrough a single
         // value and the mixed return still fires.
         let src = "function h(a: any, b: any) { if (a instanceof Promise) { return b.finally(cleanup); } else { return c; } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_sync_value_with_promise_reject_error_channel() {
+        // Regression for #7519 — zxwk1998/vue-admin-better axios response
+        // interceptor. `Promise.reject(...)` is the rejection/error channel
+        // (equivalent to `throw`), not a resolvable promise value. The happy path
+        // returns the plain `data` value while the error paths reject, which is
+        // consistent under `await fn()` (returns `data` or throws), so the arrow
+        // is not a real sync/promise mix.
+        let src = "const interceptor = (response) => {
+            const { data } = response;
+            if (data === undefined || data === null) {
+                return Promise.reject('backend returned empty');
+            }
+            if (code !== null && arr.includes(code)) {
+                return data;
+            } else {
+                handleCode(code, msg);
+                return Promise.reject(`request error`);
+            }
+        };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_function_decl_sync_value_with_promise_reject() {
+        // Function-declaration form of #7519: a plain value on the happy path and
+        // `Promise.reject(...)` on the error path is not a mix.
+        let src = "function f(c: boolean) { if (!c) return Promise.reject('bad'); return 1; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_promise_resolve_and_reject_all_async() {
+        // `Promise.reject(...)` must count as the error channel, not as sync:
+        // an all-async function that resolves in one branch and rejects in
+        // another is uniform (no sync branch) and must stay unflagged. This
+        // guards against naively reclassifying reject as `Sync`, which would
+        // wrongly turn this into a sync/promise mix.
+        let src = "function f(x: boolean) { if (x) return Promise.resolve(1); return Promise.reject('e'); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_sync_value_mixed_with_promise_resolve() {
+        // Control for #7519: `Promise.resolve(...)` is a real resolvable promise
+        // value, so mixing it with a sync return still fires.
+        let src = "function f(x: boolean) { if (x) return 1; return Promise.resolve(2); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_sync_value_mixed_with_promise_all() {
+        // Control for #7519: only `reject` was removed from the combinator set;
+        // `Promise.all(...)` stays a promise value, so a sync branch mixed with
+        // it still fires.
+        let src = "function f(x: boolean) { if (x) return 1; return Promise.all([a, b]); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_promise_reject_mixed_with_real_promise_value() {
+        // A `Promise.reject(...)` error branch does not launder a genuine
+        // sync/promise mix: a sync `return 1` plus a resolvable
+        // `Promise.resolve(2)` still fires even when a reject branch is present.
+        let src = "function f(a: number) { if (a === 0) return Promise.reject('x'); if (a === 1) return 1; return Promise.resolve(2); }";
         assert_eq!(run(src).len(), 1);
     }
 }
