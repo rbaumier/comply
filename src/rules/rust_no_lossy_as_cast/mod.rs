@@ -6,9 +6,12 @@
 //! `u8::try_from()` path returns a `Result` and forces the caller
 //! to think about the overflow case.
 //!
-//! Floats-to-int and int-narrowing casts are the most common
-//! sources of silent corruption. Float-to-int saturates in modern
-//! Rust but still loses precision; the rule flags both.
+//! Integer-narrowing casts are the most common source of silent
+//! corruption, so the rule flags them. A float source cast to an
+//! integer target (`x.floor() as i32`) is left alone: std has no
+//! `From` / `TryFrom` from `f32`/`f64` to any integer, so `as` is
+//! the only conversion and the `try_into()` remediation would not
+//! compile.
 
 mod rust;
 

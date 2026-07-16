@@ -72,7 +72,8 @@
 //! no integer value of any width or signedness can overflow it, and there is no
 //! `From` impl reachable for an unresolved source (method call / field access),
 //! making the `u128::from(x)` remediation uncompilable. A float source
-//! (`f64 as u128`) truncates and stays flagged.
+//! (`f64 as u128`) truncates but is exempt too — via the float-source carve-out
+//! below, since no `From<f64>` / `TryFrom<f64>` for `u128` exists either.
 //!
 //! Float-target casts (`as f32` / `as f64`) are only flagged when the
 //! source type is statically known to have a matching `From` impl
@@ -81,6 +82,14 @@
 //! `u128`, …) and for operands whose type can't be resolved from the AST
 //! (method calls, field accesses, un-annotated bindings), so those are
 //! left alone — suggesting `f64::from(x)` there would not compile.
+//!
+//! Symmetrically, a float-source cast to an integer target — a resolved
+//! `f64`/`f32` operand, or one whose outermost expression is a std float
+//! rounding method (`.floor()`/`.ceil()`/`.round()`/`.trunc()`, inherent to
+//! `f32`/`f64` and returning the same float) — is left alone: std has no
+//! `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer, so `as` is the only
+//! float→integer conversion and both the `from` and `try_from` remediations
+//! would fail to compile. `x.floor() as i32` is the idiomatic truncation.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -90,7 +99,8 @@ use crate::rules::rust_helpers::{
     cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_for_range_bounded,
+    cast_operand_is_enum_discriminant, cast_operand_is_float_rounding,
+    cast_operand_is_for_range_bounded,
     cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
     cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
@@ -311,10 +321,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     // or signedness — can overflow it, so `<int> as u128` is always lossless
     // (`u64 as u128`, `entity.to_bits() as u128`). There is no `From<T>` impl for
     // `u128` from an unresolvable source (a method call / field access), so the
-    // rule's `u128::from(x)` remediation would not compile. Only a float source
-    // (`f64 as u128`) truncates, so it stays governed by `is_dangerous_cast`; an
-    // unresolved source is treated as the common integer case and exempted. The
-    // signed widest target `i128` is left to `is_dangerous_cast` — a `u128 as
+    // rule's `u128::from(x)` remediation would not compile. A float source
+    // (`f64 as u128`) is excluded from this block and handled by the float-source
+    // carve-out below (no `From`/`TryFrom<f{32,64}>` for `u128` exists either); an
+    // unresolved source is treated as the common integer case and exempted here.
+    // The signed widest target `i128` is left to `is_dangerous_cast` — a `u128 as
     // i128` source can exceed `i128::MAX`, so the widest-target shortcut applies
     // only to the unsigned `u128` target.
     if target_type.kind == NumericKind::Unsigned
@@ -329,6 +340,19 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         // wider or unresolved source would not compile, so only flag
         // when `From` is provably available.
         source_type.is_some_and(|src| from_available(src, target_type))
+    } else if source_type.is_some_and(|src| src.kind == NumericKind::Float)
+        || cast_operand_is_float_rounding(node, source_bytes)
+    {
+        // A float source cast to an integer target — a resolved `f64`/`f32`
+        // operand, or one whose outermost expression is a std float rounding
+        // method (`.floor()`/`.ceil()`/`.round()`/`.trunc()`, defined only on
+        // `f32`/`f64` and returning the same float). Rust std has no
+        // `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer type, so both
+        // `<int>::from(x)` and `<int>::try_from(x)?` are uncompilable — the
+        // symmetric hole to the float-target branch above, which likewise flags
+        // only when a matching `From` is provably available. `as` is the only
+        // float→integer conversion, so leave it alone.
+        false
     } else if let Some(src) = source_type {
         is_dangerous_cast(src, target_type)
     } else {
@@ -1247,6 +1271,49 @@ name = "normal_lib"
     }
 
     #[test]
+    fn allows_float_rounding_method_as_int() {
+        // Issue #7568: `.floor()`/`.ceil()`/`.round()`/`.trunc()` are inherent to
+        // `f32`/`f64` and return the same float, so the operand is provably float.
+        // Std has no `From<f64>`/`TryFrom<f64>` for any integer, so `i32::from(x)`
+        // / `i32::try_from(x)?` are uncompilable — `as` is the only conversion.
+        assert!(run_on("fn f(x: f64) -> i32 { x.floor() as i32 }").is_empty());
+        assert!(run_on("fn f(x: f64) -> u32 { x.ceil() as u32 }").is_empty());
+        assert!(run_on("fn f(x: f64) -> i64 { x.round() as i64 }").is_empty());
+        assert!(run_on("fn f(x: f64) -> i32 { x.trunc() as i32 }").is_empty());
+        // The ddsketch.rs:93 repro shape: rounding a nested call's result.
+        assert!(run_on("fn f() -> i32 { log_gamma(a, b).floor() as i32 }").is_empty());
+        // Parentheses around the rounding call are transparent.
+        assert!(run_on("fn f(x: f64) -> i32 { (x.floor()) as i32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_resolved_float_source_as_int() {
+        // Issue #7568: a resolved `f64`/`f32` operand cast to an integer has no
+        // `From`/`TryFrom` remediation either, so `f64 as i32` is exempt — even for
+        // the widest `u128` target (`u128::from(f64)` does not exist).
+        assert!(run_on("fn f(v: f64) -> i32 { v as i32 }").is_empty());
+        assert!(run_on("fn f(v: f32) -> u16 { v as u16 }").is_empty());
+        assert!(run_on("fn f() -> u128 { let v: f64 = 1.5; v as u128 }").is_empty());
+    }
+
+    #[test]
+    fn flags_non_float_rounding_call_and_free_fn() {
+        // A nullary `.floor()`-shaped method is the float signal; a same-named
+        // method carrying arguments (a `Decimal`-style `.round(2)`) is not float,
+        // and a free function `round_to_even(x)` has an unknown return type — both
+        // stay flagged.
+        assert_eq!(run_on("fn f(x: Decimal) -> i32 { x.round(2) as i32 }").len(), 1);
+        assert_eq!(run_on("fn f() -> i32 { round_to_even(x) as i32 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_integer_narrowing_despite_float_carveout() {
+        // Only float→integer is exempted; genuine integer narrowing keeps firing.
+        assert_eq!(run_on("fn f(y: u64) -> u8 { y as u8 }").len(), 1);
+        assert_eq!(run_on("fn f(x: i64) -> i32 { x as i32 }").len(), 1);
+    }
+
+    #[test]
     fn repro_1289_shift_narrowing_not_flagged() {
         // `(x >> 8) as u8` — bit extraction, truncation intentional.
         assert!(run_on("fn f(x: u32) -> u8 { (x >> 8) as u8 }").is_empty());
@@ -1354,9 +1421,12 @@ name = "normal_lib"
     }
 
     #[test]
-    fn repro_6105_float_as_u128_still_flagged() {
-        // A float source truncates the fractional part — genuinely lossy.
-        assert_eq!(run_on("fn f(x: f64) -> u128 { x as u128 }").len(), 1);
+    fn repro_6105_float_as_u128_exempt_via_7568() {
+        // The u128 widest-target exemption excludes float sources, but a float
+        // source cast to any integer is exempt anyway (#7568): std has no
+        // `From<f64>` / `TryFrom<f64>` for `u128`, so `u128::from(x)` /
+        // `u128::try_from(x)?` are uncompilable — `as` is the only conversion.
+        assert!(run_on("fn f(x: f64) -> u128 { x as u128 }").is_empty());
     }
 
     #[test]

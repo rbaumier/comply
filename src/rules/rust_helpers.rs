@@ -5112,6 +5112,62 @@ pub fn cast_operand_is_min_clamped(cast: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True when `cast`'s operand's outermost expression is a std float rounding
+/// method call — `.floor()`, `.ceil()`, `.round()`, or `.trunc()`. These four
+/// methods are inherent to `f32`/`f64` only and each returns the same float
+/// type, so the operand is provably a float value.
+///
+/// A float source has no `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer
+/// type, so casting it to an integer with `as` is the only available conversion
+/// — the same "no `From`/`TryFrom` exists" justification behind the pointer /
+/// `from_bits` / SIMD carve-outs. Callers gate this on an integer target; a
+/// float target keeps its own precision handling.
+///
+/// Matches only a method call — a `call_expression` whose `function` is a
+/// `field_expression` — so a same-named *free* function (`floor(x)`, which could
+/// return any type) is not matched. The `f32`/`f64` rounding methods are
+/// nullary, so a call carrying arguments (a `Decimal::round(2)`-style method on
+/// some other type) is rejected too. Transparent parentheses are peeled.
+///
+/// Shared by `rust-no-as-numeric-cast` and `rust-no-lossy-as-cast`, whose
+/// `from`/`try_from` and `try_into` remediations are alike uncompilable for a
+/// float source.
+pub fn cast_operand_is_float_rounding(cast: Node, source: &[u8]) -> bool {
+    cast.child_by_field_name("value")
+        .is_some_and(|value| expr_is_float_rounding_call(value, source))
+}
+
+/// True when `node` is a nullary call to a float rounding method (`.floor()`,
+/// `.ceil()`, `.round()`, `.trunc()`), looking through transparent parentheses.
+fn expr_is_float_rounding_call(node: Node, source: &[u8]) -> bool {
+    if node.kind() == "parenthesized_expression" {
+        return node
+            .named_child(0)
+            .is_some_and(|inner| expr_is_float_rounding_call(inner, source));
+    }
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let is_rounding = function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
+        .map(str::trim)
+        .is_some_and(|method| matches!(method, "floor" | "ceil" | "round" | "trunc"));
+    if !is_rounding {
+        return false;
+    }
+    // The `f32`/`f64` rounding methods take no arguments; a call with arguments
+    // (a same-named method on another type) is not a float rounding call.
+    node.child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child(0).is_none())
+}
+
 /// True when `cast` (a `type_cast_expression`) is `<digit> as T` where `<digit>`
 /// provably derives from `char::to_digit(N)` with a literal radix `N` — the
 /// digit-parse pattern `(c as char).to_digit(10).ok_or_else(err)? as u8`.
