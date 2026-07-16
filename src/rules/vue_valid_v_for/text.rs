@@ -55,6 +55,16 @@ fn binding_argument<'a>(directive: tree_sitter::Node, source: &'a [u8]) -> Optio
         .and_then(|n| n.utf8_text(source).ok())
 }
 
+/// Whether a binding directive uses the Vue 3.5+ same-name shorthand: it carries
+/// an argument but no value node at all (`:key`, as opposed to `:key="x"` or an
+/// empty `:key=""`, both of which have a value node).
+fn is_same_name_shorthand(directive: tree_sitter::Node) -> bool {
+    let mut cursor = directive.walk();
+    !directive
+        .children(&mut cursor)
+        .any(|c| matches!(c.kind(), "attribute_value" | "quoted_attribute_value"))
+}
+
 /// Whether a `directive_attribute` is a `:key` / `v-bind:key` binding.
 fn is_key_binding(directive: tree_sitter::Node, source: &[u8]) -> bool {
     matches!(directive_name(directive, source), Some(":") | Some("v-bind"))
@@ -242,7 +252,16 @@ fn key_violation<'a>(
     bindings: &[&str],
 ) -> Option<(tree_sitter::Node<'a>, &'static str)> {
     if let Some(key) = key_directive(tag, source) {
-        let uses_binding = directive_value(key, source).is_some_and(|expr| {
+        // The expression the `:key` binds. A valueless `:key` / `v-bind:key` is
+        // the Vue 3.5+ same-name shorthand (`:key` is equivalent to `:key="key"`)
+        // and binds to its own argument name. An empty `:key=""` has a value node
+        // and is not the shorthand, so it references no iteration variable.
+        let bound = directive_value(key, source).or_else(|| {
+            is_same_name_shorthand(key)
+                .then(|| binding_argument(key, source))
+                .flatten()
+        });
+        let uses_binding = bound.is_some_and(|expr| {
             bindings
                 .iter()
                 .any(|binding| contains_identifier(expr, binding))
@@ -562,6 +581,43 @@ mod tests {
         // `items` contains `item` as a substring but not as a whole token, so a
         // key referencing `itemList` must still flag.
         let diags = run(&wrap("<div v-for=\"item in items\" :key=\"itemList\"></div>"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("does not use any variables"));
+    }
+
+    // --- Vue 3.5+ same-name `:key` shorthand ---
+
+    #[test]
+    fn allows_valueless_key_shorthand_matching_alias() {
+        // `:key` with no value is the same-name shorthand for `:key="key"`; the
+        // v-for alias is literally `key`, so it references the iteration variable.
+        let diags = run(&wrap(
+            "<li v-for=\"key in 6\" :key class=\"skeleton\"></li>",
+        ));
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_valueless_v_bind_key_shorthand_matching_alias() {
+        // Long-form `v-bind:key` shorthand is equivalent to the `:key` shorthand.
+        let diags = run(&wrap("<li v-for=\"key in 6\" v-bind:key></li>"));
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_valueless_key_shorthand_non_matching_alias() {
+        // The shorthand binds `key`, but the alias is `item`, so the bound
+        // variable is not an iteration variable and must still flag.
+        let diags = run(&wrap("<li v-for=\"item in items\" :key></li>"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("does not use any variables"));
+    }
+
+    #[test]
+    fn flags_empty_valued_key_not_treated_as_shorthand() {
+        // `:key=""` has an (empty) value node, so it is not the same-name
+        // shorthand and still references no iteration variable.
+        let diags = run(&wrap("<li v-for=\"key in 6\" :key=\"\"></li>"));
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("does not use any variables"));
     }
