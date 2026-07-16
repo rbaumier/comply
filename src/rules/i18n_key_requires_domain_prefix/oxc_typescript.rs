@@ -29,8 +29,10 @@ fn is_valid_namespaced(key: &str) -> bool {
         if !first.is_ascii_lowercase() && first != '$' {
             return false;
         }
+        // `-` (kebab-case) and `_` (snake_case) are both intra-segment word
+        // separators used by i18n key conventions (vue-i18n / i18next catalogs).
         for c in chars {
-            if !c.is_ascii_alphanumeric() && c != '-' {
+            if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
                 return false;
             }
         }
@@ -127,6 +129,16 @@ mod tests {
     fn allows_hyphenated_domain() {
         // Hyphenated domains follow npm package naming (e.g. `@grafana/data`).
         assert!(run("t('grafana-data.some.key')").is_empty());
+    }
+
+    // Regression for rbaumier/comply#7530 — snake_case key segments (see the
+    // intra-segment separator note in `is_valid_namespaced`).
+    #[test]
+    fn allows_snake_case_segments() {
+        assert!(run("t('mock_server.environment_variable_added')").is_empty());
+        assert!(run("t('authorization.oauth.label_auth_code')").is_empty());
+        assert!(run("t('ai_experiments.modify_request_body_error')").is_empty());
+        assert!(run("t('app.new_version_found')").is_empty());
     }
 
     #[test]
