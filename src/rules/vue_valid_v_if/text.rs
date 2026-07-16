@@ -36,8 +36,25 @@ fn directive_name<'a>(directive: tree_sitter::Node, source: &'a [u8]) -> Option<
         .and_then(|n| n.utf8_text(source).ok())
 }
 
-/// Whether any sibling `directive_attribute` on the same element is a
-/// `v-else` or `v-else-if`.
+/// Whether an `ERROR` node lies between directives `a` and `b` within `tag`.
+///
+/// The vendored Vue grammar does not recognize the self-closing form of the
+/// special `<template …/>` element, so error-recovery folds the following
+/// sibling's opening tag into the self-closed template's `start_tag`, marking the
+/// seam with an `ERROR` node. Directives on opposite sides of that seam belong to
+/// two distinct physical elements, not one, so they are not same-element siblings.
+fn separated_by_error(tag: tree_sitter::Node, a: tree_sitter::Node, b: tree_sitter::Node) -> bool {
+    let gap_start = a.end_byte().min(b.end_byte());
+    let gap_end = a.start_byte().max(b.start_byte());
+    let mut cursor = tag.walk();
+    tag.children(&mut cursor).any(|child| {
+        child.kind() == "ERROR" && child.start_byte() >= gap_start && child.start_byte() < gap_end
+    })
+}
+
+/// Whether any sibling `directive_attribute` on the same physical element is a
+/// `v-else` or `v-else-if`. A sibling separated from `directive` by an error seam
+/// belongs to an adjacent element, not this one, so it does not conflict.
 fn has_conflicting_else(directive: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(tag) = directive.parent() else {
         return false;
@@ -46,6 +63,7 @@ fn has_conflicting_else(directive: tree_sitter::Node, source: &[u8]) -> bool {
     tag.children(&mut cursor).any(|sibling| {
         sibling.kind() == "directive_attribute"
             && matches!(directive_name(sibling, source), Some("v-else" | "v-else-if"))
+            && !separated_by_error(tag, directive, sibling)
     })
 }
 
@@ -216,5 +234,23 @@ mod tests {
     #[test]
     fn allows_single_quoted_value() {
         assert!(run(&wrap("<div v-if='ok'></div>")).is_empty());
+    }
+
+    #[test]
+    fn allows_self_closing_template_v_if_before_v_else_if_div() {
+        // Regression for #7557: the grammar does not close a self-closing
+        // `<template …/>`, so error-recovery folds the following `<div>`'s
+        // directives into the template's start tag past an `ERROR` seam. The
+        // `v-else-if` belongs to a separate sibling element, so the self-closed
+        // template's `v-if` has no conflicting else.
+        let source = wrap("<template v-if=\"pending\"/>\n<div v-else-if=\"account\">y</div>");
+        assert!(run(&source).is_empty(), "got {:?}", run(&source));
+    }
+
+    #[test]
+    fn allows_self_closing_template_v_if_before_v_else_if_template() {
+        let source =
+            wrap("<template v-if=\"pending\"/>\n<template v-else-if=\"account\">z</template>");
+        assert!(run(&source).is_empty(), "got {:?}", run(&source));
     }
 }
