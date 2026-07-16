@@ -4182,7 +4182,7 @@ fn exit_guard_if(stmt: Node) -> Option<Node> {
 /// is a `return` / `break` / `continue` expression or a diverging macro
 /// (`panic!` / `unreachable!` / `todo!` / `unimplemented!`), so control never falls
 /// through to the statement following the block.
-fn block_diverges(block: Node, source: &[u8]) -> bool {
+pub(crate) fn block_diverges(block: Node, source: &[u8]) -> bool {
     if block.kind() != "block" {
         return false;
     }
@@ -4196,7 +4196,7 @@ fn block_diverges(block: Node, source: &[u8]) -> bool {
 /// True if `node` is a diverging tail — a `return` / `break` / `continue`
 /// expression, a diverging macro invocation, or an `expression_statement` wrapping
 /// one of those.
-fn node_diverges(node: Node, source: &[u8]) -> bool {
+pub(crate) fn node_diverges(node: Node, source: &[u8]) -> bool {
     match node.kind() {
         "return_expression" | "break_expression" | "continue_expression" => true,
         "expression_statement" => node.named_child(0).is_some_and(|c| node_diverges(c, source)),

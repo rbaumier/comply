@@ -31,6 +31,18 @@
 //!   by construction — this is stronger documentation than a wildcard. The
 //!   exemption is withheld when the or-pattern includes a catch-all alternative
 //!   (`A | _ => {}`, `A | other => {}`) that hides the remaining cases.
+//!   An empty arm is also exempt when a sibling CATCH-ALL arm in the same
+//!   `match` diverges — an unguarded `_`/wildcard/bare-binding arm whose body
+//!   cannot fall through: a `panic!`/`unreachable!`/`todo!`/`unimplemented!`
+//!   macro, or a `return`/`break`/`continue` (bare `_ => panic!(…)` or braced
+//!   `_ => { panic!(…) }`). A diverging catch-all sibling makes the `match` an
+//!   assertion/guard: it absorbs and aborts on every case the other arms do not
+//!   match, so the empty arm is unambiguously the intended (expected) case, not
+//!   a forgotten no-op. Requiring the diverging arm to be a catch-all is what
+//!   keeps a plain error-swallow like `Ok(v) => return v, Err(e) => {}` flagged
+//!   — there the diverging `Ok` arm is a specific variant and the empty `Err`
+//!   arm still silently swallows. Keyed on the enclosing `match`'s arms, not on
+//!   the empty arm's own pattern.
 //! - `for_expression.body` / `while_expression.body` /
 //!   `loop_expression.body` — empty loop body.
 //!
@@ -68,7 +80,7 @@
 //! would be pure noise.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::tuple_struct_pattern_binds_const;
+use crate::rules::rust_helpers::{block_diverges, node_diverges, tuple_struct_pattern_binds_const};
 
 fn block_is_empty(node: tree_sitter::Node) -> bool {
     node.kind() == "block" && node.named_child_count() == 0
@@ -81,7 +93,73 @@ fn match_arm_needs_justification(arm: tree_sitter::Node, source: &[u8]) -> bool 
     if guard_is_self_documenting(pattern, source) {
         return false;
     }
+    if sibling_arm_diverges(arm, source) {
+        return false;
+    }
     pattern_needs_justification(pattern, source)
+}
+
+/// True when a sibling CATCH-ALL arm in the same `match` diverges — its body
+/// cannot fall through: a `panic!`/`unreachable!`/`todo!`/`unimplemented!` macro,
+/// or a `return`/`break`/`continue`, either as a bare arm value (`_ => panic!(…)`)
+/// or a braced block whose tail diverges (`_ => { panic!(…) }`). A diverging
+/// catch-all sibling turns the `match` into an assertion/guard: it absorbs and
+/// aborts on every case the other arms do not match, so the empty arm is
+/// unambiguously the intended (expected) case and needs no comment. The catch-all
+/// requirement is what keeps a specific-variant divergence like
+/// `Ok(v) => return v, Err(e) => {}` flagged — there the empty `Err` arm still
+/// silently swallows. Keyed on the enclosing `match_block`'s arms — a structural
+/// property of the `match` — not on the empty arm's own pattern. Reuses the shared
+/// divergence predicates (`block_diverges` / `node_diverges`).
+fn sibling_arm_diverges(arm: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(match_block) = arm.parent() else {
+        return false;
+    };
+    let mut cursor = match_block.walk();
+    match_block.children(&mut cursor).any(|sibling| {
+        sibling.id() != arm.id()
+            && sibling.kind() == "match_arm"
+            && arm_is_catch_all(sibling, source)
+            && sibling.child_by_field_name("value").is_some_and(|value| {
+                block_diverges(value, source) || node_diverges(value, source)
+            })
+    })
+}
+
+/// True when a `match_arm` is an unconditional catch-all — an unguarded `_`,
+/// `wildcard_pattern`, or bare fresh-binding pattern (`_ => …`, `res => …`) — so
+/// it absorbs every case the other arms do not match. A bare `identifier` is a
+/// catch-all only when it is a binding: `_`-prefixed or lowercase-leading; an
+/// uppercase-leading identifier (`None => …`) is a unit-variant reference, not a
+/// catch-all (same leading-case convention as `or_pattern_has_wildcard`). A
+/// guarded arm (`res if cond => …`) can fail its guard, so it is not an
+/// unconditional catch-all.
+fn arm_is_catch_all(arm: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(pattern) = arm.child_by_field_name("pattern") else {
+        return false;
+    };
+    // The guard, when present, lives on the `match_pattern` wrapper; a guarded
+    // arm can fail its guard, so it is not an unconditional catch-all.
+    if pattern.child_by_field_name("condition").is_some() {
+        return false;
+    }
+    // The arm pattern is wrapped in a `match_pattern`; the real pattern is its
+    // first child. Use `child`, not `named_child`: the wildcard `_` is an
+    // anonymous token and would be skipped by `named_child`.
+    let inner = match pattern.kind() {
+        "match_pattern" => match pattern.child(0) {
+            Some(first) => first,
+            None => return false,
+        },
+        _ => pattern,
+    };
+    match inner.kind() {
+        "_" | "wildcard_pattern" => true,
+        "identifier" => inner
+            .utf8_text(source)
+            .is_ok_and(|name| name.starts_with('_') || name.starts_with(char::is_lowercase)),
+        _ => false,
+    }
 }
 
 /// True when the arm's guard (`match_pattern.condition`) references `WouldBlock`,
@@ -580,11 +658,13 @@ mod tests {
 
     #[test]
     fn flags_empty_err_arm_with_unrelated_guard_issue_5361() {
-        // Narrowness guard: a guard that does NOT name a recognized
-        // do-nothing I/O condition leaves the empty arm unjustified.
+        // Narrowness guard: a guard that does NOT name a recognized do-nothing
+        // I/O condition leaves the empty arm unjustified. The sibling is a
+        // non-diverging call so this isolates the guard concern from the
+        // sibling-divergence exemption (issue #7495).
         let src = "fn f(r: Result<u8, E>) { match r { \
                    Err(e) if e.is_timeout() => {} \
-                   res => return res, \
+                   res => handle(res), \
                    } }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
@@ -620,6 +700,106 @@ fn f(x: Option<u8>) {
     fn allows_non_empty_match_arm() {
         let src = "fn f(x: u8) { match x { 0 => {}, _ => go() } }";
         assert!(run_on(src).is_empty());
+    }
+
+    // -- sibling-arm divergence: match-as-assertion (issue #7495) --
+
+    #[test]
+    fn allows_empty_arm_when_sibling_panics_issue_7495() {
+        // The reported false positive: an assertion-style `match` where the empty
+        // arm is the expected case and the sibling `_ => panic!(…)` documents that
+        // any other variant aborts.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Err(Error::IO { .. }) => {} \
+                   _ => panic!(\"Expected Err with IO variant\"), \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_sibling_unreachable_issue_7495() {
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} _ => unreachable!(\"nope\"), } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_sibling_todo_issue_7495() {
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} _ => todo!(), } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_sibling_returns_issue_7495() {
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} _ => return, } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_sibling_breaks_issue_7495() {
+        let src = "fn f(r: Result<u8, E>) { loop { match r { Err(e) => {} _ => break, } } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_sibling_continues_issue_7495() {
+        let src = "fn f(r: Result<u8, E>) { loop { match r { Err(e) => {} _ => continue, } } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_sibling_braced_panic_issue_7495() {
+        // Braced diverging body: the block's tail expression is the panic macro.
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} _ => { panic!(\"x\") } } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_sibling_braced_return_issue_7495() {
+        // Braced diverging body with a trailing `;`: the tail is an
+        // `expression_statement` wrapping the `return`.
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} _ => { return; } } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_arm_when_no_sibling_diverges_issue_7495() {
+        // No sibling diverges: a plain call arm must NOT be read as divergence, so
+        // the uncommented empty arm still fires.
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), Err(e) => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_arm_when_sibling_block_does_not_diverge_issue_7495() {
+        // A sibling block whose tail is a plain call does not diverge — the empty
+        // arm is not exempted.
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} _ => { go(); } } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_diverging_sibling_is_binding_catch_all_issue_7495() {
+        // A bare lowercase binding (`res`) is a catch-all, exactly like `_`, so a
+        // diverging one still makes the match an assertion.
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} res => return res, } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_arm_when_diverging_sibling_is_specific_variant_issue_7495() {
+        // The diverging arm is a SPECIFIC variant (`Ok(v)`), not a catch-all, so
+        // the match is not an assertion: the empty `Err` arm still silently
+        // swallows and must flag.
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => return process(v), Err(e) => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_arm_when_diverging_catch_all_is_guarded_issue_7495() {
+        // A guarded catch-all can fail its guard, so it is not an unconditional
+        // catch-all — the empty arm is not exempted.
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} other if other.is_x() => panic!(), } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     // -- loops --
