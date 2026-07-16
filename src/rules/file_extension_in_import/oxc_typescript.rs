@@ -477,13 +477,48 @@ mod tests {
         );
     }
 
-    // Negative space for #2117: an ambiguous config (no `type:module`, but
-    // tsconfig `module:nodenext` — dual-mode, ESM-capable) is NOT a positive
-    // CommonJS signal, so the rule keeps firing (conservative default).
+    // Regression for #7558: a CommonJS package that opts into `node16`/`nodenext`
+    // (for `exports`-map support) while emitting CommonJS — no `"type":"module"`
+    // in package.json — resolves relative imports via CJS require(), which never
+    // requires extensions. TypeScript reads each file's format from the nearest
+    // package.json `type`, so the rule must stay silent. Covers both `module` and
+    // `moduleResolution` spellings, case-insensitively.
     #[test]
-    fn still_flags_nodenext_module_without_type_field() {
-        let pkg = r#"{"name":"pkg"}"#;
-        let tsconfig = r#"{"compilerOptions":{"module":"nodenext"}}"#;
+    fn skips_node16_module_without_type_field_issue_7558() {
+        let pkg = r#"{"name":"@medusajs/utils","main":"dist/index.js"}"#;
+        let tsconfig = r#"{"compilerOptions":{"module":"Node16","moduleResolution":"Node16"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "export * from './order-change';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "CJS package on module:Node16 (no type:module) resolves via require(): {diags:?}"
+        );
+    }
+
+    #[test]
+    fn skips_nodenext_module_resolution_without_type_field_issue_7558() {
+        let pkg = r#"{"name":"pkg","main":"dist/index.js"}"#;
+        let tsconfig = r#"{"compilerOptions":{"moduleResolution":"NodeNext"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { columns } from './makeData';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "CJS package on moduleResolution:NodeNext (no type:module) is CommonJS: {diags:?}"
+        );
+    }
+
+    // Negative space for #7558: the SAME `node16` tsconfig but with the nearest
+    // package.json declaring `"type":"module"` makes each file ESM, where
+    // extensions are required — so the rule must keep firing. Guards the #1307
+    // ESM path from over-suppression.
+    #[test]
+    fn still_flags_node16_module_with_type_module_issue_7558() {
+        let pkg = r#"{"name":"pkg","type":"module"}"#;
+        let tsconfig = r#"{"compilerOptions":{"module":"Node16","moduleResolution":"Node16"}}"#;
         let diags = run_in_project(
             &[("package.json", pkg), ("tsconfig.json", tsconfig)],
             "import { columns } from './makeData';\n",
@@ -491,7 +526,7 @@ mod tests {
         assert_eq!(
             diags.len(),
             1,
-            "nodenext is dual-mode/ESM-capable, not a CJS signal — still flag: {diags:?}"
+            "type:module on node16 is ESM — extensions still required: {diags:?}"
         );
     }
 
