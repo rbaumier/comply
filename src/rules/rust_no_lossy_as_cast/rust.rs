@@ -90,7 +90,8 @@ use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_indexed_element_type,
     cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_for_range_bounded,
+    cast_operand_is_enum_discriminant, cast_operand_is_float_rounding,
+    cast_operand_is_for_range_bounded,
     cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
     cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
@@ -260,6 +261,21 @@ impl AstCheck for Check {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
+        // A float source cast to an integer target — a resolved `f64`/`f32`
+        // operand, or one whose outermost expression is a std float rounding
+        // method (`.floor()`/`.ceil()`/`.round()`/`.trunc()`). Std has no
+        // `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer type, so
+        // `try_into()` / `i32::try_from(x)` — like the sibling rule's
+        // `from`/`try_from` suggestion — is uncompilable. `as` is the only
+        // float→integer conversion, so leave it alone. A float *target* (`f32`,
+        // the only float in `NARROWING_TARGETS`) stays governed by the precision
+        // logic below.
+        if target_type.kind != NumericKind::Float
+            && (source_type.is_some_and(|src| src.kind == NumericKind::Float)
+                || cast_operand_is_float_rounding(node, source_bytes))
+        {
+            return;
+        }
         if let Some(source_type) = source_type
             && !is_dangerous_cast(source_type, target_type)
         {
@@ -496,6 +512,27 @@ mod tests {
     }
 
     #[test]
+    fn allows_float_source_as_int_7568() {
+        // Issue #7568: once `rust-no-as-numeric-cast` exempts a float→int cast,
+        // this rule must not pick it up either — `try_into()` is uncompilable for a
+        // float source (no `TryFrom<f64>` for any integer). Covers a nullary
+        // `.floor()`/`.ceil()`/`.trunc()` operand and a resolved `f64`/`f32`.
+        assert!(run_on("fn f(x: f64) -> i32 { x.floor() as i32 }").is_empty());
+        assert!(run_on("fn f(x: f64) -> u32 { x.ceil() as u32 }").is_empty());
+        assert!(run_on("fn f(x: f64) -> i16 { x.trunc() as i16 }").is_empty());
+        assert!(run_on("fn f() -> i32 { log_gamma(a, b).floor() as i32 }").is_empty());
+        assert!(run_on("fn f(v: f64) -> i32 { v as i32 }").is_empty());
+        assert!(run_on("fn f(v: f32) -> u8 { v as u8 }").is_empty());
+    }
+
+    #[test]
+    fn flags_float_narrowing_to_f32_still() {
+        // The float-source carve-out is gated to integer targets; `f64 as f32`
+        // (a float *target* — precision loss with no `From`) still flags here.
+        assert_eq!(run_on("fn f(x: f64) -> f32 { x as f32 }").len(), 1);
+    }
+
+    #[test]
     fn allows_widening_to_u64() {
         assert!(run_on("fn f(x: u32) -> u64 { x as u64 }").is_empty());
     }
@@ -612,11 +649,13 @@ mod tests {
     }
 
     #[test]
-    fn repro_5690_deref_float_to_int_still_flagged() {
-        // A deref operand is ceded by `rust-no-as-numeric-cast`, so this rule
-        // owns the span. `*x as i32` where `x: &f64` is a float -> int cast — the
-        // int-to-float exemption must NOT apply to the reverse direction.
-        assert_eq!(run_on("fn f(x: &f64) -> i32 { *x as i32 }").len(), 1);
+    fn repro_5690_deref_float_to_int_exempt_via_7568() {
+        // A deref operand is ceded by `rust-no-as-numeric-cast`, so this rule owns
+        // the span. `*x as i32` where `x: &f64` is a float -> int cast: std has no
+        // `From<f64>` / `TryFrom<f64>` for `i32`, so `try_into()` is uncompilable
+        // and the cast is exempt (#7568). Int -> int deref narrowing still flags —
+        // see `repro_5690_deref_int_narrowing_still_flagged`.
+        assert!(run_on("fn f(x: &f64) -> i32 { *x as i32 }").is_empty());
     }
 
     #[test]
