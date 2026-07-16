@@ -1351,6 +1351,19 @@ fn is_object_create_null(call: &oxc_ast::ast::CallExpression) -> bool {
         )
 }
 
+/// True when `call` is `JSON.<method>(...)` — a `StaticMemberExpression` callee
+/// whose object is the identifier `JSON` and whose property is `method`.
+pub fn is_json_method_call(call: &oxc_ast::ast::CallExpression, method: &str) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    obj.name.as_str() == "JSON" && member.property.name.as_str() == method
+}
+
 /// True when, at the point of a mutation starting at byte offset `mutation_start`,
 /// the receiver `ident` provably holds a freshly-created local object because the
 /// **nearest preceding write** to its binding reassigned it to a fresh-copy

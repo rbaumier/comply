@@ -1,7 +1,7 @@
 //! no-unchecked-json-parse OXC backend — flag unwrapped `JSON.parse(...)` calls.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_json_method_call};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -92,17 +92,21 @@ impl OxcCheck for Check {
             return;
         };
 
-        // Check if callee is `JSON.parse`.
-        let Expression::StaticMemberExpression(member) = &call.callee else {
-            return;
-        };
-        if member.property.name.as_str() != "parse" {
+        // Callee must be `JSON.parse`.
+        if !is_json_method_call(call, "parse") {
             return;
         }
-        let Expression::Identifier(obj) = &member.object else {
-            return;
-        };
-        if obj.name.as_str() != "JSON" {
+
+        // Skip the deep-clone idiom `JSON.parse(JSON.stringify(x))`: the parsed
+        // value is a re-serialization of a value the program already holds and
+        // types, not untrusted external input. There is no unknown shape to
+        // validate — schema-guarding a clone of one's own typed value is noise.
+        // Only the direct `JSON.stringify(...)` argument shape qualifies; the
+        // one-hop `const s = JSON.stringify(x); JSON.parse(s)` is out of scope.
+        if let Some(Expression::CallExpression(arg_call)) =
+            call.arguments.first().and_then(|arg| arg.as_expression())
+            && is_json_method_call(arg_call, "stringify")
+        {
             return;
         }
 
@@ -279,6 +283,34 @@ mod tests {
                 }
             }
         "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn skips_json_parse_of_json_stringify_round_trip_issue_7561() {
+        // #7561: `JSON.parse(JSON.stringify(obj))` re-serializes a value the
+        // program already holds and types — a deep clone / undefined-strip, not
+        // an untrusted-input boundary. There is no unknown shape to validate.
+        let src = "const clone = JSON.parse(JSON.stringify(obj));";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn skips_json_parse_of_json_stringify_with_as_cast_issue_7561() {
+        // The issue's `removeUndefined` shape: the `as T` cast wraps the parse
+        // call, its `JSON.stringify` argument is unchanged, so it stays silent.
+        let src = "const removeUndefined = <T extends Record<string, unknown>>(obj: T): T => JSON.parse(JSON.stringify(obj)) as T;";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_json_parse_of_non_json_stringify() {
+        // The skip is specific to `JSON.stringify`: a `stringify` method on any
+        // other object gives no provenance guarantee, so it stays flagged.
+        let src = "const data = JSON.parse(notJson.stringify(x));";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(diags.len(), 1);
     }
