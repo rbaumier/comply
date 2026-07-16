@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXAttributeValue};
+use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXElementName};
 use std::sync::Arc;
 
 pub struct Check;
@@ -27,6 +27,20 @@ impl OxcCheck for Check {
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
+
+        // Reverse-tabnabbing via `window.opener` is a native-anchor concern:
+        // only a native `<a>`/`<area>` navigates the browser directly. A JSX
+        // component (`<Link>`, `<NuxtLink>`) takes `target`/`href` as props whose
+        // rendered DOM the rule cannot analyze, and framework link components
+        // inject `rel` by construction. React treats a lowercase identifier as a
+        // host element and a capitalized one (`IdentifierReference`) as a
+        // component, so anything but a native anchor is skipped.
+        let JSXElementName::Identifier(tag) = &opening.name else {
+            return;
+        };
+        if !matches!(tag.name.as_str(), "a" | "area") {
+            return;
+        }
 
         // Scan attributes for target="_blank" and a rel that severs `window.opener`.
         let mut has_target_blank = false;
@@ -149,5 +163,21 @@ mod tests {
         let src =
             r#"const x = <a href="https://example.com" target="_blank" rel="noopener">link</a>;"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_component_link_with_href() {
+        // #7556: a capitalized `<Link>` is a component whose rendered DOM the
+        // rule cannot analyze (and link components inject `rel`), so a component
+        // tag carrying `target="_blank"` must not be flagged as a native anchor.
+        let src = r#"const x = <Link href="https://example.com" target="_blank">link</Link>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_native_area_without_rel() {
+        // `<area>` is the other native element that honors `target`/`rel`.
+        let src = r#"const x = <map><area href="https://example.com" target="_blank" /></map>;"#;
+        assert_eq!(run(src).len(), 1);
     }
 }

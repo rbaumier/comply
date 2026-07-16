@@ -21,6 +21,16 @@ impl TextCheck for Check {
         }
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
+            // Reverse-tabnabbing via `window.opener` is a native-anchor concern:
+            // only a native `<a>`/`<area>` navigates the browser directly. A Vue
+            // component takes `target` as a prop whose rendered DOM the rule
+            // cannot analyze (`<SettingsItem>`), and framework link components
+            // inject `rel` on target by construction (`<NuxtLink>`/`<nuxt-link>`).
+            // Native HTML tags are lowercase; a PascalCase or hyphenated tag is a
+            // component, so anything but a native anchor is skipped.
+            if !matches!(elem.tag, "a" | "area") {
+                continue;
+            }
             let target = attr_value(elem.attrs, "target");
             if target != Some("_blank") {
                 continue;
@@ -118,5 +128,31 @@ mod tests {
         // A bound `:href` still navigates, so an unsafe `rel` is a real risk.
         let source = "<template>\n  <a :href=\"url\" target=\"_blank\">link</a>\n</template>";
         assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn ignores_nuxt_link_with_static_href() {
+        // #7556: `<NuxtLink>` is a Vue component that auto-injects
+        // `rel="noopener noreferrer"` when a target is set; the rule cannot see
+        // its rendered anchor, so it must not be flagged.
+        let source = "<template>\n  <NuxtLink href=\"https://nuxtlabs.com\" target=\"_blank\">x</NuxtLink>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_nuxt_link_with_bound_to() {
+        // #7556: a bound `:to` on `<NuxtLink target="_blank">` renders a safe anchor.
+        let source =
+            "<template>\n  <NuxtLink :to=\"url\" target=\"_blank\">x</NuxtLink>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_custom_component_with_target_prop() {
+        // #7556: `<SettingsItem>` is a PascalCase component; `target` is a prop
+        // whose rendered DOM the rule cannot analyze, not a native anchor attribute.
+        let source =
+            "<template>\n  <SettingsItem :to=\"url\" target=\"_blank\" />\n</template>";
+        assert!(run(source).is_empty());
     }
 }
