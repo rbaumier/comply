@@ -1895,6 +1895,48 @@ mod tests {
     }
 
     #[test]
+    fn allows_exports_consumed_via_alias_prefixed_import_meta_glob_issue_7493() {
+        // Regression for #7493 (nova-admin): `install` in each `src/directives/*.ts`
+        // is consumed only through `import.meta.glob<{…}>('@/directives/*.ts', {
+        // eager: true })`, where the project's tsconfig maps `@/*` → `src/*`. The
+        // aliased glob pattern resolves through the same tsconfig-paths alias as a
+        // static `@/…` import, exactly like the relative `'./dir/*.ts'` twin
+        // (#7042), so every matched module's export stays live.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "tsconfig.json",
+                r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*"] } } }"#,
+            ),
+            (
+                "src/register.ts",
+                "Object.values(import.meta.glob<{ install: (app: App) => void }>('@/directives/*.ts', { eager: true }))\n\
+                 .map(i => app.use(i));\n",
+            ),
+            ("src/directives/copy.ts", "export function install(app) {}\n"),
+            ("src/directives/permission.ts", "export function install(app) {}\n"),
+            ("src/helpers/orphan.ts", "export const orphan = () => {};\n"),
+            ("src/directives/nested/deep.ts", "export const deep = () => {};\n"),
+        ];
+        // Every file matched by the aliased glob keeps its export live.
+        let (_d0, copy) = run_on_project(&files, "src/directives/copy.ts");
+        assert!(copy.is_empty(), "copy.ts install is live via aliased glob: {copy:?}");
+        let (_d1, permission) = run_on_project(&files, "src/directives/permission.ts");
+        assert!(
+            permission.is_empty(),
+            "glob matches every directive module, not just the first: {permission:?}"
+        );
+        // The alias resolution is precise, not a blanket exemption: an export
+        // outside the globbed directory, and one nested deeper than single-segment
+        // `*` reaches, are both still flagged dead.
+        let (_d2, orphan) = run_on_project(&files, "src/helpers/orphan.ts");
+        assert_eq!(orphan.len(), 1, "orphan outside glob dir is dead: {orphan:?}");
+        assert!(orphan[0].message.contains("orphan"));
+        let (_d3, nested) = run_on_project(&files, "src/directives/nested/deep.ts");
+        assert_eq!(nested.len(), 1, "`*.ts` must not match nested files: {nested:?}");
+        assert!(nested[0].message.contains("deep"));
+    }
+
+    #[test]
     fn allows_export_imported_elsewhere() {
         let files: Vec<(&str, &str)> = vec![
             ("tax.ts", "export function computeTax() {}"),
