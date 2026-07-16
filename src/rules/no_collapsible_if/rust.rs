@@ -4,7 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["if_expression"] => |node, _source, ctx, diagnostics|
+crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
     // Skip else-if arms: merging them would harm readability of control-flow chains.
     if let Some(parent) = node.parent()
         && parent.kind() == "else_clause" {
@@ -56,6 +56,15 @@ crate::ast_check! { on ["if_expression"] => |node, _source, ctx, diagnostics|
     if outer_cond.is_some_and(|c| c.kind() == "let_condition")
         || inner_cond.is_some_and(|c| c.kind() == "let_condition")
     {
+        return;
+    }
+
+    // Honor the author's explicit suppression of clippy's equivalent lint:
+    // `no-collapsible-if` is the comply analog of `clippy::collapsible_if`, so an
+    // in-scope `#[allow(clippy::collapsible_if)]` / `#[expect(clippy::collapsible_if)]`
+    // (on the outer `if`, or an inner `#![allow(...)]` in an enclosing block/mod/file)
+    // declares the nesting intentional.
+    if crate::rules::rust_helpers::has_clippy_allow(node, source, "collapsible_if") {
         return;
     }
 
@@ -211,5 +220,65 @@ fn f() {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_expect_clippy_collapsible_if() {
+        let src = r#"
+fn f() {
+    #[expect(clippy::collapsible_if)] // readability
+    if cfg!(debug_assertions) {
+        if a != b {
+            return Err(oops());
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_allow_clippy_collapsible_if() {
+        let src = r#"
+fn f() {
+    #[allow(clippy::collapsible_if)]
+    if a {
+        if b {
+            do_something();
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inner_allow_at_block_scope() {
+        let src = r#"
+fn f() {
+    #![allow(clippy::collapsible_if)]
+    if a {
+        if b {
+            do_something();
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unrelated_clippy_allow() {
+        let src = r#"
+fn f() {
+    #[allow(clippy::needless_return)]
+    if a {
+        if b {
+            do_something();
+        }
+    }
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
