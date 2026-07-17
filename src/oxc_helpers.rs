@@ -3578,10 +3578,16 @@ fn file_imports_draft_from_immer(semantic: &oxc_semantic::Semantic) -> bool {
 /// recognized against the same factory set — the single source of truth.
 pub(crate) const VUE_REF_FACTORIES: &[&str] = &["ref", "shallowRef", "customRef", "computed"];
 
-/// Vue 3 reactive-object factories whose return value is a reactive proxy whose
-/// *properties* are the intended mutation point — `state.n = x` is how reactivity
-/// is driven, unlike a ref's single `.value` property.
-const VUE_REACTIVE_FACTORIES: &[&str] = &["reactive", "shallowReactive"];
+/// Vue 3 reactive-object factory whose proxy converts every nesting level: a
+/// nested object read back off the proxy is itself a proxy, so a property write at
+/// any depth (`state.pageable.total = x`) drives reactivity.
+const VUE_DEEP_REACTIVE_FACTORIES: &[&str] = &["reactive"];
+
+/// Vue 3 reactive-object factory whose proxy tracks only its own root-level
+/// properties — nested values are stored and exposed as-is, with no deep
+/// conversion. Only a root-level write (`state.n = x`) drives reactivity; a nested
+/// write reaches a raw object and is a plain-object mutation.
+const VUE_SHALLOW_REACTIVE_FACTORIES: &[&str] = &["shallowReactive"];
 
 /// Vue 3 ref-wrapper type-annotation names. A function parameter annotated with
 /// one of these receives a `Ref<T>` whose `.value` property is the intended
@@ -3837,22 +3843,6 @@ pub fn is_vue_ref_binding(
         || binding_is_imported_vue_ref(ident, semantic, project, path)
 }
 
-/// True when `ident` resolves to a `const`/`let` binding initialised by a Vue
-/// reactive-object factory recognised as Vue's — `reactive(...)` or
-/// `shallowReactive(...)` (imported from `vue`, or auto-injected by
-/// `unplugin-auto-import`; see [`is_vue_factory_binding`]). Such a binding is a reactive proxy whose properties
-/// are the *intended* mutation point: `state.n = x` is how Vue's reactivity is
-/// driven, not a mutation of a plain object.
-#[must_use]
-pub fn is_vue_reactive_binding(
-    ident: &oxc_ast::ast::IdentifierReference,
-    semantic: &oxc_semantic::Semantic,
-    project: &crate::project::ProjectCtx,
-    path: &Path,
-) -> bool {
-    is_vue_factory_binding(ident, semantic, VUE_REACTIVE_FACTORIES, project, path)
-}
-
 /// True when `member` is a `<ref>.value` access where `<ref>` is a direct
 /// identifier bound to a Vue ref factory (`ref`/`shallowRef`/`customRef`/
 /// `computed`, imported from `vue` or auto-injected by `unplugin-auto-import`;
@@ -3959,17 +3949,23 @@ pub fn root_identifier_of_expr<'a>(
     }
 }
 
-/// True when `member` is a property access whose member chain is rooted at an
-/// identifier bound to a Vue reactive-object factory (`reactive`/`shallowReactive`,
-/// imported from `vue` or auto-injected by `unplugin-auto-import`; see
-/// [`is_vue_factory_binding`]). Such a factory returns a *deeply* reactive proxy —
-/// every nested object is wrapped in turn — so a write at any depth
-/// (`state.pageable.total = x`, `state.list[0].done = true`) drives reactivity
-/// exactly like a top-level `state.n = x`, and there is no immutable alternative.
-/// The property name is not restricted either, unlike [`is_vue_ref_value_target`],
-/// where only the direct `.value` is the reactive point. The root is resolved
-/// through member links only (see [`root_identifier_of_expr`]), so a chain broken
-/// by a call (`getState().a.b = x`) stays flagged.
+/// True when `member` is a property-write target on a Vue reactive-object proxy —
+/// a binding initialised by `reactive(...)`/`shallowReactive(...)` (imported from
+/// `vue`, or auto-injected by `unplugin-auto-import`; see
+/// [`is_vue_factory_binding`]). A reactive proxy's properties are the *intended*
+/// mutation point: `state.n = x` and `state.incrementedTimes++` are how Vue 3
+/// reactivity is driven, with no immutable alternative. The property name is
+/// unrestricted, unlike [`is_vue_ref_value_target`], where only `.value` is the
+/// reactive point.
+///
+/// How far the exemption follows the member chain mirrors each factory's own
+/// reactivity depth. `reactive()` converts every nesting level, so a write at any
+/// depth (`state.pageable.total = x`, `state.list[0].done = true`) is a reactive
+/// write: its chain root is resolved through member links only (see
+/// [`root_identifier_of_expr`]), so a chain broken by a call (`getState().a.b = x`)
+/// resolves to no binding and stays flagged. `shallowReactive()` exposes nested
+/// values as-is, so only a root-level write on a direct-identifier base is
+/// reactive; a nested write reaches a raw object and stays flagged.
 #[must_use]
 pub fn is_vue_reactive_object_target(
     member: &oxc_ast::ast::StaticMemberExpression,
@@ -3977,8 +3973,18 @@ pub fn is_vue_reactive_object_target(
     project: &crate::project::ProjectCtx,
     path: &Path,
 ) -> bool {
-    root_identifier_of_expr(&member.object)
-        .is_some_and(|base| is_vue_reactive_binding(base, semantic, project, path))
+    use oxc_ast::ast::Expression;
+
+    if root_identifier_of_expr(&member.object).is_some_and(|base| {
+        is_vue_factory_binding(base, semantic, VUE_DEEP_REACTIVE_FACTORIES, project, path)
+    }) {
+        return true;
+    }
+    matches!(
+        &member.object,
+        Expression::Identifier(base)
+            if is_vue_factory_binding(base, semantic, VUE_SHALLOW_REACTIVE_FACTORIES, project, path)
+    )
 }
 
 /// True when `ident` resolves to a `const`/`let` binding initialised by a call to
