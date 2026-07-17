@@ -3936,15 +3936,40 @@ pub fn is_destructured_call_ref_value_target(
     false
 }
 
-/// True when `member` is a property access whose base is a direct identifier
-/// bound to a Vue reactive-object factory (`reactive`/`shallowReactive`, imported
-/// from `vue` or auto-injected by `unplugin-auto-import`; see
-/// [`is_vue_factory_binding`]). Any property of a reactive proxy is a valid mutation target, so
-/// — unlike [`is_vue_ref_value_target`] — the property name is not restricted:
-/// `state.n = x` and `state.incrementedTimes++` are both the idiomatic Vue 3
-/// reactive-update path. The base must be a direct identifier, so a nested
-/// `a.b.c = x` (whose `member.object` is itself a member expression) stays
-/// flagged.
+/// The root [`IdentifierReference`](oxc_ast::ast::IdentifierReference) a
+/// member-access chain hangs off — `s` for `s`, `s.a.b`, and `s.list[0].done`.
+/// Descends static- and computed-member links only, so a chain rooted at any
+/// other expression yields `None`: an intervening call (`getState().a.b`), a
+/// non-null assertion, or `this` produces a value whose declaration a caller
+/// cannot resolve, and must not inherit the root binding's identity.
+#[must_use]
+pub fn root_identifier_of_expr<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+) -> Option<&'a oxc_ast::ast::IdentifierReference<'a>> {
+    use oxc_ast::ast::Expression;
+
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::Identifier(id) => return Some(id),
+            Expression::StaticMemberExpression(m) => &m.object,
+            Expression::ComputedMemberExpression(m) => &m.object,
+            _ => return None,
+        };
+    }
+}
+
+/// True when `member` is a property access whose member chain is rooted at an
+/// identifier bound to a Vue reactive-object factory (`reactive`/`shallowReactive`,
+/// imported from `vue` or auto-injected by `unplugin-auto-import`; see
+/// [`is_vue_factory_binding`]). Such a factory returns a *deeply* reactive proxy —
+/// every nested object is wrapped in turn — so a write at any depth
+/// (`state.pageable.total = x`, `state.list[0].done = true`) drives reactivity
+/// exactly like a top-level `state.n = x`, and there is no immutable alternative.
+/// The property name is not restricted either, unlike [`is_vue_ref_value_target`],
+/// where only the direct `.value` is the reactive point. The root is resolved
+/// through member links only (see [`root_identifier_of_expr`]), so a chain broken
+/// by a call (`getState().a.b = x`) stays flagged.
 #[must_use]
 pub fn is_vue_reactive_object_target(
     member: &oxc_ast::ast::StaticMemberExpression,
@@ -3952,12 +3977,8 @@ pub fn is_vue_reactive_object_target(
     project: &crate::project::ProjectCtx,
     path: &Path,
 ) -> bool {
-    use oxc_ast::ast::Expression;
-
-    let Expression::Identifier(base) = &member.object else {
-        return false;
-    };
-    is_vue_reactive_binding(base, semantic, project, path)
+    root_identifier_of_expr(&member.object)
+        .is_some_and(|base| is_vue_reactive_binding(base, semantic, project, path))
 }
 
 /// True when `ident` resolves to a `const`/`let` binding initialised by a call to
