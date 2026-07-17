@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, ObjectPropertyKind};
+use oxc_ast::ast::{Expression, IdentifierReference, ObjectPropertyKind};
 use std::sync::Arc;
 
 fn is_prisma_file(source: &str) -> bool {
@@ -13,20 +13,65 @@ fn is_prisma_file(source: &str) -> bool {
         || crate::oxc_helpers::source_contains(source, "prisma.")
 }
 
-/// A `take:` or `first:` key bounds the result set.
-fn object_is_bounded(expr: &Expression) -> bool {
+/// Depth cap on spread-identifier resolution. A same-file binding can spread a
+/// reference to itself (`const a = { ...a }`) or form a cycle across bindings;
+/// resolving those would recurse forever, so a spread chain deeper than this is
+/// treated conservatively as possibly-bounded (never flagged) rather than
+/// followed further.
+const MAX_SPREAD_DEPTH: u8 = 8;
+
+/// Whether the options object bounds the result set. A literal `take:`/`first:`
+/// key bounds it. An object-spread (`...opts`) may also carry `take`/`first`/
+/// `cursor`, so it is resolved structurally: a spread of an inline object literal
+/// (or of a same-file binding initialised from one) is recursed into precisely; a
+/// spread whose argument is opaque to single-file analysis (a function-call
+/// result, a cross-file import, a member access) is treated as possibly-bounded,
+/// matching the rule's precision-first philosophy.
+fn object_is_bounded<'a>(
+    expr: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    depth: u8,
+) -> bool {
     let Expression::ObjectExpression(obj) = expr else {
         return false;
     };
-    obj.properties.iter().any(|prop| {
-        if let ObjectPropertyKind::ObjectProperty(p) = prop {
-            p.key
-                .name()
-                .is_some_and(|n| n == "take" || n == "first")
-        } else {
-            false
+    obj.properties.iter().any(|prop| match prop {
+        ObjectPropertyKind::ObjectProperty(p) => {
+            p.key.name().is_some_and(|n| n == "take" || n == "first")
         }
+        ObjectPropertyKind::SpreadProperty(spread) => match &spread.argument {
+            Expression::ObjectExpression(_) => object_is_bounded(&spread.argument, semantic, depth),
+            Expression::Identifier(ident) => {
+                depth >= MAX_SPREAD_DEPTH
+                    || resolve_local_object_init(ident, semantic)
+                        .is_none_or(|init| object_is_bounded(init, semantic, depth + 1))
+            }
+            _ => true,
+        },
     })
+}
+
+/// Resolve an identifier reference to a same-file `let`/`const`/`var` declarator
+/// whose initializer is an object literal, returning that initializer. `None`
+/// when the binding is unresolved (a cross-file import), is not a variable
+/// declarator, has no initializer, or is initialised from anything other than an
+/// object literal (e.g. a function-call result) — in every such case the spread
+/// is opaque to single-file analysis and the caller treats it conservatively.
+fn resolve_local_object_init<'a>(
+    ident: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a Expression<'a>> {
+    let scoping = semantic.scoping();
+    let symbol_id = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())?;
+    let decl_id = scoping.symbol_declaration(symbol_id);
+    let AstKind::VariableDeclarator(decl) = semantic.nodes().kind(decl_id) else {
+        return None;
+    };
+    let init = decl.init.as_ref()?;
+    matches!(init, Expression::ObjectExpression(_)).then_some(init)
 }
 
 pub struct Check;
@@ -44,7 +89,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
@@ -63,7 +108,7 @@ impl OxcCheck for Check {
             .arguments
             .iter()
             .filter_map(|arg| arg.as_expression())
-            .any(object_is_bounded);
+            .any(|arg| object_is_bounded(arg, semantic, 0));
         if bounded {
             return;
         }
@@ -178,6 +223,65 @@ export function example(model: string): string {
     \`\`\`
   `;
 }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_findmany_with_take_via_spread_of_call_result() {
+        // Issue #7721: `take` is supplied through an object-spread of a value bound
+        // to a function-call result (`buildPaginationQuery(...)` returns a
+        // `PaginationQuery { take: number }`). The bound lives cross-file, so the
+        // spread is opaque single-file and must be treated as possibly-bounded.
+        let src = r#"import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
+
+export async function getCustomers(filters: Filters) {
+  const paginationQuery = buildPaginationQuery(filters);
+  return prisma.customer.findMany({
+    where: { active: true },
+    ...paginationQuery,
+  });
+}"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_findmany_with_take_via_spread_of_object_literal() {
+        // A spread of an inline object literal carrying `take:` is resolved
+        // precisely and recognised as bounded.
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nconst rows = await prisma.user.findMany({ where: { active: true }, ...{ take: 10 } });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_findmany_with_take_via_spread_of_local_binding() {
+        // A spread of a same-file binding initialised from an object literal with
+        // `take:` is resolved precisely and recognised as bounded.
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nconst opts = { take: 25 };\nconst rows = await prisma.user.findMany({ where: { active: true }, ...opts });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_findmany_with_spread_of_local_literal_without_take() {
+        // Negative-space guard: a spread of a same-file object literal that
+        // provably carries no `take`/`first` does not suppress the diagnostic.
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nconst opts = { active: true };\nconst rows = await prisma.user.findMany({ where: { active: true }, ...opts });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_findmany_with_spread_of_inline_literal_without_take() {
+        // Negative-space guard: a spread of an inline object literal that provably
+        // carries no `take`/`first` is resolved precisely and still flagged.
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nconst rows = await prisma.user.findMany({ ...{ active: true } });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn cyclic_spread_binding_terminates() {
+        // A cyclic same-file spread chain must not recurse forever; the depth cap
+        // bails to the conservative (possibly-bounded) outcome without hanging.
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nconst a = { ...b };\nconst b = { ...a };\nconst rows = await prisma.user.findMany({ ...a });";
         assert!(run(src).is_empty());
     }
 
