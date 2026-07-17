@@ -406,6 +406,74 @@ mod tests {
         assert_eq!(diags.len(), 1, "unlisted dep in root must be flagged, got {diags:?}");
     }
 
+    // Regression #7613: create-vue solution-style tsconfig — the root `tsconfig.json`
+    // only `references` sub-projects; the `@console`/`@uc` path aliases live in the
+    // referenced `tsconfig.app.json`. A `@console/modules` import is a local alias,
+    // not an implicit dependency, and must not be flagged.
+    #[test]
+    fn allows_path_alias_from_referenced_tsconfig() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"ui","dependencies":{"vue":"^3.4.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"files":[],"references":[{"path":"./tsconfig.node.json"},{"path":"./tsconfig.app.json"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tsconfig.app.json"),
+            r#"{"compilerOptions":{"paths":{"@/*":["./src/*"],"@uc/*":["./uc-src/*"],"@console/*":["./console-src/*"]}}}"#,
+        )
+        .unwrap();
+        let console_src = dir.path().join("console-src");
+        fs::create_dir_all(&console_src).unwrap();
+        let file = console_src.join("main.ts");
+        let source = r#"import { setupCore } from "@console/modules";"#;
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "@console alias from referenced tsconfig must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A genuine unlisted dependency must still flag even in a solution-style
+    // project that references path aliases — the references union only ADDS
+    // aliases, it must not silence real missing deps.
+    #[test]
+    fn flags_unlisted_dep_alongside_referenced_aliases() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"ui","dependencies":{"vue":"^3.4.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"files":[],"references":[{"path":"./tsconfig.app.json"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tsconfig.app.json"),
+            r#"{"compilerOptions":{"paths":{"@console/*":["./console-src/*"]}}}"#,
+        )
+        .unwrap();
+        let console_src = dir.path().join("console-src");
+        fs::create_dir_all(&console_src).unwrap();
+        let file = console_src.join("main.ts");
+        let source = r#"import x from "totally-unlisted-pkg";"#;
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a genuine unlisted dep must still flag, got {diags:?}"
+        );
+    }
+
     // Regression #5163: a Vite plugin defined in the project registers a virtual
     // module whose ID looks like a package name (`nuxt-vitest-environment-options`)
     // via `resolveId`/`load`. An `import` of it must not be flagged, since it is
