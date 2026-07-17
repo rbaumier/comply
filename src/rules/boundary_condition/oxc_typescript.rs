@@ -363,20 +363,24 @@ impl OxcCheck for Check {
             return;
         }
 
-        // `e[0]` where `e` is bound to an element of an `Object.entries(...)`
-        // result — either the loop variable of `for (const e of Object.entries(x))`
-        // or the first parameter of a `.map()` / `.forEach()` / `.flatMap()` (etc.)
-        // callback invoked on `Object.entries(x)`. `Object.entries` is specified to
-        // return `Array<[string, T]>`, so every element is a two-element tuple whose
-        // index 0 (the key) is always present — the first-element read is in-bounds
-        // with no length guard. Scoped to `Object.entries`: `Object.keys` yields
-        // `string` elements (where `[0]` is a possibly-out-of-bounds character index,
-        // e.g. an empty-string key) and `Object.values` yields scalar `T` elements,
-        // so neither is a guaranteed tuple access — both stay flagged.
+        // `e[0]` where `e` is bound to an element of an entries iterator whose
+        // elements are `[K, V]` two-tuples: the loop variable of
+        // `for (const e of <src>)`, or a callback parameter of a `.map`/`.forEach`/…
+        // callback (its single element) or a `.sort`/`.toSorted` comparator (both
+        // `(a, b)` parameters), invoked on `<src>`. `<src>` is `Object.entries(x)`,
+        // a provable `Map`/`Set` instance's `.entries()`, or either of those wrapped
+        // in `Array.from(...)` / an array-spread literal `[...]`. `Object.entries`
+        // returns `Array<[string, T]>`, and `Map<K, V>`/`Set<T>` `.entries()` yields
+        // `[K, V]`/`[T, T]`, so every element is a two-element tuple whose index 0
+        // (the key) is always present — the first-element read is in-bounds with no
+        // length guard. Scoped to provable tuple sources: `Object.keys` yields
+        // `string` elements (where `[0]` is a possibly-out-of-bounds character index),
+        // `Object.values` yields scalar `T`, and an untyped `foo.entries()` receiver
+        // is unresolved — all stay flagged.
         if is_first
             && let Expression::Identifier(obj_ident) = &member.object
-            && (is_object_entries_for_of_element(node, obj_ident.name.as_str(), semantic)
-                || is_object_entries_callback_param(node, obj_ident.name.as_str(), semantic))
+            && (is_entries_for_of_element(node, obj_ident.name.as_str(), semantic)
+                || is_entries_callback_param(node, obj_ident.name.as_str(), semantic))
         {
             return;
         }
@@ -2169,7 +2173,7 @@ fn for_of_tuple_element<'a>(
 /// non-array-literal source (`watch(singleRef, cb)`) or an empty-array source
 /// (`watch([], cb)`) is not a fixed-length tuple and returns false, so the access
 /// stays flagged. Walks ancestors innermost-first so the closest enclosing callback
-/// decides. Mirrors [`is_object_entries_callback_param`] / [`is_then_callback_param`].
+/// decides. Mirrors [`is_entries_callback_param`] / [`is_then_callback_param`].
 fn is_watch_array_literal_source_callback_param(
     node: &oxc_semantic::AstNode,
     name: &str,
@@ -2663,11 +2667,11 @@ fn is_matchall_call(expr: &Expression) -> bool {
 }
 
 /// Returns true when `name` is the element binding of an enclosing
-/// `for (const name of Object.entries(...))` loop. Walks ancestors innermost-first
-/// so the closest binding for-of wins. Each element of `Object.entries` is a
-/// `[string, T]` tuple whose index 0 (the key) always exists, so `name[0]` in the
-/// loop body is in-bounds.
-fn is_object_entries_for_of_element(
+/// `for (const name of <src>)` loop whose `<src>` is a `[K, V]`-tuple entries
+/// source ([`is_key_value_entries_source`]). Walks ancestors innermost-first so
+/// the closest binding for-of wins. Each element is a `[K, V]` tuple whose index 0
+/// (the key) always exists, so `name[0]` in the loop body is in-bounds.
+fn is_entries_for_of_element(
     node: &oxc_semantic::AstNode,
     name: &str,
     semantic: &oxc_semantic::Semantic,
@@ -2680,15 +2684,15 @@ fn is_object_entries_for_of_element(
         if !for_of_binds_name(&for_of.left, name) {
             continue;
         }
-        return is_object_entries_call(&for_of.right);
+        return is_key_value_entries_source(node, &for_of.right, semantic);
     }
     false
 }
 
 /// Array iteration methods that pass each element to the callback as its first
-/// parameter. For a callback invoked on an `Object.entries(...)` result, that
-/// first parameter is therefore a `[string, T]` tuple. `reduce`/`reduceRight` are
-/// excluded — their first callback parameter is the accumulator, not the element.
+/// parameter. For a callback invoked on an entries source, that first parameter is
+/// therefore a `[K, V]` tuple. `reduce`/`reduceRight` are excluded — their first
+/// callback parameter is the accumulator, not the element.
 const ENTRIES_ELEMENT_ITERATORS: [&str; 10] = [
     "map",
     "forEach",
@@ -2702,12 +2706,30 @@ const ENTRIES_ELEMENT_ITERATORS: [&str; 10] = [
     "every",
 ];
 
-/// Returns true when the index access lives inside a callback whose first
-/// parameter is `name`, and that callback is the argument of an element-yielding
-/// array method (`.map`/`.forEach`/…) invoked on an `Object.entries(...)` call —
-/// i.e. `Object.entries(x).map((name) => ... name[0] ...)`. The first parameter
-/// is the element, a `[string, T]` tuple, so `name[0]` (the key) is in-bounds.
-fn is_object_entries_callback_param(
+/// Array methods whose callback is a comparator that receives TWO elements: both
+/// the first and second parameters are element bindings (each a `[K, V]` tuple
+/// when invoked on an entries source), so `a[0]` and `b[0]` in `(a, b) => …` are
+/// both in-bounds.
+const ENTRIES_COMPARATOR_ITERATORS: [&str; 2] = ["sort", "toSorted"];
+
+/// Type/annotation names whose instances iterate to `[K, V]` two-tuples via
+/// `.entries()`: `Map<K, V>`/`ReadonlyMap<K, V>` yield `[K, V]`, `Set<T>`/
+/// `ReadonlySet<T>` yield `[T, T]`.
+const MAP_SET_ANNOTATION_NAMES: [&str; 4] = ["Map", "ReadonlyMap", "Set", "ReadonlySet"];
+
+/// Constructors whose result is a `Map`/`Set` instance.
+const MAP_SET_CTOR_NAMES: [&str; 2] = ["Map", "Set"];
+
+/// Returns true when the index access lives inside a callback whose element
+/// parameter is `name`, and that callback is the argument of an entries iterator
+/// invoked on a `[K, V]`-tuple source ([`is_key_value_entries_source`]). For an
+/// element-yielding method (`.map`/`.forEach`/…) the element is the callback's
+/// first parameter; for a comparator (`.sort`/`.toSorted`) BOTH parameters are
+/// elements. Each such element is a `[K, V]` tuple, so `name[0]` (the key) is
+/// in-bounds. Walks ancestors innermost-first so the closest enclosing callback
+/// decides — a nested callback that binds `name` to a non-entries element keeps
+/// the access flagged.
+fn is_entries_callback_param(
     node: &oxc_semantic::AstNode,
     name: &str,
     semantic: &oxc_semantic::Semantic,
@@ -2719,39 +2741,183 @@ fn is_object_entries_callback_param(
             AstKind::Function(func) => &func.params,
             _ => continue,
         };
-        // `name` must be this callback's first parameter — the element slot. If the
-        // closest enclosing callback binds `name` elsewhere (or not at all), it is
-        // not the Object.entries element binder.
-        if !first_param_is_name(params, name) {
-            return false;
-        }
-        let parent = nodes.parent_node(ancestor.id());
-        let AstKind::CallExpression(call) = parent.kind() else {
+        let AstKind::CallExpression(call) = nodes.parent_kind(ancestor.id()) else {
             return false;
         };
         let Expression::StaticMemberExpression(member) = &call.callee else {
             return false;
         };
-        if !ENTRIES_ELEMENT_ITERATORS.contains(&member.property.name.as_str()) {
+        let method = member.property.name.as_str();
+        // `name` must fill an element slot of THIS callback: the first parameter for
+        // an element-yielding method, or either comparator parameter for a sort. If
+        // the closest enclosing callback binds `name` elsewhere (or its method is not
+        // an entries iterator), it is not the entries element binder.
+        let name_binds_element = if ENTRIES_ELEMENT_ITERATORS.contains(&method) {
+            first_param_is_name(params, name)
+        } else if ENTRIES_COMPARATOR_ITERATORS.contains(&method) {
+            comparator_param_is_name(params, name)
+        } else {
+            return false;
+        };
+        if !name_binds_element {
             return false;
         }
-        return is_object_entries_call(&member.object);
+        return is_key_value_entries_source(node, &member.object, semantic);
     }
     false
 }
 
-/// Returns true when `expr` is an `Object.entries(...)` call. The receiver must be
-/// the bare global identifier `Object`, so a project-local `foo.entries(...)` does
-/// not match.
-fn is_object_entries_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else {
+/// Returns true when `name` is the first or second formal parameter (a simple
+/// identifier) of a comparator callback — both are elements of the same array.
+fn comparator_param_is_name(params: &FormalParameters, name: &str) -> bool {
+    params.items.iter().take(2).any(|param| {
+        matches!(&param.pattern, BindingPattern::BindingIdentifier(id) if id.name.as_str() == name)
+    })
+}
+
+/// Returns true when `expr` provably evaluates to an array whose elements are
+/// `[K, V]` two-tuples: an `Object.entries(x)` result, a provable `Map`/`Set`
+/// instance's `.entries()`, or either of those wrapped in `Array.from(...)` or an
+/// array-spread literal `[...src]`. Every such element's index 0 (the key) is
+/// guaranteed present. Conservative: an unresolved receiver returns false.
+fn is_key_value_entries_source(
+    node: &oxc_semantic::AstNode,
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    match peel_transparent_wrappers(expr) {
+        Expression::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                return false;
+            };
+            match member.property.name.as_str() {
+                // `Array.from(<entries source>)` — bare global `Array`, one argument.
+                // A second `mapFn` argument (`Array.from(src, fn)`) yields the mapped
+                // results, not the `[K, V]` tuples, so it is excluded.
+                "from" => {
+                    call.arguments.len() == 1
+                        && matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == "Array")
+                        && call
+                            .arguments
+                            .first()
+                            .and_then(|arg| arg.as_expression())
+                            .is_some_and(|inner| is_key_value_entries_source(node, inner, semantic))
+                }
+                // `Object.entries(...)` (bare global) or `<map|set>.entries()`.
+                "entries" => {
+                    matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == "Object")
+                        || expr_is_map_or_set(node, &member.object, semantic)
+                }
+                _ => false,
+            }
+        }
+        // `[...<entries source>]` — a single spread of an entries source.
+        Expression::ArrayExpression(arr) => {
+            let mut elements = arr.elements.iter();
+            match (elements.next(), elements.next()) {
+                (Some(ArrayExpressionElement::SpreadElement(spread)), None) => {
+                    is_key_value_entries_source(node, &spread.argument, semantic)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when `expr` provably denotes a `Map`/`Set` instance — so
+/// `<expr>.entries()` yields `[K, V]` two-tuples. Recognized shapes: a direct
+/// `new Map(...)`/`new Set(...)`; an identifier receiver whose binding is annotated
+/// `Map`/`Set`/`ReadonlyMap`/`ReadonlySet` or is a `const` initialized with such a
+/// construction; or a `this.<prop>` receiver whose class property is likewise
+/// annotated or initialized. Conservative: an unresolved or differently-typed
+/// receiver returns false, so the access keeps flagging.
+fn expr_is_map_or_set(
+    node: &oxc_semantic::AstNode,
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    match peel_transparent_wrappers(expr) {
+        Expression::NewExpression(new_expr) => new_expr_constructs_map_or_set(new_expr),
+        Expression::Identifier(ident) => {
+            binding_declared_type(ident, semantic).is_some_and(ts_type_is_map_or_set)
+                || binding_const_init(ident, semantic).is_some_and(init_is_map_or_set_construction)
+        }
+        Expression::StaticMemberExpression(member) => {
+            matches!(&member.object, Expression::ThisExpression(_))
+                && class_property_is_map_or_set(node, member.property.name.as_str(), semantic)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when `new_expr` constructs a `Map` or `Set` — its callee is the
+/// bare global identifier `Map`/`Set`.
+fn new_expr_constructs_map_or_set(new_expr: &NewExpression) -> bool {
+    matches!(&new_expr.callee, Expression::Identifier(id) if MAP_SET_CTOR_NAMES.contains(&id.name.as_str()))
+}
+
+/// Returns true when `expr` is (through transparent wrappers) a
+/// `new Map(...)`/`new Set(...)` construction.
+fn init_is_map_or_set_construction(expr: &Expression) -> bool {
+    matches!(peel_transparent_wrappers(expr), Expression::NewExpression(new_expr) if new_expr_constructs_map_or_set(new_expr))
+}
+
+/// Returns true when `ty` is a `TSTypeReference` to `Map`/`Set`/`ReadonlyMap`/
+/// `ReadonlySet` ([`MAP_SET_ANNOTATION_NAMES`]).
+fn ts_type_is_map_or_set(ty: &TSType) -> bool {
+    let TSType::TSTypeReference(reference) = ty else {
         return false;
     };
-    let Expression::StaticMemberExpression(member) = &call.callee else {
+    let TSTypeName::IdentifierReference(name) = &reference.type_name else {
         return false;
     };
-    member.property.name.as_str() == "entries"
-        && matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == "Object")
+    MAP_SET_ANNOTATION_NAMES.contains(&name.name.as_str())
+}
+
+/// Returns true when the class enclosing `node` declares a property named
+/// `prop_name` that is annotated `Map`/`Set`/`ReadonlyMap`/`ReadonlySet` or is
+/// initialized with a `new Map(...)`/`new Set(...)` construction. Only the nearest
+/// enclosing class is inspected — that is the instance `this` binds to; a property
+/// inherited from a base class or absent here is unresolved, so it returns false.
+fn class_property_is_map_or_set(
+    node: &oxc_semantic::AstNode,
+    prop_name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let AstKind::ClassBody(body) = ancestor.kind() else {
+            continue;
+        };
+        for element in &body.body {
+            let ClassElement::PropertyDefinition(prop) = element else {
+                continue;
+            };
+            if !property_key_is(&prop.key, prop_name) {
+                continue;
+            }
+            let by_annotation = prop
+                .type_annotation
+                .as_ref()
+                .is_some_and(|ann| ts_type_is_map_or_set(&ann.type_annotation));
+            let by_init = prop.value.as_ref().is_some_and(init_is_map_or_set_construction);
+            return by_annotation || by_init;
+        }
+        return false;
+    }
+    false
+}
+
+/// Returns true when a class property key is the identifier or string-literal
+/// `name` (`x`, `"x"`, `["x"]`). Computed non-literal and private (`#x`) keys
+/// don't match.
+fn property_key_is(key: &PropertyKey, name: &str) -> bool {
+    match key {
+        PropertyKey::StaticIdentifier(id) => id.name.as_str() == name,
+        PropertyKey::StringLiteral(s) => s.value.as_str() == name,
+        _ => false,
+    }
 }
 
 /// Returns true when the first formal parameter is a simple identifier named `name`.
@@ -5526,6 +5692,53 @@ mod tests {
         // exemption must reject a non-`entries` receiver. Stays flagged.
         let src = "Object.values(o).map(e => e[0]);";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_map_entries_spread_sort_comparator_issue_7697() {
+        // The issue's first repro: `[...map.entries()].sort((a, b) => …)`. Both
+        // comparator params are `[K, V]` tuples, so `a[0]`/`b[0]` are in-bounds.
+        let src = "const classTotals = new Map<string, number>(); const top = [...classTotals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_map_entries_array_from_sort_class_property_issue_7697() {
+        // The issue's second repro: `Array.from(this.<map>.entries()).sort(...)`
+        // where the receiver is a class property initialized `new Map(...)`.
+        let src = "class C { private readonly citations = new Map<number, string>(); m() { return Array.from(this.citations.entries()).sort((a, b) => a[0] - b[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_set_entries_annotated_receiver_sort_issue_7697() {
+        // A `Set<...>`-annotated receiver: `.entries()` yields `[T, T]` tuples.
+        let src = "const s: Set<string> = new Set(); const r = [...s.entries()].sort((a, b) => a[0].localeCompare(b[0]));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_map_entries_direct_chain_sort_issue_7697() {
+        // Chaining `.entries()` directly on a `new Map(...)` construction.
+        let src = "const r = [...new Map<string, number>().entries()].sort((a, b) => a[0].localeCompare(b[0]));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_sort_comparator_array_of_arrays_issue_7697() {
+        // Negative control: the receiver is a genuine array of arrays of unknown
+        // length (`number[][]`), not a Map/Set entries source, so its elements are
+        // `number[]` (possibly empty) — `a[0]`/`b[0]` stay flagged.
+        let src = "function f(xs: number[][]) { return xs.sort((a, b) => a[0] - b[0]); }";
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_untyped_entries_sort_comparator_issue_7697() {
+        // Negative control: `foo` does not resolve to a Map/Set, so `foo.entries()`
+        // is an arbitrary user method with no tuple guarantee — stays flagged.
+        let src = "function f(foo) { return foo.entries().sort((a, b) => a[0] - b[0]); }";
+        assert_eq!(run_on(src).len(), 2);
     }
 
     #[test]
