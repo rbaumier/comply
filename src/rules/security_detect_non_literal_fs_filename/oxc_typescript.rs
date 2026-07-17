@@ -8,6 +8,8 @@
 //! Safe path sources recognised:
 //! - `__dirname` / `__filename`
 //! - `import.meta.dirname` / `import.meta.filename` / `import.meta.url`
+//! - `process.cwd()` / `os.tmpdir()` / `os.homedir()` — trusted zero-argument
+//!   Node builtin roots, never derived from request or user input
 //! - `fileURLToPath(<safe>)` / `dirname(<safe>)`
 //! - `path.dirname(...)` / `path.resolve(...)` / `path.join(...)` whose root
 //!   argument is a safe source and every other argument is a string literal
@@ -110,6 +112,30 @@ fn is_dir_global(expr: &Expression) -> bool {
     matches!(expr, Expression::Identifier(id) if matches!(id.name.as_str(), "__dirname" | "__filename"))
 }
 
+/// A trusted zero-argument Node builtin path-root call: `process.cwd()`,
+/// `os.tmpdir()`, `os.homedir()`. Their result is never derived from request or
+/// user input, so they seed a safe path the same way `__dirname` does. Matches
+/// the exact call shape only (object identifier + property name + zero args),
+/// consistent with the other syntactic root recognisers.
+fn is_trusted_builtin_root_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    if !call.arguments.is_empty() {
+        return false;
+    }
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    matches!(
+        (obj.name.as_str(), member.property.name.as_str()),
+        ("process", "cwd") | ("os", "tmpdir") | ("os", "homedir")
+    )
+}
+
 /// Resolves the callee to a `path.<method>` member or a bare `dirname` /
 /// `fileURLToPath` / `resolve` / `join` identifier, returning the method name.
 fn path_helper_method<'a>(call: &'a CallExpression<'a>, source: &str) -> Option<&'a str> {
@@ -131,7 +157,10 @@ fn path_helper_method<'a>(call: &'a CallExpression<'a>, source: &str) -> Option<
 /// derivation whose root is itself safe and whose extra segments are all
 /// literals. `safe_consts` lets a bound `const` count as a safe root.
 fn is_safe_source(expr: &Expression, source: &str, safe_consts: &FxHashSet<String>) -> bool {
-    if is_dir_global(expr) || is_import_meta_location(expr, source) {
+    if is_dir_global(expr)
+        || is_import_meta_location(expr, source)
+        || is_trusted_builtin_root_call(expr)
+    {
         return true;
     }
     if let Expression::Identifier(id) = expr {
@@ -436,6 +465,62 @@ const r = fs.readFileSync(p);
 const r = fs.readFileSync(path.resolve(import.meta.dirname, "fixtures", "a.txt"));
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_cwd_resolved_with_literal() {
+        // Regression for #7685: root is `process.cwd()` (fixed at launch, not
+        // user-controlled) joined with a string literal — traversal impossible.
+        // Also covers the const-bound reuse across two fs.* call sites.
+        let src = r#"
+import fs from "node:fs";
+import path from "node:path";
+const envPath = path.resolve(process.cwd(), ".env");
+fs.existsSync(envPath);
+fs.readFileSync(envPath, "utf8");
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_builtin_root_as_fs_argument() {
+        // A builtin root passed directly to fs.* (zero extra segments) is safe.
+        let src = r#"const r = fs.readdirSync(os.tmpdir());"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_os_tmpdir_joined_with_literal() {
+        let src = r#"const r = fs.readFileSync(path.join(os.tmpdir(), "x.log"));"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_os_homedir_joined_with_literal() {
+        let src = r#"const r = fs.readFileSync(path.join(os.homedir(), ".config"));"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_process_cwd_with_non_literal_segment() {
+        // Root is safe, but a segment is a dynamic identifier → traversal possible.
+        let src = r#"const r = fs.readFileSync(path.resolve(process.cwd(), userInput));"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_process_env_not_treated_as_safe_root() {
+        // `process.env.FOO` is a member access, not a zero-arg `process.cwd()`
+        // call — it must not be recognised as a safe root.
+        let src = r#"const r = fs.readFileSync(process.env.FOO);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_process_cwd_non_call_reference() {
+        // `process.cwd` used as a value (not a zero-arg call) is not a safe root.
+        let src = r#"const r = fs.readFileSync(path.resolve(process.cwd, ".env"));"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
