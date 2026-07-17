@@ -2405,7 +2405,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             local_name: None,
             is_primitive_literal: false,
             is_vue_ref_factory: false,
-            binds_at_most_one_param: false,
+            binds_at_most_one_param: default_export_binds_low_arity(node, source),
             is_string_literal_const: false,
         });
         return;
@@ -2822,6 +2822,98 @@ fn declarator_binds_low_arity_callable(decl: Node) -> bool {
         && fn_binds_at_most_one_param(value)
 }
 
+/// True when a `export default …` statement's exported value binds at most the
+/// first argument passed to it — the default-export analogue of the named-export
+/// arity signals ([`fn_binds_at_most_one_param`] /
+/// [`declarator_binds_low_arity_callable`]). Handles a directly-exported
+/// arrow/function (`export default (x) => …`, `export default function (x) {}`)
+/// and a bare identifier (`export default notEmpty`) resolved to its module-local
+/// single-arity `const`/`function` binding. Any other exported value — a class, a
+/// literal, a member expression, a multi-parameter callable — is not a
+/// statically-known single-arity callee and returns `false`.
+fn default_export_binds_low_arity(export_node: Node, source: &[u8]) -> bool {
+    let mut cursor = export_node.walk();
+    for child in export_node.named_children(&mut cursor) {
+        match child.kind() {
+            "function_declaration" | "generator_function_declaration" | "arrow_function"
+            | "function_expression" => return fn_binds_at_most_one_param(child),
+            "identifier" => {
+                return default_export_identifier_binds_low_arity(export_node, child, source);
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Resolve `export default <ident>` to a module-local binding of `ident` and
+/// report whether it is a single-arity callable. Scans the enclosing module's
+/// top-level declarations (both bare and `export`-prefixed) for a matching
+/// `const`/`function` and reuses the named-export arity helpers. A name that is
+/// absent, imported, or not a statically-known single-arity callable yields
+/// `false`.
+fn default_export_identifier_binds_low_arity(export_node: Node, ident: Node, source: &[u8]) -> bool {
+    let name = text_of(ident, source);
+    let mut root = export_node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    for stmt in root.named_children(&mut cursor) {
+        // `export const notEmpty = …` / `export function notEmpty(…) {}` nest the
+        // declaration one level under an `export_statement`; a bare
+        // `const notEmpty = …` is the top-level node itself.
+        let decl = if stmt.kind() == "export_statement" {
+            let mut sub = stmt.walk();
+            stmt.named_children(&mut sub).find(|c| {
+                matches!(
+                    c.kind(),
+                    "lexical_declaration"
+                        | "variable_declaration"
+                        | "function_declaration"
+                        | "generator_function_declaration"
+                )
+            })
+        } else {
+            Some(stmt)
+        };
+        let Some(decl) = decl else {
+            continue;
+        };
+        if let Some(result) = named_declaration_binds_low_arity(decl, &name, source) {
+            return result;
+        }
+    }
+    false
+}
+
+/// If `decl` declares `name` as a `const`/`function` binding, return whether that
+/// binding is a single-arity callable; otherwise `None` (name not declared here).
+fn named_declaration_binds_low_arity(decl: Node, name: &str, source: &[u8]) -> Option<bool> {
+    match decl.kind() {
+        "function_declaration" | "generator_function_declaration" => {
+            let id = decl.child_by_field_name("name")?;
+            (text_of(id, source) == name).then(|| fn_binds_at_most_one_param(decl))
+        }
+        "lexical_declaration" | "variable_declaration" => {
+            let mut cursor = decl.walk();
+            for d in decl.named_children(&mut cursor) {
+                if d.kind() != "variable_declarator" {
+                    continue;
+                }
+                let Some(nm) = d.child_by_field_name("name") else {
+                    continue;
+                };
+                if nm.kind() == "identifier" && text_of(nm, source) == name {
+                    return Some(declarator_binds_low_arity_callable(d));
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 /// Extract parameter names from a function declaration node.
 fn extract_params(node: Node, source: &[u8]) -> Vec<String> {
     let Some(params) = node.child_by_field_name("parameters") else {
@@ -2964,7 +3056,10 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     local_name: None,
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
-                    binds_at_most_one_param: false,
+                    binds_at_most_one_param: oxc_default_export_binds_low_arity(
+                        &export.declaration,
+                        &semantic,
+                    ),
                     is_string_literal_const: false,
                 });
             }
@@ -3886,6 +3981,57 @@ fn oxc_init_binds_low_arity_callable(init: &oxc_ast::ast::Expression) -> bool {
     match init {
         Expression::ArrowFunctionExpression(f) => oxc_binds_at_most_one_param(&f.params),
         Expression::FunctionExpression(f) => oxc_binds_at_most_one_param(&f.params),
+        _ => false,
+    }
+}
+
+/// oxc analogue of tree-sitter [`default_export_binds_low_arity`]: does a
+/// `export default <value>` bind at most the first argument passed to it? True
+/// for a default function declaration binding at most one parameter
+/// (`export default function (x) {}`), a directly-exported single-arity
+/// arrow/function expression, and a bare identifier (`export default notEmpty`)
+/// resolved to its module-local single-arity callable binding.
+fn oxc_default_export_binds_low_arity(
+    decl: &oxc_ast::ast::ExportDefaultDeclarationKind,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::ExportDefaultDeclarationKind;
+    if let ExportDefaultDeclarationKind::FunctionDeclaration(func) = decl {
+        return oxc_binds_at_most_one_param(&func.params);
+    }
+    decl.as_expression()
+        .is_some_and(|expr| oxc_expr_binds_low_arity(expr, semantic))
+}
+
+/// oxc equivalent of tree-sitter [`default_export_identifier_binds_low_arity`]:
+/// does `expr` denote a callable binding at most one parameter — a direct
+/// arrow/function expression ([`oxc_init_binds_low_arity_callable`]), or an
+/// identifier resolved through the semantic model to a module-local single-arity
+/// `const`/`function` binding?
+fn oxc_expr_binds_low_arity(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    if oxc_init_binds_low_arity_callable(expr) {
+        return true;
+    }
+    let Expression::Identifier(ident) = expr else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    match semantic.nodes().kind(scoping.symbol_declaration(sym_id)) {
+        AstKind::VariableDeclarator(decl) => {
+            decl.init.as_ref().is_some_and(oxc_init_binds_low_arity_callable)
+        }
+        AstKind::Function(func) => oxc_binds_at_most_one_param(&func.params),
         _ => false,
     }
 }
@@ -7623,6 +7769,15 @@ mod tests {
         "export default function hello() {}",
         "export default class Widget {}",
         "export default function (x, y) { return x + y; }",
+        // `export default` single-arity forms: both extractors compute
+        // `binds_at_most_one_param` for the default export (the #7618 arity lever
+        // applied to the default form) — a bare arrow, and a bare identifier
+        // resolved to a module-local single-arity `const`/`function`. The
+        // two-parameter variants stay `false`. Both paths must agree.
+        "export default (x) => x;",
+        "const single = (v) => !!v;\nexport default single;",
+        "const dual = (a, b) => a + b;\nexport default dual;",
+        "function guard(v) { return !!v; }\nexport default guard;",
         "export function fn(a, b, c) { return a; }",
         "export function* gen(x) { yield x; }",
         "export async function afn(p, q) { return p; }",
@@ -7775,6 +7930,36 @@ mod tests {
                    }\n";
         let extract = extract_ts_oxc(src, Path::new("ns.ts")).expect("oxc extract");
         assert!(extract.module_augmentations.is_empty());
+    }
+
+    // #7706: the default export's `binds_at_most_one_param` is computed from the
+    // exported value, not hardcoded `false` — a bare identifier is resolved to
+    // its module-local single-arity binding (the `export default notEmpty`
+    // idiom), while a multi-parameter callee stays `false`.
+    #[test]
+    fn oxc_computes_default_export_arity() {
+        let binds = |src: &str| {
+            let extract = extract_ts_oxc(src, Path::new("d.ts")).expect("oxc extract");
+            let def = extract
+                .exports
+                .iter()
+                .find(|e| e.kind == ExportKind::Default)
+                .expect("default export");
+            def.binds_at_most_one_param
+        };
+        // `export default <single-arity>` — bare arrow, and identifiers resolved
+        // to a module-local single-arity `const`/`function`.
+        assert!(binds("export default (x) => !!x;"));
+        assert!(binds(
+            "const notEmpty = (v) => !!v;\nexport default notEmpty;"
+        ));
+        assert!(binds("function guard(v) { return !!v; }\nexport default guard;"));
+        assert!(binds("export default function only(x) { return x; }"));
+        // `export default <multi-arity or non-callable>` stays `false`.
+        assert!(!binds("const dual = (a, b) => a + b;\nexport default dual;"));
+        assert!(!binds("export default function (a, b) { return a + b; }"));
+        assert!(!binds("export default 42;"));
+        assert!(!binds("export default class Widget {}"));
     }
 
     #[test]
