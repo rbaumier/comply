@@ -27,6 +27,10 @@
 //!   when at least one branch body forwards a computed value (e.g.
 //!   `match { Some(f) => (f)(x), None => true }`); a `match`/`if` whose
 //!   every branch is a bare `true` / `false` is not treated as computed.
+//!   A bare identifier tail is resolved to the initializer of its `let`
+//!   binding in the same block (`let flag = map.remove(k).is_some(); …
+//!   flag`) and counts as computed exactly when that initializer does, so
+//!   naming the value changes nothing.
 //! - Functions whose every boolean-literal return is the *same* constant
 //!   (all `true`, or all `false`): with a single possible outcome the bool
 //!   is a dispatch tag ("handler recognized the sequence"), not a
@@ -156,7 +160,7 @@ impl AstCheck for Check {
         // The bool is a genuine computed value (parser-progress
         // comparison, forwarded collection-insert result), not a
         // failure smuggled as a hardcoded `true` / `false`.
-        if returns_computed_bool(node) {
+        if returns_computed_bool(node, source_bytes) {
             return;
         }
         // A continuation predicate driving a `while` loop
@@ -226,14 +230,131 @@ impl AstCheck for Check {
 /// comparison (`pos() != start` — parser progress) or a directly
 /// forwarded call return (`self.set.insert(x)` — was it new?), the bool
 /// carries the operation's actual outcome and is the right return type.
-fn returns_computed_bool(func: tree_sitter::Node) -> bool {
+/// A bare identifier tail is resolved to its `let` initializer first, so
+/// naming the computed value (`let flag = …; flag`) reads the same as
+/// returning it directly.
+fn returns_computed_bool(func: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(body) = func.child_by_field_name("body") else {
         return false;
     };
     let Some(tail) = block_tail_expression(body) else {
         return false;
     };
-    expression_is_computed(tail)
+    expression_is_computed(tail) || identifier_tail_is_computed(body, tail, source)
+}
+
+/// True if `tail` is a bare identifier whose value is computed: it is bound by a
+/// plain `let <name> = <expr>;` in `body` whose initializer is computed, and
+/// every assignment to `<name>` assigns a computed value too.
+///
+/// `let flag = map.remove(k).is_some(); … flag` carries the operation's outcome
+/// exactly as the direct `map.remove(k).is_some()` tail does — the same
+/// `expression_is_computed` judgement decides both, so an initializer that
+/// hardcodes literals (`let flag = if op() { true } else { false };`) keeps
+/// flagging.
+///
+/// Resolution is local to `body`: an identifier bound anywhere else — a
+/// parameter, an outer capture, a `const` — has no `let` here and stays flagged.
+fn identifier_tail_is_computed(
+    body: tree_sitter::Node,
+    tail: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    if tail.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = tail.utf8_text(source) else {
+        return false;
+    };
+    let Some(initializer) = nearest_let_initializer(body, tail.start_byte(), name, source) else {
+        return false;
+    };
+    expression_is_computed(initializer) && every_assignment_is_computed(body, name, source)
+}
+
+/// The initializer of the last `let <name> = <expr>;` declared directly in
+/// `block` before `limit` — the nearest binding is the one in scope, so a later
+/// shadow wins (`let x = true; let x = map.remove(k).is_some(); x` resolves to
+/// the second). A binding inside a nested block or closure is out of scope at
+/// `limit` and is not scanned. `None` when `block` declares no such binding.
+///
+/// Only a plain name pattern (`let x`, `let mut x`) qualifies: under a
+/// destructuring pattern (`let (a, x)`, `let Some(x)`) the initializer *holds*
+/// the bound value rather than being it, so judging the initializer would not
+/// judge `<name>`.
+fn nearest_let_initializer<'a>(
+    block: tree_sitter::Node<'a>,
+    limit: usize,
+    name: &str,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    let mut cursor = block.walk();
+    let mut nearest = None;
+    for child in block.named_children(&mut cursor) {
+        if child.start_byte() >= limit {
+            break;
+        }
+        if child.kind() != "let_declaration" {
+            continue;
+        }
+        if child
+            .child_by_field_name("pattern")
+            .is_some_and(|pattern| pattern_binds_exactly(pattern, name, source))
+        {
+            nearest = child.child_by_field_name("value");
+        }
+    }
+    nearest
+}
+
+/// True if a `let` pattern is the plain name `name` — `let <name>` or `let mut
+/// <name>`, the shapes whose initializer *is* the bound value.
+fn pattern_binds_exactly(pattern: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let inner = if pattern.kind() == "mut_pattern" {
+        match pattern.named_child(0) {
+            Some(child) => child,
+            None => return false,
+        }
+    } else {
+        pattern
+    };
+    inner.kind() == "identifier" && inner.utf8_text(source).is_ok_and(|text| text == name)
+}
+
+/// True if every assignment to the local `name` in `node`'s subtree assigns a
+/// computed value, so the `let` initializer's verdict still holds at the tail.
+///
+/// A plain `name = <expr>;` re-decides the returned value, so `<expr>` must be
+/// computed as well (`let mut flag = op(); flag = false; flag` returns a
+/// hardcoded literal and keeps flagging). A compound assignment (`name &= …`)
+/// folds in an operand this walk does not model, so it disqualifies the binding.
+/// Closures are walked into rather than skipped — one can assign to a captured
+/// binding, and a same-named inner local only makes the verdict stricter.
+fn every_assignment_is_computed(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    match node.kind() {
+        "assignment_expression" if assignment_targets_name(node, name, source) => {
+            if !node
+                .child_by_field_name("right")
+                .is_some_and(expression_is_computed)
+            {
+                return false;
+            }
+        }
+        "compound_assignment_expr" if assignment_targets_name(node, name, source) => return false,
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .all(|child| every_assignment_is_computed(child, name, source))
+}
+
+/// True if an assignment's left operand is exactly the identifier `name`. A
+/// field, index, or deref target (`self.flag = …`, `v[i] = …`) writes through a
+/// place, it does not rebind the local the tail returns.
+fn assignment_targets_name(assign: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    assign.child_by_field_name("left").is_some_and(|left| {
+        left.kind() == "identifier" && left.utf8_text(source).is_ok_and(|text| text == name)
+    })
 }
 
 /// A block's implicit return is its last named child, provided that child
@@ -1350,8 +1471,7 @@ mod tests {
         // alacritty `update_highlighted_hints` — the doc states it returns
         // *whether* the highlighted hints changed (a dirty flag); the phrase
         // sits mid-sentence, not at the line start, so only the `contains`
-        // match catches it. The tail is a non-literal variable, so neither the
-        // computed nor single-constant exemption applies — the doc alone saves it.
+        // match catches it.
         let src = "\
             /// Update the mouse/vi mode cursor hint highlighting.\n\
             ///\n\
@@ -1529,6 +1649,88 @@ mod tests {
             fn load_config(&self, x: &str) -> bool {\n\
                 if matches!(x, \"\") { false } else { true }\n\
             }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #7718: an identifier tail resolves to its `let` initializer, so naming
+    // a computed bool reads the same as returning it directly ---
+
+    #[test]
+    fn allows_identifier_tail_bound_to_presence_check() {
+        // tikv `remove_peer_stat_from_maps` — the bool is
+        // `HashMap::remove(k).is_some()`, a presence report bound to a name
+        // before the infallible cleanup removes run. Nothing can fail, so there
+        // is no error to hoist into a `Result`.
+        let src = "\
+            fn remove_peer_stat_from_maps(m: &mut HashMap<u64, u8>, k: u64) -> bool {\n\
+                let removed = m.remove(&k).is_some();\n\
+                m.remove(&k);\n\
+                removed\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_identifier_tail_resolving_to_latest_shadow() {
+        // The nearest binding decides: the second `let x` shadows the literal
+        // first one, so the tail carries the computed presence report.
+        let src = "\
+            fn remove_entry(m: &mut HashMap<u64, u8>, k: u64) -> bool {\n\
+                let x = true;\n\
+                let x = m.remove(&k).is_some();\n\
+                x\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #7718: negative space — the identifier tail is only as computed as its
+    // initializer, and only while no assignment re-decides it ---
+
+    #[test]
+    fn flags_identifier_tail_shadowed_by_literal_binding() {
+        // Mirror image of the shadowing case: the *last* binding before the tail
+        // is a bare literal, so the earlier computed one does not exempt it.
+        let src = "\
+            fn remove_entry(m: &mut HashMap<u64, u8>, k: u64) -> bool {\n\
+                let x = m.remove(&k).is_some();\n\
+                let x = false;\n\
+                x\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_identifier_tail_bound_to_literal_collapse() {
+        // The initializer is the `if op() { true } else { false }` collapse — the
+        // rule's real target. Binding it to a name must not launder it, so the
+        // same `expression_is_computed` verdict as the direct-tail equivalent
+        // (`flags_genuine_action_swallowing_failure`) applies.
+        let src = "\
+            fn save_user(u: &User) -> bool {\n\
+                let ok = if db.write(u) { true } else { false };\n\
+                ok\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_identifier_tail_reassigned_to_literal() {
+        // The initializer is computed but a later assignment hardcodes the
+        // returned value, so the initializer no longer decides the tail.
+        let src = "\
+            fn save_state(m: &mut HashMap<u64, u8>, k: u64) -> bool {\n\
+                let mut removed = m.remove(&k).is_some();\n\
+                removed = false;\n\
+                removed\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unresolvable_identifier_tail() {
+        // A parameter has no `let` in the body to resolve against, so the tail
+        // stays unresolved and the function keeps its behaviour.
+        let src = "fn save_flag(flag: bool) -> bool { do_thing(); flag }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
