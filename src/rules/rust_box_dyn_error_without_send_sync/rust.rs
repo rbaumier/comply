@@ -30,12 +30,22 @@
 //! adding the bounds would change *which* type the impl is for. A method in
 //! such an impl constructs and returns that same self type, so we exempt the
 //! whole body rather than try to tell self-typed positions apart. This keys on
-//! the enclosing impl's self type, so a `Box<dyn Error>` returned from an
+//! the enclosing impl's self type, so a `Box<dyn Error>` in the *body* of an
 //! `impl … for ConcreteType` still flags.
+//!
+//! A `Box<dyn Error>` in the return type or a parameter of a method inside a
+//! trait impl (`impl Trait for Type`) is exempt: that signature is dictated by
+//! the trait declaration, so adding `+ Send + Sync` would make it no longer
+//! match the trait (E0053) — the implementor structurally can't apply the
+//! remediation, which belongs on the trait definition instead. The skip is
+//! scoped to signature positions: a `Box<dyn Error>` in the method body, in an
+//! inherent-impl method, or in a free function still flags.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_fn_main, is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{
+    is_in_fn_main, is_in_test_context, is_in_trait_impl, is_under_tests_dir,
+};
 
 const KINDS: &[&str] = &["generic_type"];
 
@@ -63,6 +73,14 @@ impl AstCheck for Check {
         // `Send + Sync` without changing which type the impl is for — the
         // remediation is structurally impossible. Exempt those positions.
         if is_in_box_dyn_error_self_type_impl(node, source_bytes) {
+            return;
+        }
+        // A `Box<dyn Error>` in the return type or a parameter of a trait-impl
+        // method has a signature dictated by the trait contract: adding
+        // `+ Send + Sync` would stop it matching the trait declaration (E0053),
+        // so the implementor can't apply the remediation. Body-local positions
+        // in the same method are the author's own choice and still flag.
+        if is_in_trait_impl_method_signature(node) {
             return;
         }
         if is_in_test_context(node, source_bytes)
@@ -152,6 +170,41 @@ fn is_in_box_dyn_error_self_type_impl(node: tree_sitter::Node, source_bytes: &[u
             });
         }
         current = ancestor.parent();
+    }
+    false
+}
+
+/// True when the flagged `Box<dyn Error>` `node` sits in the return type or a
+/// parameter type of a method whose nearest enclosing impl is a trait impl
+/// (`impl Trait for Type`).
+///
+/// A trait-impl method's signature is fixed by the trait declaration: adding
+/// `+ Send + Sync` would make it no longer match the trait (E0053), so the
+/// implementor can't apply the remediation — it belongs on the trait
+/// definition. The skip is scoped to signature positions via a byte-range
+/// check against the method's `return_type`/`parameters` fields: a
+/// `Box<dyn Error>` in the method body (e.g. a `let x: Box<dyn Error> = …`
+/// local) is the author's own choice and still flags, as does one in an
+/// inherent-impl method or a free function. Trait-impl membership is decided by
+/// the shared [`is_in_trait_impl`] lever on the nearest enclosing method.
+fn is_in_trait_impl_method_signature(node: tree_sitter::Node) -> bool {
+    let mut current = node.parent();
+    while let Some(func) = current {
+        if func.kind() == "function_item" {
+            if !is_in_trait_impl(func) {
+                return false;
+            }
+            return [
+                func.child_by_field_name("return_type"),
+                func.child_by_field_name("parameters"),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|field| {
+                node.start_byte() >= field.start_byte() && node.end_byte() <= field.end_byte()
+            });
+        }
+        current = func.parent();
     }
     false
 }
@@ -453,22 +506,84 @@ path = "src/lib.rs"
     }
 
     #[test]
-    fn flags_box_dyn_error_return_in_impl_for_concrete_type() {
-        // Negative control: a `Box<dyn Error>` returned from an impl whose self
-        // type is a concrete type is NOT pinned to the self type — it can be
-        // made `Send + Sync`, so it still flags.
+    fn allows_box_dyn_error_return_in_trait_impl_for_concrete_type() {
+        // `impl SinkError for MyError { fn boxed() -> Box<dyn Error> }`: even
+        // with a concrete self type, `boxed` is a `SinkError` trait method, so
+        // its return type is fixed by the trait declaration and can't gain
+        // `+ Send + Sync` (E0053). Same shape as the tikv `impl ConfigManager
+        // for RaftstoreConfigManager { fn dispatch }` repro.
         let source = r#"
             impl SinkError for MyError {
                 fn boxed() -> Box<dyn std::error::Error> { todo!() }
             }
         "#;
-        assert_eq!(run_on(source).len(), 1);
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn flags_box_dyn_error_struct_field() {
         // Negative control: a struct field outside any impl still flags.
         let source = "struct S { e: Box<dyn std::error::Error> }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_box_dyn_error_return_in_trait_impl_method() {
+        // tikv coprocessor/config.rs:229: `fn dispatch` implements
+        // `ConfigManager::dispatch`, whose return type `Result<(), Box<dyn
+        // Error>>` is fixed by the trait. Adding `+ Send + Sync` would stop the
+        // method matching the trait declaration (E0053), so the implementor
+        // can't apply the remediation.
+        let source = r#"
+            impl ConfigManager for RaftstoreConfigManager {
+                fn dispatch(
+                    &mut self,
+                    change: ConfigChange,
+                ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+                    Ok(())
+                }
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_box_dyn_error_param_in_trait_impl_method() {
+        // A parameter type is equally dictated by the trait declaration.
+        let source = r#"
+            impl Handler for MyHandler {
+                fn handle(&self, e: Box<dyn std::error::Error>) {}
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_box_dyn_error_return_in_inherent_impl_method() {
+        // Precision guard: an inherent-impl method signature is the author's
+        // own — the `Box<dyn Error>` can be made `Send + Sync`, so it flags.
+        let source = r#"
+            impl SplitConfig {
+                fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+                    Ok(())
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_box_dyn_error_body_local_in_trait_impl_method() {
+        // Precision guard: a body-local `Box<dyn Error>` inside a trait-impl
+        // method is the author's own choice (not part of the trait-fixed
+        // signature), so it still flags.
+        let source = r#"
+            impl Handler for MyHandler {
+                fn handle(&self) {
+                    let e: Box<dyn std::error::Error> = todo!();
+                }
+            }
+        "#;
         assert_eq!(run_on(source).len(), 1);
     }
 }
