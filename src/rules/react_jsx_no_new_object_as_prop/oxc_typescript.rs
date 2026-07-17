@@ -1,6 +1,10 @@
 //! react-jsx-no-new-object-as-prop OxcCheck backend.
 //!
-//! Flags `jsx_attribute` nodes whose value is an inline object literal.
+//! Flags `jsx_attribute` nodes whose value is an inline object literal, but only
+//! on custom components: a lowercase host/DOM tag (`<div>`, `<span>`) diffs its
+//! attributes by value on every render and never memoizes on prop identity, so
+//! an inline object there is not a re-render hazard — and props like
+//! `dangerouslySetInnerHTML` even require a fresh `{ __html }` literal.
 //!
 //! Skipped when the file does not import React (the new-reference-per-render
 //! rationale is React-specific; non-React JSX frameworks have different
@@ -57,6 +61,14 @@ impl OxcCheck for Check {
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
+
+        // The new-reference-per-render concern only applies to custom components:
+        // React memoizes those on prop identity (`React.memo`, `PureComponent`).
+        // A host/DOM element (lowercase tag) diffs its attributes by value every
+        // render regardless, so an inline object there is not a re-render hazard.
+        if !crate::oxc_helpers::jsx_element_name_is_component(&opening.name) {
+            return;
+        }
 
         for attr_item in &opening.attributes {
             let JSXAttributeItem::Attribute(attr) = attr_item else {
@@ -219,6 +231,71 @@ mod tests {
             "import React from 'react';\nconst x = <Comp style={{ color: 'red' }} />;",
         );
         assert!(d.is_empty(), "react-compiler dep declared: {d:?}");
+    }
+
+    #[test]
+    fn skips_host_element_dangerously_set_inner_html() {
+        // Issue #7686: a host/DOM element (lowercase `<div>`) never memoizes on
+        // prop identity, and `dangerouslySetInnerHTML` requires a fresh
+        // `{ __html }` object literal — flagging it is a false positive.
+        let dir = TempDir::new().unwrap();
+        let d = run_in_project(
+            dir.path(),
+            "src/comp.tsx",
+            "import React from 'react';\nconst x = <div dangerouslySetInnerHTML={{ __html: body }} />;",
+        );
+        assert!(d.is_empty(), "host element must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn skips_host_element_inline_style() {
+        // Issue #7686: an inline object on a host element's `style` prop is a
+        // by-value DOM diff, not a re-render hazard.
+        let dir = TempDir::new().unwrap();
+        let d = run_in_project(
+            dir.path(),
+            "src/comp.tsx",
+            "import React from 'react';\nconst x = <span style={{ color: \"red\" }} />;",
+        );
+        assert!(d.is_empty(), "host element style must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn skips_hyphenated_custom_element() {
+        // A hyphenated tag (`<my-element>`) is a host custom element, not a React
+        // component — React never memoizes it on prop identity.
+        let dir = TempDir::new().unwrap();
+        let d = run_in_project(
+            dir.path(),
+            "src/comp.tsx",
+            "import React from 'react';\nconst x = <my-element config={{ a: 1 }} />;",
+        );
+        assert!(d.is_empty(), "hyphenated custom element must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn flags_custom_component_identifier() {
+        // A capitalized identifier is a custom component; React memoizes it on
+        // prop identity, so the inline object is a genuine re-render hazard.
+        let dir = TempDir::new().unwrap();
+        let d = run_in_project(
+            dir.path(),
+            "src/comp.tsx",
+            "import React from 'react';\nconst x = <EmailTemplate goToAction={{ url: \"x\" }} />;",
+        );
+        assert_eq!(d.len(), 1, "custom component still flags: {d:?}");
+    }
+
+    #[test]
+    fn flags_member_expression_component() {
+        // A member-expression name (`Foo.Bar`) is always a component reference.
+        let dir = TempDir::new().unwrap();
+        let d = run_in_project(
+            dir.path(),
+            "src/comp.tsx",
+            "import React from 'react';\nconst x = <Foo.Bar config={{ a: 1 }} />;",
+        );
+        assert_eq!(d.len(), 1, "member-expression component still flags: {d:?}");
     }
 
     #[test]

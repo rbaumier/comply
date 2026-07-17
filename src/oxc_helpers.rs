@@ -789,6 +789,27 @@ pub fn jsx_import_source_pragma_value(source: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
+/// Whether a JSX element name denotes a user-defined component rather than an
+/// intrinsic host/DOM element.
+///
+/// The oxc parser already applies React's host-vs-component rule when it builds
+/// the element name, so the variant is the single source of truth: a component
+/// reference (`<Foo>`, `<_Foo>`, `<Foo.Bar>`, a non-ASCII tag) is an
+/// `IdentifierReference` or `MemberExpression`, while an intrinsic host tag
+/// (`<div>`, `<span>`, a hyphenated custom element like `<my-element>`) stays an
+/// `Identifier`, and `<svg:rect>` a `NamespacedName`. Only components memoize on
+/// prop identity (`React.memo`, `PureComponent`), so referential-equality
+/// concerns apply to them alone; a host element diffs its attributes by value on
+/// every render regardless.
+#[must_use]
+pub fn jsx_element_name_is_component(name: &oxc_ast::ast::JSXElementName) -> bool {
+    use oxc_ast::ast::JSXElementName;
+    matches!(
+        name,
+        JSXElementName::IdentifierReference(_) | JSXElementName::MemberExpression(_)
+    )
+}
+
 /// True when the file declares a `@jsxImportSource` pragma whose value points to
 /// a non-React JSX runtime. Any value other than `react` / `react-dom` (or a
 /// `react`/`react-dom` subpath) names a non-React dialect (`hono/jsx`, a relative
