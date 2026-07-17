@@ -474,6 +474,31 @@ mod tests {
     }
 
     #[test]
+    fn allows_unparenthesized_arrow_param_shadowing_ref() {
+        // lyswhut/lx-music-desktop repro (#7703): an unparenthesized single-param
+        // arrow `offset => { … }` shadows the outer `const offset = ref(0)`;
+        // `offset == …` inside the body is the plain param, not the ref.
+        let src = "const offset = ref(0);\nconst originOffset = ref(0);\nconst updateLyric = offset => {\n  if (offset == originOffset.value) { removeLyric(); }\n};";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_local_let_in_unparenthesized_arrow_shadowing_ref() {
+        // Same repro (#7703): a local `let offset` inside `lrc => { … }` shadows
+        // the outer ref; `offset + 1` after the decl is the plain value.
+        let src = "const offset = ref(0);\nconst getOffset = lrc => {\n  let offset = compute(lrc);\n  return offset + 1;\n};";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_ref_operand_outside_unparenthesized_arrow_body() {
+        // The unparenthesized arrow shadows `offset` only inside its body; a bare
+        // `offset + 1` after it at module scope is still the ref and must flag.
+        let src = "const offset = ref(0);\nconst f = offset => { return offset; };\nconst y = offset + 1;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
     fn flags_ref_operand_in_script_when_sfc_fails_to_parse() {
         // The same grammar bail-out must not suppress a genuine `<script>`
         // misuse: the text-scan template carve-out ends at `</template>`, so the

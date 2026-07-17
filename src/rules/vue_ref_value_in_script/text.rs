@@ -201,4 +201,30 @@ mod tests {
         let sfc = "<script setup>\nconst placeholder = ref(0)\nfunction f() {\n  if (placeholder === 'x') { return 1 }\n  const placeholder = 2\n}\n</script>";
         assert_eq!(run(sfc).len(), 1);
     }
+
+    #[test]
+    fn allows_unparenthesized_arrow_param_shadowing_ref() {
+        // lyswhut/lx-music-desktop repro (#7703): an unparenthesized single-param
+        // arrow `offset => { … }` shadows the outer `const offset = ref(0)`, so
+        // `offset == originOffset.value` inside is the plain param, not the ref.
+        let sfc = "<script setup>\nconst offset = ref(0)\nconst originOffset = ref(0)\nconst updateLyric = offset => {\n  if (offset == originOffset.value) { removeLyric() }\n}\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_local_let_in_unparenthesized_arrow_shadowing_ref() {
+        // Same repro (#7703): inside `getOffset = lrc => { … }` a local
+        // `let offset` shadows the outer ref; `if (offset)` after it is the plain
+        // local value.
+        let sfc = "<script setup>\nconst offset = ref(0)\nconst getOffset = lrc => {\n  let offset = compute(lrc)\n  if (offset) { return offset }\n  return offset\n}\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_ref_outside_unparenthesized_arrow_body() {
+        // The arrow shadows `offset` only inside its body; the top-scope
+        // `if (offset)` after it is still the outer ref and must flag.
+        let sfc = "<script setup>\nconst offset = ref(0)\nconst updateLyric = offset => {\n  return offset\n}\nif (offset) {}\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
 }
