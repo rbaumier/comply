@@ -11,6 +11,8 @@
 //! (`impl<T> RwLock<T>`, `unsafe impl<T> Send for RwLock<T>`), a function
 //! return type (`fn new() -> RwLock<T>`, `fn get(&self) -> &Mutex<T>`), a
 //! function parameter (`fn f(m: &Mutex<T>)` borrows a lock the caller owns),
+//! any other reference position — a borrowed lock owned and wrapped elsewhere
+//! (`&Mutex<T>` / `&RwLock<T>`, including a `Fn*(&Lock<T>)` closure-type bound),
 //! a struct field — named (`struct S { m: Mutex<T> }`) or tuple
 //! (`struct S(Mutex<T>)`) — a raw-pointer target (`*const Mutex<T>` /
 //! `*mut Mutex<T>`, a transient unsafe alias such as the
@@ -84,6 +86,15 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
             // `Mutex<T>` in the function body is reached through `body`, not
             // `parameter`, and stays flagged.
             "parameter" => return,
+            // A reference (`&Mutex<T>` / `&RwLock<T>`) borrows a lock owned and
+            // wrapped elsewhere; it cannot be `Arc`-wrapped at the borrow site.
+            // This generalizes the `parameter` and `&Mutex`-return exemptions to
+            // every borrowed-lock position — most importantly a `Fn*(&Lock<T>)`
+            // closure-type bound, whose parameters live in a `function_type`
+            // rather than a `parameter` node and so match no other arm. The walk
+            // visits ancestors only, so an owned `Mutex<&T>` whose inner type
+            // merely contains a reference is unaffected.
+            "reference_type" => return,
             // A raw-pointer target (`*const Mutex<T>` / `*mut Mutex<T>`) is a
             // transient unsafe alias that cannot syntactically carry the `Arc`
             // wrapper, so a `Mutex` reached through a `pointer_type` is not a
@@ -475,6 +486,32 @@ fn f() {
     #[test]
     fn allows_rwlock_ref_parameter() {
         assert!(run("fn g(m: &RwLock<u32>) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_rwlock_ref_in_fnmut_trait_bound() {
+        let src = r#"
+fn proxy_all_segments_and_apply<F>(mut operation: F) -> OperationResult<()>
+where
+    F: FnMut(&RwLock<dyn StorageSegmentEntry>) -> OperationResult<()>,
+{ }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_ref_in_fn_trait_bound() {
+        assert!(run("fn apply<F: Fn(&Mutex<u32>)>(f: F) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_ref_struct_field() {
+        assert!(run("struct S<'a> { lock: &'a Mutex<u32> }").is_empty());
+    }
+
+    #[test]
+    fn flags_owned_mutex_of_reference() {
+        assert_eq!(run("fn f() { let m: Mutex<&u32> = todo!(); }").len(), 1);
     }
 
     #[test]
