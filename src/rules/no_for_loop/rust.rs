@@ -10,6 +10,12 @@
 //! index — there is no local index to convert to a `for` binding — so it is
 //! not flagged; likewise a body that only mutates a different target.
 //!
+//! The index must also be a `0..len` sweep: a `let <index> = 0` binding must
+//! precede the loop in an enclosing block. An index bound from a `while let` /
+//! `if let` pattern or a function parameter starts at an arbitrary offset —
+//! `for`/`.iter().enumerate()` always start at 0 and visit every element once —
+//! so it has no iterator rewrite and is not flagged.
+//!
 //! The index must advance by exactly one at every mutation site (`i += 1`,
 //! `i = i + 1`). A non-unit or mixed stride (`cursor += 2` beside `cursor += 1`,
 //! `i += 3`, a `-=` decrement, `i = i + 2`) is not a 1:1 element iteration and
@@ -68,6 +74,16 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     // requires the index to be mutated at all — a body that only touches a
     // different target is not a traversal to convert.
     if !index_advances_by_unit_stride(body, index_var, source) {
+        return;
+    }
+
+    // The index must be a `0..len` sweep to have a `for`/`.iter().enumerate()`
+    // rewrite: require a preceding `let <index> = 0` binding in an enclosing
+    // block. An index bound from a `while let`/`if let` pattern, a function
+    // parameter, or carried across iterations starts at an arbitrary offset —
+    // `for`/`enumerate` always start at 0 and visit every element once — so it
+    // has no iterator equivalent and is exempt.
+    if !crate::rules::rust_helpers::local_let_binds_zero(node, index_var, source) {
         return;
     }
 
@@ -589,6 +605,59 @@ mod tests {
         let src = "fn f(v: &[i32]) { \
                    let mut i = 0; \
                    while i < v.len() { use_it(v[i]); i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_pattern_bound_index_issue_7731() {
+        // reth sim_bundle.rs parse_and_flatten_bundle: `idx` is bound by the
+        // `while let Some((.., mut idx, ..)) = stack.pop()` pattern — a resumable
+        // stack cursor starting at the saved offset, not zero-initialized before
+        // the loop — so there is no `for`/`.iter().enumerate()` rewrite.
+        let src = "fn f(stack: &mut Vec<(usize, Vec<u8>)>) { \
+                   while let Some((mut idx, body)) = stack.pop() { \
+                   while idx < body.len() { let _ = body[idx]; idx += 1; } \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_fn_parameter_index_issue_7731() {
+        // The index is a function parameter, not a `let <i> = 0` sweep: it enters
+        // at a caller-chosen offset, so `for`/`enumerate` cannot express it.
+        let src = "fn f(mut i: usize, v: &[u8]) { \
+                   while i < v.len() { let _ = v[i]; i += 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_typed_zero_init_index_loop_issue_7731() {
+        // A zero-initialized `let mut i: usize = 0` sweep is the rule's target;
+        // the type annotation does not change that it starts at 0.
+        let src = "fn f(v: &[i32]) { \
+                   let mut i: usize = 0; \
+                   while i < v.len() { let _ = v[i]; i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_suffixed_zero_init_index_loop_issue_7731() {
+        // A suffixed literal `0usize` is still integer-literal zero, so the sweep
+        // fires.
+        let src = "fn f(v: &[i32]) { \
+                   let mut i = 0usize; \
+                   while i < v.len() { let _ = v[i]; i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_zero_init_not_immediately_before_loop_issue_7731() {
+        // The zero-init `let` need not be the statement immediately before the
+        // loop — a preceding-in-block binding still proves the `0..len` sweep.
+        let src = "fn f(v: &[i32]) { \
+                   let mut i = 0; \
+                   let _guard = setup(); \
+                   while i < v.len() { let _ = v[i]; i += 1; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }

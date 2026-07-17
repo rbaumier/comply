@@ -6853,6 +6853,52 @@ fn let_binds_vec(let_node: Node, var: &str, source: &[u8]) -> bool {
     false
 }
 
+/// True if a local `let` binding named `var`, declared before `node` in an
+/// enclosing block, initializes it to an integer-literal `0` (`let mut i = 0`,
+/// `let i: usize = 0`, `let mut i = 0usize`).
+///
+/// Walks up the enclosing scopes from `node`, considering only `let` declarations
+/// that lexically precede `node` within their block. A parameter binding or a
+/// pattern-bound name (`while let Some((mut i, ..)) = ...`) is not a
+/// `let_declaration` and is never confirmed here.
+///
+/// A zero-initialized preceding `let` is the structural signature of a `0..len`
+/// index sweep — the only shape with a `for item in collection` /
+/// `.iter().enumerate()` rewrite. An index bound from a pattern, a parameter, or
+/// carried across iterations starts at an arbitrary offset and has no such
+/// equivalent.
+pub fn local_let_binds_zero(node: Node, var: &str, source: &[u8]) -> bool {
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        let mut cursor = parent.walk();
+        for sib in parent.children(&mut cursor) {
+            if sib.id() == child.id() {
+                break;
+            }
+            if sib.kind() == "let_declaration" && let_binds_zero(sib, var, source) {
+                return true;
+            }
+        }
+        child = parent;
+    }
+    false
+}
+
+/// Whether `let_node` binds `var` to an integer-literal `0`. A type annotation
+/// (`let mut i: usize = 0`) is permitted and ignored; only the initializer value
+/// settles zero-initialization, and a type suffix (`0usize`) is stripped.
+fn let_binds_zero(let_node: Node, var: &str, source: &[u8]) -> bool {
+    let Some(pattern) = let_node.child_by_field_name("pattern") else {
+        return false;
+    };
+    if !let_pattern_binds(pattern, var, source) {
+        return false;
+    }
+    let_node.child_by_field_name("value").is_some_and(|value| {
+        value.kind() == "integer_literal" && parse_int_literal(value, source) == Some(0)
+    })
+}
+
 /// Whether a local `let` binding for `var`, declared before `node` in an
 /// enclosing scope, is an in-memory buffer — a `Vec` or a `String`. Used to
 /// recognize the infallible `io::Write`-into-`Vec<u8>` / `fmt::Write`-into-
