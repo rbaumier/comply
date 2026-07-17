@@ -1,7 +1,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, expression_is_array, is_array_initializer,
-    is_node_module_system_target, locally_owned_binding_init,
+    is_node_module_system_target, is_reduce_accumulator_param, is_vue_ref_value_target,
+    locally_owned_binding_init,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
@@ -58,6 +59,32 @@ impl OxcCheck for Check {
         // Node Module-system object: `ctx.parentModule.children.push(mod)` mutates
         // the Node-owned CJS dependency-graph array — the module-loader contract.
         if is_node_module_system_target(&member.object, semantic) {
+            return;
+        }
+
+        // Vue 3 reactive ref: `tabs.value.push(x)` / `tabs.value.splice(...)`
+        // mutates the deeply-reactive array a `ref([])` holds — the idiomatic,
+        // referentially-stable Vue 3 update. The receiver `<ref>.value` is itself
+        // a member access whose base is the ref identifier, so the receiver's
+        // `.object` is the `<ref>.value` node passed to `is_vue_ref_value_target`.
+        // The non-mutating alternative (`tabs.value = [...tabs.value, x]`)
+        // reallocates the array and drops its reactive identity. Parity with
+        // `no-mutation` / `no-property-mutation`, which exempt `<ref>.value` writes.
+        if let Expression::StaticMemberExpression(inner) = &member.object
+            && is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
+        {
+            return;
+        }
+
+        // Reduce accumulator: `menus.reduce((acc, cur) => { acc.push(cur); return
+        // acc; }, [])` mutates the callback's accumulator parameter — the canonical
+        // reduce pattern, where the accumulator is threaded through and returned,
+        // never observed elsewhere until `reduce` completes. Parity with
+        // `no-mutation` / `no-property-mutation`, which exempt reduce-accumulator
+        // mutations via the same helper.
+        if let Expression::Identifier(receiver) = &member.object
+            && is_reduce_accumulator_param(receiver, semantic)
+        {
             return;
         }
 
@@ -1073,6 +1100,94 @@ mod tests {
             function drain(): number | undefined {
                 const rows: number[] = getRows();
                 return rows.pop();
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_push_and_splice_on_vue_ref_value_array_issue_7656() {
+        // Regression for rbaumier/comply#7656 — soybean-admin: a `ref([])` holds a
+        // deeply-reactive array; `tabs.value.push(tab)` / `tabs.value.splice(...)`
+        // is the idiomatic, referentially-stable Vue 3 update (the non-mutating
+        // form reallocates the array and drops its reactive identity).
+        let src = r#"
+            import { ref } from 'vue'
+            const tabs = ref([]);
+            function addTab(tab) {
+                tabs.value.push(tab);
+                tabs.value.splice(0, 1);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_on_typed_vue_ref_value_array_issue_7656() {
+        // #7656 — a typed `ref<RouteKey[]>([])` holds the same reactive array;
+        // `excludeCacheRoutes.value.push(routeName)` is the reactive update.
+        let src = r#"
+            import { ref } from 'vue'
+            const excludeCacheRoutes = ref<string[]>([]);
+            function add(routeName) {
+                excludeCacheRoutes.value.push(routeName);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_inside_reduce_accumulator_issue_7656() {
+        // Regression for rbaumier/comply#7656 — soybean-admin: `acc.push(cur)`
+        // inside a `.reduce()` callback mutates the accumulator parameter, the
+        // canonical reduce pattern; the accumulator is threaded through and
+        // returned, never observed until `reduce` completes.
+        let src = r#"
+            function flatten(menus: string[]): string[] {
+                return menus.reduce((acc: string[], cur) => {
+                    acc.push(cur);
+                    return acc;
+                }, []);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_push_on_non_ref_value_array_issue_7656() {
+        // Negative space for #7656 — `.value` on a plain const (not bound to a Vue
+        // ref factory, no `vue` import) is an ordinary array mutation, still
+        // flagged; only a genuine `<ref>.value` receiver is exempt.
+        let src = r#"
+            const notARef = getThing();
+            notARef.value.push(1);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_push_on_plain_property_array_issue_7656() {
+        // Negative space for #7656 — a plain property array (`obj.items`) is
+        // neither a `<ref>.value` receiver nor a reduce accumulator, so its
+        // mutation stays flagged.
+        let src = r#"
+            function add(obj, x) {
+                obj.items.push(x);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_push_on_non_reduce_callback_param_issue_7656() {
+        // Negative space for #7656 — the first parameter of a non-`.reduce()`
+        // callback is not an accumulator; a genuine array mutation on it (the
+        // param carries an array type annotation) stays flagged.
+        let src = r#"
+            function each(items) {
+                items.forEach((acc: string[], item) => {
+                    acc.push(item);
+                });
             }
         "#;
         assert_eq!(run(src).len(), 1);
