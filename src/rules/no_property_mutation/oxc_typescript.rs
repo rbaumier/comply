@@ -14,6 +14,7 @@ use crate::oxc_helpers::{
     is_react_display_name_assignment, is_reassigned_fresh_copy_at, is_reduce_accumulator_param,
     is_rtk_reducer_draft_param, is_typed_array_binding, is_unist_visitor_node_param,
     is_valtio_proxy_binding, is_vue_reactive_object_target, is_vue_ref_value_target,
+    root_identifier_of_expr,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -171,17 +172,6 @@ fn is_rooted_at_this(expr: &Expression) -> bool {
         Expression::StaticMemberExpression(m) => is_rooted_at_this(&m.object),
         Expression::ComputedMemberExpression(m) => is_rooted_at_this(&m.object),
         _ => false,
-    }
-}
-
-/// Get the root `IdentifierReference` from a member-access chain. Used to resolve
-/// the binding via semantic and inspect its declaration.
-fn root_identifier_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
-    match expr {
-        Expression::Identifier(id) => Some(id),
-        Expression::StaticMemberExpression(m) => root_identifier_of_expr(&m.object),
-        Expression::ComputedMemberExpression(m) => root_identifier_of_expr(&m.object),
-        _ => None,
     }
 }
 
@@ -1874,14 +1864,76 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_nested_member_mutation_on_reactive_object() {
-        // Negative space: the exemption requires a direct-identifier base, so a
-        // nested write `state.inner.n = x` (whose object is itself a member
-        // expression) stays flagged.
+    fn allows_nested_member_mutation_on_reactive_object_issue_7719() {
+        // Regression for rbaumier/comply#7719 — `reactive()` returns a deeply
+        // reactive proxy, so a nested write drives reactivity exactly like a
+        // top-level one and has no immutable alternative.
         let src = r#"
             import { reactive } from 'vue'
-            const state = reactive({ inner: { n: 0 } });
-            state.inner.n = 1;
+            const state = reactive({ nested: { n: 0 } });
+            state.nested.n = 1;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_deep_member_mutation_on_reactive_object_issue_7719() {
+        // The proxy wraps every nesting level, so the exemption follows the chain
+        // to any depth — `state.pageable.total = x` in the reporting repro.
+        let src = r#"
+            import { reactive } from 'vue'
+            const s = reactive({ a: { b: { c: 0 } } });
+            s.a.b.c = 1;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_computed_link_member_mutation_on_reactive_object_issue_7719() {
+        // A computed link in the chain (`s.list[0]`) reads the same deep proxy —
+        // the element is wrapped too, so the write stays the reactive-update path.
+        let src = r#"
+            import { reactive } from 'vue'
+            const s = reactive({ list: [{ done: false }] });
+            s.list[0].done = true;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nested_reactive_update_expression_issue_7719() {
+        // The update-expression arm exempts deep writes on the same grounds.
+        let src = r#"
+            import { reactive } from 'vue'
+            const state = reactive({ pageable: { pageNum: 1 } });
+            state.pageable.pageNum++;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_nested_member_mutation_on_plain_object() {
+        // Negative space: the deep-chain walk resolves the root binding, it does
+        // not blanket-allow nested writes — a parameter object is not a reactive
+        // proxy, so a nested write on it stays flagged.
+        let src = r#"
+            function f(o) {
+                o.a.b = 2;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_member_mutation_behind_a_call() {
+        // Negative space: a call breaks the chain — `getState()` returns an
+        // unresolvable value that cannot inherit a reactive binding's identity,
+        // so the write stays flagged even next to a `reactive()` binding.
+        let src = r#"
+            import { reactive } from 'vue'
+            const state = reactive({ a: { b: 1 } });
+            function getState() { return state; }
+            getState().a.b = 1;
         "#;
         assert_eq!(run(src).len(), 1);
     }

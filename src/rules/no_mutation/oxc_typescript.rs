@@ -6,7 +6,7 @@ use crate::oxc_helpers::{
     is_local_dispatch_table_binding, is_local_object_builder_binding,
     is_locally_owned_array_binding, is_react_display_name_assignment, is_rtk_reducer_draft_param,
     is_typed_array_binding, is_valtio_proxy_binding, is_vue_reactive_object_target,
-    is_vue_ref_value_target,
+    is_vue_ref_value_target, root_identifier_of_expr,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
@@ -420,15 +420,6 @@ fn root_identifier_of_simple_target<'a>(
         oxc_ast::ast::SimpleAssignmentTarget::ComputedMemberExpression(m) => {
             root_identifier_of_expr(&m.object)
         }
-        _ => None,
-    }
-}
-
-fn root_identifier_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
-    match expr {
-        Expression::Identifier(id) => Some(id),
-        Expression::StaticMemberExpression(m) => root_identifier_of_expr(&m.object),
-        Expression::ComputedMemberExpression(m) => root_identifier_of_expr(&m.object),
         _ => None,
     }
 }
@@ -1233,6 +1224,35 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nested_reactive_object_mutation_issue_7719() {
+        // Regression for rbaumier/comply#7719, parity with no-property-mutation:
+        // `reactive()` returns a deeply reactive proxy, so a write at any depth
+        // drives reactivity exactly like a top-level one.
+        let src = r#"
+            import { reactive } from 'vue'
+            const state = reactive({ pageable: { pageNum: 1, total: 0 }, list: [{ done: false }] })
+            function update(data) {
+                state.pageable.total = data.total
+                state.pageable.pageNum++
+                state.list[0].done = true
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_nested_property_mutation_on_non_reactive_call_const() {
+        // Negative space: the deep-chain walk resolves the root binding, it does
+        // not blanket-allow nested writes — a const initialised by a non-reactive
+        // factory call stays flagged at depth too.
+        let src = r#"
+            const s = someNonReactive();
+            s.a.b = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
