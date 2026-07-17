@@ -54,6 +54,12 @@ pub fn mask_html_comments(source: &str) -> String {
 /// Returns `None` if no `<template>` block is found. The returned slice
 /// borrows from `source`, so callers can recover its byte offset via
 /// pointer arithmetic.
+///
+/// When the grammar fails to parse the SFC and yields no `template_element`
+/// (a top-level `ERROR`, e.g. from a bare `<`/`>` in a directive or binding
+/// value that is read as a tag terminator), a text scan recovers the root
+/// `<template> … </template>` region so template awareness survives the
+/// parse failure.
 pub fn extract_template(source: &str) -> Option<&str> {
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -61,6 +67,7 @@ pub fn extract_template(source: &str) -> Option<&str> {
         .ok()?;
     let tree = parser.parse(source, None)?;
     crate::rules::vue_sfc::template_block(&tree, source)
+        .or_else(|| crate::rules::vue_sfc::template_block_text_fallback(source))
 }
 
 /// A parsed HTML opening/self-closing tag from a Vue template.
