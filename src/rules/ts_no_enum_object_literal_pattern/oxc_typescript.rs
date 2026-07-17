@@ -6,9 +6,10 @@ use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     BindingPattern, CallExpression, Expression, FormalParameter, FormalParameters, FunctionBody,
-    IdentifierReference, ObjectExpression, ObjectPropertyKind, PropertyKey, Statement, TSLiteral,
-    TSSignature, TSTupleElement, TSType, TSTypeAnnotation, TSTypeOperatorOperator,
-    TSTypeParameterDeclaration, TSTypeQueryExprName, VariableDeclarationKind,
+    IdentifierReference, ObjectExpression, ObjectPattern, ObjectPropertyKind, PropertyKey,
+    Statement, TSLiteral, TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
+    TSTypeOperatorOperator, TSTypeParameterDeclaration, TSTypeQueryExprName,
+    VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -321,8 +322,10 @@ fn binding_declared_type<'a>(
 /// The declared type of the binding named `binding_name` inside `param`. A plain
 /// identifier parameter (`value: T`) carries the type directly; a destructured
 /// object parameter (`{ event }: { event: T }`) carries it on the object-type
-/// member whose key is `binding_name`. `None` for an un-annotated parameter, a
-/// non-object destructuring, or a missing member.
+/// member whose key is the one `binding_name` is destructured from — which is not
+/// the binding's own name under a rename (`{ event: e }` binds `e` from key
+/// `event`). `None` for an un-annotated parameter, a non-object destructuring, or
+/// a missing member.
 fn param_binding_type<'a>(
     param: &'a FormalParameter<'a>,
     binding_name: &str,
@@ -330,12 +333,42 @@ fn param_binding_type<'a>(
     let ty = &param.type_annotation.as_ref()?.type_annotation;
     match &param.pattern {
         BindingPattern::BindingIdentifier(_) => Some(ty),
-        BindingPattern::ObjectPattern(_) => object_type_member(ty, binding_name),
+        BindingPattern::ObjectPattern(pat) => {
+            object_type_member(ty, binding_property_key(pat, binding_name)?)
+        }
         _ => None,
     }
 }
 
-/// The member type for the non-computed property named `name` in an object-type
+/// The statically-known property key that `binding_name` is destructured from in
+/// `pat` — `event` for both `{ event }` and `{ event: e }` (binding `e`), and for
+/// a defaulted `{ event = "approved" }`. `None` when no property with a static,
+/// non-computed key binds that name directly; a nested pattern (`{ a: { b } }`)
+/// is not resolved.
+fn binding_property_key<'a>(pat: &'a ObjectPattern<'a>, binding_name: &str) -> Option<&'a str> {
+    pat.properties.iter().find_map(|p| {
+        if p.computed || binding_pattern_name(&p.value) != Some(binding_name) {
+            return None;
+        }
+        match &p.key {
+            PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+            PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+            _ => None,
+        }
+    })
+}
+
+/// The name a binding pattern binds directly, looking through a default value
+/// (`event = "approved"` binds `event`). `None` for a nested destructuring.
+fn binding_pattern_name<'a>(pat: &'a BindingPattern<'a>) -> Option<&'a str> {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
+        BindingPattern::AssignmentPattern(assign) => binding_pattern_name(&assign.left),
+        _ => None,
+    }
+}
+
+/// The member type for the statically-named property `name` in an object-type
 /// literal (`{ name: T }`). `None` when `ty` is not a type literal or has no such
 /// property.
 fn object_type_member<'a>(ty: &'a TSType<'a>, name: &str) -> Option<&'a TSType<'a>> {
@@ -1217,6 +1250,35 @@ mod tests {
         let src = "const eventToColumnMap = { approved: 'approvedAt', rejected: 'rejectedAt' } as const;\n\
                    function f({ event }: { event: 'approved' | 'rejected' }) { return eventToColumnMap[event]; }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_string_literal_union_key_renamed_destructured_param() {
+        // The binding is renamed: `e` is destructured from key `event`, so the
+        // member type must be resolved through the pattern's key, not the
+        // binding's own name.
+        let src = "const m = { approved: 'approvedAt', rejected: 'rejectedAt' } as const;\n\
+                   function f({ event: e }: { event: 'approved' | 'rejected' }) { return m[e]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_string_literal_union_key_defaulted_destructured_param() {
+        // A default value does not change which key the binding comes from.
+        let src = "const m = { approved: 'approvedAt', rejected: 'rejectedAt' } as const;\n\
+                   function f({ event = 'approved' }: { event?: 'approved' | 'rejected' }) { return m[event]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_renamed_destructured_key_colliding_with_another_member() {
+        // `approved` is destructured from key `status` (declared `string`), so it
+        // is an arbitrary key. Resolving the member by the binding's own name
+        // would wrongly pick up the unrelated `approved` member's literal union
+        // and suppress this true positive.
+        let src = "const m = { approved: 'approvedAt', rejected: 'rejectedAt' } as const;\n\
+                   function f({ status: approved }: { status: string; approved: 'approved' | 'rejected' }) { return m[approved]; }";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
