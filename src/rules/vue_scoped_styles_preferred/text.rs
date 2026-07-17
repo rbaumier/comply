@@ -110,4 +110,17 @@ mod tests {
         // A valued `lang` alone (no scoped/module) still leaks globally.
         assert_eq!(run("<style lang=\"less\">\n.x {}\n</style>").len(), 1);
     }
+
+    #[test]
+    fn flags_when_module_is_a_value_or_substring_not_a_boolean_attr() {
+        // Exact attribute-name match: `module` as a *value* or inside a longer
+        // name must not exempt the block.
+        assert_eq!(run("<style lang=\"module\">\n.x {}\n</style>").len(), 1);
+        assert_eq!(run("<style data-module>\n.x {}\n</style>").len(), 1);
+    }
+
+    #[test]
+    fn allows_module_on_multiline_start_tag() {
+        assert!(run("<style\n  lang=\"less\"\n  module>\n.a {}\n</style>").is_empty());
+    }
 }

@@ -465,6 +465,14 @@ pub fn collect_attr_names(attrs: &str) -> Vec<&str> {
                 }
             }
         }
+
+        // Guarantee forward progress: when the cursor is parked on a bare
+        // delimiter that no branch above consumed (a `>` or `/`, e.g. from an
+        // unquoted value like `src=/a.css`), advance past it so the scan always
+        // terminates instead of spinning in place.
+        if i == name_start && i < len {
+            i += 1;
+        }
     }
 
     names
@@ -705,6 +713,16 @@ mod tests {
     fn collect_attr_names_works() {
         let names = collect_attr_names("class=\"foo\" aria-label=\"bar\" disabled");
         assert_eq!(names, vec!["class", "aria-label", "disabled"]);
+    }
+
+    #[test]
+    fn collect_attr_names_terminates_on_unquoted_value_with_slash() {
+        // An unquoted value containing `/` must not spin the tokenizer forever.
+        assert_eq!(collect_attr_names("href=/"), vec!["href"]);
+        assert_eq!(
+            collect_attr_names("src=./a.css module"),
+            vec!["src", ".", "a.css", "module"]
+        );
     }
 
     #[test]
