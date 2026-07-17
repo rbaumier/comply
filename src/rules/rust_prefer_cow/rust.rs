@@ -18,8 +18,10 @@
 //! / `Thing { name: name }`), as a bare argument of a call — a function
 //! call, a method call, or an enum tuple-variant constructor
 //! (`some_fn(name)` / `Variant::String(name)`) — as a bare `identifier`
-//! element of an array literal (`[name]`) or a `vec!` macro (`vec![name]`),
-//! both of which move their elements into the owned collection, by a bare
+//! element of an array literal (`[name]`), moved anywhere inside a `vec!` macro
+//! (a bare element `vec![name]`, or into a constructor nested inside it at any
+//! depth — `vec![Ctor(name)]` / `vec![Ctor { field: name }]` / `vec![Ctor { name }]`),
+//! by a bare
 //! assignment that stores it in an owned place (`self.field = name`), or by
 //! being referenced
 //! anywhere inside a `move` closure (`move || { … name … }`), which captures
@@ -215,13 +217,14 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
             }
         }
         "macro_invocation" => {
-            // `vec![x]` moves its elements into the owned `Vec`. Scope to the
-            // `vec` std collection macro: a format macro (`println!`, `write!`,
-            // `format!`) only borrows its substitution arguments, so those stay
-            // flagged. A macro `token_tree` holds flat tokens (no expression
-            // shape), so a bare-`identifier` element move is one whose
-            // neighbours are element boundaries — `&x` leaves a `&` sibling and
-            // `x.clone()` a `.` sibling, both of which stay flagged.
+            // `vec![…]` moves its elements — and anything moved into a
+            // constructor nested inside them — into the owned `Vec`. Scope to
+            // the `vec` std collection macro: a format macro (`println!`,
+            // `write!`, `format!`) only borrows its substitution arguments, so
+            // those stay flagged. A macro body is an opaque `token_tree` of flat
+            // tokens, so the move is detected structurally by recursing nested
+            // `token_tree`s and reading the param `identifier`'s immediate token
+            // neighbours (`&` borrow / `.`/`::` call-or-path / `:` field label).
             if macro_name_is_vec(node, source)
                 && vec_moves_identifier(node, source, param_name)
             {
@@ -328,12 +331,16 @@ fn macro_name_is_vec(node: tree_sitter::Node, source: &[u8]) -> bool {
         .is_some_and(|name| name == "vec")
 }
 
-/// Whether `param_name` appears as a bare `identifier` element of the `vec!`
-/// macro's `token_tree` (`vec![name]`, `vec![a, name]`). A `token_tree` holds
-/// flat tokens, so an element move is a bare `identifier` flanked by
-/// element-boundary tokens; a leading `&` (`vec![&name]`, a borrow) or a
-/// trailing `.` (`vec![name.clone()]`, a method/field access) leaves a
-/// non-boundary sibling, so those stay flagged.
+/// Whether `param_name` is moved as a bare `identifier` anywhere inside the
+/// `vec!` macro's `token_tree`, including nested `token_tree`s. A macro body is
+/// an opaque `token_tree` of flat tokens, and every balanced `(…)`/`{…}`/`[…]`
+/// inside it is a *nested* `token_tree`, so a param moved into a constructor
+/// (`vec![Ctor(name)]`, `vec![Ctor { field: name }]`, `vec![Ctor { name }]`) or
+/// an arbitrarily nested one (`vec![Outer { x: vec![Inner { f: name }] }]`) lives
+/// one or more `token_tree` levels deep. The scan therefore recurses into every
+/// nested `token_tree` that moves its contents (see [`should_scan_nested_tree`])
+/// and recognises a move by the param `identifier`'s immediate token neighbours
+/// (see [`token_is_moved`]).
 fn vec_moves_identifier(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
     let mut macro_cursor = node.walk();
     let Some(tree) = node
@@ -342,22 +349,60 @@ fn vec_moves_identifier(node: tree_sitter::Node, source: &[u8], param_name: &str
     else {
         return false;
     };
+    token_tree_moves_identifier(tree, source, param_name)
+}
+
+/// Recursive worker for [`vec_moves_identifier`]: scans one `token_tree`'s direct
+/// children for a moved occurrence of `param_name`, descending into every nested
+/// `token_tree` that moves its contents (see [`should_scan_nested_tree`]).
+fn token_tree_moves_identifier(tree: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
     let mut cursor = tree.walk();
-    tree.children(&mut cursor).any(|token| {
-        token.kind() == "identifier"
-            && token.utf8_text(source) == Ok(param_name)
-            && is_element_boundary(token.prev_sibling())
-            && is_element_boundary(token.next_sibling())
+    tree.children(&mut cursor).any(|token| match token.kind() {
+        "token_tree" => {
+            should_scan_nested_tree(token, source)
+                && token_tree_moves_identifier(token, source, param_name)
+        }
+        "identifier" => {
+            token.utf8_text(source) == Ok(param_name)
+                && token_is_moved(token.prev_sibling(), token.next_sibling())
+        }
+        _ => false,
     })
 }
 
-/// Whether `sibling` delimits a `token_tree` element: a bracket/paren/brace or
-/// an element separator (`,` / `;`). A missing sibling counts as a boundary.
-fn is_element_boundary(sibling: Option<tree_sitter::Node>) -> bool {
-    match sibling {
-        None => true,
-        Some(node) => matches!(node.kind(), "[" | "(" | "{" | "]" | ")" | "}" | "," | ";"),
+/// Whether a nested `token_tree` moves the values it holds, so the scan should
+/// descend into it. A plain delimiter group — constructor args `Ctor(…)`, a
+/// struct body `Ctor { … }`, an array `[…]` — always moves its contents. A
+/// nested *macro* argument list (its immediate previous sibling is the macro
+/// `!`) only moves its contents when the macro is `vec` (`vec![Inner { f: name }]`
+/// one level down); other macros (`format!`, `write!`, `assert!`) merely borrow
+/// their arguments, so a param passed there stays flagged rather than being
+/// mistaken for a move.
+fn should_scan_nested_tree(tree: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(prev) = tree.prev_sibling() else {
+        return true;
+    };
+    if prev.kind() != "!" {
+        return true;
     }
+    prev.prev_sibling()
+        .and_then(|name| name.utf8_text(source).ok())
+        == Some("vec")
+}
+
+/// Whether a `param_name` `identifier` token — given its immediate `prev`/`next`
+/// token siblings inside a macro `token_tree` — is a *moved* value rather than a
+/// borrowed, cloned, or field-label occurrence. It is a move unless it is
+/// immediately preceded by `&` (`&name`, a borrow), immediately followed by `.`
+/// or `::` (`name.clone()` / `name::X`, a method call or path), or immediately
+/// followed by `:` (`name: <expr>`, a struct field *label* — not the moved
+/// value; the shorthand `{ name }`, where `name` is followed by `,`/`}`, still
+/// moves).
+fn token_is_moved(prev: Option<tree_sitter::Node>, next: Option<tree_sitter::Node>) -> bool {
+    if prev.is_some_and(|p| p.kind() == "&") {
+        return false;
+    }
+    !next.is_some_and(|n| matches!(n.kind(), "." | "::" | ":"))
 }
 
 /// Whether `param_name` appears as a bare `identifier` anywhere in `node`'s
@@ -648,6 +693,82 @@ mod tests {
         // The `vec!` move recognition is scoped to `vec`; a format macro only
         // borrows its substitution arguments, so `format!` stays flagged.
         assert_eq!(run(r#"pub fn f(s: String) -> String { format!("{}", s) }"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_param_moved_into_tuple_struct_in_vec() {
+        // Repro of #7695 (swc `diagnostic.rs`): `sig` is moved by value into
+        // `Message(sig, 1)`, a tuple-struct constructor nested one `token_tree`
+        // level deep inside `vec![…]`, so the resulting `Vec` owns it — taking
+        // `String` by value is the correct API.
+        assert!(run("pub fn tuple_arg(sig: String) { let _ = vec![Message(sig, 1)]; }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_moved_into_struct_field_in_vec() {
+        // `s` is moved into the explicit field `snippet: s` of a struct literal
+        // nested inside `vec![…]`.
+        assert!(
+            run("pub fn field_init(s: String) { let _ = vec![Part { snippet: s }]; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_moved_into_struct_shorthand_in_vec() {
+        // Shorthand `{ name }` moves the param into the constructed value.
+        assert!(run("pub fn shorthand(name: String) { let _ = vec![Part { name }]; }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_moved_into_nested_constructor_in_vec() {
+        // Arbitrary nesting: `s` is moved into `Part { snippet: s }` two
+        // `token_tree` levels deep inside `vec![Outer { parts: vec![…] }]`.
+        assert!(
+            run("pub fn nested(s: String) { let _ = vec![Outer { parts: vec![Part { snippet: s }] }]; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_param_read_inside_vec_constructor() {
+        // `s.len()` inside the nested constructor only borrows `s` (method
+        // receiver), so `&str` would compile — the warning holds.
+        assert_eq!(
+            run("pub fn f(s: String) { let _ = vec![Message(s.len(), 1)]; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_cloned_inside_vec_constructor() {
+        // `s.clone()` clones rather than moves the param.
+        assert_eq!(
+            run("pub fn f(s: String) { let _ = vec![Message(s.clone(), 1)]; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_when_vec_field_label_coincides_with_name() {
+        // The param `name` appears only as the field LABEL `name:` (initialised
+        // from a different value); the param itself is never moved, so the field
+        // label must not be mistaken for a move and the warning holds.
+        assert_eq!(
+            run("pub fn f(name: String) { let _ = vec![Part { name: other() }]; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_borrowed_by_format_macro_inside_vec() {
+        // `format!` nested inside the `vec!` only borrows `s`, so the element is
+        // an owned `String` built from a borrow — `&str` would compile and the
+        // warning holds. The scan must not descend into a non-`vec` macro's
+        // argument list and mistake the borrowed `s` for a move.
+        assert_eq!(
+            run(r#"pub fn f(s: String) -> Vec<String> { vec![format!("{}", s)] }"#).len(),
+            1
+        );
     }
 
     #[test]
