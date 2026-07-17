@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, expression_is_array, is_array_initializer,
-    is_locally_owned_array_binding, is_node_module_system_target,
+    is_node_module_system_target, locally_owned_binding_init,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
@@ -61,16 +61,21 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Mutation of a locally-owned array is not externally observable:
-        // the receiver resolves to a `const`/`let` declared in an inner
-        // (non-module) scope whose initialiser is an array literal (`[...]`,
-        // `[]`) or `new Array(...)`. This is the "build up an accumulator
-        // then return it" pattern (`const actions = [a, b]; actions.push(c);
-        // return v.pipe(...actions)`). A parameter array, a module-scope
-        // array, or a property (`this.items`, `obj.list`) is not exempt —
-        // those may be observed by other code.
+        // Mutation of a locally-owned array is not externally observable: the
+        // receiver resolves to a `const`/`let` declared in an inner (non-module)
+        // scope whose initialiser is an array-evident expression — an array
+        // literal (`[...]`, `[]`), a `new Array(...)`, or a fresh-array-producing
+        // call (`data.map(...)`, `items.filter(...)`, `str.split(...)`,
+        // `Array.from(...)`, `Object.keys(...)`). This covers both the
+        // "build up an accumulator then return it" pattern (`const actions =
+        // [a, b]; actions.push(c); return v.pipe(...actions)`) and the
+        // "fetch `perPage + 1`, then `.pop()` the extra" pagination trick
+        // (`const rows = data.map(...); const extra = rows.pop()`). A parameter
+        // array, a module-scope array, or a property (`this.items`, `obj.list`)
+        // is not exempt — those may be observed by other code.
         if let Expression::Identifier(receiver) = &member.object
-            && is_locally_owned_array_binding(receiver, semantic)
+            && locally_owned_binding_init(receiver, semantic)
+                .is_some_and(is_array_evident_initializer)
         {
             return;
         }
@@ -192,8 +197,12 @@ fn is_non_array_fill(
 /// `true` when `expr` proves its value is a fresh array: an array literal
 /// (`[...]`, `[]`), a `new Array(...)` construction, an array-returning call
 /// (`x.map(...)`, `x.filter(...)`, `x.slice(...)`, `x.concat(...)`,
-/// `Array.from(...)`, `Array.of(...)`), or an `Object.keys`/`Object.values`/
-/// `Object.entries(...)` static producer.
+/// `str.split(...)`, `Array.from(...)`, `Array.of(...)`), or an
+/// `Object.keys`/`Object.values`/`Object.entries(...)` static producer.
+///
+/// `slice`/`concat`/`split` also exist on `String`, so this accepts the same
+/// receiver-type imprecision the rule already carries for `slice`/`concat`:
+/// `String.prototype.split` always returns a fresh `string[]`.
 fn is_array_evident_initializer(expr: &Expression) -> bool {
     if is_array_initializer(expr) {
         return true;
@@ -216,7 +225,7 @@ fn is_array_evident_initializer(expr: &Expression) -> bool {
             }
             matches!(
                 method,
-                "map" | "filter" | "slice" | "concat" | "flat" | "flatMap" | "toSorted"
+                "map" | "filter" | "slice" | "concat" | "split" | "flat" | "flatMap" | "toSorted"
                     | "toReversed" | "toSpliced" | "fill"
             )
         }
@@ -986,6 +995,84 @@ mod tests {
             function collect(): void {
                 const xs: number[] = getThem();
                 xs.push(3);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_pop_on_local_map_bound_array_issue_7594() {
+        // Regression for rbaumier/comply#7594 — documenso pagination: a local
+        // `const` bound to `data.map(...)` holds a brand-new array referenced
+        // only through member reads; `.pop()` on it (the classic
+        // fetch-`perPage + 1`-then-pop trick) mutates a private copy, not
+        // externally observable.
+        let src = r#"
+            function paginate(data, perPage) {
+                const parsedData = data.map((auditLog) => parse(auditLog));
+                if (parsedData.length > perPage) {
+                    const nextItem = parsedData.pop();
+                    return nextItem.id;
+                }
+                return undefined;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_sort_on_inline_split_call_issue_7594() {
+        // Regression for rbaumier/comply#7594 — documenso PDF signing:
+        // `signatureText.split("\n").sort(...)` sorts the fresh `string[]` that
+        // `.split()` just allocated; nothing else references it, the canonical
+        // "sort a fresh copy" idiom.
+        let src = r#"
+            function longestLine(signatureText) {
+                return signatureText.split("\n").sort((a, b) => b.length - a.length)[0];
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_sort_on_local_split_bound_array_issue_7594() {
+        // #7594 — a local `const` bound to `str.split(...)` holds a fresh
+        // `string[]`; sorting it in place is not observable.
+        let src = r#"
+            function order(str) {
+                const lines = str.split("\n");
+                lines.sort();
+                return lines;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_pop_on_module_scope_map_bound_array_issue_7594() {
+        // Negative space for #7594 — a module-scope `const` bound to
+        // `data.map(...)` is reachable by other code in the module, so mutating
+        // it stays observable. The scope guard must reject root-scope bindings
+        // even when the initialiser is a fresh-array producer.
+        let src = r#"
+            const shared = data.map((x) => x);
+            export function drain() {
+                return shared.pop();
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_pop_on_local_const_bound_to_non_fresh_source_issue_7594() {
+        // Negative space for #7594 — a non-root `const` with an array type
+        // annotation but bound to a non-fresh source (an opaque getter call)
+        // may alias a shared array, so its mutation stays flagged. Only a
+        // fresh-array-producing initialiser is locally owned.
+        let src = r#"
+            function drain(): number | undefined {
+                const rows: number[] = getRows();
+                return rows.pop();
             }
         "#;
         assert_eq!(run(src).len(), 1);
