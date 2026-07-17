@@ -42,47 +42,6 @@ pub fn mask_html_comments(source: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| source.to_string())
 }
 
-/// Return a copy of a Vue SFC `source` with the JS/TS comments (`//…` line and
-/// `/* … */` block, JSDoc included) inside every `<script>` / `<script setup>`
-/// block replaced by spaces, leaving `<template>`, `<style>`, and custom blocks
-/// byte-for-byte unchanged.
-///
-/// Each `<script>` raw body is masked with [`crate::oxc_helpers::mask_comments`],
-/// which skips string and template literals — a `//` or `/*` inside a string
-/// (e.g. a `"http://…"` URL) is left intact. The mask is offset-preserving:
-/// comment bytes become single spaces and newlines are kept, so byte offsets and
-/// line/column positions are unchanged.
-///
-/// Comment syntax is JS-specific, so it is applied only within `<script>` raw
-/// text: a `//` in the `<template>` is literal HTML text, not a comment, and must
-/// stay intact so a live access on that line is still scanned. A source with no
-/// parseable `<script>` block is returned unchanged, so plain-script callers are
-/// unaffected.
-#[must_use]
-pub fn mask_script_comments(source: &str) -> String {
-    let mut parser = tree_sitter::Parser::new();
-    if parser
-        .set_language(&tree_sitter_vue_updated::language())
-        .is_err()
-    {
-        return source.to_string();
-    }
-    let Some(tree) = parser.parse(source, None) else {
-        return source.to_string();
-    };
-    let mut out = source.as_bytes().to_vec();
-    for block in crate::rules::vue_sfc::extract_scripts(&tree, source) {
-        let start = block.text.as_ptr() as usize - source.as_ptr() as usize;
-        let masked = crate::oxc_helpers::mask_comments(block.text);
-        // `mask_comments` is offset-preserving, so the masked body has the same
-        // byte length as the original script body and splices in place.
-        out[start..start + block.text.len()].copy_from_slice(masked.as_bytes());
-    }
-    // Spliced bytes are the original non-comment bytes plus ASCII spaces, so char
-    // boundaries are never split and the buffer stays valid UTF-8.
-    String::from_utf8(out).unwrap_or_else(|_| source.to_string())
-}
-
 /// Extract the inner content of the SFC's root `<template>` block.
 ///
 /// A valid Vue SFC has exactly one top-level `<template>` block; any other
@@ -568,39 +527,6 @@ mod tests {
         let masked = mask_html_comments(source);
         assert!(masked.starts_with("<p>café</p>"));
         assert!(!masked.contains("é -->"));
-    }
-
-    #[test]
-    fn mask_script_comments_blanks_line_and_block_comments() {
-        let source = "<script setup>\nconst a = 1 // gone\n/* also gone */\n</script>";
-        let masked = mask_script_comments(source);
-        assert!(!masked.contains("gone"));
-        assert!(masked.contains("const a = 1"));
-        // Offset-preserving: same byte length and newline positions.
-        assert_eq!(masked.len(), source.len());
-        assert_eq!(masked.lines().count(), source.lines().count());
-    }
-
-    #[test]
-    fn mask_script_comments_keeps_string_slashes() {
-        // `//` inside a string literal is not a comment; it must survive.
-        let source = "<script setup>\nconst u = 'http://a'\n</script>";
-        assert_eq!(mask_script_comments(source), source);
-    }
-
-    #[test]
-    fn mask_script_comments_leaves_template_double_slash() {
-        // `//` in `<template>` is literal text, not a JS comment, so it is kept.
-        let source = "<template>\n  <a>http://x</a>\n</template>\n<script setup>\nconst a = 1\n</script>";
-        let masked = mask_script_comments(source);
-        assert!(masked.contains("http://x"));
-    }
-
-    #[test]
-    fn mask_script_comments_non_sfc_unchanged() {
-        // No `<script>` block: the source is returned unchanged.
-        let source = "<template>\n  <div>hi</div>\n</template>";
-        assert_eq!(mask_script_comments(source), source);
     }
 
     #[test]
