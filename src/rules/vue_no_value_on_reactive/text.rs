@@ -178,7 +178,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     // Mask JS comments inside every `<script>` block so a `reactive()` binding or
     // a `name.value` access that appears only in commented-out code is never
     // scanned. The mask is offset-preserving, so line numbers stay correct.
-    let masked = crate::rules::vue_template_helpers::mask_script_comments(ctx.source);
+    let masked = crate::rules::vue_sfc::mask_script_comments(ctx.source);
     let names = collect_reactives(&masked);
     if names.is_empty() {
         return;
