@@ -2,8 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
-    is_local_dispatch_table_binding, is_local_object_builder_binding,
+    byte_offset_to_line_col, expression_is_array, is_constant_index_expression,
+    is_get_context_call_binding, is_local_dispatch_table_binding, is_local_object_builder_binding,
     is_locally_owned_array_binding, is_react_display_name_assignment, is_rtk_reducer_draft_param,
     is_typed_array_binding, is_valtio_proxy_binding, is_vue_reactive_object_target,
     is_vue_ref_value_target, root_identifier_of_expr,
@@ -278,6 +278,23 @@ impl OxcCheck for Check {
                 if matches!(method, "push" | "unshift")
                     && let Expression::Identifier(receiver) = &member.object
                     && is_locally_owned_array_binding(receiver, semantic)
+                {
+                    return;
+                }
+
+                // An array-mutation method on a plain-identifier receiver is an
+                // array mutation only with positive evidence that the binding is
+                // array-shaped: an array-literal / `new Array(...)` / array-returning
+                // initializer, or an explicit array type annotation (`T[]`,
+                // `readonly T[]`, `Array<T>`, `ReadonlyArray<T>`) on its declarator or
+                // parameter. A receiver bound to a non-array factory
+                // (`const router = useRouter()`, `const s = new Subject()`) carries no
+                // such evidence and calls a same-named method on a different object
+                // (navigation, an event emitter), not an array. Member receivers
+                // (`store.items`, `this.children`) are not gated — their element type
+                // is not locally resolvable — so they stay flagged.
+                if matches!(&member.object, Expression::Identifier(_))
+                    && !expression_is_array(&member.object, semantic)
                 {
                     return;
                 }
@@ -1459,11 +1476,12 @@ mod tests {
 
     #[test]
     fn still_flags_ordinary_const_array_push_outside_reducer_issue_5596() {
-        // Negative space: `.push` on a plain const array outside any reducer (no
-        // RTK context, no `Draft<…>` type) stays flagged.
+        // Negative space: `.push` on a plain const array (positive array evidence
+        // via the `number[]` annotation) outside any reducer (no RTK context, no
+        // `Draft<…>` type) stays flagged.
         let src = r#"
             function f() {
-                const list = getList();
+                const list: number[] = getList();
                 list.push(1);
             }
         "#;
@@ -1486,11 +1504,12 @@ mod tests {
 
     #[test]
     fn still_flags_non_draft_const_mutation_inside_reducer_issue_5596() {
-        // Negative space: a captured outer `const` mutated inside a reducer is not
-        // the draft (not the reducer's first param) — it stays flagged.
+        // Negative space: a captured outer `const` array (positive array evidence
+        // via the `unknown[]` annotation) mutated inside a reducer is not the draft
+        // (not the reducer's first param) — it stays flagged.
         let src = r#"
             import { createSlice } from '@reduxjs/toolkit'
-            const cache = getCache();
+            const cache: unknown[] = getCache();
             const slice = createSlice({
                 name: 's',
                 initialState,
@@ -1626,19 +1645,6 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_push_on_const_from_opaque_call_issue_7593() {
-        // Negative space: a `const` initialised from a call (not an array literal)
-        // may reference a shared array — its `.push` stays flagged.
-        let src = r#"
-            function collect() {
-                const list = getList();
-                list.push(1);
-            }
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
     fn still_flags_push_on_module_scope_const_array_issue_7593() {
         // Negative space: a module-scope array is reachable by other code in the
         // module, so its mutation stays observable and flagged.
@@ -1663,6 +1669,71 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Array-mutation method names collide with non-array `.push()` APIs
+    // (vue-router `Router`, history, RxJS `Subject`, custom `Stack`) — issue #7732
+
+    #[test]
+    fn ignores_push_on_vue_router_instance_issue_7732() {
+        // Regression for rbaumier/comply#7732 — `useRouter()` returns a vue-router
+        // `Router`; `router.push(path)` navigates and has no immutable alternative.
+        // The receiver carries no array evidence, so the array-method name alone
+        // must not drive the diagnostic.
+        let src = r#"
+            const router = useRouter();
+            function go() {
+                router.push("/");
+                router.push({ name: "home", query: { q: "1" } });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_on_history_and_subject_and_opaque_call_issue_7732() {
+        // Other non-array receivers with a `.push()` method: a history object, an
+        // RxJS `Subject` (`new Subject()`), and a const bound to any opaque factory
+        // call. None carries array evidence, so none is flagged — proving the gate
+        // keys on structural array evidence, not a receiver-name allowlist.
+        let src = r#"
+            const h = createHistory();
+            const s = new Subject();
+            const list = getList();
+            function run() {
+                h.push("/next");
+                s.push(1);
+                list.push(1);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_literal_and_producer_and_annotation_receivers_issue_7732() {
+        // True positives preserved: a plain-identifier receiver with positive array
+        // evidence — an array literal, an array-producing chain (`.split()`,
+        // `Array.from(...)`), or an explicit `T[]` annotation — stays flagged.
+        let array_literal = r#"
+            const xs = [];
+            xs.push(1);
+        "#;
+        assert_eq!(run(array_literal).len(), 1);
+        let annotation = r#"
+            const xs: number[] = f();
+            xs.splice(0, 1);
+        "#;
+        assert_eq!(run(annotation).len(), 1);
+        let split_producer = r#"
+            const xs = "a,b".split(",");
+            xs.push("c");
+        "#;
+        assert_eq!(run(split_producer).len(), 1);
+        let array_from_producer = r#"
+            const xs = Array.from(it);
+            xs.unshift(0);
+        "#;
+        assert_eq!(run(array_from_producer).len(), 1);
     }
 }
 
