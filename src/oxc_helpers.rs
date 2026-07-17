@@ -3868,21 +3868,33 @@ pub fn is_vue_ref_value_target(
     is_vue_ref_binding(base, semantic, project, path)
 }
 
-/// True when `member` is a `<ident>.value` access where `<ident>` is destructured
-/// (object/array pattern) from a function CALL — the standard "composable returns
-/// a `Ref<T>`" pattern (`const { error } = useThing(); error.value = x`). A
-/// `Ref<T>` is mutated only via `.value` regardless of how it was produced; a
-/// binding destructured from a call result is conservatively treated as a
-/// potential ref. Restricted to the `value` property (so `x.config = y` stays
-/// flagged) and to call initializers (so destructuring a plain OBJECT LITERAL is
-/// NOT exempted).
+/// True when `member` is a `<ident>.value` access where `<ident>` is a local
+/// binding initialised by a function CALL — the standard "composable returns a
+/// `Ref<T>`" pattern, whether the ref is bound directly
+/// (`const theme = useStorage(k, v); theme.value = x`) or destructured
+/// (`const { error } = useThing(); error.value = x`). A `Ref<T>` is mutated only
+/// through `.value` regardless of which composable produced it and of how the
+/// binding was taken, so a binding holding a call result is conservatively
+/// treated as a potential ref.
+///
+/// Two structural constraints bound the exemption: the property must be `value`
+/// (`x.config = y` stays flagged), and the initialiser must be a call
+/// (`const o = { value: 1 }; o.value = 2` stays flagged). The binding must also
+/// be declared outside any function nested in that initialiser, so a callback
+/// parameter (`const rows = xs.map((r) => { r.value = 1; })`) does not inherit
+/// the enclosing declarator's call.
+///
+/// The trade-off is a false negative when a call returns a plain object whose
+/// `value` is a real data field (`const c = getConfig(); c.value = 5`):
+/// distinguishing it from a ref would take a callee-name allowlist, which no
+/// hand-written composable would match.
 #[must_use]
-pub fn is_destructured_call_ref_value_target(
+pub fn is_call_ref_value_target(
     member: &oxc_ast::ast::StaticMemberExpression,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     use oxc_ast::AstKind;
-    use oxc_ast::ast::{BindingPattern, Expression};
+    use oxc_ast::ast::Expression;
 
     if member.property.name.as_str() != "value" {
         return false;
@@ -3902,25 +3914,20 @@ pub fn is_destructured_call_ref_value_target(
     for kind in
         std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
-        if let AstKind::VariableDeclarator(decl) = kind {
-            // The binding must be destructured (object/array pattern), not a
-            // plain `const x = …` — a non-destructured call result is not
-            // recognized as a ref.
-            if !matches!(
-                decl.id,
-                BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_)
-            ) {
-                return false;
+        match kind {
+            AstKind::VariableDeclarator(decl) => {
+                let Some(init) = &decl.init else {
+                    return false;
+                };
+                // `await` / `as T` / `!` all evaluate to the value the call
+                // produced (see `peel_value_wrappers`).
+                return matches!(peel_value_wrappers(init), Expression::CallExpression(_));
             }
-            let Some(init) = &decl.init else {
-                return false;
-            };
-            // Peel a leading `await`, e.g. `const { x } = await useThing()`.
-            let init = match init {
-                Expression::AwaitExpression(a) => &a.argument,
-                other => other,
-            };
-            return matches!(init, Expression::CallExpression(_));
+            // A binding declared inside a function is that function's own — a
+            // parameter or a local — not the call result an enclosing
+            // declarator holds.
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
         }
     }
     false

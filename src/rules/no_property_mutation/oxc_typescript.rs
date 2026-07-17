@@ -454,10 +454,10 @@ impl OxcCheck for Check {
                         let prop_text = m.property.name.as_str();
 
                         // Vue 3 reactive ref: `count.value = x` drives reactivity.
-                        // Also covers a `Ref<T>` destructured from a composable call
-                        // (`const { error } = useThing(); error.value = x`).
+                        // Also covers a `Ref<T>` a composable call returned
+                        // (`const theme = useStorage(k, v); theme.value = x`).
                         if is_vue_ref_value_target(m, semantic, ctx.project, ctx.path)
-                            || crate::oxc_helpers::is_destructured_call_ref_value_target(m, semantic)
+                            || crate::oxc_helpers::is_call_ref_value_target(m, semantic)
                         { return; }
                         // Vue 3 reactive() object: `state.n = x` is the idiomatic update.
                         if is_vue_reactive_object_target(m, semantic, ctx.project, ctx.path) { return; }
@@ -570,9 +570,9 @@ impl OxcCheck for Check {
                 match &update.argument {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
                         // Vue 3 reactive ref: `count.value++` drives reactivity.
-                        // Also covers a `Ref<T>` destructured from a composable call.
+                        // Also covers a `Ref<T>` a composable call returned.
                         if is_vue_ref_value_target(m, semantic, ctx.project, ctx.path)
-                            || crate::oxc_helpers::is_destructured_call_ref_value_target(m, semantic)
+                            || crate::oxc_helpers::is_call_ref_value_target(m, semantic)
                         { return; }
                         // Vue 3 reactive() object: `state.incrementedTimes++` is the idiomatic update.
                         if is_vue_reactive_object_target(m, semantic, ctx.project, ctx.path) { return; }
@@ -1107,7 +1107,7 @@ mod tests {
         // external state — mutating it stays flagged.
         let src = r#"
             const o = makeThing();
-            o.value = 5;
+            o.count = 5;
         "#;
         assert_eq!(run(src).len(), 1);
     }
@@ -1587,11 +1587,11 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_value_mutation_on_plain_const_without_vue_import() {
-        // Negative space: `.value` on a const from an external call (not a vue
-        // ref factory, no vue import) is a genuine mutation and stays flagged.
+    fn still_flags_value_mutation_on_non_call_initialized_const() {
+        // Negative space: no call produced `plain`, so it holds no composable
+        // ref and the `.value` write stays flagged.
         let src = r#"
-            const plain = getThing();
+            const plain = source;
             plain.value = 1;
         "#;
         assert_eq!(run(src).len(), 1);
@@ -1758,7 +1758,7 @@ mod tests {
                 "composables/useThing.ts",
                 "import { flag } from '../state'\n\
                  export function useThing() {\n\
-                     const flag = getThing();\n\
+                     const flag = source;\n\
                      flag.value = 1;\n\
                  }",
             ),
@@ -1778,13 +1778,72 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    // Vue ref bound directly from a composable call — issue #7734
+
     #[test]
-    fn still_flags_value_mutation_on_non_destructured_composable_binding() {
-        // Negative space: the exemption requires destructuring, so a `.value`
-        // write on a plain non-destructured `const x = useThing()` stays flagged.
+    fn allows_value_mutation_on_non_destructured_composable_ref_issue_7734() {
+        // Regression for rbaumier/comply#7734 — `useStorage` (VueUse) returns a
+        // `RemovableRef<string>`; `.value =` is the reactive update, exactly as
+        // for a destructured composable ref.
+        let src = r#"
+            const themePalette = useStorage("theme-palette", "blue");
+            const device = useStorage("device", "desktop");
+            function apply(preset, val) {
+                themePalette.value = preset.id;
+                device.value = val;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_hand_written_composable_ref_issue_7734() {
+        // The exemption keys on the call, not on a known composable name, so a
+        // hand-written composable's ref is treated like a VueUse one.
+        let src = r#"
+            const x = useMyThing();
+            function f() { x.value = 1; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_wrapped_composable_ref_issue_7734() {
+        // `await` and `as T` preserve the value the call produced.
+        let src = r#"
+            const x = (await useThing()) as Ref<number>;
+            function f() { x.value = 1; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_update_expression_on_composable_ref_issue_7734() {
+        // The update handler takes the same exemption as the assignment handler.
+        let src = r#"
+            const count = useCounter();
+            function bump() { count.value++; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_value_property_on_non_destructured_composable_binding_issue_7734() {
+        // Negative space: the exemption is `.value`-restricted, so another
+        // property write on a call-initialised binding stays flagged.
         let src = r#"
             const x = useThing();
-            function f() { x.value = 1; }
+            function f() { x.other = 1; }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_callback_param_in_call_initializer_issue_7734() {
+        // Negative space: `r` is the callback's own parameter, not the value
+        // `xs.map(...)` returned, so it does not inherit the declarator's call.
+        let src = r#"
+            const rows = xs.map((r) => { r.value = 1; return r; });
         "#;
         assert_eq!(run(src).len(), 1);
     }
@@ -2407,7 +2466,7 @@ mod tests {
             const instance = makeThing();
             instance.prop = y;
             const count = makeCounter();
-            count.value = 5;
+            count.total = 5;
         "#;
         assert_eq!(run(src).len(), 2);
     }

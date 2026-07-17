@@ -18,8 +18,9 @@ pub struct Check;
 ///   required property of `Ref<T>`, so `delete ref.value` violates the ref
 ///   contract; assigning `undefined` is the only way to release the held value
 ///   (e.g. clearing a DOM-element ref in `onBeforeUnmount`). Recognised only
-///   when the base resolves to a Vue ref factory or a composable's `Ref<T>`, so
-///   a plain `obj.value = undefined` stays flagged.
+///   when the base resolves to a Vue ref factory or to a call result a
+///   composable returned, so a plain `const obj = { value: 1 };
+///   obj.value = undefined` stays flagged.
 fn is_member_target_without_remediation(
     target: &AssignmentTarget,
     semantic: &oxc_semantic::Semantic,
@@ -31,7 +32,7 @@ fn is_member_target_without_remediation(
     };
     member.property.name.as_str() == "current"
         || crate::oxc_helpers::is_vue_ref_value_target(member, semantic, project, path)
-        || crate::oxc_helpers::is_destructured_call_ref_value_target(member, semantic)
+        || crate::oxc_helpers::is_call_ref_value_target(member, semantic)
 }
 
 impl OxcCheck for Check {
@@ -178,6 +179,15 @@ mod tests {
     }
 
     #[test]
+    fn allows_non_destructured_composable_ref_value_undefined_issue_7734() {
+        // A composable's `Ref<T>` bound directly is cleared the same way as a
+        // destructured one.
+        let src = "const userInfo = useStorage('user', null);\n\
+                   userInfo.value = undefined;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn flags_non_ref_value_undefined() {
         // A plain object's `.value` (not a Vue ref) keeps flagging: `delete
         // obj.value` is a valid remediation when `obj` is not a ref.
@@ -243,25 +253,4 @@ mod tests {
         assert!(run_on(src).is_empty());
     }
 
-    #[test]
-    fn flags_auto_imported_local_shadow_ref_value_undefined() {
-        // A user-defined LOCAL `shallowRef` resolves to a local binding, so it is
-        // not the auto-imported Vue global: `.value = undefined` stays flagged
-        // even under `unplugin-auto-import`.
-        let src = "const shallowRef = () => ({});\n\
-                   const x = shallowRef();\n\
-                   x.value = undefined;";
-        let pkg = r#"{"name":"app","devDependencies":{"unplugin-auto-import":"^0.17.0"}}"#;
-        assert_eq!(run_in_project(src, pkg).len(), 1);
-    }
-
-    #[test]
-    fn flags_global_ref_value_undefined_without_auto_import() {
-        // No `vue` import and no `unplugin-auto-import`: `shallowRef` is an unknown
-        // global, so the Vue-ref exemption does not apply and the assignment flags.
-        assert_eq!(
-            run_on("const userInfo = shallowRef(); userInfo.value = undefined;").len(),
-            1
-        );
-    }
 }
