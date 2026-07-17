@@ -8,8 +8,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-no-is-loading",
-    description: "`isLoading` was renamed to `isPending` in TanStack Query v5.",
-    remediation: "Replace `isLoading` with `isPending` (or `isFetching` if you need network activity).",
+    description: "`isLoading` was removed from `useMutation` results in TanStack Query v5 (renamed to `isPending`).",
+    remediation: "Replace `isLoading` with `isPending` on the `useMutation` result.",
     severity: Severity::Warning,
     doc_url: Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5"),
     categories: &["tanstack"],
