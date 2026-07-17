@@ -93,7 +93,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    arm_body_is_diverging, enum_has_cfg_gated_variant, is_in_test_context,
+    arm_body_is_diverging, enum_has_cfg_gated_variant, has_clippy_allow, is_in_test_context,
 };
 
 #[derive(Debug)]
@@ -113,6 +113,14 @@ impl AstCheck for Check {
     ) {
         let source_bytes = ctx.source.as_bytes();
         if is_in_test_context(node, source_bytes) {
+            return;
+        }
+        // The author opted out of the clippy lint this rule mirrors
+        // (`wildcard_enum_match_arm`), on the `match` itself or an enclosing
+        // statement/item/module/file scope; deferring to that explicit
+        // `#[allow]` / `#[expect]` avoids double-flagging an already-suppressed
+        // lint.
+        if has_clippy_allow(node, source_bytes, "wildcard_enum_match_arm") {
             return;
         }
         let Some(match_block) = node.child_by_field_name("body") else {
@@ -2219,5 +2227,65 @@ mod tests {
                    Self::Logs(a) => TypedIter(Some(a.iter_mut())), \
                    _ => TypedIter(None /* empty */), } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_with_expect_clippy_wildcard_enum_match_arm() {
+        // Issue #7682: the author explicitly opted out of the mirrored clippy
+        // lint (`wildcard_enum_match_arm`) via `#[expect(...)]` on the `match`
+        // (qdrant `lib/collection/src/operations/types.rs`). Deferring to that
+        // suppression avoids double-flagging an already-suppressed lint.
+        let src = r#"fn f(&self) -> bool {
+    #[expect(clippy::wildcard_enum_match_arm, reason = "error handling")]
+    match self {
+        Self::NotFound { what } => what.contains("No point with id"),
+        Self::PointNotFound { .. } => true,
+        _ => false,
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_with_allow_clippy_wildcard_enum_match_arm() {
+        // The `#[allow(...)]` form of the mirror-lint suppression is honored too.
+        let src = r#"fn f(&self) -> bool {
+    #[allow(clippy::wildcard_enum_match_arm)]
+    match self {
+        Self::NotFound { what } => what.contains("No point with id"),
+        Self::PointNotFound { .. } => true,
+        _ => false,
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_without_clippy_allow() {
+        // The same wildcard enum match WITHOUT the mirror-lint suppression is a
+        // genuine target and must still fire.
+        let src = r#"fn f(&self) -> bool {
+    match self {
+        Self::NotFound { what } => what.contains("No point with id"),
+        Self::PointNotFound { .. } => true,
+        _ => false,
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_under_unrelated_clippy_allow() {
+        // An `#[allow]` of a DIFFERENT clippy lint must not suppress this rule:
+        // the defer keys only on the exact mirror lint name.
+        let src = r#"fn f(&self) -> bool {
+    #[allow(clippy::match_same_arms)]
+    match self {
+        Self::NotFound { what } => what.contains("No point with id"),
+        Self::PointNotFound { .. } => true,
+        _ => false,
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
