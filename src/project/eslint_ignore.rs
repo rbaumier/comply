@@ -3,12 +3,15 @@
 //! `.d.ts`, fixtures, build output).
 //!
 //! Covered:
-//! - `.eslintignore` / `.eslint-ignore` (gitignore syntax) — handled by the
-//!   walker via `add_custom_ignore_filename` in `crate::files`, not here.
 //! - flat config global ignores: an object whose **only** key is `ignores`
-//!   in `eslint.config.{js,mjs,cjs,ts,mts,cts}`.
+//!   in `eslint.config.{js,mjs,cjs,ts,mts,cts}` (`load`).
 //! - `ignorePatterns` in `.eslintrc.{json,js,cjs,yaml,yml}` and in
-//!   `package.json` → `eslintConfig`.
+//!   `package.json` → `eslintConfig` (`load`).
+//! - `.eslintignore` / `.eslint-ignore` files (gitignore syntax; often a
+//!   symlink to `.prettierignore`) via `load_ignore_files`. These routinely
+//!   list non-JS globs (`*.rs`, `*.py`) ESLint never lints, so the caller
+//!   applies the returned matcher only to the TypeScript family — see
+//!   `crate::files`.
 //!
 //! Static extraction only — comply does not execute the config JS. String
 //! literals and `...NAME` spreads of a same-file `const NAME = [literals]` are
@@ -31,6 +34,11 @@ const FLAT_CONFIGS: &[&str] = &[
     "eslint.config.cts",
 ];
 
+/// ESLint's file-based path-exclusion files, gitignore syntax. A project often
+/// symlinks `.eslintignore` to `.prettierignore`; `std::fs` follows the symlink
+/// transparently when the matcher reads them.
+const IGNORE_FILES: &[&str] = &[".eslintignore", ".eslint-ignore"];
+
 /// Build a matcher from ESLint's config-based ignore mechanisms, anchored at
 /// the nearest config root at or above `scan_root`. Returns `None` when no
 /// ESLint config is found or it declares no ignore patterns.
@@ -49,6 +57,40 @@ pub fn load(scan_root: &Path) -> Option<Gitignore> {
         let _ = builder.add_line(None, pattern);
     }
     builder.build().ok()
+}
+
+/// Build a matcher from the project's `.eslintignore` / `.eslint-ignore` files
+/// (gitignore syntax), anchored at the nearest ancestor of `scan_root` that
+/// holds one. Returns `None` when neither file is found.
+///
+/// Unlike [`load`], these files exist independently of any ESLint config, so
+/// the search keys on the ignore file itself rather than `config_root`. They
+/// routinely list non-JS globs (`*.rs`, `*.py`) that ESLint never lints, so the
+/// caller must apply this matcher only to the TypeScript family — a bare `*.rs`
+/// line must not suppress Rust (or any other non-JS) source.
+pub fn load_ignore_files(scan_root: &Path) -> Option<Gitignore> {
+    let root = ignore_file_root(scan_root)?;
+    let mut builder = GitignoreBuilder::new(&root);
+    for name in IGNORE_FILES {
+        // `add` reads the file (following a `.prettierignore` symlink) and
+        // returns any parse error, which we skip rather than abort the matcher.
+        let _ = builder.add(root.join(name));
+    }
+    builder.build().ok()
+}
+
+/// Nearest directory at or above `start` that holds an `.eslintignore` or
+/// `.eslint-ignore` file, mirroring `config_root`'s upward search so scanning a
+/// subtree still honors a repo-root ignore file.
+fn ignore_file_root(start: &Path) -> Option<PathBuf> {
+    let mut cur = Some(start);
+    while let Some(dir) = cur {
+        if IGNORE_FILES.iter().any(|f| dir.join(f).exists()) {
+            return Some(dir.to_path_buf());
+        }
+        cur = dir.parent();
+    }
+    None
 }
 
 /// Nearest directory at or above `start` that holds an actual ESLint config.

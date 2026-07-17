@@ -253,10 +253,13 @@ fn is_hidden_non_config(path: &Path) -> bool {
 /// `EXCLUDED_DIRS` and non-config hidden paths pruned. Shared by every
 /// directory-scan entry point so they observe identical exclusion semantics.
 fn project_walker(path: &Path) -> ignore::Walk {
-    // Honor the project's own ESLint exclusions (flat-config `ignores`,
-    // `ignorePatterns`, package.json eslintConfig). The file-based
-    // `.eslintignore` / `.eslint-ignore` are gitignore-syntax, so the walker
-    // handles them natively via add_custom_ignore_filename below.
+    // Honor the project's own ESLint config-based exclusions (flat-config
+    // `ignores`, `ignorePatterns`, package.json eslintConfig) as a blanket walk
+    // prune — these are directory/build-artifact patterns safe to skip for every
+    // language. The file-based `.eslintignore` / `.eslint-ignore` are handled
+    // separately in `walk_directory`, scoped to the TypeScript family, because
+    // they routinely list non-JS globs (`*.rs`) that must not prune other
+    // languages.
     let eslint_ignore = crate::project::eslint_ignore::load(path);
     // The root itself may be a hidden/absolute path; only entries *below* it are
     // checked against the hidden filter, so strip the root prefix first.
@@ -267,8 +270,6 @@ fn project_walker(path: &Path) -> ignore::Walk {
         // reachable; `filter_entry` below re-prunes every other hidden path.
         .hidden(false)
         .add_custom_ignore_filename(".complyignore")
-        .add_custom_ignore_filename(".eslintignore")
-        .add_custom_ignore_filename(".eslint-ignore")
         .filter_entry(move |entry| {
             let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
             if is_dir
@@ -298,6 +299,11 @@ fn project_walker(path: &Path) -> ignore::Walk {
 }
 
 fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
+    // ESLint's file-based ignores (`.eslintignore` / `.eslint-ignore`, commonly
+    // a `.prettierignore` symlink) list non-JS globs like `*.rs` that ESLint
+    // never lints, so they only exclude files in the TypeScript family — never
+    // Rust or any other language. Built once, matched per file below.
+    let eslint_ignore_files = crate::project::eslint_ignore::load_ignore_files(path);
     let mut files = Vec::new();
     for entry in project_walker(path) {
         let entry = entry.context("failed to read directory entry")?;
@@ -305,6 +311,12 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
             continue;
         }
         if let Some(sf) = classify(entry.path()) {
+            if sf.language.is_typescript_family()
+                && let Some(gi) = &eslint_ignore_files
+                && gi.matched_path_or_any_parents(&sf.path, false).is_ignore()
+            {
+                continue;
+            }
             files.push(sf);
         }
     }
@@ -312,7 +324,11 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
 }
 
 /// TypeScript declaration files (`.d.ts`, `.d.mts`, `.d.cts`, `.d.tsx`) under
-/// `path`, using the same exclusion rules as the lint scan. Declaration files
+/// `path`, using the same walk exclusions as the lint scan (`project_walker`).
+/// The TypeScript-family `.eslintignore` filter lives in `walk_directory` and
+/// does not apply here — declaration files are never in the lint set anyway,
+/// and keeping their references maximizes cross-file usage coverage. Declaration
+/// files
 /// are dropped from the linted source set, but they carry real
 /// `import`/`export … from`/`declare module` references; cross-file rules that
 /// reason about dependency usage scan them through this function. Best-effort:
@@ -545,6 +561,66 @@ mod tests {
 
         assert!(names.contains(&"kept.ts".to_string()));
         assert!(!names.contains(&"gen.ts".to_string()));
+    }
+
+    #[test]
+    fn walk_directory_eslintignore_scopes_to_typescript_family() {
+        // Issue #7657: `.eslintignore` (often a `.prettierignore` symlink) lists
+        // non-JS globs like `*.rs` that ESLint/Prettier never process. Those must
+        // not suppress Rust discovery, while TS globs — including files inside an
+        // ignored directory — are still honored.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("a.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("b.ts"), "x").unwrap();
+        std::fs::write(root.join("ignored.ts"), "x").unwrap();
+        std::fs::create_dir(root.join("generated")).unwrap();
+        std::fs::write(root.join("generated/deep.ts"), "x").unwrap();
+        std::fs::write(root.join("generated/keep.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join(".eslintignore"), "*.rs\nignored.ts\ngenerated/\n").unwrap();
+
+        let names = walked_names(root);
+
+        assert!(
+            names.contains(&"a.rs".to_string()),
+            "a *.rs eslintignore glob must not suppress Rust, got: {names:?}"
+        );
+        assert!(names.contains(&"b.ts".to_string()));
+        assert!(
+            !names.contains(&"ignored.ts".to_string()),
+            "a TS glob in .eslintignore must still exclude TS, got: {names:?}"
+        );
+        // A directory pattern must still exclude the TS files under it (the
+        // matcher checks the file's ancestors, since the walker no longer prunes
+        // the directory), but never the non-TS files.
+        assert!(
+            !names.contains(&"deep.ts".to_string()),
+            "a TS file inside an eslintignore'd directory must still be excluded, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"keep.rs".to_string()),
+            "a Rust file inside an eslintignore'd directory must not be suppressed, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn walk_directory_complyignore_stays_language_agnostic() {
+        // `.complyignore` is comply's own ignore file — unlike ESLint's it is not
+        // scoped to any language, so a `*.rs` line still suppresses Rust. Guards
+        // against accidentally rescoping the wrong ignore file (issue #7657).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("a.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("b.ts"), "x").unwrap();
+        std::fs::write(root.join(".complyignore"), "*.rs\n").unwrap();
+
+        let names = walked_names(root);
+
+        assert!(
+            !names.contains(&"a.rs".to_string()),
+            ".complyignore must stay language-agnostic, got: {names:?}"
+        );
+        assert!(names.contains(&"b.ts".to_string()));
     }
 
     #[test]
