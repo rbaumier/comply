@@ -76,22 +76,21 @@ impl OxcCheck for Check {
         }
 
         // Mutation of a fresh array with no pre-existing reference is not
-        // externally observable. Two receiver shapes qualify:
+        // externally observable — the receiver expression itself allocates the
+        // array, so nothing else can hold a reference. Qualifying shapes:
         // - an inline array literal (`[...referencedColumns].sort(...)`,
-        //   `[a, b].reverse()`, `[...x].splice(0, 1)`): the receiver is the
-        //   just-allocated literal itself;
-        // - a chained array-returning call (`children.slice(0, n).reverse()`,
-        //   `items.filter(...).sort(...)`, `xs.map(...).reverse()`): the
-        //   receiver is the array the preceding call just allocated.
-        // In both cases nothing else holds a reference to the array — the
-        // canonical "sort/reverse a copy" idiom. A receiver whose call is not a
-        // fresh-array producer (`obj.getList().reverse()`) may return a shared
-        // array, so it stays flagged.
-        if matches!(
-            &member.object,
-            Expression::ArrayExpression(_) | Expression::CallExpression(_)
-        ) && is_array_evident_initializer(&member.object)
-        {
+        //   `[a, b].reverse()`, `[...x].splice(0, 1)`);
+        // - a `new Array(n)` construction (`new Array(n).fill(0)`);
+        // - an array-returning call: a chained producer
+        //   (`children.slice(0, n).reverse()`, `items.filter(...).sort(...)`)
+        //   or a static one (`Object.keys(o).sort()`, `Array.from(x).sort()`).
+        // In every case nothing else references the array — the canonical
+        // "sort/reverse/fill a fresh array" idiom. A receiver whose call is not
+        // a fresh-array producer (`obj.getList().reverse()`) may return a shared
+        // array, so it stays flagged; a plain-identifier or member receiver is
+        // never array-evident here and is handled by the binding checks
+        // above/below.
+        if is_array_evident_initializer(&member.object) {
             return;
         }
 
@@ -190,10 +189,11 @@ fn is_non_array_fill(
     false
 }
 
-/// `true` when `expr` proves its value is an array: an array literal (`[...]`,
-/// `[]`), a `new Array(...)` construction, or an array-returning call
+/// `true` when `expr` proves its value is a fresh array: an array literal
+/// (`[...]`, `[]`), a `new Array(...)` construction, an array-returning call
 /// (`x.map(...)`, `x.filter(...)`, `x.slice(...)`, `x.concat(...)`,
-/// `Array.from(...)`, `Array.of(...)`).
+/// `Array.from(...)`, `Array.of(...)`), or an `Object.keys`/`Object.values`/
+/// `Object.entries(...)` static producer.
 fn is_array_evident_initializer(expr: &Expression) -> bool {
     if is_array_initializer(expr) {
         return true;
@@ -204,11 +204,15 @@ fn is_array_evident_initializer(expr: &Expression) -> bool {
     match &call.callee {
         Expression::StaticMemberExpression(member) => {
             let method = member.property.name.as_str();
-            if matches!(
-                &member.object,
-                Expression::Identifier(id) if id.name.as_str() == "Array"
-            ) {
-                return matches!(method, "from" | "of");
+            if let Expression::Identifier(id) = &member.object {
+                match id.name.as_str() {
+                    // `Array.from(...)` / `Array.of(...)` build a fresh array.
+                    "Array" => return matches!(method, "from" | "of"),
+                    // `Object.keys`/`values`/`entries(...)` each return a fresh
+                    // array (`string[]` / `unknown[]` / `[string, unknown][]`).
+                    "Object" => return matches!(method, "keys" | "values" | "entries"),
+                    _ => {}
+                }
             }
             matches!(
                 method,
@@ -806,6 +810,63 @@ mod tests {
         let src = r#"
             function order(arr: number[]) {
                 arr.sort();
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_fill_on_inline_new_array_receiver() {
+        // Regression for rbaumier/comply#7630 — `new Array<number>(hidden).fill(0)`
+        // (joplin LocalEmbeddingProvider) initialises a brand-new, unreferenced
+        // buffer in place; the mutation is not externally observable.
+        let src = r#"
+            function makeVec(hidden: number) {
+                return new Array<number>(hidden).fill(0);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_fill_on_inline_new_array_without_generic() {
+        // #7630 — the same idiom without a generic type argument.
+        assert!(run("const vec = new Array(8).fill(0);").is_empty());
+    }
+
+    #[test]
+    fn ignores_sort_on_object_keys_receiver() {
+        // Regression for rbaumier/comply#7630 — `Object.keys(theme).sort()`
+        // (joplin themeToCss) sorts the fresh `string[]` that `Object.keys`
+        // just allocated; the canonical "sorted keys" idiom, as fresh as
+        // `[...x].sort()`.
+        let src = r#"
+            function sortedKeys(theme) {
+                return Object.keys(theme).sort();
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_sort_on_object_values_receiver() {
+        // #7630 — `Object.values(o)` returns a fresh array too.
+        assert!(run("const v = Object.values(o).sort();").is_empty());
+    }
+
+    #[test]
+    fn ignores_sort_on_object_entries_receiver() {
+        // #7630 — `Object.entries(o)` returns a fresh `[key, value][]`.
+        assert!(run("const e = Object.entries(o).sort();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_push_on_object_property_receiver() {
+        // Negative space for #7630 — `obj.list.push(x)` mutates a property that
+        // other code may reference; only inline fresh receivers are exempt.
+        let src = r#"
+            function add(obj, x) {
+                obj.list.push(x);
             }
         "#;
         assert_eq!(run(src).len(), 1);
