@@ -609,6 +609,14 @@ impl ImportIndex {
             }
         }
 
+        // A namespace import of a barrel (`import * as ns from <barrel>`) reads
+        // the barrel's whole namespace as `ns.*`, which includes every module it
+        // pulls in via `export * from './m'`. Propagate namespace-import liveness
+        // down the `export *` chain so each such origin module's entire export
+        // surface counts as reachable — the `import * as x from './barrel';
+        // Object.keys(x).forEach(...)` global-registration pattern.
+        propagate_namespace_imports_through_star_edges(&mut namespace_imported, &star_edges);
+
         let min_indexed = exports.keys().min().cloned();
 
         Self {
@@ -1019,6 +1027,41 @@ fn star_reexported_names(
         }
     }
     resolved.into_iter().collect()
+}
+
+/// Expand `namespace_imported` across `export *` re-export edges. When a barrel
+/// is namespace-imported (`import * as ns from <barrel>`), the barrel's whole
+/// namespace is reachable as `ns.*`, including every module it re-exports via
+/// `export * from './m'`; so each such origin module's entire export surface is
+/// live too. Walks `star_edges` from every already-namespace-imported path,
+/// transitively through nested `export *` barrels, bounding cyclic chains with a
+/// visited set. Only `export *` edges are followed — a by-name `export { X }
+/// from './m'` surfaces just `X`, not the origin's other exports, so it must not
+/// mark the whole origin namespace-imported.
+fn propagate_namespace_imports_through_star_edges(
+    namespace_imported: &mut FxHashSet<PathBuf>,
+    star_edges: &FxHashMap<PathBuf, Vec<PathBuf>>,
+) {
+    let mut visited: FxHashSet<PathBuf> = FxHashSet::default();
+    let mut queue: std::collections::VecDeque<PathBuf> = namespace_imported
+        .iter()
+        .filter_map(|barrel| star_edges.get(barrel))
+        .flatten()
+        .cloned()
+        .collect();
+    while let Some(module) = queue.pop_front() {
+        if !visited.insert(module.clone()) {
+            continue;
+        }
+        namespace_imported.insert(module.clone());
+        if let Some(next) = star_edges.get(&module) {
+            for src in next {
+                if !visited.contains(src) {
+                    queue.push_back(src.clone());
+                }
+            }
+        }
+    }
 }
 
 /// Extract bare specifier → package name mapping from all imports.

@@ -4926,6 +4926,112 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_for_star_reexported_symbol_via_namespace_imported_barrel_issue_7674() {
+        // Regression for #7674 — the `directives` barrel `export *`s each
+        // directive module and is consumed via a namespace import
+        // (`import * as directives from '@/directives'`) then iterated with
+        // `Object.keys(directives).forEach(...)` to register every one. No file
+        // namespace-imports `./auth` directly, so namespace-import liveness must
+        // propagate down the barrel's `export *` chain: every re-exported symbol
+        // is reachable as `directives.*` and none is dead.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/directives/auth/index.ts", "export const auth = 1;\n"),
+            ("src/directives/copy/index.ts", "export const copy = 2;\n"),
+            (
+                "src/directives/index.ts",
+                "export * from './auth';\nexport * from './copy';\n",
+            ),
+            (
+                "src/main.ts",
+                "import * as directives from './directives';\n\
+                 Object.keys(directives).forEach(key => key);\n",
+            ),
+        ];
+        let (_dir, auth_diags) = run_on_project(&files, "src/directives/auth/index.ts");
+        assert!(
+            auth_diags.is_empty(),
+            "`auth` re-exported via `export *` from a namespace-imported barrel must not be flagged, got: {auth_diags:?}"
+        );
+        let (_dir, copy_diags) = run_on_project(&files, "src/directives/copy/index.ts");
+        assert!(
+            copy_diags.is_empty(),
+            "`copy` re-exported via `export *` from a namespace-imported barrel must not be flagged, got: {copy_diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_dead_export_not_reached_by_namespace_imported_barrel_issue_7674() {
+        // Negative-space guard for #7674: a module NOT re-exported via `export *`
+        // from the namespace-imported barrel gets no propagated liveness and
+        // stays flagged. The propagation must follow real `export *` edges, not
+        // blanket-exempt every export once any barrel is namespace-imported.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/directives/auth/index.ts", "export const auth = 1;\n"),
+            ("src/directives/index.ts", "export * from './auth';\n"),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+            (
+                "src/main.ts",
+                "import * as directives from './directives';\n\
+                 Object.keys(directives).forEach(key => key);\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/orphan.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("orphan")),
+            "an export not reachable via `export *` from the namespace-imported barrel is still dead, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn propagates_namespace_liveness_transitively_through_nested_star_barrels_issue_7674() {
+        // Transitive control for #7674: barrel A `export *`s barrel B, which
+        // `export *`s the leaf module M. A is namespace-imported, so M's exports
+        // must be live across BOTH `export *` hops.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/leaf.ts", "export const widget = 1;\n"),
+            ("src/inner/index.ts", "export * from '../leaf';\n"),
+            ("src/outer/index.ts", "export * from '../inner';\n"),
+            (
+                "src/main.ts",
+                "import * as everything from './outer';\n\
+                 Object.keys(everything).forEach(key => key);\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/leaf.ts");
+        assert!(
+            diags.is_empty(),
+            "leaf export reached through two nested `export *` barrels from a namespace import must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn namespace_liveness_propagation_terminates_on_cyclic_star_chain_issue_7674() {
+        // Cycle guard for #7674: two barrels `export *` each other. A namespace
+        // import of one must propagate liveness without looping forever; the
+        // traversal's visited set bounds the cyclic `export *` chain.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/a.ts",
+                "export const fromA = 1;\nexport * from './b';\n",
+            ),
+            (
+                "src/b.ts",
+                "export const fromB = 2;\nexport * from './a';\n",
+            ),
+            (
+                "src/main.ts",
+                "import * as everything from './a';\n\
+                 Object.keys(everything).forEach(key => key);\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/b.ts");
+        assert!(
+            diags.is_empty(),
+            "export in a module reached through a cyclic `export *` chain from a namespace import must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn no_fp_for_bin_package_internal_export() {
         // Regression for #1141 — azure-sdk-for-js's `@azure/dev-tool` is a
         // CLI-tool workspace package (declares `bin`, no `main`/`exports`/
