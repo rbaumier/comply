@@ -2,8 +2,12 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::project::PrismaSoftDelete;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression};
+use oxc_ast::ast::{
+    BindingPattern, Class, ClassElement, Expression, IdentifierReference, PropertyKey, TSType,
+    TSTypeName,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -12,14 +16,15 @@ pub struct Check;
 const FIND_METHODS: &[&str] = &["findMany", "findFirst", "findUnique"];
 
 /// True when the result of the query at `call_span` is bound to a variable that
-/// is later guarded by an explicit `deletedAt` null-check in the same scope.
+/// is later guarded by an explicit null-check on the soft-delete `field` in the
+/// same scope.
 ///
 /// The intentional pattern the rule must not flag:
 /// ```ignore
 /// const env = await prisma.env.findFirst({ where: { id } });
 /// if (!env || env.project.deletedAt !== null) return notAuthorized();
 /// ```
-/// Here the `deletedAt: null` filter is *deliberately* omitted from the `where`
+/// Here the `field: null` filter is *deliberately* omitted from the `where`
 /// clause so the code can distinguish "soft-deleted" from "not found" and return
 /// a specific response — the soft-delete check is performed explicitly on the
 /// result instead.
@@ -27,14 +32,15 @@ const FIND_METHODS: &[&str] = &["findMany", "findFirst", "findUnique"];
 /// Detection is structural, not name-based: the call must be the initializer of
 /// a `VariableDeclarator` (directly or under an `await`), and one of that
 /// binding's resolved references must root a `StaticMemberExpression` chain whose
-/// final property is `deletedAt` (`result.deletedAt`, `result.project.deletedAt`)
+/// final property is `field` (`result.deletedAt`, `result.project.deletedAt`)
 /// used in a guard context — a `=== null` / `!== null` comparison, or a
 /// truthiness/negation check. When the result isn't bound to a variable the
 /// pattern can't apply and existing behaviour is preserved.
-fn result_has_post_query_deleted_at_guard(
+fn result_has_post_query_soft_delete_guard(
     call_span: oxc_span::Span,
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
+    field: &str,
 ) -> bool {
     let Some(symbol_id) = result_binding_symbol(call_span, node, semantic) else {
         return false;
@@ -42,7 +48,7 @@ fn result_has_post_query_deleted_at_guard(
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
     scoping.get_resolved_references(symbol_id).any(|reference| {
-        reference_roots_deleted_at_guard(reference.node_id(), semantic, nodes)
+        reference_roots_soft_delete_guard(reference.node_id(), semantic, nodes, field)
     })
 }
 
@@ -87,12 +93,13 @@ fn span_contains(outer: oxc_span::Span, inner: oxc_span::Span) -> bool {
 }
 
 /// True when the reference at `ref_node_id` is the root object of a
-/// `StaticMemberExpression` chain ending in `.deletedAt`, and that `deletedAt`
-/// access is used in a guard context (null comparison or truthiness/negation).
-fn reference_roots_deleted_at_guard(
+/// `StaticMemberExpression` chain ending in `.<field>`, and that `field` access
+/// is used in a guard context (null comparison or truthiness/negation).
+fn reference_roots_soft_delete_guard(
     ref_node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
     nodes: &oxc_semantic::AstNodes,
+    field: &str,
 ) -> bool {
     let mut child_span = nodes.get_node(ref_node_id).kind().span();
     let mut current_id = ref_node_id;
@@ -111,7 +118,7 @@ fn reference_roots_deleted_at_guard(
         if member.object.span() != child_span {
             return false;
         }
-        if member.property.name.as_str() == "deletedAt" {
+        if member.property.name.as_str() == field {
             return member_access_in_guard_context(parent_id, member.span(), semantic);
         }
         child_span = member.span();
@@ -181,6 +188,109 @@ fn client_import_specifier<'a>(
         })
 }
 
+/// Module specifier of the schema-owning package for the Prisma client used as
+/// the query receiver `<receiver>.<model>`. Covers a named client import
+/// (`prisma.model.findMany()` → the `prisma` import's source) and a
+/// constructor-injected NestJS service (`this.prismaService.model.findMany()`),
+/// whose declared property type is resolved to its import via the same symbol +
+/// import-graph provenance. `None` when the receiver is neither shape or its
+/// provenance is unresolved — schema discovery then falls back to the file's own
+/// package boundary.
+fn client_import_specifier_of<'a>(
+    receiver: &Expression<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    match receiver {
+        Expression::Identifier(client) => client_import_specifier(client, semantic),
+        // `this.<prop>` — an injected class property; resolve `<prop>`'s declared
+        // type to the import it comes from.
+        Expression::StaticMemberExpression(prop)
+            if matches!(prop.object, Expression::ThisExpression(_)) =>
+        {
+            let type_ident =
+                injected_property_type_ident(prop.property.name.as_str(), node, semantic)?;
+            client_import_specifier(type_ident, semantic)
+        }
+        _ => None,
+    }
+}
+
+/// Type-name identifier of the declared type of the injected class property
+/// `prop_name`, looked up in the nearest enclosing class. Covers a constructor
+/// parameter property
+/// (`constructor(private readonly prismaService: PrismaService)`) and a class
+/// field (`private prismaService: PrismaService`). The returned identifier is a
+/// type reference resolvable to its import, so the same provenance path a named
+/// client uses applies. `None` when no enclosing class declares `prop_name` with
+/// a simple type annotation.
+fn injected_property_type_ident<'a>(
+    prop_name: &str,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a IdentifierReference<'a>> {
+    let nodes = semantic.nodes();
+    // `this` binds to the nearest enclosing class, so only that class can declare
+    // the property — stop at the first class walking up.
+    for kind in nodes.ancestor_kinds(node.id()) {
+        if let AstKind::Class(class) = kind {
+            return class_property_type_ident(class, prop_name);
+        }
+    }
+    None
+}
+
+/// Type-name identifier of the declared type of the class member named
+/// `prop_name` — a constructor parameter property or a class field.
+fn class_property_type_ident<'a>(
+    class: &'a Class<'a>,
+    prop_name: &str,
+) -> Option<&'a IdentifierReference<'a>> {
+    for element in &class.body.body {
+        match element {
+            ClassElement::PropertyDefinition(prop)
+                if property_key_is(&prop.key, prop_name) =>
+            {
+                return type_reference_ident(&prop.type_annotation.as_ref()?.type_annotation);
+            }
+            ClassElement::MethodDefinition(method)
+                if property_key_is(&method.key, "constructor") =>
+            {
+                for param in &method.value.params.items {
+                    if crate::oxc_helpers::is_parameter_property(param)
+                        && let BindingPattern::BindingIdentifier(id) = &param.pattern
+                        && id.name.as_str() == prop_name
+                        && let Some(ann) = &param.type_annotation
+                    {
+                        return type_reference_ident(&ann.type_annotation);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether `key` is a static-identifier property key named `name`.
+fn property_key_is(key: &PropertyKey, name: &str) -> bool {
+    matches!(key, PropertyKey::StaticIdentifier(id) if id.name.as_str() == name)
+}
+
+/// The identifier of a simple type reference (`Foo`), or `None` for any other
+/// type (union, qualified `ns.Foo`, primitive, …). The identifier carries a
+/// resolvable reference id, so [`client_import_specifier`] can trace it to its
+/// import.
+fn type_reference_ident<'a>(ty: &'a TSType<'a>) -> Option<&'a IdentifierReference<'a>> {
+    let TSType::TSTypeReference(type_ref) = ty else {
+        return None;
+    };
+    match &type_ref.type_name {
+        TSTypeName::IdentifierReference(ident) => Some(&**ident),
+        _ => None,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -213,45 +323,49 @@ impl OxcCheck for Check {
         if !ctx.source_contains("prisma") {
             return;
         }
-        // When a schema.prisma is available, skip models that don't have a
-        // `deletedAt` field — they can't have soft-deleted rows, so the
-        // missing filter is not a bug. Fall through when no schema is found
-        // (backward-compatible: fire on all). The authoritative schema is the
-        // one backing the client this call uses: when `prisma` is imported from a
-        // workspace package (`import { prisma } from '@scope/prisma'`), that
-        // package's schema is consulted (in the dominant monorepo layout the
-        // schema lives in a dedicated sibling package, outside this file's own
-        // package boundary).
+        // The soft-delete column to enforce. Defaults to `deletedAt` for the
+        // schema-less fallback; when a schema governs this query it becomes the
+        // exact field the model declares, so a project whose column is
+        // `deletedTime` is driven by the schema rather than this default.
+        let mut soft_delete_field = String::from("deletedAt");
+
+        // When a schema.prisma is available, consult it for this model. The
+        // authoritative schema is the one backing the client this call uses:
+        // a `prisma` import from a workspace package
+        // (`import { prisma } from '@scope/prisma'`) or a constructor-injected
+        // NestJS service (`this.prismaService.model.…`, whose declared type
+        // resolves to its import) both point at that package's schema (in the
+        // dominant monorepo layout the schema lives in a dedicated sibling
+        // package, outside this file's own package boundary).
         if let Expression::StaticMemberExpression(inner) = &member.object {
             let model_name = inner.property.name.as_str();
-            let client_specifier = match &inner.object {
-                Expression::Identifier(client) => client_import_specifier(client, semantic),
-                _ => None,
-            };
-            if ctx
+            let client_specifier = client_import_specifier_of(&inner.object, node, semantic);
+            match ctx
                 .project
-                .prisma_model_is_soft_delete(ctx.path, model_name, client_specifier)
-                == Some(false)
+                .prisma_model_soft_delete(ctx.path, model_name, client_specifier)
             {
-                // A schema governs this query and this model has no `deletedAt`
+                // A schema governs this query and this model has no soft-delete
                 // column — there are no soft-deleted rows, so the missing filter
-                // is not a bug. (`None` = no schema → fall through to
-                // fire-on-all; `Some(true)` = the model is soft-delete → fall
-                // through to flag.)
-                return;
+                // is not a bug.
+                Some(PrismaSoftDelete::NotSoftDelete) => return,
+                // The schema declares the soft-delete column: enforce that exact
+                // field name in the where clause, guard check, and message.
+                Some(PrismaSoftDelete::SoftDeleteField(field)) => soft_delete_field = field,
+                // No schema resolved → fall through with the default field.
+                None => {}
             }
         }
-        // Heuristic: scan the entire call source range for
-        // `deletedAt` — present anywhere in the where clause is fine.
+        // Heuristic: scan the entire call source range for the soft-delete field —
+        // present anywhere in the where clause is fine.
         let span_text = &ctx.source[call.span.start as usize..call.span.end as usize];
-        if span_text.contains("deletedAt") {
+        if span_text.contains(soft_delete_field.as_str()) {
             return;
         }
-        // The `deletedAt: null` filter may be deliberately omitted so the code
-        // can distinguish "deleted" from "not found" and handle the soft-deleted
-        // case with an explicit post-query `result.deletedAt` guard. Suppress
-        // when the bound result is guarded that way later in the same scope.
-        if result_has_post_query_deleted_at_guard(call.span, node, semantic) {
+        // The `<field>: null` filter may be deliberately omitted so the code can
+        // distinguish "deleted" from "not found" and handle the soft-deleted case
+        // with an explicit post-query `result.<field>` guard. Suppress when the
+        // bound result is guarded that way later in the same scope.
+        if result_has_post_query_soft_delete_guard(call.span, node, semantic, &soft_delete_field) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -261,8 +375,8 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!(
-                "`{method}` without a `deletedAt` filter — soft-deleted rows will \
-                 leak into the result. Add `where: {{ deletedAt: null, … }}`."
+                "`{method}` without a `{soft_delete_field}` filter — soft-deleted rows will \
+                 leak into the result. Add `where: {{ {soft_delete_field}: null, … }}`."
             ),
             severity: Severity::Warning,
             span: None,
@@ -355,6 +469,40 @@ mod tests {
         (dir, ctx, file_path)
     }
 
+    /// Build a monorepo where a dedicated `@scope/prisma` package owns
+    /// `schema.prisma` (`View` with a `deletedTime DateTime?` soft-delete column,
+    /// `Account` with no soft-delete column, `Envelope` with `deletedAt`) and a
+    /// consumer `@scope/app` package — with no schema of its own — injects the
+    /// client as a NestJS service. Returns the loaded `ProjectCtx` and a source
+    /// file path inside the consumer package.
+    fn monorepo_with_injected_prisma_service() -> (tempfile::TempDir, ProjectCtx, std::path::PathBuf)
+    {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let prisma_pkg = dir.path().join("packages/prisma");
+        std::fs::create_dir_all(&prisma_pkg).unwrap();
+        std::fs::write(prisma_pkg.join("package.json"), r#"{"name":"@scope/prisma"}"#).unwrap();
+        std::fs::write(
+            prisma_pkg.join("schema.prisma"),
+            "model View {\n  id String @id\n  deletedTime DateTime?\n}\n\nmodel Account {\n  id String @id\n}\n\nmodel Envelope {\n  id String @id\n  deletedAt DateTime?\n}\n",
+        )
+        .unwrap();
+        let app_pkg = dir.path().join("packages/app");
+        std::fs::create_dir_all(app_pkg.join("src")).unwrap();
+        std::fs::write(app_pkg.join("package.json"), r#"{"name":"@scope/app"}"#).unwrap();
+        let file_path = app_pkg.join("src/view.service.ts");
+        std::fs::write(&file_path, "export const x = 1;").unwrap();
+        let source = SourceFile { path: file_path.clone(), language: Language::TypeScript };
+        let ctx = ProjectCtx::load(&[&source], &Config::default());
+        (dir, ctx, file_path)
+    }
+
     // Regression for #7434: the client is imported from a dedicated sibling
     // package `@scope/prisma` whose schema's `Recipient` has no `deletedAt`, so
     // the missing filter is not a bug and the query must not be flagged.
@@ -370,6 +518,141 @@ mod tests {
 
     // The same fixture: `Envelope` has `deletedAt` in `@scope/prisma`, so a
     // query that omits the filter is still flagged (no false negative).
+    // Regression for #7671: the client is a constructor-injected NestJS service
+    // (`this.prismaService.<model>.…`) whose declared type resolves to its import
+    // from the schema-owning package. The schema must be consulted the same way a
+    // named import is — otherwise every query in a DI-based backend fires. `View`
+    // is a soft-delete model whose column is `deletedTime`, and this query omits
+    // the filter, so it is still flagged (with the schema-derived field name).
+    #[test]
+    fn flags_injected_service_soft_delete_model_missing_filter() {
+        let (_dir, project, file_path) = monorepo_with_injected_prisma_service();
+        let src = r#"
+            import { PrismaService } from '@scope/prisma';
+            class ViewService {
+                constructor(private readonly prismaService: PrismaService) {}
+                getViews(ids: string[]) {
+                    return this.prismaService.view.findMany({ where: { id: { in: ids } } });
+                }
+            }
+        "#;
+        let diags = run_with_project(src, &file_path, &project);
+        assert_eq!(diags.len(), 1);
+        // The message names the schema-derived field, not the hard-coded default.
+        assert!(diags[0].message.contains("deletedTime"));
+    }
+
+    // The same injected service, but the query filters on the schema's
+    // `deletedTime` column — the soft-delete filter is present, so it is silent.
+    #[test]
+    fn ignores_injected_service_soft_delete_model_with_filter() {
+        let (_dir, project, file_path) = monorepo_with_injected_prisma_service();
+        let src = r#"
+            import { PrismaService } from '@scope/prisma';
+            class ViewService {
+                constructor(private readonly prismaService: PrismaService) {}
+                getViews(ids: string[]) {
+                    return this.prismaService.view.findMany({
+                        where: { deletedTime: null, id: { in: ids } },
+                    });
+                }
+            }
+        "#;
+        assert!(run_with_project(src, &file_path, &project).is_empty());
+    }
+
+    // `Account` has no soft-delete column in the resolved schema, so a query via
+    // the injected service that omits any filter is not a bug and must be silent.
+    #[test]
+    fn ignores_injected_service_non_soft_delete_model() {
+        let (_dir, project, file_path) = monorepo_with_injected_prisma_service();
+        let src = r#"
+            import { PrismaService } from '@scope/prisma';
+            class AccountService {
+                constructor(private readonly prismaService: PrismaService) {}
+                getAccount(id: string) {
+                    return this.prismaService.account.findFirst({ where: { id } });
+                }
+            }
+        "#;
+        assert!(run_with_project(src, &file_path, &project).is_empty());
+    }
+
+    // True-positive control via the injected service: `Envelope` is a genuine
+    // `deletedAt` soft-delete model, and this query omits the filter → flagged.
+    #[test]
+    fn flags_envelope_via_injected_service_missing_filter() {
+        let (_dir, project, file_path) = monorepo_with_injected_prisma_service();
+        let src = r#"
+            import { PrismaService } from '@scope/prisma';
+            class EnvelopeService {
+                constructor(private readonly prismaService: PrismaService) {}
+                get(id: string) {
+                    return this.prismaService.envelope.findFirst({ where: { id } });
+                }
+            }
+        "#;
+        let diags = run_with_project(src, &file_path, &project);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("deletedAt"));
+    }
+
+    // Resolution is structural, not name-based: an injected property named `orm`
+    // typed `Client` (neither `prismaService` nor `PrismaService`) still resolves
+    // to the schema package. That the message names `deletedTime` — not the
+    // fall-through default `deletedAt` — proves the schema was resolved via the
+    // property's declared type, not a hard-coded receiver name.
+    #[test]
+    fn resolves_injected_service_regardless_of_property_and_type_name() {
+        let (_dir, project, file_path) = monorepo_with_injected_prisma_service();
+        let src = r#"
+            import { Client } from '@scope/prisma';
+            class S {
+                constructor(private readonly orm: Client) {}
+                f(id: string) {
+                    return this.orm.view.findMany({ where: { id } });
+                }
+            }
+        "#;
+        let diags = run_with_project(src, &file_path, &project);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("deletedTime"));
+    }
+
+    // Property injection (a class field rather than a constructor parameter
+    // property) is the other NestJS DI shape; its declared type resolves to the
+    // same schema package, so a `View` query omitting the `deletedTime` filter is
+    // still flagged with the schema-derived field name.
+    #[test]
+    fn flags_injected_service_declared_as_class_field() {
+        let (_dir, project, file_path) = monorepo_with_injected_prisma_service();
+        let src = r#"
+            import { PrismaService } from '@scope/prisma';
+            class ViewService {
+                private readonly prismaService: PrismaService;
+                getViews(ids: string[]) {
+                    return this.prismaService.view.findMany({ where: { id: { in: ids } } });
+                }
+            }
+        "#;
+        let diags = run_with_project(src, &file_path, &project);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("deletedTime"));
+    }
+
+    // The same schema resolved through a named `prisma` import: `View`'s
+    // `deletedTime` column drives the where-check, so a `deletedTime: null`
+    // filter silences the query even though the field is not `deletedAt`.
+    #[test]
+    fn named_import_where_check_uses_schema_derived_field() {
+        let (_dir, project, file_path) = monorepo_with_injected_prisma_service();
+        let src = r#"
+            import { prisma } from '@scope/prisma';
+            const v = await prisma.view.findMany({ where: { deletedTime: null } });
+        "#;
+        assert!(run_with_project(src, &file_path, &project).is_empty());
+    }
+
     #[test]
     fn flags_envelope_when_client_imported_from_sibling_package() {
         let (_dir, project, file_path) = monorepo_with_sibling_prisma_schema();

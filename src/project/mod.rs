@@ -2880,13 +2880,15 @@ pub struct ProjectCtx {
     // (same value `apply_to_all` iterates), so no canonicalization is needed.
     clean_files: Mutex<FxHashSet<PathBuf>>,
 
-    // Prisma soft-delete model names (lowercase) from the downward `schema.prisma`
-    // scan rooted at a directory, keyed by that directory. Scoping the scan to one
-    // directory (a resolved sibling package or the file's own boundary) keeps a
-    // same-named model in another package's schema from leaking its `deletedAt`
-    // status. The value `None` = no `schema.prisma` under it (caller falls back to
-    // fire-on-all). Built lazily on first miss per directory and reused for the run.
-    prisma_soft_delete_models_by_boundary: Mutex<FxHashMap<PathBuf, Option<FxHashSet<String>>>>,
+    // Prisma soft-delete models from the downward `schema.prisma` scan rooted at a
+    // directory, keyed by that directory: each soft-delete model's lowercase name
+    // maps to the field a query must filter on (`deletedAt` / `deletedTime` / …).
+    // Scoping the scan to one directory (a resolved sibling package or the file's
+    // own boundary) keeps a same-named model in another package's schema from
+    // leaking its soft-delete status. The value `None` = no `schema.prisma` under
+    // it (caller falls back to fire-on-all). Built lazily on first miss per
+    // directory and reused for the run.
+    prisma_soft_delete_models_by_boundary: Mutex<FxHashMap<PathBuf, Option<FxHashMap<String, String>>>>,
 
     // Workspace member package `name` → its manifest directory, keyed by the
     // npm/pnpm workspaces root nearest an importer. `prisma-soft-delete-filter`
@@ -5119,11 +5121,12 @@ impl ProjectCtx {
         topmost
     }
 
-    /// Whether `model` (compared case-insensitively) declares a `deletedAt`
-    /// field per the authoritative `schema.prisma` for `file_path`.
-    /// `Some(true)` = the model is soft-delete (flag a missing filter);
-    /// `Some(false)` = a schema governs the query and this model has no
-    /// `deletedAt` column (no soft-deleted rows, so don't flag); `None` = no
+    /// Soft-delete classification of `model` (compared case-insensitively) per
+    /// the authoritative `schema.prisma` for `file_path`.
+    /// `Some(SoftDeleteField(field))` = the model declares a nullable-`DateTime`
+    /// soft-delete column named `field` (flag a query missing that filter);
+    /// `Some(NotSoftDelete)` = a schema governs the query and this model has no
+    /// soft-delete column (no soft-deleted rows, so don't flag); `None` = no
     /// `schema.prisma` found, so the caller falls back to the "fire on all
     /// models" default.
     ///
@@ -5141,34 +5144,39 @@ impl ProjectCtx {
     /// `prisma/` subdirectory — the single-package layout and the case where no
     /// client import resolves to a schema-bearing package. Results are cached per
     /// scanned directory.
-    pub fn prisma_model_is_soft_delete(
+    pub fn prisma_model_soft_delete(
         &self,
         file_path: &Path,
         model: &str,
         client_specifier: Option<&str>,
-    ) -> Option<bool> {
+    ) -> Option<PrismaSoftDelete> {
         if let Some(pkg_dir) =
             client_specifier.and_then(|spec| self.resolve_workspace_package_dir(file_path, spec))
-            && let Some(is_soft_delete) = self.prisma_model_is_soft_delete_in(&pkg_dir, model)
+            && let Some(verdict) = self.prisma_model_soft_delete_in(&pkg_dir, model)
         {
-            return Some(is_soft_delete);
+            return Some(verdict);
         }
         let boundary = self
             .nearest_package_json_dir(file_path)
             .or_else(|| self.project_root.clone())
             .or_else(|| file_path.parent().map(Path::to_path_buf))?;
-        self.prisma_model_is_soft_delete_in(&boundary, model)
+        self.prisma_model_soft_delete_in(&boundary, model)
     }
 
-    /// Whether `model` (case-insensitive) declares a `deletedAt` field per the
+    /// Soft-delete classification of `model` (case-insensitive) per the
     /// `schema.prisma` file(s) found by a downward scan rooted at `dir`. `None`
-    /// when no schema exists under `dir`. Cached per directory.
-    fn prisma_model_is_soft_delete_in(&self, dir: &Path, model: &str) -> Option<bool> {
+    /// when no schema exists under `dir`; otherwise the model either declares a
+    /// nullable-`DateTime` soft-delete column (whose field name is carried) or
+    /// does not. Cached per directory.
+    fn prisma_model_soft_delete_in(&self, dir: &Path, model: &str) -> Option<PrismaSoftDelete> {
         let mut cache = self.prisma_soft_delete_models_by_boundary.lock().unwrap();
-        let set = cache
+        let models = cache
             .entry(dir.to_path_buf())
             .or_insert_with(|| collect_prisma_soft_delete_models(dir));
-        set.as_ref().map(|s| s.contains(&model.to_lowercase()))
+        models.as_ref().map(|m| match m.get(&model.to_lowercase()) {
+            Some(field) => PrismaSoftDelete::SoftDeleteField(field.clone()),
+            None => PrismaSoftDelete::NotSoftDelete,
+        })
     }
 
     /// Directory of the workspace member package named by `specifier` (or its
@@ -5320,17 +5328,31 @@ impl ProjectCtx {
     }
 }
 
+/// Soft-delete classification of a Prisma model, resolved from the
+/// `schema.prisma` backing the client a query uses. The absence of any schema is
+/// represented by the caller's `Option::None`; this enum distinguishes the two
+/// schema-present outcomes.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PrismaSoftDelete {
+    /// The model declares a nullable-`DateTime` soft-delete column; a query must
+    /// filter on this field name (`where: { <field>: null }`).
+    SoftDeleteField(String),
+    /// A schema governs the model but it declares no soft-delete column, so a
+    /// missing filter cannot leak soft-deleted rows.
+    NotSoftDelete,
+}
+
 /// Scan the project tree downward from `root` for every `schema.prisma` file
-/// (excluding `node_modules` and dot-directories) and aggregate the lowercase
-/// names of models that declare a `deletedAt` field. Returns `None` when no
-/// `schema.prisma` is found anywhere — the soft-delete rule then falls back to
-/// firing on all models. A `Some(set)` (possibly empty) means at least one
-/// schema was found, so models absent from `set` provably have no soft-delete
+/// (excluding `node_modules` and dot-directories) and map each soft-delete
+/// model's lowercase name to the field a query must filter on. Returns `None`
+/// when no `schema.prisma` is found anywhere — the soft-delete rule then falls
+/// back to firing on all models. A `Some(map)` (possibly empty) means at least
+/// one schema was found, so models absent from `map` provably have no soft-delete
 /// column and must not be flagged. Bounded by a depth limit so a pathologically
 /// deep tree can't blow the stack or stall.
-fn collect_prisma_soft_delete_models(root: &Path) -> Option<FxHashSet<String>> {
+fn collect_prisma_soft_delete_models(root: &Path) -> Option<FxHashMap<String, String>> {
     const MAX_DEPTH: u32 = 8;
-    let mut models = FxHashSet::default();
+    let mut models = FxHashMap::default();
     let mut found_schema = false;
     let mut stack: Vec<(PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
 
@@ -5364,19 +5386,23 @@ fn collect_prisma_soft_delete_models(root: &Path) -> Option<FxHashSet<String>> {
     found_schema.then_some(models)
 }
 
-/// Parse a `schema.prisma` text and return the lowercase names of models that
-/// declare a `deletedAt` field. Uses a simple line-based scan — no full Prisma
-/// parser needed.
-fn parse_prisma_soft_delete_models(schema: &str) -> FxHashSet<String> {
-    let mut result = FxHashSet::default();
+/// Parse a `schema.prisma` text and map each soft-delete model's lowercase name
+/// to the field a query must filter on. A model counts as soft-delete when it
+/// declares a nullable `DateTime` field whose Prisma name — or `@map("…")`
+/// database column — matches a soft-delete shape (see
+/// [`is_soft_delete_field_name`]). The mapped value is the Prisma field name,
+/// which is what a `where: { <field>: null }` clause references. Line-based scan
+/// — no full Prisma parser needed.
+fn parse_prisma_soft_delete_models(schema: &str) -> FxHashMap<String, String> {
+    let mut result = FxHashMap::default();
     let mut current_model: Option<String> = None;
-    let mut block_has_deleted_at = false;
+    let mut soft_delete_field: Option<String> = None;
     let mut depth: i32 = 0;
 
     for line in schema.lines() {
         let trimmed = line.trim();
 
-        if let Some(ref _name) = current_model {
+        if current_model.is_some() {
             // Count brace depth to detect block end.
             for c in trimmed.chars() {
                 match c {
@@ -5385,16 +5411,16 @@ fn parse_prisma_soft_delete_models(schema: &str) -> FxHashSet<String> {
                     _ => {}
                 }
             }
-            if trimmed.contains("deletedAt") {
-                block_has_deleted_at = true;
+            if soft_delete_field.is_none()
+                && let Some(field) = soft_delete_field_of_line(trimmed)
+            {
+                soft_delete_field = Some(field.to_string());
             }
             if depth == 0 {
-                if block_has_deleted_at {
-                    result.insert(current_model.take().unwrap().to_lowercase());
-                } else {
-                    current_model = None;
+                let name = current_model.take().unwrap();
+                if let Some(field) = soft_delete_field.take() {
+                    result.insert(name.to_lowercase(), field);
                 }
-                block_has_deleted_at = false;
             }
         } else if trimmed.starts_with("model ") {
             let rest = &trimmed["model ".len()..];
@@ -5403,7 +5429,7 @@ fn parse_prisma_soft_delete_models(schema: &str) -> FxHashSet<String> {
                 continue;
             }
             current_model = Some(name.to_string());
-            block_has_deleted_at = false;
+            soft_delete_field = None;
             depth = 0;
             for c in trimmed.chars() {
                 match c {
@@ -5415,6 +5441,47 @@ fn parse_prisma_soft_delete_models(schema: &str) -> FxHashSet<String> {
         }
     }
     result
+}
+
+/// Field-name shapes a Prisma soft-delete timestamp uses, matched
+/// case-insensitively against the field's own name and its `@map(...)` column.
+const SOFT_DELETE_FIELD_NAMES: &[&str] =
+    &["deletedat", "deletedtime", "deleted_at", "deleted_time"];
+
+/// Whether `name` matches a soft-delete column shape (case-insensitive).
+fn is_soft_delete_field_name(name: &str) -> bool {
+    SOFT_DELETE_FIELD_NAMES.contains(&name.to_lowercase().as_str())
+}
+
+/// The Prisma field name of a soft-delete column declared on `trimmed` — a
+/// single line inside a `model { … }` block — or `None` when the line is not
+/// one. A soft-delete column is a nullable `DateTime` (`DateTime?`) whose field
+/// name, or `@map("…")` database column, matches a soft-delete shape. The
+/// returned name is the Prisma field name (what a `where` clause references),
+/// even when the column is remapped via `@map`.
+fn soft_delete_field_of_line(trimmed: &str) -> Option<&str> {
+    let mut tokens = trimmed.split_whitespace();
+    let name = tokens.next()?;
+    // Field lines start with an identifier; braces, block attributes (`@@index`)
+    // and comments do not.
+    if !name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') {
+        return None;
+    }
+    // Soft-delete columns are nullable timestamps; gate on the type, not the name.
+    if tokens.next()? != "DateTime?" {
+        return None;
+    }
+    (is_soft_delete_field_name(name) || map_target_is_soft_delete(trimmed)).then_some(name)
+}
+
+/// True when `line` carries an `@map("column")` attribute whose column name
+/// matches a soft-delete shape — a field renamed at the database level
+/// (`deletedTime DateTime? @map("deleted_time")`).
+fn map_target_is_soft_delete(line: &str) -> bool {
+    line.split_once("@map(")
+        .and_then(|(_, rest)| rest.split(')').next())
+        .map(|arg| arg.trim().trim_matches('"'))
+        .is_some_and(is_soft_delete_field_name)
 }
 
 /// Parse a `schema.prisma` text and return the literal `output` paths declared
@@ -8787,8 +8854,41 @@ model Envelope {
     #[test]
     fn parse_collects_only_models_with_deleted_at() {
         let models = parse_prisma_soft_delete_models(SCHEMA_WITH_ENVELOPE);
-        assert!(models.contains("envelope"));
-        assert!(!models.contains("account"));
+        assert_eq!(models.get("envelope").map(String::as_str), Some("deletedAt"));
+        assert!(!models.contains_key("account"));
+    }
+
+    // A soft-delete column may be named `deletedTime` (or remapped via `@map`)
+    // rather than `deletedAt`; it still counts, and the resolved Prisma field
+    // name is what a `where` clause must reference. A same-typed field with an
+    // unrelated name (`updatedAt`) is not a soft-delete column.
+    #[test]
+    fn parse_derives_soft_delete_field_from_nullable_datetime() {
+        let schema = r#"
+model View {
+  id          String    @id
+  deletedTime DateTime?
+  updatedAt   DateTime?
+}
+
+model Table {
+  id      String   @id
+  deleted DateTime? @map("deleted_time")
+}
+
+model Plain {
+  id        String @id
+  deletedAt String
+}
+"#;
+        let models = parse_prisma_soft_delete_models(schema);
+        assert_eq!(models.get("view").map(String::as_str), Some("deletedTime"));
+        // `@map("deleted_time")` marks the column soft-delete; the Prisma field
+        // name (`deleted`) is what the where clause references.
+        assert_eq!(models.get("table").map(String::as_str), Some("deleted"));
+        // `deletedAt` typed `String` (not nullable `DateTime`) is not a
+        // soft-delete timestamp.
+        assert!(!models.contains_key("plain"));
     }
 
     #[test]
@@ -8847,8 +8947,8 @@ model User {
         std::fs::write(schema_dir.join("schema.prisma"), SCHEMA_WITH_ENVELOPE).unwrap();
 
         let models = collect_prisma_soft_delete_models(dir.path()).unwrap();
-        assert!(models.contains("envelope"));
-        assert!(!models.contains("account"));
+        assert!(models.contains_key("envelope"));
+        assert!(!models.contains_key("account"));
     }
 
     #[test]
@@ -8859,8 +8959,8 @@ model User {
         std::fs::write(schema_dir.join("schema.prisma"), SCHEMA_WITH_ENVELOPE).unwrap();
 
         let models = collect_prisma_soft_delete_models(dir.path()).unwrap();
-        assert!(models.contains("envelope"));
-        assert!(!models.contains("account"));
+        assert!(models.contains_key("envelope"));
+        assert!(!models.contains_key("account"));
     }
 
     #[test]
@@ -8930,10 +9030,16 @@ model User {
         let file_b = pkg_b.join("src/repo.ts");
 
         // pkgA: schema present, User has no deletedAt → not soft-delete (not flagged).
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file_a, "user", None), Some(false));
+        assert_eq!(
+            ctx.prisma_model_soft_delete(&file_a, "user", None),
+            Some(PrismaSoftDelete::NotSoftDelete)
+        );
         // pkgB: User has deletedAt → soft-delete (flagged). The leak is closed:
         // pkgB's deletedAt does NOT make pkgA's User look soft-delete.
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file_b, "user", None), Some(true));
+        assert_eq!(
+            ctx.prisma_model_soft_delete(&file_b, "user", None),
+            Some(PrismaSoftDelete::SoftDeleteField("deletedAt".into()))
+        );
     }
 
     // A single-package project (one root-level schema, no nested package.json)
@@ -8953,8 +9059,14 @@ model User {
             ..ProjectCtx::default()
         };
         let file = dir.path().join("src/repo.ts");
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "envelope", None), Some(true));
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "account", None), Some(false));
+        assert_eq!(
+            ctx.prisma_model_soft_delete(&file, "envelope", None),
+            Some(PrismaSoftDelete::SoftDeleteField("deletedAt".into()))
+        );
+        assert_eq!(
+            ctx.prisma_model_soft_delete(&file, "account", None),
+            Some(PrismaSoftDelete::NotSoftDelete)
+        );
     }
 
     // No `schema.prisma` anywhere under the boundary → `None`, so the caller
@@ -8968,7 +9080,7 @@ model User {
             ..ProjectCtx::default()
         };
         let file = dir.path().join("src/repo.ts");
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "user", None), None);
+        assert_eq!(ctx.prisma_model_soft_delete(&file, "user", None), None);
     }
 
     // Regression for #7434: the schema lives in a dedicated sibling package
@@ -9013,22 +9125,22 @@ model Envelope {
 
         // Recipient has no deletedAt in @scope/prisma → not soft-delete.
         assert_eq!(
-            ctx.prisma_model_is_soft_delete(&file, "recipient", Some("@scope/prisma")),
-            Some(false)
+            ctx.prisma_model_soft_delete(&file, "recipient", Some("@scope/prisma")),
+            Some(PrismaSoftDelete::NotSoftDelete)
         );
         // Envelope has deletedAt → still soft-delete.
         assert_eq!(
-            ctx.prisma_model_is_soft_delete(&file, "envelope", Some("@scope/prisma")),
-            Some(true)
+            ctx.prisma_model_soft_delete(&file, "envelope", Some("@scope/prisma")),
+            Some(PrismaSoftDelete::SoftDeleteField("deletedAt".into()))
         );
         // A subpath import of the same package resolves to the same schema.
         assert_eq!(
-            ctx.prisma_model_is_soft_delete(&file, "recipient", Some("@scope/prisma/client")),
-            Some(false)
+            ctx.prisma_model_soft_delete(&file, "recipient", Some("@scope/prisma/client")),
+            Some(PrismaSoftDelete::NotSoftDelete)
         );
         // No client specifier → falls back to the consumer's own boundary (no
         // schema) → None, so the caller fires on all models.
-        assert_eq!(ctx.prisma_model_is_soft_delete(&file, "recipient", None), None);
+        assert_eq!(ctx.prisma_model_soft_delete(&file, "recipient", None), None);
     }
 
     /// Helper: load a `ProjectCtx` from explicit `(relative-path, contents)`
