@@ -84,13 +84,11 @@ impl OxcCheck for Check {
                     return;
                 }
                 // Vue 3 reactive ref: `count.value = x` drives reactivity. Also
-                // covers a `Ref<T>` destructured from a composable call
-                // (`const { error } = useThing(); error.value = x`).
+                // covers a `Ref<T>` a composable call returned
+                // (`const theme = useStorage(k, v); theme.value = x`).
                 if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
                     && (is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
-                        || crate::oxc_helpers::is_destructured_call_ref_value_target(
-                            member, semantic,
-                        ))
+                        || crate::oxc_helpers::is_call_ref_value_target(member, semantic))
                 {
                     return;
                 }
@@ -131,13 +129,11 @@ impl OxcCheck for Check {
             // obj.count++, --obj.count
             AstKind::UpdateExpression(update) => {
                 // Vue 3 reactive ref: `count.value++` drives reactivity. Also
-                // covers a `Ref<T>` destructured from a composable call.
+                // covers a `Ref<T>` a composable call returned.
                 if let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
                     &update.argument
                     && (is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
-                        || crate::oxc_helpers::is_destructured_call_ref_value_target(
-                            member, semantic,
-                        ))
+                        || crate::oxc_helpers::is_call_ref_value_target(member, semantic))
                 {
                     return;
                 }
@@ -917,7 +913,7 @@ mod tests {
         // external state — mutating it stays flagged.
         let src = r#"
             const o = makeThing();
-            o.value = 5;
+            o.count = 5;
         "#;
         assert_eq!(run(src).len(), 1);
     }
@@ -1112,11 +1108,11 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_value_mutation_on_plain_const_without_vue_import() {
-        // Negative space: `.value` on a const from an external call (not a vue
-        // ref factory, no vue import) is a genuine mutation and stays flagged.
+    fn still_flags_value_mutation_on_non_call_initialized_const() {
+        // Negative space: no call produced `plain`, so it holds no composable
+        // ref and the `.value` write stays flagged.
         let src = r#"
-            const plain = getThing();
+            const plain = source;
             plain.value = 1;
         "#;
         assert_eq!(run(src).len(), 1);
@@ -1172,6 +1168,30 @@ mod tests {
             cfg.enabled = true;
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Vue ref bound directly from a composable call — issue #7734
+
+    #[test]
+    fn allows_value_mutation_on_non_destructured_composable_ref_issue_7734() {
+        // Regression for rbaumier/comply#7734 — `useStorage` (VueUse) returns a
+        // `RemovableRef<string>`; `.value =` is the reactive update, exactly as
+        // for a destructured composable ref.
+        let src = r#"
+            const themePalette = useStorage("theme-palette", "blue");
+            function apply(preset) { themePalette.value = preset.id; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_update_expression_on_composable_ref_issue_7734() {
+        // The update handler takes the same exemption as the assignment handler.
+        let src = r#"
+            const count = useCounter();
+            function bump() { count.value++; }
+        "#;
+        assert!(run(src).is_empty());
     }
 
     #[test]
