@@ -1308,9 +1308,12 @@ pub fn is_local_object_builder_binding(
 ///   object rather than mutating an existing one. `Object.assign(existing, …)`,
 ///   whose first argument is an identifier or member expression, is NOT fresh —
 ///   it mutates `existing` in place and stays subject to the rule.
-fn is_fresh_copy_expression(expr: &oxc_ast::ast::Expression) -> bool {
+fn is_fresh_copy_expression<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> bool {
     use oxc_ast::ast::Expression;
-    match expr {
+    // Peel transparent wrappers first: `{} as ThemePalette` (and `satisfies T` /
+    // `!` / `(…)`) evaluates to the same fresh object as the bare `{}`. See
+    // `peel_value_wrappers` for the full set of value-preserving wrappers stripped.
+    match peel_value_wrappers(expr) {
         Expression::ObjectExpression(_) => true,
         Expression::CallExpression(call) => {
             let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -3604,6 +3607,10 @@ fn is_vue_factory_binding(
             let Some(init) = &decl.init else {
                 return false;
             };
+            // Peel transparent wrappers: `reactive({…}) as PaginationProps` / `ref(0)!`
+            // evaluate to the same factory-call value, so match the call shape through
+            // them (see `peel_value_wrappers`).
+            let init = peel_value_wrappers(init);
             let Expression::CallExpression(call) = init else {
                 return false;
             };
@@ -3966,11 +3973,9 @@ pub fn is_valtio_proxy_binding(
             let Some(init) = &decl.init else {
                 return false;
             };
-            // Peel a leading non-null assertion: `proxy({…})!`.
-            let init = match init {
-                Expression::TSNonNullExpression(e) => &e.expression,
-                other => other,
-            };
+            // Peel transparent wrappers: `proxy({…})!`, `proxy({…}) as Store` evaluate
+            // to the same proxy value (see `peel_value_wrappers`).
+            let init = peel_value_wrappers(init);
             let Expression::CallExpression(call) = init else {
                 return false;
             };
