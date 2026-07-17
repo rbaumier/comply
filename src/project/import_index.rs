@@ -4738,6 +4738,21 @@ impl OxcPathResolver {
     }
 
     fn read_path_aliases(tsconfig_dir: &Path, tsconfig_path: &Path) -> Vec<(String, Vec<PathBuf>)> {
+        Self::read_path_aliases_rec(tsconfig_dir, tsconfig_path, 0)
+    }
+
+    /// `read_path_aliases`, depth-bounded so following project `references` (and
+    /// a referenced config's own `references`) can never loop. Shares
+    /// `Tsconfig::load`'s `extends`/`references` recursion bound
+    /// ([`crate::project::TSCONFIG_MAX_DEPTH`]).
+    fn read_path_aliases_rec(
+        tsconfig_dir: &Path,
+        tsconfig_path: &Path,
+        depth: u8,
+    ) -> Vec<(String, Vec<PathBuf>)> {
+        if depth >= crate::project::TSCONFIG_MAX_DEPTH {
+            return Vec::new();
+        }
         let raw = match std::fs::read_to_string(tsconfig_path) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -4756,7 +4771,7 @@ impl OxcPathResolver {
             .map(|b| tsconfig_dir.join(b))
             .unwrap_or_else(|| tsconfig_dir.to_path_buf());
 
-        tsconfig
+        let mut aliases: Vec<(String, Vec<PathBuf>)> = tsconfig
             .paths
             .into_iter()
             .map(|(pattern, targets)| {
@@ -4764,7 +4779,30 @@ impl OxcPathResolver {
                     targets.into_iter().map(|t| base.join(t)).collect();
                 (pattern, resolved_targets)
             })
-            .collect()
+            .collect();
+
+        // Project references are separate compilation units, not inheritance: a
+        // create-vue "solution-style" root (`{ files: [], references: [...] }`)
+        // carries no `paths` of its own — the `@/*` alias lives in the referenced
+        // `tsconfig.app.json`. Union each referenced config's aliases in,
+        // resolved against THAT config's own dir/`baseUrl` (matching how
+        // TypeScript assigns a source file to its owning project). The referrer's
+        // own aliases win on key collision; a missing/unreadable reference is
+        // skipped, not fatal.
+        for reference in crate::project::tsconfig_reference_paths(&raw) {
+            let ref_path = crate::project::resolve_reference(tsconfig_path, &reference);
+            let Some(ref_dir) = ref_path.parent() else {
+                continue;
+            };
+            for (pattern, targets) in Self::read_path_aliases_rec(ref_dir, &ref_path, depth + 1) {
+                if aliases.iter().any(|(existing, _)| existing == &pattern) {
+                    continue;
+                }
+                aliases.push((pattern, targets));
+            }
+        }
+
+        aliases
     }
 
     fn make_oxc(tsconfig_path: Option<PathBuf>) -> Resolver {
@@ -6649,6 +6687,144 @@ mod tests {
         let imports = index.get_imports(&app_canon);
         assert_eq!(imports.len(), 1, "imports: {imports:?}");
         assert_eq!(imports[0].source_path.as_ref(), Some(&utils_canon));
+    }
+
+    /// Build a create-vue "solution-style" project: `frontend/tsconfig.json` is
+    /// a solution config with no `paths`, referencing `tsconfig.app.json` (which
+    /// declares `@/*` → `./src/*`) and an absent `tsconfig.node.json`.
+    /// `frontend/src/stores/auth.ts` exports `useAuthStore` (imported via `@/`)
+    /// and `orphan` (imported by nobody); `frontend/src/components/Sidebar.ts`
+    /// imports `useAuthStore` through the `@/` alias.
+    #[cfg(test)]
+    fn build_create_vue_index() -> (TempDir, ImportIndex, PathBuf, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let frontend = dir.path().join("frontend");
+        fs::create_dir_all(frontend.join("src/stores")).unwrap();
+        fs::create_dir_all(frontend.join("src/components")).unwrap();
+        fs::write(
+            frontend.join("tsconfig.json"),
+            r#"{ "files": [], "references": [{ "path": "./tsconfig.node.json" }, { "path": "./tsconfig.app.json" }] }"#,
+        )
+        .unwrap();
+        fs::write(
+            frontend.join("tsconfig.app.json"),
+            r#"{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }"#,
+        )
+        .unwrap();
+        let store = frontend.join("src/stores/auth.ts");
+        fs::write(
+            &store,
+            "export const useAuthStore = () => ({});\nexport const orphan = 1;\n",
+        )
+        .unwrap();
+        let sidebar = frontend.join("src/components/Sidebar.ts");
+        fs::write(
+            &sidebar,
+            "import { useAuthStore } from '@/stores/auth';\nexport const used = useAuthStore;\n",
+        )
+        .unwrap();
+
+        let sources = [
+            SourceFile { path: store.clone(), language: Language::TypeScript },
+            SourceFile { path: sidebar.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let store_canon = fs::canonicalize(&store).unwrap();
+        let sidebar_canon = fs::canonicalize(&sidebar).unwrap();
+        (dir, index, store_canon, sidebar_canon)
+    }
+
+    // Regression for #7684: a create-vue solution-style root `tsconfig.json`
+    // carries no `paths` — the `@/*` → `./src/*` alias lives in the referenced
+    // `tsconfig.app.json`. The import-graph resolver must follow `references` so
+    // `@/stores/auth` resolves to `src/stores/auth.ts`, keeping `useAuthStore`
+    // (imported only via `@/`) cross-file used rather than dead.
+    #[test]
+    fn references_solution_style_at_alias_resolves() {
+        let (_dir, index, store_canon, sidebar_canon) = build_create_vue_index();
+
+        let imp = index
+            .get_imports(&sidebar_canon)
+            .iter()
+            .find(|i| i.specifier == "@/stores/auth")
+            .expect("@/stores/auth import must be indexed")
+            .source_path
+            .clone();
+        assert_eq!(
+            imp.as_ref(),
+            Some(&store_canon),
+            "@/* must resolve through the referenced tsconfig.app.json",
+        );
+        assert!(
+            !index.get_usages(&store_canon, "useAuthStore").is_empty(),
+            "useAuthStore is imported via @/ and must not be dead",
+        );
+    }
+
+    // Negative-space guard for #7684: following `references` must not blanket
+    // resolve every export in the referenced project as used. An export imported
+    // by nobody stays dead.
+    #[test]
+    fn references_solution_style_keeps_genuinely_unused_export_dead() {
+        let (_dir, index, store_canon, _sidebar_canon) = build_create_vue_index();
+
+        assert!(
+            index.get_usages(&store_canon, "orphan").is_empty(),
+            "an export imported by nobody must stay dead under the references alias",
+        );
+    }
+
+    // #7684 correctness: a referenced config in a SUBDIRECTORY has its `paths`
+    // resolved against its OWN dir, not the referrer's. `@app/*` → `./src/*`
+    // declared in `packages/app/tsconfig.json` must map to `packages/app/src/*`,
+    // so `@app/lib` (imported from a file governed by the root resolver)
+    // resolves to `packages/app/src/lib.ts`.
+    #[test]
+    fn references_paths_resolve_relative_to_referenced_config_own_dir() {
+        let dir = TempDir::new().unwrap();
+        let app = dir.path().join("packages/app");
+        fs::create_dir_all(app.join("src")).unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{ "files": [], "references": [{ "path": "./packages/app" }] }"#,
+        )
+        .unwrap();
+        fs::write(
+            app.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "paths": { "@app/*": ["./src/*"] } } }"#,
+        )
+        .unwrap();
+        let lib = app.join("src/lib.ts");
+        fs::write(&lib, "export const helper = 1;\n").unwrap();
+        let consumer = dir.path().join("consumer.ts");
+        fs::write(
+            &consumer,
+            "import { helper } from '@app/lib';\nexport const used = helper;\n",
+        )
+        .unwrap();
+
+        let sources = [
+            SourceFile { path: lib.clone(), language: Language::TypeScript },
+            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let lib_canon = fs::canonicalize(&lib).unwrap();
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let imp = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "@app/lib")
+            .expect("@app/lib import must be indexed")
+            .source_path
+            .clone();
+        assert_eq!(
+            imp.as_ref(),
+            Some(&lib_canon),
+            "referenced config `paths` must resolve against its own dir (packages/app/src)",
+        );
     }
 
     /// Build a SvelteKit-shaped project: the given `package.json`, a root

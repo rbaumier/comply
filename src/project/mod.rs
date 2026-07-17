@@ -1911,11 +1911,16 @@ impl Tsconfig {
     }
 }
 
+/// Recursion bound shared by every tsconfig traversal that follows `extends`
+/// and project `references` — `load_tsconfig_file` here and the import-graph
+/// resolver's `read_path_aliases_rec`. Guards against pathological cycles.
+pub(crate) const TSCONFIG_MAX_DEPTH: u8 = 10;
+
 /// Read a tsconfig.json at `path`, follow its `extends` chain and project
 /// `references`, and return the merged result. Depth-tracked to bound recursion
-/// (shared across both `extends` and `references`) at 10 levels.
+/// (shared across both `extends` and `references`) by [`TSCONFIG_MAX_DEPTH`].
 fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
-    if depth >= 10 {
+    if depth >= TSCONFIG_MAX_DEPTH {
         return None;
     }
     let raw = std::fs::read_to_string(path).ok()?;
@@ -1956,12 +1961,30 @@ fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
     Some(merged)
 }
 
+/// The `references[].path` strings a tsconfig's raw JSON declares, in source
+/// order. Consumed by the import-graph resolver to follow project references
+/// when unioning path aliases; each string is turned into a config file via
+/// [`resolve_reference`].
+pub(crate) fn tsconfig_reference_paths(raw: &str) -> Vec<String> {
+    let Some(json) = parse_jsonc(raw) else {
+        return Vec::new();
+    };
+    json.get("references")
+        .and_then(|v| v.as_array())
+        .map(|refs| {
+            refs.iter()
+                .filter_map(|r| r.get("path").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Resolve a project-reference `path` (a `references` entry) to the tsconfig file
 /// it names, relative to the directory of the referring config. Per TypeScript, a
 /// reference path either names the config file directly (ends in `.json`, e.g.
 /// `./tsconfig.app.json`) or names a directory holding a `tsconfig.json` (e.g.
 /// `../shared`), in which case `tsconfig.json` is appended.
-fn resolve_reference(referrer: &Path, reference: &str) -> PathBuf {
+pub(crate) fn resolve_reference(referrer: &Path, reference: &str) -> PathBuf {
     let dir = referrer.parent().unwrap_or_else(|| Path::new("."));
     let candidate = dir.join(reference);
     if candidate.extension().and_then(|e| e.to_str()) == Some("json") {
