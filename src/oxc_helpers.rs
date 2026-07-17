@@ -5057,23 +5057,147 @@ fn type_ident_is_named_import_from(
     false
 }
 
-/// The `TSType` of the same-file `type X = …` alias that the type-position
+/// The same-file `type X = …` alias *declaration* that the type-position
 /// identifier `id` names, or `None` when its binding is not a local type-alias
 /// declaration (an import, a type parameter, a value binding, or an unresolved
-/// reference). Resolves the reference → symbol → declaration node.
+/// reference). Resolves the reference → symbol → declaration node. Exposes the
+/// whole declaration so callers that need the generic parameter list (to
+/// substitute call-site type-arguments) can reach it, not only the aliased type.
 #[must_use]
-fn resolve_same_file_type_alias<'a>(
+fn resolve_same_file_type_alias_decl<'a>(
     id: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic<'a>,
-) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+) -> Option<&'a oxc_ast::ast::TSTypeAliasDeclaration<'a>> {
     use oxc_ast::AstKind;
     let ref_id = id.reference_id.get()?;
     let scoping = semantic.scoping();
     let sym_id = scoping.get_reference(ref_id).symbol_id()?;
     match semantic.nodes().kind(scoping.symbol_declaration(sym_id)) {
-        AstKind::TSTypeAliasDeclaration(alias) => Some(&alias.type_annotation),
+        AstKind::TSTypeAliasDeclaration(alias) => Some(alias),
         _ => None,
     }
+}
+
+/// The aliased `TSType` of the same-file `type X = …` alias that `id` names, or
+/// `None` when its binding is not a local type-alias declaration.
+#[must_use]
+fn resolve_same_file_type_alias<'a>(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+    resolve_same_file_type_alias_decl(id, semantic).map(|alias| &alias.type_annotation)
+}
+
+/// The runtime primitive-keyword types a branded / opaque primitive is built on
+/// (`string & { __brand }`). `any`/`unknown`/`object`/`null`/`undefined`/`void`/
+/// `never` are excluded: they are not the underlying carrier of a nominal brand.
+#[must_use]
+fn is_primitive_keyword(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::TSType;
+    matches!(
+        ty,
+        TSType::TSStringKeyword(_)
+            | TSType::TSNumberKeyword(_)
+            | TSType::TSBooleanKeyword(_)
+            | TSType::TSSymbolKeyword(_)
+            | TSType::TSBigIntKeyword(_)
+    )
+}
+
+/// True when the same-file `type X = …` alias named by `id` resolves to a
+/// branded / opaque primitive: a `TSIntersectionType` that carries at least one
+/// primitive-keyword member (`string`/`number`/`boolean`/`symbol`/`bigint`),
+/// either directly (`type Brand = string & { __brand: 'x' }`) or through a
+/// one-hop generic helper whose primitive type-argument substitutes into a
+/// parameter position of its intersection (`type Opaque<K, T> = T & { __brand: K }`
+/// instantiated as `type Key = Opaque<'Key', string>`).
+///
+/// A branded primitive is a nominal-typing phantom: `__brand` has no runtime
+/// representation, so no `typeof`/`in`/type-predicate check can distinguish the
+/// value from its underlying primitive. The `as` cast is the only mechanism
+/// TypeScript offers to mint the brand, making it a construction-time ascription
+/// rather than a refinement of a pre-existing binding.
+///
+/// Termination is by construction: at most two resolution hops are taken (the
+/// named alias, then optionally one generic helper it references); nothing
+/// recurses, so a self-referential alias cannot loop.
+#[must_use]
+pub fn resolves_to_branded_primitive(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let Some(aliased) = resolve_same_file_type_alias(id, semantic) else {
+        return false;
+    };
+    match aliased {
+        // Direct brand: `type Brand = string & { __brand: 'x' }`.
+        TSType::TSIntersectionType(intersection) => {
+            intersection.types.iter().any(is_primitive_keyword)
+        }
+        // One-hop generic helper: `type Key = Opaque<'Key', string>` where
+        // `Opaque<K, T> = T & { __brand: K }`. Resolve the helper and check its
+        // intersection with the call-site type-arguments substituted in.
+        TSType::TSTypeReference(tref) => {
+            let TSTypeName::IdentifierReference(helper_id) = &tref.type_name else {
+                return false;
+            };
+            resolve_same_file_type_alias_decl(helper_id, semantic).is_some_and(|helper| {
+                helper_intersection_has_primitive(helper, tref.type_arguments.as_deref())
+            })
+        }
+        _ => false,
+    }
+}
+
+/// True when the generic helper alias `helper` is an intersection that carries a
+/// primitive-keyword member once `type_args` substitute into its parameters —
+/// either a member that is already a primitive keyword, or a bare reference to a
+/// helper type parameter whose corresponding call-site type-argument is a
+/// primitive keyword (`T` in `T & { __brand: K }` bound to `string`).
+#[must_use]
+fn helper_intersection_has_primitive(
+    helper: &oxc_ast::ast::TSTypeAliasDeclaration,
+    type_args: Option<&oxc_ast::ast::TSTypeParameterInstantiation>,
+) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSIntersectionType(intersection) = &helper.type_annotation else {
+        return false;
+    };
+    let params = helper.type_parameters.as_deref();
+    intersection.types.iter().any(|member| {
+        if is_primitive_keyword(member) {
+            return true;
+        }
+        let TSType::TSTypeReference(mref) = member else {
+            return false;
+        };
+        if mref.type_arguments.is_some() {
+            return false;
+        }
+        let TSTypeName::IdentifierReference(param_ref) = &mref.type_name else {
+            return false;
+        };
+        substituted_type_argument(param_ref.name.as_str(), params, type_args)
+            .is_some_and(is_primitive_keyword)
+    })
+}
+
+/// The call-site type-argument bound to the helper type parameter named
+/// `param_name`, or `None` when the name is not a declared parameter or no
+/// argument occupies its position. Matches the parameter name to its index in
+/// the declaration, then reads the same-index member of the instantiation.
+#[must_use]
+fn substituted_type_argument<'a>(
+    param_name: &str,
+    params: Option<&oxc_ast::ast::TSTypeParameterDeclaration>,
+    type_args: Option<&'a oxc_ast::ast::TSTypeParameterInstantiation<'a>>,
+) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+    let index = params?
+        .params
+        .iter()
+        .position(|p| p.name.name.as_str() == param_name)?;
+    type_args?.params.get(index)
 }
 
 /// True when `ident` (a type-position identifier) resolves to a symbol whose
