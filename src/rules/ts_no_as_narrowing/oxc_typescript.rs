@@ -6,6 +6,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_inside_type_predicate_fn, is_outer_as_unknown_double_cast,
     name_is_generic_type_param_in_scope, operand_is_typed_as_generic_param,
+    resolves_to_branded_primitive,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, TSType, TSTypeName};
@@ -141,7 +142,7 @@ fn operand_is_global_object(expr: &Expression) -> bool {
     )
 }
 
-fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
+fn target_is_narrowing(ty: &TSType, semantic: &oxc_semantic::Semantic) -> bool {
     match ty {
         TSType::TSLiteralType(_) | TSType::TSTemplateLiteralType(_) => true,
         TSType::TSTypeReference(r) => {
@@ -151,6 +152,12 @@ fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
                 // Generic utility type like `NonNullable<T>`.
                 NARROWING_UTILITY_TYPES.contains(&name)
             } else if is_dom_interface_type(name) {
+                false
+            } else if resolves_to_branded_primitive(id, semantic) {
+                // Branded / opaque primitive (`string & { __brand }`): the brand
+                // is a compile-time-only phantom with no runtime representation,
+                // so no `typeof`/`in`/type-predicate can mint it. The `as` cast
+                // is a construction-time ascription, not a refinable narrowing.
                 false
             } else {
                 // PascalCase identifier — likely a user-defined narrowing type.
@@ -208,7 +215,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if !target_is_narrowing(&as_expr.type_annotation, ctx.source) {
+        if !target_is_narrowing(&as_expr.type_annotation, semantic) {
             return;
         }
 
@@ -686,5 +693,96 @@ mod tests {
         // narrowing; `(obj.prop) as Baz` must still fire.
         let diags = run_on("const y = (obj.prop) as Baz;");
         assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_direct_branded_primitive_target() {
+        // Regression for #7733: `type Brand = string & { __brand: 'x' }` is a
+        // branded / opaque primitive. `__brand` is a compile-time-only phantom,
+        // so no `typeof`/`in`/type-predicate can mint it — the `as` is the only
+        // way to construct the brand, not a narrowing of a refinable binding.
+        let src = "type Brand = string & { __brand: 'x' };\n\
+                   const s = \"a\";\n\
+                   const b = s as Brand;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_generic_opaque_helper_target() {
+        // Regression for #7733: the `Opaque<K, T> = T & { __brand: K }` helper
+        // instantiated as `Opaque<'Key', string>` resolves to a branded string
+        // once the primitive type-argument substitutes into `T`.
+        let src = "type Opaque<K, T> = T & { __brand: K };\n\
+                   type Key = Opaque<'Key', string>;\n\
+                   function f(x: string) { return x as Key; }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_branded_primitive_with_concatenation_operand() {
+        // Regression for #7733: the discriminator is the cast TARGET (a brand),
+        // not the operand — a `+` concatenation operand must not resurrect the
+        // diagnostic (`(a + '/' + b) as SegmentRequestKey`).
+        let src = "type Opaque<K, T> = T & { __brand: K };\n\
+                   type Key = Opaque<'Key', string>;\n\
+                   function f(a: string, b: string) { return (a + '/' + b) as Key; }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_number_and_boolean_branded_primitives() {
+        // Regression for #7733: brands over `number`/`boolean` carriers are the
+        // same phantom-brand idiom as string brands.
+        let num = "type Nb = number & { __b: 'n' };\n\
+                   function f(n: number) { return n as Nb; }";
+        assert!(run_on(num).is_empty(), "unexpected diags: {:?}", run_on(num));
+        let boo = "type Bb = boolean & { __b: 'b' };\n\
+                   function g(v: boolean) { return v as Bb; }";
+        assert!(run_on(boo).is_empty(), "unexpected diags: {:?}", run_on(boo));
+    }
+
+    #[test]
+    fn still_flags_literal_union_alias_target() {
+        // Control for #7733: an alias resolving to a literal union is a genuine
+        // narrowing (no intersection, no primitive keyword) and must keep firing.
+        let src = "type U = 'a' | 'b';\n\
+                   function f(x: string) { return x as U; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_object_only_intersection_target() {
+        // Control for #7733: an intersection of two object types has no
+        // primitive-keyword member, so it is not a branded primitive — the
+        // branded-primitive gate must not fire and the cast still flags.
+        let src = "type A = { a: number };\n\
+                   type B = { b: number };\n\
+                   type AB = A & B;\n\
+                   function f(x: unknown) { return x as AB; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_interface_target() {
+        // Control for #7733: a plain interface target is not a branded primitive;
+        // casting to it remains a narrowing.
+        let src = "interface Config { a: number }\n\
+                   function f(x: unknown) { return x as Config; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_opaque_helper_with_object_type_argument() {
+        // Control for #7733: the generic-helper path requires the substituted
+        // type-argument to be a primitive keyword. `Opaque<'K', { a: number }>`
+        // substitutes an object type into `T`, so the intersection carries no
+        // primitive member — it is not a branded primitive and still flags.
+        let src = "type Opaque<K, T> = T & { __brand: K };\n\
+                   type Boxed = Opaque<'K', { a: number }>;\n\
+                   function f(x: unknown) { return x as Boxed; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
