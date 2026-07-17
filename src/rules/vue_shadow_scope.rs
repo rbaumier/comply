@@ -216,8 +216,10 @@ fn collect_local_decls(body: &str, base: usize) -> Vec<(String, usize)> {
     locals
 }
 
-/// Collect block-bodied `function …(params) { … }` and arrow `(params) => { … }`
-/// shadow scopes in `source`, with byte offsets absolute to `source`. A usage
+/// Collect block-bodied `function …(params) { … }` and arrow shadow scopes —
+/// both the parenthesized `(params) => { … }` and the unparenthesized
+/// single-parameter `ident => { … }` form — in `source`, with byte offsets
+/// absolute to `source`. A usage
 /// whose offset lies inside a scope's body is shadowing the outer ref — and must
 /// not be flagged — when its name is one of that scope's params, or matches a
 /// local `const`/`let`/`var` declaration of the same name that appears textually
@@ -240,8 +242,9 @@ pub(crate) fn collect_shadow_scopes(source: &str) -> Vec<ShadowScope> {
         }
     }
 
-    // Arrow forms: a `(params) => {` whose `=>` is immediately followed by a
-    // block body. Anchor on `=>` then walk back to the param-list parens.
+    // Arrow forms whose `=>` is immediately followed by a block body. Anchor on
+    // `=>`, then read the param list back: either a `(params)` list, or a single
+    // unparenthesized identifier param (`ident => {`).
     for (arrow, _) in source.match_indices("=>") {
         let mut j = arrow + 2;
         while j < bytes.len() && bytes[j].is_ascii_whitespace() {
@@ -250,19 +253,25 @@ pub(crate) fn collect_shadow_scopes(source: &str) -> Vec<ShadowScope> {
         if j >= bytes.len() || bytes[j] != b'{' {
             continue;
         }
-        // Walk back over whitespace to the `)` that closes the param list.
+        // Walk back over whitespace to the byte preceding the param list.
         let mut k = arrow;
         while k > 0 && bytes[k - 1].is_ascii_whitespace() {
             k -= 1;
         }
-        if k == 0 || bytes[k - 1] != b')' {
-            continue;
-        }
-        let close_paren = k - 1;
-        let Some(open_paren) = find_matching_open(bytes, close_paren) else {
-            continue;
+        let params = if k > 0 && bytes[k - 1] == b')' {
+            let close_paren = k - 1;
+            let Some(open_paren) = find_matching_open(bytes, close_paren) else {
+                continue;
+            };
+            parse_param_names(&source[open_paren + 1..close_paren])
+        } else {
+            let Some(param) = unparenthesized_arrow_param(source, k) else {
+                continue;
+            };
+            let mut params = FxHashSet::default();
+            params.insert(param);
+            params
         };
-        let params = parse_param_names(&source[open_paren + 1..close_paren]);
         let Some(body_close) = match_delimiter(bytes, j) else {
             continue;
         };
@@ -317,6 +326,29 @@ fn scope_from_params_at(source: &str, after_kw: usize) -> Option<ShadowScope> {
     })
 }
 
+/// Read the single parameter of an unparenthesized arrow (`ident => {`). `end`
+/// is the exclusive byte offset one past the last non-whitespace byte before the
+/// `=>`, i.e. one past the identifier's final byte. Returns the parameter name
+/// when the bytes ending at `end` form a valid JS identifier that is not the tail
+/// of a member expression (`obj.method =>`); otherwise `None`, so a `=>` that is
+/// not an unparenthesized single-identifier arrow yields no scope.
+fn unparenthesized_arrow_param(source: &str, end: usize) -> Option<String> {
+    let bytes = source.as_bytes();
+    let mut start = end;
+    while start > 0 && is_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    // Must be a non-empty identifier not starting with a digit, and not a
+    // property access — `a.b => …` binds no fresh `b`.
+    if start == end || bytes[start].is_ascii_digit() {
+        return None;
+    }
+    if start > 0 && bytes[start - 1] == b'.' {
+        return None;
+    }
+    Some(source[start..end].to_string())
+}
+
 /// Find the `(` matching the `)` at `close` by scanning backwards.
 fn find_matching_open(bytes: &[u8], close: usize) -> Option<usize> {
     let mut depth = 0usize;
@@ -336,5 +368,62 @@ fn find_matching_open(bytes: &[u8], close: usize) -> Option<usize> {
             return None;
         }
         i -= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unparenthesized_single_param_arrow_registers_param_scope() {
+        // `count => { … }` (no parens around the param) must register a scope
+        // whose param set holds `count` and whose body covers the `{ … }` block.
+        let src = "const handler = count => {\n  return count + 1\n}\n";
+        let scope = collect_shadow_scopes(src)
+            .into_iter()
+            .find(|s| s.params.contains("count"))
+            .expect("unparenthesized arrow param scope");
+        // The body range opens at the `{` and stops before the closing `}`
+        // (exclusive end), covering the block's statements.
+        let body = &src[scope.body.clone()];
+        assert!(body.starts_with('{'));
+        assert!(body.contains("return count + 1"));
+    }
+
+    #[test]
+    fn unparenthesized_arrow_collects_body_locals() {
+        // A local `let offset` inside `lrc => { … }` is collected as a shadowing
+        // local, so a same-named outer ref is suppressed after the declaration.
+        let src = "const getOffset = lrc => {\n  let offset = compute(lrc)\n  return offset\n}\n";
+        let scope = collect_shadow_scopes(src)
+            .into_iter()
+            .find(|s| s.params.contains("lrc"))
+            .expect("unparenthesized arrow param scope");
+        assert!(scope.locals.iter().any(|(name, _)| name == "offset"));
+    }
+
+    #[test]
+    fn member_access_before_arrow_is_not_a_param() {
+        // `obj.method` is a member expression, not a fresh binding: the `.`
+        // predecessor must reject `method` as an unparenthesized arrow param.
+        let src = "obj.method => {\n  return 1\n}\n";
+        assert!(collect_shadow_scopes(src).iter().all(|s| !s.params.contains("method")));
+    }
+
+    #[test]
+    fn async_unparenthesized_arrow_registers_param_scope() {
+        // The `async` keyword sits before the param and is not read into it, so
+        // an async single-param arrow still registers its `count` param scope.
+        let src = "const f = async count => {\n  return count + 1\n}\n";
+        assert!(collect_shadow_scopes(src).iter().any(|s| s.params.contains("count")));
+    }
+
+    #[test]
+    fn digit_leading_token_before_arrow_is_not_a_param() {
+        // A token that is not a valid identifier (starts with a digit) must not
+        // be read as an unparenthesized arrow param.
+        let src = "123 => {\n  return 1\n}\n";
+        assert!(collect_shadow_scopes(src).iter().all(|s| s.params.is_empty()));
     }
 }
