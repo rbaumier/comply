@@ -319,6 +319,16 @@ fn contains_password_in_url(line: &str) -> bool {
             // URL-format template in documentation, not a real credential —
             // a real userinfo component would percent-encode `[`/`]`.
             && !after[..colon + 1 + at].contains('[') {
+                // A `${...}` substitution in the userinfo means the credential is
+                // built from a runtime template expression, not a hardcoded
+                // literal — the same interpolation-is-not-a-literal reasoning
+                // `pem_body_is_interpolated` applies to PEM key bodies. The span
+                // is scoped to the userinfo (before the `@`), so a `${...}` in the
+                // host/port/db after the `@` still flags a literal password.
+                let userinfo = &after[..colon + 1 + at];
+                if userinfo.contains("${") {
+                    return false;
+                }
                 let username = &after[..colon];
                 let password = &rest[..at];
                 if is_placeholder_credential_pair(username, password) {
@@ -932,6 +942,38 @@ mod tests {
     fn still_flags_real_password_on_non_loopback_ip() {
         assert_eq!(
             run(r#"const u = "postgres://user:hunter2@10.0.0.5/db";"#).len(),
+            1
+        );
+    }
+
+    // Regression tests for #7641 — a URL whose userinfo is a `${...}` template
+    // substitution builds the credential from a runtime expression, not a
+    // hardcoded literal (ghostfolio redis.helper.ts).
+    #[test]
+    fn allows_interpolated_password_in_template_url() {
+        assert!(
+            run(r#"return `redis://${encodedPassword ? `:${encodedPassword}` : ''}@${host}:${port}/${db}`;"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_interpolated_userinfo_both_parts() {
+        assert!(run(r#"const u = `postgres://${user}:${pass}@${host}/db`;"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_literal_redis_password() {
+        assert_eq!(run("const db = 'redis://admin:hunter2@host:6379';").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_literal_password_with_interpolation_after_at() {
+        // Critical boundary: userinfo `admin:hunter2` is a literal credential;
+        // the `${...}` substitutions are all AFTER the `@` (host/port/db),
+        // outside the userinfo span, so the `${` guard must not exempt this.
+        assert_eq!(
+            run(r#"const u = `redis://admin:hunter2@${host}:${port}/${db}`;"#).len(),
             1
         );
     }
