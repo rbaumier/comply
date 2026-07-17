@@ -1,28 +1,41 @@
 //! vue-scoped-styles-preferred AST backend.
 //!
-//! Walks `style_element` nodes and inspects their `start_tag` for the
-//! `scoped` or `module` attribute. Emits a diagnostic when neither is
+//! Walks `style_element` nodes and reads the raw text of their `start_tag`
+//! for a `scoped` or `module` attribute. Emits a diagnostic when neither is
 //! present.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::vue_template_helpers::collect_attr_names;
 
-fn start_tag_has_attr(start_tag: tree_sitter::Node, source: &[u8], target: &str) -> bool {
+/// True when the `<style>` opening tag carries a `scoped` or `module`
+/// attribute, either of which scopes selectors locally: Vue hashes the classes
+/// of a `module` block and exposes them via `$style`, exactly as `scoped`
+/// isolates a block's selectors.
+///
+/// Attribute names are read from the raw source between the tag name and the
+/// tag terminator `>`, then tokenized with [`collect_attr_names`]. This is
+/// grammar-agnostic: tree-sitter-vue does not surface a value-less boolean
+/// attribute (`module`/`scoped`) that follows a valued attribute (`lang="less"`)
+/// as an `attribute` node, so a per-attribute child walk misses it, whereas the
+/// raw text sees every attribute regardless of ordering.
+fn start_tag_has_scoping_attr(start_tag: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = start_tag.walk();
-    for child in start_tag.children(&mut cursor) {
-        if child.kind() != "attribute" {
-            continue;
-        }
-        let mut inner = child.walk();
-        for grand in child.children(&mut inner) {
-            if grand.kind() == "attribute_name"
-                && let Ok(name) = grand.utf8_text(source)
-                && name == target
-            {
-                return true;
-            }
-        }
-    }
-    false
+    let Some(tag_name) = start_tag
+        .children(&mut cursor)
+        .find(|c| c.kind() == "tag_name")
+    else {
+        return false;
+    };
+    let rest = &source[tag_name.end_byte()..];
+    let end = rest.iter().position(|&b| b == b'>').unwrap_or(rest.len());
+    let Ok(attrs) = std::str::from_utf8(&rest[..end]) else {
+        return false;
+    };
+    // Drop a self-closing slash so the tokenizer only sees attribute text.
+    let attrs = attrs.trim().trim_end_matches('/').trim_end();
+    collect_attr_names(attrs)
+        .iter()
+        .any(|name| *name == "scoped" || *name == "module")
 }
 
 crate::ast_check! { on ["style_element"] => |node, source, ctx, diagnostics|
@@ -30,9 +43,7 @@ crate::ast_check! { on ["style_element"] => |node, source, ctx, diagnostics|
     let Some(start_tag) = node.children(&mut cursor).find(|c| c.kind() == "start_tag") else {
         return;
     };
-    if start_tag_has_attr(start_tag, source, "scoped")
-        || start_tag_has_attr(start_tag, source, "module")
-    {
+    if start_tag_has_scoping_attr(start_tag, source) {
         return;
     }
     let pos = start_tag.start_position();
@@ -80,5 +91,23 @@ mod tests {
     #[test]
     fn allows_scoped_with_lang() {
         assert!(run("<style lang=\"scss\" scoped>\n.x {}\n</style>").is_empty());
+    }
+
+    #[test]
+    fn allows_module_after_valued_lang() {
+        // The exact repro: a value-less `module` after a valued `lang`.
+        assert!(run("<style lang=\"less\" module>\n.a {}\n</style>").is_empty());
+        assert!(run("<style lang=\"scss\" module>\n.a {}\n</style>").is_empty());
+    }
+
+    #[test]
+    fn allows_scoped_after_valued_lang() {
+        assert!(run("<style lang=\"less\" scoped>\n.x {}\n</style>").is_empty());
+    }
+
+    #[test]
+    fn flags_unscoped_style_with_lang() {
+        // A valued `lang` alone (no scoped/module) still leaks globally.
+        assert_eq!(run("<style lang=\"less\">\n.x {}\n</style>").len(), 1);
     }
 }
