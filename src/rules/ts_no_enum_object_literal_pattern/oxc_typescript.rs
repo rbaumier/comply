@@ -5,9 +5,10 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BindingPattern, CallExpression, Expression, FormalParameters, FunctionBody,
-    IdentifierReference, Statement, TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
-    TSTypeOperatorOperator, TSTypeParameterDeclaration, TSTypeQueryExprName, VariableDeclarationKind,
+    BindingPattern, CallExpression, Expression, FormalParameter, FormalParameters, FunctionBody,
+    IdentifierReference, ObjectExpression, ObjectPropertyKind, PropertyKey, Statement, TSLiteral,
+    TSSignature, TSTupleElement, TSType, TSTypeAnnotation, TSTypeOperatorOperator,
+    TSTypeParameterDeclaration, TSTypeQueryExprName, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -15,9 +16,13 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Collect names of `const X = { ... } as const` bindings.
-fn collect_as_const_objects<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> FxHashSet<&'a str> {
-    let mut names = FxHashSet::default();
+/// Collect `const X = { ... } as const` bindings as `name -> set of the
+/// object's static string keys` (non-computed identifier and string-literal
+/// property names).
+fn collect_as_const_objects<'a>(
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> FxHashMap<&'a str, FxHashSet<&'a str>> {
+    let mut objects = FxHashMap::default();
     for node in semantic.nodes().iter() {
         let AstKind::VariableDeclaration(decl) = node.kind() else { continue };
         if decl.kind != VariableDeclarationKind::Const {
@@ -51,14 +56,38 @@ fn collect_as_const_objects<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> FxH
                 continue;
             }
             // The expression part should be an object.
-            let Expression::ObjectExpression(_) = &as_expr.expression else { continue };
+            let Expression::ObjectExpression(obj) = &as_expr.expression else { continue };
             // Get the binding name.
             if let BindingPattern::BindingIdentifier(id) = &declarator.id {
-                names.insert(id.name.as_str());
+                objects.insert(id.name.as_str(), object_literal_keys(obj));
             }
         }
     }
-    names
+    objects
+}
+
+/// The set of statically-known string keys of an object literal — the names of
+/// its non-computed identifier and string-literal properties. Computed, numeric,
+/// and spread properties are omitted, so membership is a sound (not necessarily
+/// complete) test that a string is a key of the object.
+fn object_literal_keys<'a>(obj: &'a ObjectExpression<'a>) -> FxHashSet<&'a str> {
+    let mut keys = FxHashSet::default();
+    for prop in &obj.properties {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else { continue };
+        if p.computed {
+            continue;
+        }
+        match &p.key {
+            PropertyKey::StaticIdentifier(id) => {
+                keys.insert(id.name.as_str());
+            }
+            PropertyKey::StringLiteral(s) => {
+                keys.insert(s.value.as_str());
+            }
+            _ => {}
+        }
+    }
+    keys
 }
 
 /// True when `ty` is an object-literal type with a closed set of named keys — a
@@ -287,6 +316,55 @@ fn binding_declared_type<'a>(
         }
     }
     None
+}
+
+/// The declared type of the binding named `binding_name` inside `param`. A plain
+/// identifier parameter (`value: T`) carries the type directly; a destructured
+/// object parameter (`{ event }: { event: T }`) carries it on the object-type
+/// member whose key is `binding_name`. `None` for an un-annotated parameter, a
+/// non-object destructuring, or a missing member.
+fn param_binding_type<'a>(
+    param: &'a FormalParameter<'a>,
+    binding_name: &str,
+) -> Option<&'a TSType<'a>> {
+    let ty = &param.type_annotation.as_ref()?.type_annotation;
+    match &param.pattern {
+        BindingPattern::BindingIdentifier(_) => Some(ty),
+        BindingPattern::ObjectPattern(_) => object_type_member(ty, binding_name),
+        _ => None,
+    }
+}
+
+/// The member type for the non-computed property named `name` in an object-type
+/// literal (`{ name: T }`). `None` when `ty` is not a type literal or has no such
+/// property.
+fn object_type_member<'a>(ty: &'a TSType<'a>, name: &str) -> Option<&'a TSType<'a>> {
+    let TSType::TSTypeLiteral(lit) = ty else { return None };
+    lit.members.iter().find_map(|m| {
+        let TSSignature::TSPropertySignature(prop) = m else { return None };
+        if !prop.key.is_specific_static_name(name) {
+            return None;
+        }
+        prop.type_annotation.as_ref().map(|a| &a.type_annotation)
+    })
+}
+
+/// True when `ty` is a non-empty union of string-literal types (`"a" | "b"`),
+/// every member of which is a key of the indexed object (`obj_keys`). A key with
+/// such a type ranges only over the object's own keys, so the lookup is
+/// statically key-narrow — the same conservatism applied to a `keyof typeof X`
+/// key.
+fn union_of_literal_keys(ty: &TSType, obj_keys: &FxHashSet<&str>) -> bool {
+    let TSType::TSUnionType(union) = ty else { return false };
+    !union.types.is_empty() && union.types.iter().all(|m| string_literal_type_is_key(m, obj_keys))
+}
+
+/// True when `ty` is a string-literal type (`"a"`) whose value is a key of the
+/// indexed object (`obj_keys`).
+fn string_literal_type_is_key(ty: &TSType, obj_keys: &FxHashSet<&str>) -> bool {
+    let TSType::TSLiteralType(lit) = ty else { return false };
+    let TSLiteral::StringLiteral(s) = &lit.literal else { return false };
+    obj_keys.contains(s.value.as_str())
 }
 
 /// True when `ty` is `T[]` (a `TSArrayType`) or a tuple `[T, ...T[]]` (a
@@ -527,12 +605,16 @@ fn param_inferred_from_typed_array_receiver<'a>(
 /// an un-annotated callback parameter, also true when it is the first parameter
 /// of a `.map()`/`.forEach()`/`.filter()`/`.some()`/`.every()` callback whose
 /// receiver is declared `T[]` or `[T, ...T[]]` with `T` resolving to `keyof
-/// typeof obj_name` (its element type is then a known key).
+/// typeof obj_name` (its element type is then a known key). Also true when the
+/// declared type is a string-literal union (`"a" | "b"`) every member of which
+/// is a key of the object (`obj_keys`) — it ranges only over the object's keys,
+/// so it is as key-narrow as `keyof typeof obj_name`.
 fn index_ident_keys_obj<'a>(
     id: &IdentifierReference<'a>,
     obj_name: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
     aliases: &FxHashMap<&str, &str>,
+    obj_keys: &FxHashSet<&str>,
 ) -> bool {
     let Some(ref_id) = id.reference_id.get() else { return false };
     let scoping = semantic.scoping();
@@ -540,7 +622,7 @@ fn index_ident_keys_obj<'a>(
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
     for node_id in std::iter::once(decl_node_id).chain(nodes.ancestor_ids(decl_node_id)) {
-        let ann = match nodes.kind(node_id) {
+        let ty = match nodes.kind(node_id) {
             AstKind::FormalParameter(param) => {
                 // No annotation: accept when the parameter's type is inferred
                 // from a typed array receiver of an array-method callback.
@@ -549,27 +631,34 @@ fn index_ident_keys_obj<'a>(
                         node_id, obj_name, semantic, aliases,
                     );
                 }
-                param.type_annotation.as_ref()
+                let Some(ty) = param_binding_type(param, id.name.as_str()) else {
+                    return false;
+                };
+                ty
             }
             AstKind::VariableDeclarator(decl) => {
                 // No annotation: accept when the initializer extracts an element
                 // from a `(keyof typeof Obj)[]` array (its elements are keys).
-                if decl.type_annotation.is_none() {
+                let Some(ann) = decl.type_annotation.as_ref() else {
                     return decl.init.as_ref().is_some_and(|init| {
                         init_yields_obj_key(init, obj_name, semantic, aliases)
                     });
-                }
-                decl.type_annotation.as_ref()
+                };
+                &ann.type_annotation
             }
             _ => continue,
         };
-        let Some(ann) = ann else { return false };
-        if type_keys_obj(&ann.type_annotation, obj_name, aliases) {
+        if type_keys_obj(ty, obj_name, aliases) {
+            return true;
+        }
+        // A key whose declared type is a string-literal union drawn entirely from
+        // the object's keys (`"a" | "b"`) is as key-narrow as `keyof typeof Obj`.
+        if union_of_literal_keys(ty, obj_keys) {
             return true;
         }
         // `code: TCode` where `<TCode extends keyof typeof Obj>` is as safe as a
         // direct `keyof typeof Obj` annotation — resolve the constraint.
-        return type_ref_name(&ann.type_annotation).is_some_and(|name| {
+        return type_ref_name(ty).is_some_and(|name| {
             type_param_constraint_keys_obj(name, decl_node_id, obj_name, semantic, aliases)
         });
     }
@@ -597,6 +686,30 @@ fn is_safe_index(expr: &Expression, source: &str) -> bool {
     }
 }
 
+/// True when the index expression is a conditional (`c ? a : b`) or an `||` / `??`
+/// logical expression, recursively, whose every leaf operand is a string literal
+/// that is a key of the indexed object (`obj_keys`). Such an index has a
+/// literal-union type drawn entirely from the object's own keys, so the lookup is
+/// statically key-narrow — not a widening arbitrary-key access. `&&` is excluded:
+/// its value is not necessarily one of its operands. Recursion descends only into
+/// strict sub-expressions of a finite AST, so it terminates.
+fn index_is_literal_key_union(expr: &Expression, obj_keys: &FxHashSet<&str>) -> bool {
+    match peel_parens(expr) {
+        Expression::StringLiteral(s) => obj_keys.contains(s.value.as_str()),
+        Expression::ConditionalExpression(cond) => {
+            index_is_literal_key_union(&cond.consequent, obj_keys)
+                && index_is_literal_key_union(&cond.alternate, obj_keys)
+        }
+        Expression::LogicalExpression(logic)
+            if logic.operator.is_or() || logic.operator.is_coalesce() =>
+        {
+            index_is_literal_key_union(&logic.left, obj_keys)
+                && index_is_literal_key_union(&logic.right, obj_keys)
+        }
+        _ => false,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::ComputedMemberExpression]
@@ -618,8 +731,15 @@ impl OxcCheck for Check {
             return;
         }
 
-        let names = collect_as_const_objects(semantic);
-        if !names.contains(obj_name) {
+        let objects = collect_as_const_objects(semantic);
+        let Some(obj_keys) = objects.get(obj_name) else {
+            return;
+        };
+
+        // A ternary or `||`/`??` chain whose leaves are all literal keys of the
+        // object indexes with a literal-union of the object's own keys — a
+        // key-narrow lookup, not a widening arbitrary-key access.
+        if index_is_literal_key_union(&member.expression, obj_keys) {
             return;
         }
 
@@ -628,7 +748,7 @@ impl OxcCheck for Check {
         // to read an `as const` map. Not the widening enum-replacement pattern.
         if let Expression::Identifier(idx_id) = &member.expression {
             let aliases = collect_keyof_typeof_aliases(semantic);
-            if index_ident_keys_obj(idx_id, obj_name, semantic, &aliases) {
+            if index_ident_keys_obj(idx_id, obj_name, semantic, &aliases, obj_keys) {
                 return;
             }
         }
@@ -1036,6 +1156,84 @@ mod tests {
         // the same statement still flags.
         let src = "const a: Record<string, number> = { x: 1 } as const, b = { y: 2 } as const;\n\
                    function f(k: string) { return a[k] + b[k]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ternary_of_literal_keys_index() {
+        // Regression for issue #7722(a): `isAnalytics ? "analyticsApi" : "api"`
+        // has type `"analyticsApi" | "api"`, both keys of the object — a
+        // key-narrow lookup, not a widening arbitrary-key access.
+        let src = "const X = { api: { a: 1 }, analyticsApi: { b: 2 } } as const;\n\
+                   function f(isAnalytics: boolean) { return X[isAnalytics ? \"analyticsApi\" : \"api\"]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nested_ternary_of_literal_keys_index() {
+        // Nested ternary: every leaf (`a`, `b`, `c`) is a key of the object.
+        let src = "const X = { a: 1, b: 2, c: 3 } as const;\n\
+                   function f(p: number, q: boolean) { return X[p > 0 ? \"a\" : q ? \"b\" : \"c\"]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_logical_coalesce_of_literal_keys_index() {
+        // `??` chain whose operands are all literal keys of the object.
+        let src = "const X = { api: 1, analyticsApi: 2 } as const;\n\
+                   const r = X[\"analyticsApi\" ?? \"api\"];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_ternary_with_non_key_leaf() {
+        // One branch (`missingKey`) is not a key of the object, so the index is
+        // not provably key-narrow.
+        let src = "const X = { api: 1, analyticsApi: 2 } as const;\n\
+                   function f(cond: boolean) { return X[cond ? \"api\" : \"missingKey\"]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ternary_with_non_literal_leaf() {
+        // A non-literal branch (`k`) leaves the index type open — not key-narrow.
+        let src = "const X = { api: 1, analyticsApi: 2 } as const;\n\
+                   function f(cond: boolean, k: string) { return X[cond ? \"api\" : k]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_string_literal_union_key_param() {
+        // A parameter typed as a string-literal union equal to the object's keys.
+        let src = "const m = { approved: 'approvedAt', rejected: 'rejectedAt' } as const;\n\
+                   function f(event: 'approved' | 'rejected') { return m[event]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_string_literal_union_key_destructured_param() {
+        // Regression for issue #7722(b): `event` is destructured with declared
+        // type `"approved" | "rejected"`, exactly the keys of `eventToColumnMap`.
+        let src = "const eventToColumnMap = { approved: 'approvedAt', rejected: 'rejectedAt' } as const;\n\
+                   function f({ event }: { event: 'approved' | 'rejected' }) { return eventToColumnMap[event]; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_string_literal_union_key_with_non_key_member() {
+        // `deleted` is not a key of the map, so the union is not a subset of the
+        // object's keys — the lookup can widen.
+        let src = "const m = { approved: 'approvedAt', rejected: 'rejectedAt' } as const;\n\
+                   function f(event: 'approved' | 'deleted') { return m[event]; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_plain_string_key_against_literal_union_map() {
+        // The union-key fix must not neuter the rule: an arbitrary `string` key
+        // against the same map still widens and is still flagged.
+        let src = "const m = { approved: 'approvedAt', rejected: 'rejectedAt' } as const;\n\
+                   function f(event: string) { return m[event]; }";
         assert_eq!(run(src).len(), 1);
     }
 }
