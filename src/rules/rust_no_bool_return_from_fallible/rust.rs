@@ -19,9 +19,11 @@
 //! - Trait-impl methods (`impl Trait for Type`): the signature is fixed
 //!   by the trait contract, the implementor can't return `Result`.
 //! - Functions whose body tail expression *computes* the bool from a
-//!   real value — a comparison (parser progress: `pos() != start`) or a
-//!   forwarded call return (`HashSet::insert`'s "was it new?") — rather
-//!   than hardcoding a literal. A `match`/`if` tail counts as computed
+//!   real value — a comparison (parser progress: `pos() != start`), a
+//!   forwarded call return (`HashSet::insert`'s "was it new?"), or a
+//!   bool-producing macro tail (`cfg!(...)`, an env-helper macro that
+//!   forwards a computed value) — rather than hardcoding a literal. A
+//!   `match`/`if` tail counts as computed
 //!   when at least one branch body forwards a computed value (e.g.
 //!   `match { Some(f) => (f)(x), None => true }`); a `match`/`if` whose
 //!   every branch is a bare `true` / `false` is not treated as computed.
@@ -257,13 +259,19 @@ fn block_tail_expression(block: tree_sitter::Node) -> Option<tree_sitter::Node> 
 /// True if `expr` *computes* its boolean value from a real value rather
 /// than hardcoding `true` / `false`. A comparison (`pos() != start`) or a
 /// forwarded call return (`self.set.insert(x)`, a closure's `(f)(x)`)
-/// carries the operation's actual outcome. A `match`/`if` is computed iff
-/// at least one branch body is itself computed — an all-literal `match`/`if`
-/// (`if ok { true } else { false }`) is the genuine literal-smuggling smell
-/// and is not treated as computed.
+/// carries the operation's actual outcome. A `macro_invocation` tail
+/// (`cfg!(...)`, `matches!(x, ..)`, an env-helper macro) forwards its
+/// result the same way a call does, so it counts as computed too. A
+/// `match`/`if` is computed iff at least one branch body is itself
+/// computed — an all-literal `match`/`if` (`if ok { true } else { false }`)
+/// is the genuine literal-smuggling smell and is not treated as computed.
 fn expression_is_computed(expr: tree_sitter::Node) -> bool {
     match expr.kind() {
-        "binary_expression" | "call_expression" | "await_expression" | "try_expression" => true,
+        "binary_expression"
+        | "call_expression"
+        | "await_expression"
+        | "try_expression"
+        | "macro_invocation" => true,
         "match_expression" => match_has_computed_arm(expr),
         "if_expression" => if_has_computed_branch(expr),
         _ => false,
@@ -1019,8 +1027,8 @@ mod tests {
     #[test]
     fn allows_atomic_fetch_and() {
         // crossbeam-utils AtomicCell<bool>::fetch_and — the bool is the
-        // previous atomic value (the body tail is a macro invocation, so
-        // `returns_computed_bool` cannot see through it).
+        // previous atomic value; exempted by the `fetch_*` name class,
+        // which runs before `returns_computed_bool`.
         let src = "\
             pub fn fetch_and(&self, val: bool) -> bool {\n\
                 atomic! {\n\
@@ -1476,6 +1484,50 @@ mod tests {
                 if x.is_empty() { return false; }\n\
                 persist(x);\n\
                 true\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #7642: a `macro_invocation` tail forwards a computed bool the same way
+    // a `call_expression` tail does — it hardcodes no literal, so it is not the
+    // success/failure collapse the rule targets ---
+
+    #[test]
+    fn allows_macro_invocation_tail_forwarding_bool() {
+        // quickwit `search_job_placer.rs` `load_estimation_disabled` — the whole
+        // body is a single macro tail that reads a cached env var and forwards a
+        // computed `bool`; there is no `true`/`false` literal to hoist.
+        let src = "\
+            fn load_estimation_disabled() -> bool {\n\
+                get_bool_from_env_cached!(\"QW_DISABLE_LOAD_ESTIMATION\", false)\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_matches_macro_tail() {
+        // `matches!(...)` produces the bool directly; the action-prefixed name
+        // (`process_`) is matched only because of the prefix list.
+        let src = "fn process_frame(&self, x: &Frame) -> bool { matches!(x, Frame::Data(_)) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_cfg_macro_tail() {
+        let src = "fn load_feature_flag() -> bool { cfg!(feature = \"fast\") }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #7642: negative space — a macro in the body does not exempt a function
+    // that still collapses success/failure onto bool literals ---
+
+    #[test]
+    fn flags_literal_collapse_despite_macro_in_condition() {
+        // The tail is the `if { .. } else { .. }` literal collapse, not a macro;
+        // a `matches!` guard in the *condition* doesn't make the tail computed.
+        let src = "\
+            fn load_config(&self, x: &str) -> bool {\n\
+                if matches!(x, \"\") { false } else { true }\n\
             }";
         assert_eq!(run_on(src).len(), 1);
     }
