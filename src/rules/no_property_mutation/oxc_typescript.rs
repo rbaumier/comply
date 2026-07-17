@@ -1812,13 +1812,27 @@ mod tests {
 
     #[test]
     fn allows_vue_shallow_reactive_object_mutation() {
-        // `shallowReactive` follows the same reactive-proxy mutation contract.
+        // `shallowReactive` tracks its root-level properties, so a root-level
+        // write follows the same reactive-proxy mutation contract.
         let src = r#"
             import { shallowReactive } from 'vue'
             const state = shallowReactive({ n: 0 });
             state.n = 5;
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_nested_member_mutation_on_shallow_reactive_object() {
+        // Negative space: `shallowReactive` does no deep conversion — `state.nested`
+        // is the raw object, so writing through it drives no reactivity and is a
+        // plain-object mutation. The depth of the exemption tracks the factory.
+        let src = r#"
+            import { shallowReactive } from 'vue'
+            const state = shallowReactive({ nested: { n: 0 } });
+            state.nested.n = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
