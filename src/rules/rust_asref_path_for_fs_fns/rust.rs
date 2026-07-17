@@ -96,10 +96,12 @@ fn param_name<'a>(pattern: Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     }
 }
 
-/// True if the parameter named `name` is passed as an argument to one of the
-/// body's filesystem calls. Walks every `call_expression` whose callee matches
-/// an [`FS_CALL_MARKERS`] entry and checks its argument list for an identifier
-/// equal to `name` (covering `f(name)`, `f(&name)`, `f(name.as_ref())`, …).
+/// True if the parameter named `name` is passed as a *direct* path argument to
+/// one of the body's filesystem calls. Walks every `call_expression` whose
+/// callee matches an [`FS_CALL_MARKERS`] entry and checks its argument list via
+/// [`param_is_direct_path_arg`] (covering `f(name)`, `f(&name)`,
+/// `f(name.as_ref())`, but not `f(build_path(name))` where `name` is only an
+/// argument to an inner path-builder).
 ///
 /// The match is name-based, not scope-accurate: it does not follow rebindings
 /// (`let p = name; fs::read(p)` is missed) nor distinguish a shadowing local of
@@ -117,7 +119,7 @@ fn param_passed_to_fs_call(body: Node, name: &str, source: &[u8]) -> bool {
             return;
         }
         let Some(args) = call.child_by_field_name("arguments") else { return; };
-        if identifier_appears_in(args, name, source) {
+        if param_is_direct_path_arg(args, name, source) {
             found = true;
         }
     });
@@ -151,14 +153,29 @@ fn walk_call_expressions(node: Node, visit: &mut impl FnMut(Node)) {
     }
 }
 
-/// True if an `identifier` node equal to `name` appears anywhere under `node`.
-fn identifier_appears_in(node: Node, name: &str, source: &[u8]) -> bool {
-    if node.kind() == "identifier" {
-        return node.utf8_text(source) == Ok(name);
+/// True if the param `name` occupies a *direct* path position under `node`
+/// (an fs call's argument list): the bare identifier (`f(name)`), under a
+/// reference (`f(&name)`), or as the receiver of a method chain on the param
+/// itself (`f(name.as_ref())` / `f(name.as_path())`).
+///
+/// A nested `call_expression` transforms its arguments — its *return*, not the
+/// arguments, is what reaches the fs call — so we follow only the callee
+/// (`function` field) and never descend the `arguments` field. That reaches a
+/// method-chain receiver like `name.as_ref()` while leaving a param passed
+/// *into* an inner path-builder (`fs::metadata(build_path(name))`,
+/// `fs::read(dir.join(name))`) unmatched.
+fn param_is_direct_path_arg(node: Node, name: &str, source: &[u8]) -> bool {
+    match node.kind() {
+        "identifier" => node.utf8_text(source) == Ok(name),
+        "call_expression" => node
+            .child_by_field_name("function")
+            .is_some_and(|func| param_is_direct_path_arg(func, name, source)),
+        _ => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .any(|child| param_is_direct_path_arg(child, name, source))
+        }
     }
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor)
-        .any(|child| identifier_appears_in(child, name, source))
 }
 
 /// Classify `type_node` as one of the concrete path-ish types we
@@ -299,6 +316,54 @@ mod tests {
                    let mut file = File::create(name)?; \
                    file.write_all(data) }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_str_param_passed_by_reference_to_fs_call() {
+        // `&p` is a direct path argument (the reference wraps the param itself),
+        // so the `&str` param stays flagged.
+        let src = "pub fn load(p: &str) -> Vec<u8> { fs::read(&p).unwrap() }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_str_param_via_asref_chain_to_fs_call() {
+        // `p.as_ref()` is a path-view method chain on the param itself — the
+        // receiver is the param, so it stays flagged.
+        let src = "pub fn load(p: &str) -> std::io::Result<File> { File::open(p.as_ref()) }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_str_param_via_aspath_chain_to_fs_call() {
+        let src = "pub fn load(p: &str) -> std::io::Result<Metadata> { fs::metadata(p.as_path()) }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_str_param_nested_in_inner_path_builder() {
+        // Regression for #7658: the fs path is the *return* of
+        // `self.thumbnail_path(cas_id, size)`; `cas_id` is only an argument to
+        // that inner path-builder, so the `&str` param must not be flagged.
+        let src = "pub async fn has_thumbnail(&self, cas_id: &str, size: u32) -> bool { \
+                   tokio::fs::metadata(self.thumbnail_path(cas_id, size)).await.is_ok() }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_str_param_as_arg_to_join() {
+        // `name` is an argument to `dir.join(...)`; the joined `PathBuf` is the
+        // path, not `name` itself.
+        let src = "pub fn load(name: &str) -> Vec<u8> { fs::read(dir.join(name)).unwrap() }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_str_param_as_arg_to_free_path_builder() {
+        // `id` is transformed by the free `build_path` function; its return is
+        // the path handed to the fs call, so `id` must not be flagged.
+        let src = "pub fn load(id: &str) -> std::io::Result<Metadata> { fs::metadata(build_path(id)) }";
+        assert!(run(src).is_empty());
     }
 
     #[test]
