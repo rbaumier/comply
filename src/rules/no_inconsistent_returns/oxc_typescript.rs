@@ -78,7 +78,7 @@ impl OxcCheck for Check {
         // arm of the declared union, or the `JSON.parse` reviver idiom where a
         // bare `return;` drops a key under a `: any` contract). That is the
         // canonical idiom, not an inconsistency.
-        if has_value && has_bare && return_type_admits_void_or_undefined(return_type) {
+        if has_value && has_bare && return_type_admits_void_or_undefined(return_type, semantic) {
             return;
         }
 
@@ -598,5 +598,121 @@ function outer() {
 }
 "#;
         assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_vue_router_navigation_guard_return() {
+        // Regression for issue #7644 (jellyfin/jellyfin-vue router middleware): a
+        // guard typed `: NavigationGuardReturn` (vue-router's `void | boolean |
+        // RouteLocationRaw | …` union) returns `void` (bare `return;` = continue
+        // navigation) or `false` (cancel). Both are the declared contract, not an
+        // inconsistency. Recognized by import-graph provenance.
+        let code = r#"
+import type { NavigationGuardReturn } from 'vue-router';
+
+export function playbackGuard(): NavigationGuardReturn {
+    if (ready) {
+        return;
+    }
+    return false;
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_same_file_void_admitting_alias_return() {
+        // A same-file `type GuardReturn = void | boolean` alias admits a bare
+        // `return;` (the `void` arm) alongside a value return. The type reference
+        // is resolved to its aliased definition.
+        let code = r#"
+type GuardReturn = void | boolean;
+
+function g(x): GuardReturn {
+    if (x) return;
+    return false;
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn still_flags_same_file_non_void_alias_return() {
+        // A same-file alias that does NOT admit void: a bare `return;` yields
+        // `undefined`, not the declared type. Genuine inconsistency, must flag.
+        let code = r#"
+type GuardReturn = number | string;
+
+function g(x): GuardReturn {
+    if (x) return 5;
+    return;
+}
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_navigation_guard_return_not_from_vue_router() {
+        // Negative control: the `NavigationGuardReturn` name alone must not
+        // exempt. Here it is a same-file alias to a non-void type with no
+        // vue-router import, so neither provenance nor alias resolution admits a
+        // bare `return;` — still flags.
+        let code = r#"
+type NavigationGuardReturn = number;
+
+function g(x): NavigationGuardReturn {
+    if (x) return 5;
+    return;
+}
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn allows_vue_router_navigation_guard_return_with_sibling_import() {
+        // A non-void sibling specifier in the same `vue-router` import must not
+        // clobber the provenance match for `NavigationGuardReturn`.
+        let code = r#"
+import type { RouteLocationNormalized, NavigationGuardReturn } from 'vue-router';
+
+export function adminGuard(to: RouteLocationNormalized): NavigationGuardReturn {
+    if (to.meta.admin) {
+        return;
+    }
+    return false;
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_vue_router_navigation_guard_return_renamed_import() {
+        // Provenance keys on the exported name, so a renamed import still matches.
+        let code = r#"
+import type { NavigationGuardReturn as NGR } from 'vue-router';
+
+export function validateGuard(): NGR {
+    if (ok) {
+        return;
+    }
+    return false;
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn still_flags_navigation_guard_return_from_wrong_module() {
+        // Same exported name, wrong source module: provenance requires the import
+        // to come from `vue-router`, so a bare `return;` still flags.
+        let code = r#"
+import type { NavigationGuardReturn } from 'my-router';
+
+export function g(x): NavigationGuardReturn {
+    if (x) return 5;
+    return;
+}
+"#;
+        assert_eq!(run_on(code).len(), 1);
     }
 }
