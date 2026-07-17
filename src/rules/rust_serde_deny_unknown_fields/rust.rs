@@ -21,6 +21,15 @@
 //! is exactly the mechanism for accepting unknown keys, so rejecting
 //! them before the flatten can catch them defeats the field's purpose.
 //!
+//! **Exception:** a struct that is the *target* of a `#[serde(flatten)]`
+//! field on another struct in the same file is NOT flagged. serde forbids
+//! `deny_unknown_fields` on a flatten target too: when it is flattened into
+//! a parent alongside a sibling flattened struct, the two share one field
+//! map, so `deny_unknown_fields` on the target would reject the sibling's
+//! fields as unknown and break the parent's deserialization. The target is
+//! resolved by same-file type-name identity (a field typed `Key` or
+//! `crate::x::Key` flattens the struct named `Key`).
+//!
 //! **Exception:** a `#[serde(transparent)]` struct is NOT flagged. It
 //! delegates all (de)serialization to its single inner field and has no
 //! field-name map of its own, so `deny_unknown_fields` is a no-op there.
@@ -148,6 +157,17 @@ impl AstCheck for Check {
             .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source_bytes).ok())
             .unwrap_or("Struct");
+        // A struct that is itself the type of a `#[serde(flatten)]` field on
+        // another struct in this file is a flatten *target*. serde forbids
+        // `deny_unknown_fields` on a flatten target just as on a flatten source:
+        // when several structs are flattened into one parent, enabling it on a
+        // target makes it reject its siblings' fields as unknown and breaks the
+        // parent's deserialization. Symmetric to `has_flatten_field`.
+        if let Some(root) = source_file_root(node)
+            && source_file_flattens_type_named(root, name, source_bytes)
+        {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -309,10 +329,8 @@ fn has_named_fields(struct_node: tree_sitter::Node) -> bool {
         .is_some_and(|body| body.kind() == "field_declaration_list")
 }
 
-/// True if any field inside the struct body carries a
-/// `#[serde(flatten)]` attribute. We walk the `field_declaration_list`
-/// child and, for each `field_declaration`, look for preceding
-/// `attribute_item` siblings containing `flatten`.
+/// True if any field inside the struct body carries a `#[serde(flatten)]`
+/// attribute — i.e. the struct is a flatten *source*.
 fn has_flatten_field(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(body) = struct_node.child_by_field_name("body") else {
         return false;
@@ -321,27 +339,105 @@ fn has_flatten_field(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     }
     let mut cursor = body.walk();
-    for field in body.children(&mut cursor) {
-        if field.kind() != "field_declaration" {
-            continue;
-        }
-        let mut sibling = field.prev_named_sibling();
-        while let Some(s) = sibling {
-            match s.kind() {
-                "attribute_item" => {
-                    if let Ok(text) = s.utf8_text(source)
-                        && text.contains("flatten")
-                    {
-                        return true;
-                    }
+    body.children(&mut cursor)
+        .any(|field| field.kind() == "field_declaration" && field_has_flatten_attr(field, source))
+}
+
+/// True if `field` (a `field_declaration`) has a preceding `#[serde(flatten)]`
+/// attribute. Interleaved comments are skipped; the scan stops at the first
+/// non-attribute, non-comment sibling.
+fn field_has_flatten_attr(field: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = field.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && text.contains("flatten")
+                {
+                    return true;
                 }
-                "line_comment" | "block_comment" => {}
-                _ => break,
             }
-            sibling = s.prev_named_sibling();
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// Walk up from `node` to the enclosing `source_file` root.
+fn source_file_root(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = Some(node);
+    while let Some(n) = current {
+        if n.kind() == "source_file" {
+            return Some(n);
+        }
+        current = n.parent();
+    }
+    None
+}
+
+/// True if any `struct_item` in the file has a `#[serde(flatten)]` field whose
+/// type resolves (final path segment) to `name` — i.e. the struct named `name`
+/// is a flatten *target*. Descends the whole subtree so a struct nested in a
+/// `mod` is found, mirroring the same-file enum-definition walks.
+///
+/// This is a full-file walk, invoked once per otherwise-flaggable struct (the
+/// call site is guarded by every cheaper exemption first), not a bounded
+/// subtree scan; the candidate set per file is small, so it is not a hot path.
+fn source_file_flattens_type_named(
+    source_file: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    let mut cursor = source_file.walk();
+    let mut stack = vec![source_file];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "struct_item" && struct_flattens_type_named(node, name, source) {
+            return true;
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
         }
     }
     false
+}
+
+/// True if `struct_node` has a `#[serde(flatten)]` field whose type's final
+/// path segment is `name`.
+fn struct_flattens_type_named(struct_node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let Some(body) = struct_node.child_by_field_name("body") else {
+        return false;
+    };
+    if body.kind() != "field_declaration_list" {
+        return false;
+    }
+    let mut cursor = body.walk();
+    body.children(&mut cursor).any(|field| {
+        field.kind() == "field_declaration"
+            && field_has_flatten_attr(field, source)
+            && field
+                .child_by_field_name("type")
+                .and_then(|ty| field_type_final_segment(ty, source))
+                == Some(name)
+    })
+}
+
+/// The final path-segment identifier of a field type, ignoring generic
+/// arguments: `Key` -> `Key`, `crate::model::Key` -> `Key`, `Key<T>` -> `Key`.
+/// Returns `None` for shapes with no single leading path (references, tuples,
+/// `dyn`/`impl`, …), which never name a flatten-target struct.
+fn field_type_final_segment<'a>(type_node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    match type_node.kind() {
+        "type_identifier" => type_node.utf8_text(source).ok(),
+        "scoped_type_identifier" => type_node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok()),
+        "generic_type" => type_node
+            .child_by_field_name("type")
+            .and_then(|base| field_type_final_segment(base, source)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -405,6 +501,88 @@ mod tests {
         assert!(
             run_on(source).is_empty(),
             "false positive: struct with flatten field can't have deny_unknown_fields"
+        );
+    }
+
+    #[test]
+    fn allows_flatten_target_structs() {
+        // qdrant clock_map.rs: `Key` and `Clock` are each a `#[serde(flatten)]`
+        // target of `KeyClockHelper`. serde forbids `deny_unknown_fields` on a
+        // flatten target, so neither may be flagged; `KeyClockHelper` itself is
+        // exempt via the existing flatten-source path. (Closes #7681)
+        let source = "#[derive(Copy, Clone, Deserialize, Serialize)]\n\
+                      pub struct Key { peer_id: PeerId, clock_id: u32 }\n\
+                      #[derive(Copy, Clone, Deserialize, Serialize)]\n\
+                      struct Clock { current_tick: u64, token: ClockToken }\n\
+                      #[derive(Copy, Clone, Deserialize, Serialize)]\n\
+                      struct KeyClockHelper {\n\
+                          #[serde(flatten)]\n\
+                          key: Key,\n\
+                          #[serde(flatten)]\n\
+                          clock: Clock,\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: flatten-target structs (Key, Clock) or the flatten-source helper flagged"
+        );
+    }
+
+    #[test]
+    fn flags_non_target_but_exempts_flatten_target_in_same_file() {
+        // `Inner` is a flatten target (exempt); `Plain` is a normal Deserialize
+        // struct that is NOT flattened anywhere — it must still be flagged.
+        // Proves the exemption is scoped to referenced type names, not a blanket
+        // pass on every struct in a file that happens to use flatten somewhere.
+        let source = "#[derive(Deserialize)]\n\
+                      struct Inner { a: u32 }\n\
+                      #[derive(Deserialize)]\n\
+                      struct Wrapper {\n\
+                          #[serde(flatten)]\n\
+                          inner: Inner,\n\
+                      }\n\
+                      #[derive(Deserialize)]\n\
+                      struct Plain { b: u32 }";
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1, "only the non-target `Plain` struct should flag");
+        assert!(
+            diags[0].message.contains("`Plain`"),
+            "the flagged struct must be `Plain`, got: {}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn allows_flatten_target_referenced_by_qualified_path() {
+        // The flatten field's type is a path (`crate::model::Key`); resolving to
+        // its final segment `Key` must still exempt the same-file `Key` struct.
+        let source = "#[derive(Deserialize)]\n\
+                      struct Key { peer_id: u32 }\n\
+                      #[derive(Deserialize)]\n\
+                      struct Helper {\n\
+                          #[serde(flatten)]\n\
+                          key: crate::model::Key,\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: flatten target referenced by a qualified path not exempted"
+        );
+    }
+
+    #[test]
+    fn allows_flatten_target_referenced_by_generic_type() {
+        // A flatten field typed `Key<u32>` resolves to its base segment `Key`
+        // (generic args ignored), so the same-file generic `Key<T>` struct is
+        // exempted.
+        let source = "#[derive(Deserialize)]\n\
+                      struct Key<T> { peer_id: T }\n\
+                      #[derive(Deserialize)]\n\
+                      struct Helper {\n\
+                          #[serde(flatten)]\n\
+                          key: Key<u32>,\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: flatten target referenced by a generic type not exempted"
         );
     }
 
