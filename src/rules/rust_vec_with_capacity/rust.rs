@@ -22,7 +22,10 @@
 //! be written. A bare identifier that is a generic `IntoIterator` function
 //! parameter (`fn new<I>(input: I)` or `fn new(input: impl IntoIterator)`) is
 //! likewise skipped: it has no `.len()`, so `Vec::with_capacity(input.len())`
-//! would not compile.
+//! would not compile. A bare identifier bound by a local `let` to one of those
+//! same lazy shapes (`let it = xs.iter().map(..); for x in it`) is skipped too —
+//! the lazy iterator has no cheap length whether written inline or hoisted into
+//! a local.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -104,11 +107,17 @@ fn extract_var_name<'a>(pattern: tree_sitter::Node<'a>, source: &'a [u8]) -> Opt
 /// an iterator-adaptor chain (`v.iter().filter(..)`, parsed as a
 /// `call_expression` whose function is a `field_expression`).
 ///
-/// A bare `identifier` is also skipped when it resolves to a function parameter
-/// whose declared type is a generic `IntoIterator` — a bare type parameter of
-/// the enclosing function (`fn new<I>(input: I)` with `I: IntoIterator`) or an
-/// argument-position `impl IntoIterator`: such a value has no `.len()`, so
-/// `Vec::with_capacity(input.len())` would not compile.
+/// A bare `identifier` is also skipped in two further cases, both because the
+/// resolved iterable has no cheaply-known `.len()`. First, when it resolves to a
+/// function parameter whose declared type is a generic `IntoIterator` — a bare
+/// type parameter of the enclosing function (`fn new<I>(input: I)` with
+/// `I: IntoIterator`) or an argument-position `impl IntoIterator`. Second, when
+/// it resolves to a local `let` binding whose initializer is itself one of the
+/// lazy shapes skipped inline — an iterator-adaptor chain or a fallible
+/// `try_expression` (`let it = xs.iter().map(..); for x in it`): the same
+/// reasoning applies whether the lazy iterator is written inline or hoisted into
+/// a local. A local bound to a concrete collection (`Vec`, `vec![..]`, a plain
+/// call) keeps its known length and still flags.
 fn iterable_has_known_length(for_node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(value) = for_node.child_by_field_name("value") else { return false; };
     let inner = if value.kind() == "reference_expression" {
@@ -122,10 +131,78 @@ fn iterable_has_known_length(for_node: tree_sitter::Node, source: &[u8]) -> bool
     if !matches!(inner.kind(), "identifier" | "field_expression") {
         return false;
     }
-    if inner.kind() == "identifier" && iterable_is_generic_param(inner, source) {
-        return false;
+    if inner.kind() == "identifier" {
+        if iterable_is_generic_param(inner, source) {
+            return false;
+        }
+        if let Some(init) = resolve_local_binding(inner, source)
+            && is_lazy_iterable_expr(init)
+        {
+            return false;
+        }
     }
     true
+}
+
+/// Whether `expr` is a lazy/fallible iterator shape with no cheaply-known
+/// `.len()`: an iterator-adaptor chain — a `call_expression` whose function is a
+/// `field_expression` (`v.iter().filter(..)`, `xs.into_iter().kmerge_by(..)`) —
+/// or a fallible `try_expression` (`Iter::new(r)?`). These are exactly the
+/// shapes `iterable_has_known_length` treats as non-length-bearing when they
+/// appear inline in the loop header; the same test applied to a resolved local
+/// binding's initializer catches the hoisted-into-a-local form. A plain
+/// `call_expression` (`build()`) is not matched: its result may be a concrete
+/// collection, so the local keeps its known length.
+fn is_lazy_iterable_expr(expr: tree_sitter::Node) -> bool {
+    match expr.kind() {
+        "try_expression" => true,
+        "call_expression" => matches!(
+            expr.child_by_field_name("function").map(|f| f.kind()),
+            Some("field_expression")
+        ),
+        _ => false,
+    }
+}
+
+/// The initializer of the nearest preceding `let <name> = <value>` binding for a
+/// bare-identifier iterable, resolving it to what it was bound to. Walks outward
+/// from `ident` through each enclosing `block`, scanning only the statements
+/// before the loop, so the closest binding wins when a name is rebound
+/// (shadowing). Stops at the enclosing function or a closure boundary (an
+/// outer-scope capture is left unresolved). Returns `None` when the name is a
+/// parameter, a field, or otherwise not bound by a local `let`.
+fn resolve_local_binding<'a>(
+    ident: tree_sitter::Node<'a>,
+    source: &'a [u8],
+) -> Option<tree_sitter::Node<'a>> {
+    let name = ident.utf8_text(source).ok()?;
+    let mut node = ident;
+    loop {
+        let parent = node.parent()?;
+        if parent.kind() == "block" {
+            let mut found = None;
+            let mut cursor = parent.walk();
+            for sib in parent.children(&mut cursor) {
+                if sib.id() == node.id() {
+                    break;
+                }
+                if sib.kind() == "let_declaration"
+                    && let Some(pattern) = sib.child_by_field_name("pattern")
+                    && extract_var_name(pattern, source) == Some(name)
+                    && let Some(value) = sib.child_by_field_name("value")
+                {
+                    found = Some(value);
+                }
+            }
+            if found.is_some() {
+                return found;
+            }
+        }
+        if matches!(parent.kind(), "function_item" | "closure_expression") {
+            return None;
+        }
+        node = parent;
+    }
 }
 
 /// Whether the iterable `ident` resolves to a parameter of the enclosing
@@ -503,6 +580,36 @@ mod tests {
     #[test]
     fn flags_when_local_shadows_generic_param() {
         let src = "fn f<I>(input: I) {\n    let input = vec![1, 2, 3];\n    let mut v = Vec::new();\n    for x in input {\n        v.push(x);\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_local_kmerge_adaptor_binding_issue_7640() {
+        let src = "fn f(entry_groups: Vec<Vec<E>>) {\n    let merged = entry_groups.into_iter().kmerge_by(|a, b| a < b);\n    let mut current: Vec<E> = Vec::new();\n    for e in merged {\n        current.push(e);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_local_map_adaptor_binding_issue_7640() {
+        let src = "fn f(xs: Vec<i32>) {\n    let it = xs.iter().map(|x| x + 1);\n    let mut out = Vec::new();\n    for x in it {\n        out.push(x);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_local_try_expression_binding_issue_7640() {
+        let src = "fn f(r: &mut R) -> Result<(), E> {\n    let it = Iter::new(r)?;\n    let mut out = Vec::new();\n    for x in it {\n        out.push(x);\n    }\n    Ok(())\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_local_concrete_vec_binding_issue_7640() {
+        let src = "fn f() {\n    let v: Vec<i32> = build();\n    let mut out = Vec::new();\n    for x in v {\n        out.push(x);\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_local_vec_macro_binding_issue_7640() {
+        let src = "fn f() {\n    let v = vec![1, 2, 3];\n    let mut out = Vec::new();\n    for x in v {\n        out.push(x);\n    }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
