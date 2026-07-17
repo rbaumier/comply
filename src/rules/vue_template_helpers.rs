@@ -70,6 +70,24 @@ pub fn extract_template(source: &str) -> Option<&str> {
         .or_else(|| crate::rules::vue_sfc::template_block_text_fallback(source))
 }
 
+/// The `lang` attribute of the SFC's root `<template>` opening tag (`"pug"`,
+/// `"jade"`, `"html"`, …), or `None` when the tag has no `lang` or the file has
+/// no root `<template>`. The `lang` is read off the `<template>` AST node via
+/// the Vue grammar, never string-matched against the raw body.
+///
+/// Text-scan template rules assume the default HTML grammar (`//` at a text-node
+/// position becomes a visible comment, `<`/`>` delimit tags). That premise fails
+/// under a preprocessor (`pug`/`jade`/`haml`/…), so such rules early-return when
+/// this reports a `lang` other than absent or `html`.
+pub fn template_lang(source: &str) -> Option<&str> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_vue_updated::language())
+        .ok()?;
+    let tree = parser.parse(source, None)?;
+    crate::rules::vue_sfc::template_lang(&tree, source)
+}
+
 /// A parsed HTML opening/self-closing tag from a Vue template.
 #[derive(Debug)]
 pub struct VueElement<'a> {
@@ -544,6 +562,40 @@ mod tests {
         let template = extract_template(source).unwrap();
         assert!(template.contains("<span>a</span>"));
         assert!(template.contains("<div></div>"));
+    }
+
+    #[test]
+    fn template_lang_reads_pug() {
+        // A pug body has no `<`/`>` tags, so the html grammar reads it as plain
+        // text; the root `<template>` start tag still carries `lang="pug"`.
+        let source = "<template lang=\"pug\">\ndiv(:class=\"$style.bg\")\n//- silent\n</template>";
+        assert_eq!(template_lang(source), Some("pug"));
+    }
+
+    #[test]
+    fn template_lang_reads_single_quoted() {
+        assert_eq!(
+            template_lang("<template lang='jade'>\ndiv\n</template>"),
+            Some("jade")
+        );
+    }
+
+    #[test]
+    fn template_lang_reads_explicit_html() {
+        assert_eq!(
+            template_lang("<template lang=\"html\">\n  <p>hi</p>\n</template>"),
+            Some("html")
+        );
+    }
+
+    #[test]
+    fn template_lang_none_when_absent() {
+        assert_eq!(template_lang("<template>\n  <div></div>\n</template>"), None);
+    }
+
+    #[test]
+    fn template_lang_none_without_template() {
+        assert_eq!(template_lang("<script>const x = 1</script>"), None);
     }
 
     #[test]

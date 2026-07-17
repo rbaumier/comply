@@ -106,6 +106,33 @@ pub fn template_block<'src>(tree: &tree_sitter::Tree, source: &'src str) -> Opti
     source.get(content_start..content_end)
 }
 
+/// The `lang` attribute of the SFC's root `<template>` start tag (e.g. `"pug"`
+/// for `<template lang="pug">`), or `None` when the tag has no `lang` or the
+/// file has no root `<template>`.
+///
+/// Locates the same root `template_element` [`template_block`] uses, then reads
+/// its start-tag text with [`tag_lang`]. Rules whose text scan assumes the
+/// default HTML template grammar consult this to skip preprocessor templates
+/// (`pug`, `jade`, `haml`, …), where the `<`/`>` tag model and the
+/// `//`-comment-as-text-node premise no longer hold.
+pub(crate) fn template_lang<'src>(
+    tree: &tree_sitter::Tree,
+    source: &'src str,
+) -> Option<&'src str> {
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let template = root
+        .children(&mut cursor)
+        .find(|c| c.kind() == "template_element")?;
+    let mut inner = template.walk();
+    let start_tag = template
+        .children(&mut inner)
+        .find(|c| c.kind() == "start_tag")?;
+    // `utf8_text` borrows from `source`, so the returned lang outlives `tree`.
+    let tag_text = start_tag.utf8_text(source.as_bytes()).ok()?;
+    tag_lang(tag_text)
+}
+
 /// Text-scan fallback for [`template_block`] when the grammar produced no
 /// `template_element`.
 ///
@@ -254,7 +281,7 @@ fn script_block_from_element<'src>(
         .and_then(|t| t.utf8_text(source_bytes).ok());
     let is_setup = start_tag_text.is_some_and(|t| t.contains("setup"));
     let lang = start_tag_text
-        .and_then(script_lang)
+        .and_then(tag_lang)
         // The slice lives in `source` for `'src` (the same buffer `text` is
         // read from below), so the borrow outlives `source_bytes`'s scope.
         .map(|l| unsafe { std::mem::transmute::<&str, &'src str>(l) });
@@ -271,13 +298,13 @@ fn script_block_from_element<'src>(
     })
 }
 
-/// The `lang` attribute value of a `<script>` start tag (e.g. `"tsx"` for
-/// `<script setup lang="tsx">`), or `None` when there is no `lang`. Read from
-/// the raw start-tag text — the same text `is_setup` inspects — because the Vue
-/// grammar exposes a typed node only for langs it special-cases (`ts`, `tsx`)
-/// and emits an error node for others (e.g. `jsx`), whereas the attribute is
-/// always present verbatim in the tag text.
-fn script_lang(tag_text: &str) -> Option<&str> {
+/// The `lang` attribute value of a start tag (e.g. `"tsx"` for
+/// `<script setup lang="tsx">`, `"pug"` for `<template lang="pug">`), or `None`
+/// when there is no `lang`. Read from the raw start-tag text because the Vue
+/// grammar exposes a typed node only for langs it special-cases and emits an
+/// error node for others (e.g. `jsx`), whereas the attribute is always present
+/// verbatim in the tag text.
+fn tag_lang(tag_text: &str) -> Option<&str> {
     let bytes = tag_text.as_bytes();
     let mut from = 0;
     while let Some(rel) = tag_text[from..].find("lang") {

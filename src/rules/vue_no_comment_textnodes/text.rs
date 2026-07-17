@@ -4,7 +4,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_template, is_vue_file, mask_html_comments};
+use crate::rules::vue_template_helpers::{
+    extract_template, is_vue_file, mask_html_comments, template_lang,
+};
 
 #[derive(Debug)]
 pub struct Check;
@@ -12,6 +14,14 @@ pub struct Check;
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_vue_file(ctx.path) {
+            return Vec::new();
+        }
+        // The premise — a JS `//` comment at a text-node position renders as
+        // visible text — holds only for the default HTML template grammar. A
+        // `<template lang="pug">` (or jade/haml/…) is preprocessed: `//-` is a
+        // valid silent comment and there are no `<`/`>` tag boundaries, so the
+        // whole HTML text-node scan would be false. Skip any non-HTML lang.
+        if template_lang(ctx.source).is_some_and(|lang| !lang.eq_ignore_ascii_case("html")) {
             return Vec::new();
         }
         let Some(template) = extract_template(ctx.source) else {
@@ -258,5 +268,46 @@ mod tests {
         // A comment inside a multi-line `{{ … }}` interpolation is real JS.
         let src = "<template>\n  <div>{{\n    // computed label\n    label\n  }}</div>\n</template>";
         assert!(run(src).is_empty());
+    }
+
+    // --- #7704 regression: preprocessor templates (`<template lang="pug">`) ---
+
+    #[test]
+    fn skips_pug_template_silent_comments() {
+        // In a `lang="pug"` template, `//-` is Pug's silent-comment syntax, not a
+        // JS text-node comment. The HTML text-node premise does not apply, so no
+        // `//-` line is flagged.
+        let src = "<template lang=\"pug\">\ndiv(:class=\"$style.bg\")\n//- div(:class=\"$style.bg\" :style=\"bgStyle\")\n//- button(type=\"button\" @click=\"max\")\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_jade_template_silent_comments() {
+        // `jade` is Pug's former name — the same preprocessor, so the gate skips
+        // it too.
+        let src = "<template lang=\"jade\">\ndiv\n//- silent comment\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_explicit_html_lang_template() {
+        // `lang="html"` is the default grammar, so a genuine text-node comment is
+        // still reported.
+        let src = "<template lang=\"html\">\n  <div>\n    // this is a comment\n  </div>\n</template>";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_uppercase_pug_lang() {
+        // The lang comparison is case-insensitive: `PUG` is still a preprocessor.
+        let src = "<template lang=\"PUG\">\ndiv\n//- silent\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_uppercase_html_lang() {
+        // `HTML` folds to the default grammar, so a text-node comment still fires.
+        let src = "<template lang=\"HTML\">\n  <div>\n    // this is a comment\n  </div>\n</template>";
+        assert_eq!(run(src).len(), 1);
     }
 }
