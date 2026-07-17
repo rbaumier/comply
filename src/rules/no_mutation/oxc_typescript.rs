@@ -5,7 +5,8 @@ use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding,
     is_locally_owned_array_binding, is_react_display_name_assignment, is_rtk_reducer_draft_param,
-    is_typed_array_binding, is_valtio_proxy_binding, is_vue_ref_value_target,
+    is_typed_array_binding, is_valtio_proxy_binding, is_vue_reactive_object_target,
+    is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
@@ -93,6 +94,12 @@ impl OxcCheck for Check {
                 {
                     return;
                 }
+                // Vue 3 reactive() object: `state.n = x` is the idiomatic update.
+                if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
+                    && is_vue_reactive_object_target(member, semantic, ctx.project, ctx.path)
+                {
+                    return;
+                }
                 // TypedArray element write `buf[i] = v`: indexed assignment is the
                 // only way to populate a TypedArray (a fixed-length binary buffer
                 // with no immutable element-setter and no spread-then-build form).
@@ -131,6 +138,13 @@ impl OxcCheck for Check {
                         || crate::oxc_helpers::is_destructured_call_ref_value_target(
                             member, semantic,
                         ))
+                {
+                    return;
+                }
+                // Vue 3 reactive() object: `state.incrementedTimes++` is the idiomatic update.
+                if let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
+                    &update.argument
+                    && is_vue_reactive_object_target(member, semantic, ctx.project, ctx.path)
                 {
                     return;
                 }
@@ -1168,6 +1182,50 @@ mod tests {
             ),
         ];
         assert!(run_on_project(files, "composables/useNav.ts").is_empty());
+    }
+
+    // Vue 3 reactive() object property mutation — issue #7655
+
+    #[test]
+    fn allows_reactive_object_property_mutation_issue_7655() {
+        // Parity with no-property-mutation: `reactive()` returns a reactive
+        // proxy whose direct property write (`s.n = x`) and update (`s.n++`)
+        // are the intended Vue 3 reactivity path — there is no immutable
+        // alternative, so the proxy exists to be mutated.
+        let src = r#"
+            import { reactive } from 'vue'
+            const s = reactive({ n: 0 })
+            function update() {
+                s.n = 1
+                s.n++
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_mutation_on_non_reactive_call_const() {
+        // Negative space: a const initialised by a non-reactive factory call is
+        // not a reactive proxy — the property write stays flagged.
+        let src = r#"
+            const s = someNonReactive();
+            s.n = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_delete_on_reactive_object() {
+        // Parity boundary: the reactive() exemption covers property assignment
+        // and increment/decrement (the two contexts no-property-mutation
+        // exempts), not `delete`; a delete on a reactive object stays flagged in
+        // both rules.
+        let src = r#"
+            import { reactive } from 'vue'
+            const s = reactive({ n: 0 });
+            delete s.n;
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // TypedArray indexed element assignment — issue #5328
