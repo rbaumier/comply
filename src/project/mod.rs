@@ -1900,16 +1900,20 @@ impl Tsconfig {
     /// JavaScript equivalent) and recursively resolve any `extends` chain.
     /// Child `compilerOptions` win, but `paths` entries from parent tsconfigs
     /// are preserved when the child does not redeclare the same alias key —
-    /// matches TypeScript's own merge semantics. Recursion is capped at 10
-    /// levels to defend against pathological cycles.
+    /// matches TypeScript's own merge semantics. Path aliases declared in a
+    /// project reference (`references: [{ path }]`) are also unioned in, so a
+    /// solution-style root config whose `paths` live in a referenced project
+    /// still exposes them. Recursion is capped at 10 levels to defend against
+    /// pathological cycles.
     pub fn load(root: &Path) -> Option<Self> {
         load_tsconfig_file(&root.join("tsconfig.json"), 0)
             .or_else(|| load_tsconfig_file(&root.join("jsconfig.json"), 0))
     }
 }
 
-/// Read a tsconfig.json at `path`, follow its `extends` chain, and return the
-/// merged result. Depth-tracked to bound recursion at 10 levels.
+/// Read a tsconfig.json at `path`, follow its `extends` chain and project
+/// `references`, and return the merged result. Depth-tracked to bound recursion
+/// (shared across both `extends` and `references`) at 10 levels.
 fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
     if depth >= 10 {
         return None;
@@ -1926,7 +1930,45 @@ fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
         merged = merge_tsconfig(parent, merged);
     }
 
+    // Project references are separate compilation units, not inheritance: a
+    // create-vue "solution-style" root (`{ files: [], references: [...] }`)
+    // carries no `paths` of its own — the aliases live in the referenced
+    // `tsconfig.app.json`. Union each referenced project's path aliases into the
+    // effective set (the referrer's own aliases win via `or_insert`), so a
+    // `@console/*` alias declared only in a referenced config is still
+    // recognized. Only alias prefixes cross over; scalar options stay the
+    // referrer's. A referenced config's own `extends`/`references` are followed
+    // by this same recursion, bounded by the shared depth cap.
+    if let Some(references) = json.get("references").and_then(|v| v.as_array()) {
+        for reference in references {
+            let Some(ref_path) = reference.get("path").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let resolved = resolve_reference(path, ref_path);
+            if let Some(referenced) = load_tsconfig_file(&resolved, depth + 1) {
+                for (alias, targets) in referenced.paths {
+                    merged.paths.entry(alias).or_insert(targets);
+                }
+            }
+        }
+    }
+
     Some(merged)
+}
+
+/// Resolve a project-reference `path` (a `references` entry) to the tsconfig file
+/// it names, relative to the directory of the referring config. Per TypeScript, a
+/// reference path either names the config file directly (ends in `.json`, e.g.
+/// `./tsconfig.app.json`) or names a directory holding a `tsconfig.json` (e.g.
+/// `../shared`), in which case `tsconfig.json` is appended.
+fn resolve_reference(referrer: &Path, reference: &str) -> PathBuf {
+    let dir = referrer.parent().unwrap_or_else(|| Path::new("."));
+    let candidate = dir.join(reference);
+    if candidate.extension().and_then(|e| e.to_str()) == Some("json") {
+        candidate
+    } else {
+        candidate.join("tsconfig.json")
+    }
 }
 
 /// Resolve an `extends` reference to the tsconfig file it names, or `None` when
@@ -4538,8 +4580,9 @@ impl ProjectCtx {
 
     /// Walk up from `path` to the nearest `tsconfig.json` (or `jsconfig.json`,
     /// its JavaScript equivalent), cache by config directory. Follows the
-    /// `extends` chain so that settings inherited from a root
-    /// `tsconfig.base.json` are visible to callers.
+    /// `extends` chain and project `references` so that settings inherited from a
+    /// root `tsconfig.base.json` and path aliases declared in a referenced
+    /// solution-style project are visible to callers.
     pub fn nearest_tsconfig(&self, path: &Path) -> Option<Arc<Tsconfig>> {
         let start_dir = path.parent()?;
         let config_file = self.nearest_ts_js_config_file(start_dir)?;
@@ -7874,6 +7917,98 @@ mod tests {
         let ts = Tsconfig::load(dir.path()).unwrap();
         assert!(ts.paths.contains_key("~/*"));
         assert_eq!(ts.jsx.as_deref(), Some("preserve"));
+    }
+
+    #[test]
+    fn references_union_path_aliases_create_vue_solution_style() {
+        // Regression #7613: a create-vue "solution-style" root tsconfig carries no
+        // `paths` of its own — they live in the referenced `tsconfig.app.json`.
+        // The referenced project's aliases must be unioned in so `@console`/`@uc`
+        // are recognized as local aliases, not implicit deps. `tsconfig.node.json`
+        // is referenced but absent — a missing reference is skipped, not fatal.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.app.json"),
+            r#"{"compilerOptions":{"paths":{"@/*":["./src/*"],"@uc/*":["./uc-src/*"],"@console/*":["./console-src/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"files":[],"references":[{"path":"./tsconfig.node.json"},{"path":"./tsconfig.app.json"}]}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        let prefixes = ts.alias_prefixes();
+        assert!(prefixes.contains(&"@console".to_string()), "{prefixes:?}");
+        assert!(prefixes.contains(&"@uc".to_string()), "{prefixes:?}");
+        assert!(prefixes.contains(&"@".to_string()), "{prefixes:?}");
+    }
+
+    #[test]
+    fn references_resolve_directory_to_tsconfig_json() {
+        // A `references` entry may name a directory (not a `.json` file);
+        // TypeScript appends `tsconfig.json`. The referenced project's aliases are
+        // unioned in.
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"@app/*":["./src/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"files":[],"references":[{"path":"./packages/app"}]}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert!(ts.paths.contains_key("@app/*"), "{:?}", ts.paths);
+    }
+
+    #[test]
+    fn references_follow_referenced_configs_own_extends() {
+        // A referenced project may itself `extends` a base config; its inherited
+        // aliases are unioned into the solution-style root through the same
+        // recursion.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.base.json"),
+            r#"{"compilerOptions":{"paths":{"@base/*":["./base/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.app.json"),
+            r#"{"extends":"./tsconfig.base.json","compilerOptions":{"paths":{"@app/*":["./app/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"files":[],"references":[{"path":"./tsconfig.app.json"}]}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert!(ts.paths.contains_key("@base/*"), "{:?}", ts.paths);
+        assert!(ts.paths.contains_key("@app/*"), "{:?}", ts.paths);
+    }
+
+    #[test]
+    fn referrer_own_paths_win_over_referenced() {
+        // The referrer's own `paths` take precedence over a referenced project's
+        // for a conflicting alias key (references only fill gaps).
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.app.json"),
+            r#"{"compilerOptions":{"paths":{"@/*":["./referenced/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"paths":{"@/*":["./root/*"]}},"references":[{"path":"./tsconfig.app.json"}]}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert_eq!(ts.paths.get("@/*").unwrap(), &vec!["./root/*".to_string()]);
     }
 
     fn load_ctx_in(dir: &TempDir) -> ProjectCtx {
