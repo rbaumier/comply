@@ -402,27 +402,31 @@ impl ImportIndex {
                     }
                 }
                 // Expand each `import.meta.glob(pattern)` into namespace-import
-                // edges. Vite eager-imports every project module matching the
-                // pattern and exposes its namespace, so each matched file is
-                // consumed as a whole module — the same edge shape as
-                // `import * as ns`, which marks all of the target's exports live.
+                // edges. Vite pulls in every project module matching the pattern
+                // and exposes its namespace, so each matched file is consumed as
+                // a whole module — the same edge shape as `import * as ns`, which
+                // marks all of the target's exports live. An eager glob is a
+                // static namespace import, evaluated with this module; a lazy one
+                // (Vite's default) expands to `() => import(…)` thunks, so its
+                // edges are deferred code-split loads and carry `is_dynamic` like
+                // a dynamic `import()`.
                 if !is_rust && !extract.glob_imports.is_empty() {
                     let glob_edges: Vec<ImportedSymbol> = extract
                         .glob_imports
                         .iter()
-                        .flat_map(|(pattern, line)| {
-                            resolve_glob_import_targets(&path, pattern, &known_paths, &path_resolver)
+                        .flat_map(|glob| {
+                            resolve_glob_import_targets(&path, &glob.pattern, &known_paths, &path_resolver)
                                 .into_iter()
                                 .map(move |target| ImportedSymbol {
                                     local_name: String::new(),
                                     imported_name: "*".into(),
                                     kind: ImportKind::Namespace,
-                                    specifier: pattern.clone(),
+                                    specifier: glob.pattern.clone(),
                                     source_path: Some(target),
-                                    line: *line,
+                                    line: glob.line,
                                     is_type_only: false,
                                     is_runtime_value: true,
-                                    is_dynamic: false,
+                                    is_dynamic: !glob.is_eager,
                                 })
                         })
                         .collect();
@@ -1368,6 +1372,22 @@ impl DomTreeMethods {
     }
 }
 
+/// One Vite glob-import pattern captured from an `import.meta.glob` /
+/// `import.meta.globEager` call site.
+#[derive(Debug, PartialEq, Eq)]
+struct GlobImport {
+    /// The raw pattern string, resolved against the calling file's directory.
+    pattern: String,
+    /// 1-based line of the call site.
+    line: usize,
+    /// `true` when Vite expands the call into static namespace imports evaluated
+    /// with the calling module — `import.meta.glob(pattern, { eager: true })` or
+    /// `import.meta.globEager(pattern)`. `false` — Vite's default — expands the
+    /// call into a map of `() => import(…)` thunks: deferred, code-split loads
+    /// that only evaluate their target when a thunk is called.
+    is_eager: bool,
+}
+
 /// Raw per-file extract before cross-file resolution.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct FileExtract {
@@ -1383,12 +1403,12 @@ struct FileExtract {
     /// directory as referenced. Resolved to absolute dirs in `ImportIndex::build`.
     dynamic_dirs: Vec<String>,
     /// Raw `import.meta.glob` / `import.meta.globEager` patterns (Vite's
-    /// build-time glob import) paired with the 1-based line of the call. Vite
-    /// eager-imports every project module whose path matches the pattern —
-    /// resolved against this file's directory — and exposes each as a namespace,
-    /// so `ImportIndex::build` turns every matched file into a namespace-import
+    /// build-time glob import) with the eagerness read from each call site. Vite
+    /// imports every project module whose path matches the pattern — resolved
+    /// against this file's directory — and exposes each as a namespace, so
+    /// `ImportIndex::build` turns every matched file into a namespace-import
     /// edge (all its exports live). Empty for Rust.
-    glob_imports: Vec<(String, usize)>,
+    glob_imports: Vec<GlobImport>,
     /// Rust-only: names of file-backed submodules declared by this file via
     /// `mod foo;` (both `pub mod` and private `mod`). A `mod foo;` pulls
     /// `foo.rs` / `foo/mod.rs` into the crate's compilation but is not a `use`
@@ -1557,7 +1577,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             call.line += row_offset;
         }
         for glob in &mut glob_imports[glob_start..] {
-            glob.1 += row_offset;
+            glob.line += row_offset;
         }
     }
 
@@ -2209,8 +2229,9 @@ fn extract_require(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
 /// A leading type argument (`import.meta.glob<T>('./x/*.ts')`) sits in the
 /// call's `type_arguments`, not `arguments`, so the value string is reached
 /// directly. Both the single-string and array-of-strings argument forms are
-/// handled. Mirrors [`oxc_extract_glob_import`].
-fn extract_glob_import(node: Node, source: &[u8], out: &mut Vec<(String, usize)>) {
+/// handled, and the array form's patterns share the call's eagerness. Mirrors
+/// [`oxc_extract_glob_import`].
+fn extract_glob_import(node: Node, source: &[u8], out: &mut Vec<GlobImport>) {
     let Some(callee) = node.child_by_field_name("function") else {
         return;
     };
@@ -2225,26 +2246,66 @@ fn extract_glob_import(node: Node, source: &[u8], out: &mut Vec<(String, usize)>
     let Some(args) = node.child_by_field_name("arguments") else {
         return;
     };
-    // Only the first value argument is the pattern; any 2nd argument is the
-    // options object (`{ eager: true }`), matching Vite's `glob(pattern, options)`
-    // signature and the oxc path's `call.arguments.first()`.
+    // Vite's signature is `glob(pattern, options)`: the first value argument is
+    // the pattern, the second the options object.
     let mut cursor = args.walk();
-    let Some(pattern_arg) = args.named_children(&mut cursor).next() else {
+    let mut value_args = args.named_children(&mut cursor);
+    let Some(pattern_arg) = value_args.next() else {
         return;
     };
+    // `globEager` is eager by definition; `glob` only when its options say so.
+    let is_eager = callee_text == "import.meta.globEager"
+        || value_args
+            .next()
+            .is_some_and(|options| glob_options_are_eager(options, source));
     let line = node.start_position().row + 1;
     match pattern_arg.kind() {
-        "string" => push_glob_pattern(&glob_string_literal(pattern_arg, source), line, out),
+        "string" => {
+            push_glob_pattern(&glob_string_literal(pattern_arg, source), line, is_eager, out);
+        }
         "array" => {
             let mut inner = pattern_arg.walk();
             for el in pattern_arg.named_children(&mut inner) {
                 if el.kind() == "string" {
-                    push_glob_pattern(&glob_string_literal(el, source), line, out);
+                    push_glob_pattern(&glob_string_literal(el, source), line, is_eager, out);
                 }
             }
         }
         _ => {}
     }
+}
+
+/// `true` when a tree-sitter `import.meta.glob` options argument sets
+/// `eager: true`. Every other shape — a non-object argument, a missing or
+/// non-`true` `eager`, a computed or shorthand key, a value the AST cannot
+/// resolve to the literal `true` — leaves the glob lazy, which is both Vite's
+/// default and the conservative direction for the deferred-edge consumers.
+/// Mirrors [`oxc_glob_options_are_eager`].
+fn glob_options_are_eager(options: Node, source: &[u8]) -> bool {
+    if options.kind() != "object" {
+        return false;
+    }
+    let mut cursor = options.walk();
+    options.named_children(&mut cursor).any(|prop| {
+        // Only a `key: value` pair can carry a literal `true`; a shorthand
+        // (`{ eager }`), a spread (`{ ...opts }`) and a computed key
+        // (`{ ['eager']: true }`) are all distinct node kinds.
+        if prop.kind() != "pair" {
+            return false;
+        }
+        let (Some(key), Some(value)) = (
+            prop.child_by_field_name("key"),
+            prop.child_by_field_name("value"),
+        ) else {
+            return false;
+        };
+        let key_name = match key.kind() {
+            "property_identifier" => text_of(key, source),
+            "string" => glob_string_literal(key, source),
+            _ => return false,
+        };
+        key_name == "eager" && value.kind() == "true"
+    })
 }
 
 /// The unquoted text of a tree-sitter `string` node.
@@ -2254,10 +2315,15 @@ fn glob_string_literal(node: Node, source: &[u8]) -> String {
         .to_string()
 }
 
-/// Record a non-empty glob pattern with the 1-based line of its call site.
-fn push_glob_pattern(pattern: &str, line: usize, out: &mut Vec<(String, usize)>) {
+/// Record a non-empty glob pattern with the 1-based line of its call site and
+/// the eagerness of the call it came from.
+fn push_glob_pattern(pattern: &str, line: usize, is_eager: bool, out: &mut Vec<GlobImport>) {
     if !pattern.is_empty() {
-        out.push((pattern.to_string(), line));
+        out.push(GlobImport {
+            pattern: pattern.to_string(),
+            line,
+            is_eager,
+        });
     }
 }
 
@@ -4214,17 +4280,17 @@ fn oxc_extract_require(
 /// Capture `import.meta.glob(pattern)` / `import.meta.globEager(pattern)` glob
 /// patterns from an oxc `CallExpression`. Vite's build-time glob import replaces
 /// the call with a map of every project module matching `pattern` (relative to
-/// the calling file) and eager-imports each, so the string-literal pattern(s)
-/// are collected here and resolved to namespace-import edges in
-/// `ImportIndex::build`. A leading type argument
-/// (`import.meta.glob<{ x: T }>('./x/*.ts')`) lives in `call.type_arguments`,
-/// not `call.arguments`, so the first value argument is the pattern. Both the
-/// single-string and array-of-strings argument forms are handled. Mirrors
+/// the calling file), so the string-literal pattern(s) are collected here and
+/// resolved to namespace-import edges in `ImportIndex::build`. A leading type
+/// argument (`import.meta.glob<{ x: T }>('./x/*.ts')`) lives in
+/// `call.type_arguments`, not `call.arguments`, so the first value argument is
+/// the pattern. Both the single-string and array-of-strings argument forms are
+/// handled, and the array form's patterns share the call's eagerness. Mirrors
 /// [`extract_glob_import`].
 fn oxc_extract_glob_import(
     lines: &[usize],
     call: &oxc_ast::ast::CallExpression,
-    out: &mut Vec<(String, usize)>,
+    out: &mut Vec<GlobImport>,
 ) {
     use oxc_ast::ast::{Argument, ArrayExpressionElement, Expression};
     let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -4242,18 +4308,54 @@ fn oxc_extract_glob_import(
     let Some(first) = call.arguments.first() else {
         return;
     };
+    // `globEager` is eager by definition; `glob` only when its options say so.
+    let is_eager =
+        prop == "globEager" || call.arguments.get(1).is_some_and(oxc_glob_options_are_eager);
     let line = oxc_line_at(lines, call.span.start as usize);
     match first {
-        Argument::StringLiteral(lit) => push_glob_pattern(lit.value.as_str(), line, out),
+        Argument::StringLiteral(lit) => {
+            push_glob_pattern(lit.value.as_str(), line, is_eager, out);
+        }
         Argument::ArrayExpression(arr) => {
             for el in &arr.elements {
                 if let ArrayExpressionElement::StringLiteral(lit) = el {
-                    push_glob_pattern(lit.value.as_str(), line, out);
+                    push_glob_pattern(lit.value.as_str(), line, is_eager, out);
                 }
             }
         }
         _ => {}
     }
+}
+
+/// `true` when an oxc `import.meta.glob` options argument sets `eager: true`.
+/// Every other shape — a non-object argument, a missing or non-`true` `eager`, a
+/// computed or shorthand key, a value the AST cannot resolve to the literal
+/// `true` — leaves the glob lazy, which is both Vite's default and the
+/// conservative direction for the deferred-edge consumers. Mirrors
+/// [`glob_options_are_eager`].
+fn oxc_glob_options_are_eager(options: &oxc_ast::ast::Argument) -> bool {
+    use oxc_ast::ast::{Argument, Expression, ObjectPropertyKind, PropertyKey};
+    let Argument::ObjectExpression(obj) = options else {
+        return false;
+    };
+    obj.properties.iter().any(|prop| {
+        let ObjectPropertyKind::ObjectProperty(prop) = prop else {
+            return false;
+        };
+        // A computed key (`{ ['eager']: true }`) names no statically-known
+        // property here; tree-sitter models it as a distinct node kind, so
+        // skipping it keeps both extractors in step.
+        if prop.computed {
+            return false;
+        }
+        let key_name = match &prop.key {
+            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+            PropertyKey::StringLiteral(lit) => lit.value.as_str(),
+            _ => return false,
+        };
+        key_name == "eager"
+            && matches!(&prop.value, Expression::BooleanLiteral(lit) if lit.value)
+    })
 }
 
 /// Capture `import X = require("pkg")` (TypeScript CommonJS interop) as an
@@ -5780,6 +5882,50 @@ mod tests {
             cycle.contains(a_ts) && cycle.contains(b_ts),
             "the reported cycle must contain both statically-cyclic modules, got: {cycle:?}"
         );
+    }
+
+    // Regression for #7720 (`HalseySpicy/Geeker-Admin`): a router registers its
+    // views through `import.meta.glob`, and each view imports back from the
+    // router — the glob is the only edge closing the loop. Lazily globbed views
+    // load through `() => import(…)` thunks, so nothing evaluates at the router's
+    // module-evaluation time and no cycle is reported. The same graph with an
+    // eager glob does evaluate the views with the router, so its cycle stands.
+    // Either way the views stay namespace-imported: dead-export liveness reads
+    // the glob edge regardless of eagerness.
+    #[test]
+    fn lazy_glob_edge_does_not_form_cycle() {
+        for (glob_call, want_cycle) in [
+            ("import.meta.glob('./views/*.ts')", false),
+            ("import.meta.glob('./views/*.ts', { eager: true })", true),
+        ] {
+            let router_src = format!("export const modules = {glob_call};\n");
+            let (_dir, index, paths) = build_index(&[
+                ("router.ts", &router_src),
+                (
+                    "views/home.ts",
+                    "import { modules } from '../router';\nexport const home = modules;\n",
+                ),
+            ]);
+            let router = &paths[0];
+            let home = &paths[1];
+
+            assert!(
+                index.is_namespace_imported(home),
+                "`{glob_call}` must namespace-import the view it matches"
+            );
+            assert_eq!(
+                index.cycle_for(router).is_some(),
+                want_cycle,
+                "`{glob_call}`: cycle_for(router) must be {want_cycle}, got: {:?}",
+                index.cycle_for(router)
+            );
+            assert_eq!(
+                index.cycle_for(home).is_some(),
+                want_cycle,
+                "`{glob_call}`: cycle_for(views/home) must be {want_cycle}, got: {:?}",
+                index.cycle_for(home)
+            );
+        }
     }
 
     // Unit check on the Tarjan adjacency: an edge tagged `is_dynamic` is dropped
@@ -7573,6 +7719,38 @@ mod tests {
         );
     }
 
+    // #7720: `import.meta.glob(pattern)` is lazy unless its call says otherwise —
+    // Vite expands the default form to a map of `() => import(…)` thunks, so each
+    // matched module is a deferred, code-split load and its edge is tagged
+    // dynamic. Only `{ eager: true }` and `globEager` expand to static namespace
+    // imports evaluated with the importer. An options argument that is not a
+    // literal `eager: true` cannot promise eager evaluation, so it stays lazy.
+    #[test]
+    fn glob_edge_is_dynamic_unless_the_call_is_eager() {
+        for (call, want_dynamic) in [
+            ("import.meta.glob('./modules/*.ts')", true),
+            ("import.meta.glob('./modules/*.ts', { eager: false })", true),
+            ("import.meta.glob('./modules/*.ts', opts)", true),
+            ("import.meta.glob('./modules/*.ts', { eager: true })", false),
+            ("import.meta.globEager('./modules/*.ts')", false),
+        ] {
+            let main_src = format!("declare const opts: any;\nexport const m = {call};\n");
+            let (_dir, index, paths) = build_index(&[
+                ("main.ts", &main_src),
+                ("modules/a.ts", "export const x = 1;\n"),
+            ]);
+            let edge = index
+                .get_imports(&paths[0])
+                .iter()
+                .find(|i| i.source_path.as_ref() == Some(&paths[1]))
+                .unwrap_or_else(|| panic!("`{call}` must register an edge to modules/a.ts"));
+            assert_eq!(
+                edge.is_dynamic, want_dynamic,
+                "`{call}` must expand to is_dynamic={want_dynamic} edges"
+            );
+        }
+    }
+
     // =======================================================================
     // Differential test: the oxc extractor must produce a byte-exact
     // `FileExtract` (same elements, same order, same line/column/offset) as the
@@ -7747,7 +7925,7 @@ mod tests {
         // the static directory prefix into `dynamic_dirs`, not into `imports`.
         "const d = import(`./locales/${lang}.ts`);",
         "const e = import(`../../compositions/src/${scope}/${name}`);",
-        // `import.meta.glob` (Vite eager glob import): both extractors record the
+        // `import.meta.glob` (Vite's glob import): both extractors record the
         // string-literal pattern(s) into `glob_imports`. Type arguments precede
         // the value pattern and must be skipped; the array form lists patterns.
         "const g1 = import.meta.glob('./mods/*.ts', { eager: true });",
@@ -7756,6 +7934,19 @@ mod tests {
         "const g4 = import.meta.glob(['./a/*.ts', './b/*.ts']);",
         // a non-`import.meta` `.glob(...)` member call must be ignored by both.
         "const g5 = fg.glob('./mods/*.ts');",
+        // glob eagerness is read from the options argument, and both extractors
+        // must read it identically: an explicit `{ eager: false }`, a
+        // string-literal `eager` key, an options value that is not an object
+        // literal, a shorthand key, a computed key, and a non-literal `eager`
+        // value. Everything that is not a literal `eager: true` stays lazy.
+        "const g6 = import.meta.glob('./mods/*.ts', { eager: false });",
+        "const g7 = import.meta.glob('./mods/*.ts', { 'eager': true });",
+        "declare const opts: any; const g8 = import.meta.glob('./mods/*.ts', opts);",
+        "declare const eager: boolean; const g9 = import.meta.glob('./mods/*.ts', { eager });",
+        "const g10 = import.meta.glob('./mods/*.ts', { ['eager']: true });",
+        "declare const flag: boolean; const g11 = import.meta.glob('./mods/*.ts', { eager: flag });",
+        "const g12 = import.meta.glob(['./a/*.ts', './b/*.ts'], { eager: true });",
+        "const g13 = import.meta.glob('./mods/*.ts', { eager: true, import: 'default' });",
         // --- exports ---
         "export * from './m';",
         "export * as ns from './m';",
