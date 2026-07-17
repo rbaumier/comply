@@ -99,18 +99,37 @@ fn is_entity_mirror_schema_name(name: &str) -> bool {
 }
 
 const VALID_CONTINUATIONS: &[&str] = &[
+    // Length / content constraints.
     "min",
     "max",
-    "email",
-    "url",
-    "uuid",
-    "regex",
     "length",
     "startsWith",
     "endsWith",
+    // Zod built-in string-format validators — each rejects the empty string.
+    "regex",
+    "email",
+    "url",
+    "uuid",
+    "datetime",
+    "date",
+    "time",
+    "duration",
+    "ip",
+    "ipv4",
+    "ipv6",
+    "cidr",
+    "emoji",
+    "nanoid",
+    "cuid",
+    "cuid2",
+    "ulid",
+    "jwt",
+    "e164",
+    // Optionality wrappers.
     "optional",
     "nullable",
     "nullish",
+    // Transforms.
     "trim",
     "toLowerCase",
     "toUpperCase",
@@ -241,6 +260,34 @@ mod tests {
     #[test]
     fn allows_email() {
         assert!(run("z.string().email()").is_empty());
+    }
+
+    #[test]
+    fn allows_string_format_validators() {
+        // Regression for issue #7696: Zod built-in string-format validators
+        // reject the empty string exactly like `.email()`/`.url()`/`.uuid()`,
+        // so `z.string().<format>()` must not be flagged.
+        assert!(run("z.string().datetime()").is_empty());
+        assert!(run("z.string().datetime().optional()").is_empty());
+        assert!(run("z.string().uuid()").is_empty());
+        assert!(run("z.string().ip()").is_empty());
+        assert!(run("z.string().cuid2()").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_constraining_continuation() {
+        // `.describe()` does not constrain emptiness, so a bare `z.string()`
+        // that only carries it stays flagged.
+        assert_eq!(run("z.object({ name: z.string().describe('x') })").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_base64_which_accepts_empty() {
+        // `.base64()` / `.base64url()` are Zod string-format validators whose
+        // regexes match the empty string, so they do not make the field
+        // non-empty and stay flagged.
+        assert_eq!(run("z.object({ blob: z.string().base64() })").len(), 1);
+        assert_eq!(run("z.object({ blob: z.string().base64url() })").len(), 1);
     }
 
     #[test]
