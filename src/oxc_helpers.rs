@@ -4878,44 +4878,147 @@ pub fn type_annotation_is_type_predicate(
     annotation.is_some_and(|ann| matches!(ann.type_annotation, TSType::TSTypePredicate(_)))
 }
 
+/// External-library return types whose declared union admits both a bare
+/// `return;` (yields `void`/`undefined`) and a value return, keyed by
+/// `(source module, exported name)`. comply cannot parse the `.d.ts` in
+/// `node_modules`, so such a type is recognized by import-graph provenance: the
+/// return-type identifier's binding must resolve to a named import of that
+/// exported name from that module. `NavigationGuardReturn` is vue-router's
+/// navigation-guard return union (`void | boolean | RouteLocationRaw | …`), where
+/// a bare `return;` continues navigation and `return false;`/a route cancels —
+/// the same dual-return contract as Nuxt's `defineNuxtRouteMiddleware` callback.
+const VOID_ADMITTING_IMPORTED_TYPES: &[(&str, &str)] = &[("vue-router", "NavigationGuardReturn")];
+
+/// Maximum `type X = …` alias-resolution depth. Guards a pathological
+/// self/mutually-referential alias chain (`type A = A | number`) against
+/// unbounded recursion; genuine void-admitting aliases resolve in one or two hops.
+const MAX_TYPE_ALIAS_DEPTH: u32 = 8;
+
 /// True when `annotation` is a return-type that admits both `return;` (yields
 /// `undefined`) and `return expr;`: a bare `void`/`undefined`/`any` keyword, a
-/// union that includes any of them, or a `Promise<T>` whose single awaited type
-/// argument does. `any` is a superset of every type including `undefined`, so a
-/// bare `return;` is a valid `any` value (the canonical `JSON.parse` reviver
-/// idiom returns `undefined` to drop a key). In an `async` function a bare
-/// `return` resolves the promise to `Promise.resolve(undefined)`, i.e. the
-/// `undefined`/`void` arm of a declared `Promise<T | undefined>` /
-/// `Promise<T | void>`. Mixing bare and value returns under such a contract is
-/// the canonical TypeScript idiom (e.g. `: any`, `: T | undefined`,
-/// `: Promise<T | undefined>`, void tail-calls), not an inconsistency.
+/// union that includes any of them, a `Promise<T>` whose single awaited type
+/// argument does, a same-file `type X = …` alias that resolves to any of the
+/// above, or an external library type whose union admits `void` recognized by
+/// import-graph provenance (see `VOID_ADMITTING_IMPORTED_TYPES`). `any` is a
+/// superset of every type including `undefined`, so a bare `return;` is a valid
+/// `any` value (the canonical `JSON.parse` reviver idiom returns `undefined` to
+/// drop a key). In an `async` function a bare `return` resolves the promise to
+/// `Promise.resolve(undefined)`, i.e. the `undefined`/`void` arm of a declared
+/// `Promise<T | undefined>` / `Promise<T | void>`. Mixing bare and value returns
+/// under such a contract is the canonical TypeScript idiom (e.g. `: any`,
+/// `: T | undefined`, `: Promise<T | undefined>`, `: NavigationGuardReturn`, void
+/// tail-calls), not an inconsistency.
 #[must_use]
 pub fn return_type_admits_void_or_undefined(
     annotation: Option<&oxc_ast::ast::TSTypeAnnotation>,
+    semantic: &oxc_semantic::Semantic,
 ) -> bool {
+    annotation.is_some_and(|ann| ty_admits_void(&ann.type_annotation, semantic, 0))
+}
+
+/// Recursive core of `return_type_admits_void_or_undefined`. `depth` counts only
+/// alias-resolution hops and is bounded by `MAX_TYPE_ALIAS_DEPTH`.
+#[must_use]
+fn ty_admits_void(ty: &oxc_ast::ast::TSType, semantic: &oxc_semantic::Semantic, depth: u32) -> bool {
     use oxc_ast::ast::{TSType, TSTypeName};
-    fn ty_admits(ty: &TSType) -> bool {
-        match ty {
-            TSType::TSVoidKeyword(_)
-            | TSType::TSUndefinedKeyword(_)
-            | TSType::TSAnyKeyword(_) => true,
-            TSType::TSUnionType(union) => union.types.iter().any(ty_admits),
+    match ty {
+        TSType::TSVoidKeyword(_) | TSType::TSUndefinedKeyword(_) | TSType::TSAnyKeyword(_) => true,
+        TSType::TSUnionType(union) => union
+            .types
+            .iter()
+            .any(|member| ty_admits_void(member, semantic, depth)),
+        TSType::TSTypeReference(tref) => {
+            let TSTypeName::IdentifierReference(id) = &tref.type_name else {
+                return false;
+            };
             // `Promise<T>`: an async bare `return` resolves to
             // `Promise.resolve(undefined)`, so admit when the single awaited
             // type argument `T` does. Only the one-argument `Promise<T>` shape.
-            TSType::TSTypeReference(tref) => {
-                matches!(
-                    &tref.type_name,
-                    TSTypeName::IdentifierReference(id) if id.name == "Promise"
-                ) && tref.type_arguments.as_ref().is_some_and(|args| {
+            if id.name == "Promise" {
+                return tref.type_arguments.as_ref().is_some_and(|args| {
                     args.params.len() == 1
-                        && args.params.first().is_some_and(ty_admits)
-                })
+                        && args
+                            .params
+                            .first()
+                            .is_some_and(|arg| ty_admits_void(arg, semantic, depth))
+                });
             }
-            _ => false,
+            // External library type recognized by import-graph provenance
+            // (e.g. vue-router's `NavigationGuardReturn`): its `.d.ts` is
+            // unreadable, so the binding must resolve to a named import of the
+            // known export from the known module.
+            if VOID_ADMITTING_IMPORTED_TYPES
+                .iter()
+                .any(|&(module, export)| type_ident_is_named_import_from(id, semantic, export, module))
+            {
+                return true;
+            }
+            // Same-file `type X = …` alias: recurse into the aliased type so any
+            // local alias that unions in `void`/`undefined` is recognized.
+            depth < MAX_TYPE_ALIAS_DEPTH
+                && resolve_same_file_type_alias(id, semantic)
+                    .is_some_and(|aliased| ty_admits_void(aliased, semantic, depth + 1))
+        }
+        _ => false,
+    }
+}
+
+/// True when the type-position identifier `id` resolves (via its binding) to a
+/// named import whose *exported* name is `export_name` and whose source module is
+/// `module`. Binds the specific reference to its `ImportSpecifier`
+/// (reference → symbol → declaration), so a same-named local type — or an import
+/// of a different name or module — is never mistaken for it. Keys on the exported
+/// name, so a renamed import (`import { NavigationGuardReturn as NGR }`) is still
+/// recognized.
+#[must_use]
+fn type_ident_is_named_import_from(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    export_name: &str,
+    module: &str,
+) -> bool {
+    use oxc_ast::AstKind;
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    let mut exported_name_matches = false;
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        match kind {
+            AstKind::ImportSpecifier(spec) => {
+                exported_name_matches = spec.imported.name().as_str() == export_name;
+            }
+            AstKind::ImportDeclaration(import) => {
+                return exported_name_matches && import.source.value.as_str() == module;
+            }
+            _ => {}
         }
     }
-    annotation.is_some_and(|ann| ty_admits(&ann.type_annotation))
+    false
+}
+
+/// The `TSType` of the same-file `type X = …` alias that the type-position
+/// identifier `id` names, or `None` when its binding is not a local type-alias
+/// declaration (an import, a type parameter, a value binding, or an unresolved
+/// reference). Resolves the reference → symbol → declaration node.
+#[must_use]
+fn resolve_same_file_type_alias<'a>(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+    use oxc_ast::AstKind;
+    let ref_id = id.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    match semantic.nodes().kind(scoping.symbol_declaration(sym_id)) {
+        AstKind::TSTypeAliasDeclaration(alias) => Some(&alias.type_annotation),
+        _ => None,
+    }
 }
 
 /// True when `ident` (a type-position identifier) resolves to a symbol whose
