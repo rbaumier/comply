@@ -144,6 +144,15 @@ pub struct ExportedSymbol {
     /// non-function binding), where the extra-args footgun may apply or arity is
     /// unknown.
     pub binds_at_most_one_param: bool,
+    /// `true` when this is a single `const` binding whose initializer is a string
+    /// literal or a substitution-free template literal (`export const X = "lit"`).
+    /// The exported value is then a compile-time-fixed string — the cross-file
+    /// analogue of the same-file const-string predicate in
+    /// `security_detect_non_literal_regexp`. Unlike `is_primitive_literal`, this
+    /// requires `const` (a `let`/`var` binding can be reassigned) and excludes
+    /// number/boolean literals, matching that rule's stricter "provably-static
+    /// string pattern" contract. `false` for every other export shape.
+    pub is_string_literal_const: bool,
 }
 
 /// Kind of an imported symbol.
@@ -1522,6 +1531,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             binds_at_most_one_param: false,
+            is_string_literal_const: false,
         });
     }
 
@@ -2271,6 +2281,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 binds_at_most_one_param: false,
+                is_string_literal_const: false,
             });
             return;
         }
@@ -2285,6 +2296,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             binds_at_most_one_param: false,
+            is_string_literal_const: false,
         });
         return;
     }
@@ -2329,6 +2341,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 binds_at_most_one_param: false,
+                is_string_literal_const: false,
             });
         }
         return;
@@ -2350,6 +2363,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             binds_at_most_one_param: false,
+            is_string_literal_const: false,
         });
         return;
     }
@@ -2387,6 +2401,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             is_primitive_literal: false,
                             is_vue_ref_factory: false,
                             binds_at_most_one_param: fn_binds_at_most_one_param(inner),
+                            is_string_literal_const: false,
                         });
                     }
                 } else {
@@ -2437,6 +2452,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: fn_binds_at_most_one_param(child),
+                    is_string_literal_const: false,
                 });
             }
         }
@@ -2456,6 +2472,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: false,
+                    is_string_literal_const: false,
                 });
             }
         }
@@ -2485,6 +2502,12 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                 let is_vue_ref_factory = name_node.kind() == "identifier"
                     && declarator_binds_vue_ref_factory(decl, source);
                 let binds_at_most_one_param = declarator_binds_low_arity_callable(decl);
+                // Parity with the same-file const-string predicate in
+                // security_detect_non_literal_regexp: a single-identifier `const`
+                // bound to a string literal or a substitution-free template literal.
+                let is_string_literal_const = name_node.kind() == "identifier"
+                    && node_is_const_declaration(child)
+                    && declarator_binds_string_literal(decl);
                 let mut names = Vec::new();
                 collect_pattern_names(name_node, source, &mut names);
                 for name in names {
@@ -2499,6 +2522,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                         is_primitive_literal,
                         is_vue_ref_factory,
                         binds_at_most_one_param,
+                        is_string_literal_const,
                     });
                 }
             }
@@ -2519,6 +2543,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: false,
+                    is_string_literal_const: false,
                 });
             }
         }
@@ -2538,6 +2563,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: false,
+                    is_string_literal_const: false,
                 });
             }
         }
@@ -2558,6 +2584,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: false,
+                    is_string_literal_const: false,
                 });
             }
         }
@@ -2608,6 +2635,34 @@ fn declarator_binds_primitive_literal(decl: Node, source: &[u8]) -> bool {
         // treated as non-literal, matching both the oxc extractor (distinct
         // `BigIntLiteral`) and the same-file `oxc_helpers::is_primitive_literal`.
         "number" => value.utf8_text(source).is_ok_and(|t| !t.ends_with('n')),
+        _ => false,
+    }
+}
+
+/// True when `decl` is a `const` declaration. `let`/`const` both parse to
+/// `lexical_declaration` (distinguished by the `kind` field); `var` parses to
+/// `variable_declaration` and is never `const`.
+fn node_is_const_declaration(decl: Node) -> bool {
+    decl.kind() == "lexical_declaration"
+        && decl
+            .child_by_field_name("kind")
+            .is_some_and(|k| k.kind() == "const")
+}
+
+/// True when a `variable_declarator` initializes its binding directly with a
+/// string literal or a substitution-free template literal (`= "lit"`, `` = `lit` ``).
+/// A template carrying a `${}` substitution is not a compile-time-fixed string
+/// and returns `false`. The tree-sitter analogue of the same-file const-string
+/// predicate in `security_detect_non_literal_regexp`.
+fn declarator_binds_string_literal(decl: Node) -> bool {
+    let Some(value) = decl.child_by_field_name("value") else {
+        return false;
+    };
+    match value.kind() {
+        "string" => true,
+        "template_string" => !value
+            .children(&mut value.walk())
+            .any(|c| c.kind() == "template_substitution"),
         _ => false,
     }
 }
@@ -2867,6 +2922,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: false,
+                    is_string_literal_const: false,
                 });
             }
             // `declare module '<specifier>' { … }` — a TypeScript module
@@ -3397,6 +3453,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 binds_at_most_one_param: false,
+                is_string_literal_const: false,
             });
         }
         return;
@@ -3426,6 +3483,7 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: oxc_binds_at_most_one_param(&func.params),
+                    is_string_literal_const: false,
                 });
             }
         }
@@ -3442,11 +3500,12 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: false,
+                    is_string_literal_const: false,
                 });
             }
         }
         Declaration::VariableDeclaration(var) => {
-            use oxc_ast::ast::{BindingPattern, Expression};
+            use oxc_ast::ast::{BindingPattern, Expression, VariableDeclarationKind};
             for decl in &var.declarations {
                 // Parity with the tree-sitter extractor (`declarator_binds_primitive_literal`):
                 // only a single plain-identifier binding initialized directly
@@ -3474,6 +3533,16 @@ fn oxc_extract_export_named(
                 // binds at most one parameter (`export const f = (x) => …`).
                 let binds_at_most_one_param =
                     decl.init.as_ref().is_some_and(oxc_init_binds_low_arity_callable);
+                // Parity with the same-file const-string predicate in
+                // security_detect_non_literal_regexp: a single-identifier `const`
+                // bound to a string literal or a substitution-free template literal.
+                let is_string_literal_const = var.kind == VariableDeclarationKind::Const
+                    && matches!(&decl.id, BindingPattern::BindingIdentifier(_))
+                    && decl.init.as_ref().is_some_and(|init| match init {
+                        Expression::StringLiteral(_) => true,
+                        Expression::TemplateLiteral(tpl) => tpl.expressions.is_empty(),
+                        _ => false,
+                    });
                 let mut names = Vec::new();
                 oxc_collect_pattern_names(&decl.id, &mut names);
                 for name in names {
@@ -3488,6 +3557,7 @@ fn oxc_extract_export_named(
                         is_primitive_literal,
                         is_vue_ref_factory,
                         binds_at_most_one_param,
+                        is_string_literal_const,
                     });
                 }
             }
@@ -3504,6 +3574,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 binds_at_most_one_param: false,
+                is_string_literal_const: false,
             });
         }
         Declaration::TSInterfaceDeclaration(decl) => {
@@ -3518,6 +3589,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 binds_at_most_one_param: false,
+                is_string_literal_const: false,
             });
         }
         Declaration::TSEnumDeclaration(decl) => {
@@ -3532,6 +3604,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 binds_at_most_one_param: false,
+                is_string_literal_const: false,
             });
         }
         Declaration::TSModuleDeclaration(decl) => {
@@ -3551,6 +3624,7 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: false,
+                    is_string_literal_const: false,
                 });
             }
         }
@@ -3591,6 +3665,7 @@ fn oxc_extract_cjs_export(
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             binds_at_most_one_param: false,
+            is_string_literal_const: false,
         });
     };
 
@@ -3707,6 +3782,7 @@ fn oxc_extract_export_all(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 binds_at_most_one_param: false,
+                is_string_literal_const: false,
             });
         }
         // A string-literal namespace name (`export * as "ns"`) has no
@@ -3725,6 +3801,7 @@ fn oxc_extract_export_all(
         is_primitive_literal: false,
         is_vue_ref_factory: false,
         binds_at_most_one_param: false,
+        is_string_literal_const: false,
     });
 }
 
@@ -4862,6 +4939,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         is_primitive_literal: false,
         is_vue_ref_factory: false,
         binds_at_most_one_param: false,
+        is_string_literal_const: false,
     });
 }
 
@@ -4939,6 +5017,7 @@ fn extract_rust_use(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 binds_at_most_one_param: false,
+                is_string_literal_const: false,
             });
         }
     }
@@ -7235,6 +7314,42 @@ mod tests {
         assert!(!is_lit("b"));
     }
 
+    #[test]
+    fn marks_string_literal_const_exports() {
+        let extract = extract_ts_treesitter(
+            "export const CURRENCY = \"USD\";\n\
+             export const TPL = `USD`;\n\
+             export const TPL_SLOT = `a${x}`;\n\
+             export const NUM = 42;\n\
+             export const FLAG = true;\n\
+             export let LET_STR = \"USD\";\n\
+             export var VAR_STR = \"USD\";\n\
+             export const CALLED = getCurrency();\n\
+             export const { a } = obj;",
+            Language::TypeScript,
+        );
+        let is_str_const = |name: &str| {
+            extract
+                .exports
+                .iter()
+                .find(|e| e.name == name)
+                .unwrap_or_else(|| panic!("missing export {name}"))
+                .is_string_literal_const
+        };
+        // A `const` bound to a string literal or a substitution-free template.
+        assert!(is_str_const("CURRENCY"));
+        assert!(is_str_const("TPL"));
+        // A template with a `${}` slot, a number/boolean const, a `let`/`var`
+        // binding, a call, and a destructuring binding are all excluded.
+        assert!(!is_str_const("TPL_SLOT"));
+        assert!(!is_str_const("NUM"));
+        assert!(!is_str_const("FLAG"));
+        assert!(!is_str_const("LET_STR"));
+        assert!(!is_str_const("VAR_STR"));
+        assert!(!is_str_const("CALLED"));
+        assert!(!is_str_const("a"));
+    }
+
     /// Every distinct case the oxc extractor must match, one source string each.
     const DIFF_CASES: &[&str] = &[
         // --- imports ---
@@ -7305,6 +7420,14 @@ mod tests {
         "export const a1 = 1, b1 = 2, c1 = 3;",
         "export let mutable = 0;",
         "export var legacy = 0;",
+        // `is_string_literal_const`: a `const` bound to a string literal or a
+        // substitution-free template is a string-literal const; a `${}` slot, a
+        // `let`/`var` binding, and non-string literals are not. Both extractors
+        // must agree.
+        "export const strConst = \"usd\";",
+        "export const tplConst = `usd`;",
+        "export const tplSlot = `a${x}`;",
+        "export let strLet = \"x\";",
         // BigInt has a distinct oxc node but no tree-sitter `bigint` kind; both
         // extractors must agree it is NOT a primitive-literal export.
         "export const big = 123n;",
