@@ -1169,4 +1169,39 @@ mod tests {
         )];
         assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
     }
+
+    // #7706 repro (calcom/cal.com `packages/lib/server/username.ts`): a
+    // default-exported single-parameter type-guard (`notEmpty`) imported as the
+    // default binding and passed bare to `.filter` preserves narrowing and drops
+    // the injected `index`/`array` — the import-graph arity resolver now computes
+    // the default export's arity, so it must not flag.
+    #[test]
+    fn allows_imported_single_arity_default_type_guard() {
+        let files = &[
+            (
+                "notEmpty.ts",
+                "const notEmpty = <T>(value: T): value is NonNullable<T> => value !== null && value !== undefined;\nexport default notEmpty;",
+            ),
+            (
+                "consumer.ts",
+                "import notEmpty from './notEmpty';\nconst users: (string | null)[] = [];\nexport const out = users.filter(notEmpty);",
+            ),
+        ];
+        assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #7706 negative space: a *two*-parameter default-exported function exposes
+    // the `(element, index)` footgun and must stay flagged even as a default
+    // import — the default-export arity resolver only exempts single-arity callees.
+    #[test]
+    fn flags_imported_multi_arity_default_function() {
+        let files = &[
+            ("combine.ts", "export default function combine(a: number, b: number): number {\n  return a + b;\n}"),
+            (
+                "consumer.ts",
+                "import combine from './combine';\nconst nums: number[] = [];\nexport const out = nums.map(combine);",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
+    }
 }
