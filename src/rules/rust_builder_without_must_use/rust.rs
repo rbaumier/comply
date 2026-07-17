@@ -1,31 +1,30 @@
 //! rust-builder-without-must-use backend.
 //!
-//! Heuristic: a `pub struct_item` whose name ends in `Builder` (the
-//! near-universal Rust convention for the builder pattern) must carry
-//! a `#[must_use]` attribute. Only `pub` builders are flagged: `#[must_use]`
-//! is an API-boundary lint, so a private, internally-consumed builder has no
-//! external caller to warn. Among `pub` builders the attribute is demanded
-//! only when it is a *consuming*
-//! builder, whose setters take `self` by value and return the builder
-//! by value (`Self` / `<Builder>`). Struct-level `#[must_use]` only
-//! fires when a value of that exact type is produced and dropped; it
-//! does not propagate through references. So for a *non-consuming*
-//! builder — setters take `&mut self` and return `&mut Self` /
-//! `&mut <Builder>` — the struct-level attribute is inert for the
-//! forgotten-`.build()` case, and demanding it is a false positive.
-//! Such builders are detected from their inherent `impl` blocks and
-//! skipped.
+//! A `pub struct_item` whose name ends in `Builder` (the near-universal Rust
+//! convention for the builder pattern) is flagged when it lacks a `#[must_use]`
+//! attribute *and* exposes a by-value consuming setter: a method taking `self`
+//! / `mut self` by value and returning the builder type (`Self`, the bare
+//! `<Name>`, or `<Name><..>` with generic arguments). That is the only shape
+//! for which struct-level `#[must_use]` catches anything the diagnostic cites —
+//! a value of the builder type is produced by a fluent chain and dropped unused
+//! when the caller forgets the terminal (`Builder::new().a().b();`).
 //!
-//! A `...Builder` whose visible inherent `impl` has no builder shape at all —
-//! no method returns the builder type (by value or `&mut`) and no
-//! `self`-consuming terminal produces a product — is a stateful factory, not a
-//! fluent builder. There is no builder value to drop nor `.build()` to forget,
-//! so struct-level `#[must_use]` is inert; it too is skipped.
+//! Struct-level `#[must_use]` only fires on a produced-and-dropped value of the
+//! exact type; it does not propagate through references. So builders whose
+//! setters take `&mut self` — fluent `&mut self -> &mut Self` chains and
+//! `&mut self -> ()` accumulators alike — pure factories, and `self`-consuming
+//! terminals that return a product (`finish(self) -> Product`) never leave a
+//! dangling builder value. For them the attribute is inert, so the rule stays
+//! silent. Setters are collected from every `impl` block targeting the struct
+//! in the file, inherent and trait impls alike.
+//!
+//! Only `pub` builders are flagged: `#[must_use]` is an API-boundary lint, so a
+//! private, internally-consumed builder has no external caller to warn.
 //!
 //! Builders in test directories and test-support module files (e.g. a
-//! `#[cfg(test)]`-gated `test_helpers.rs`) are not flagged: they ship
-//! nothing, so `#[must_use]` has no production API boundary there. The
-//! engine enforces this via `skip_in_test_dir` on the rule's META.
+//! `#[cfg(test)]`-gated `test_helpers.rs`) are not flagged: they ship nothing,
+//! so `#[must_use]` has no production API boundary there. The engine enforces
+//! this via `skip_in_test_dir` on the rule's META.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -64,8 +63,11 @@ impl AstCheck for Check {
         if has_must_use_attribute(node, source_bytes) {
             return;
         }
-        let shape = collect_builder_shape(node, name, source_bytes);
-        if shape.is_non_consuming_builder() || shape.is_factory_without_builder_shape() {
+        // Struct-level `#[must_use]` only catches a dropped builder *value*,
+        // which can only arise from a by-value consuming setter forming a
+        // dangling fluent chain. Without such a setter the attribute is inert,
+        // so demanding it would be a false positive.
+        if !has_by_value_consuming_setter(node, name, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -101,198 +103,88 @@ fn has_must_use_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-/// Structural summary of a `...Builder`'s inherent methods, used to decide
-/// whether struct-level `#[must_use]` can catch anything the rule cites.
-#[derive(Default)]
-struct BuilderShape {
-    /// At least one inherent `impl <name>` block was observed in the file.
-    has_inherent_impl: bool,
-    /// A consuming setter: `self` by value returning the builder by value
-    /// (`Self` / `<name>`).
-    has_consuming_setter: bool,
-    /// A non-consuming setter: `&mut self` returning the builder by reference
-    /// (`&mut Self` / `&mut <name>`).
-    has_non_consuming_setter: bool,
-    /// Any method returns the builder type (by value or `&mut`), regardless of
-    /// its receiver — e.g. a `fn new() -> Self` constructor as well as setters.
-    returns_builder: bool,
-    /// A `self`-consuming terminal producing a non-builder product
-    /// (`fn build(self) -> Product`).
-    has_consuming_terminal: bool,
-}
-
-impl BuilderShape {
-    /// A *non-consuming* builder, for which struct-level `#[must_use]` is inert:
-    /// at least one `&mut self -> &mut <builder>` setter and no by-value
-    /// consuming setter. A struct `#[must_use]` would catch nothing the rule
-    /// cites, so demanding it is a false positive. A mixed or consuming builder
-    /// keeps being flagged.
-    fn is_non_consuming_builder(&self) -> bool {
-        self.has_non_consuming_setter && !self.has_consuming_setter
-    }
-
-    /// A stateful *factory*, not a fluent builder: its observed inherent `impl`
-    /// has no builder shape at all — no method returns the builder type and no
-    /// `self`-consuming terminal produces a product. There is no builder value
-    /// to drop nor `.build()` to forget, so struct-level `#[must_use]` is inert.
-    /// Requires an observed inherent `impl`: a `...Builder` with no visible
-    /// methods keeps being flagged from its name alone.
-    fn is_factory_without_builder_shape(&self) -> bool {
-        self.has_inherent_impl && !self.returns_builder && !self.has_consuming_terminal
-    }
-}
-
-/// Walk every inherent `impl <name>` block in the file (an `impl_item` with no
-/// `trait` field whose target base type equals `name`) and summarize the
-/// receiver/return shapes of its methods into a [`BuilderShape`].
-fn collect_builder_shape(struct_node: tree_sitter::Node, name: &str, source: &[u8]) -> BuilderShape {
+/// True when any `impl` block targeting the builder `name` in the file —
+/// inherent or trait impl — defines a *by-value consuming setter*: a method
+/// taking `self` / `mut self` by value and returning the builder type. That is
+/// the sole shape for which struct-level `#[must_use]` is not inert, so it is
+/// the sole shape the rule flags.
+fn has_by_value_consuming_setter(struct_node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
     let mut root = struct_node;
     while let Some(parent) = root.parent() {
         root = parent;
     }
     let mut cursor = root.walk();
     let mut stack = vec![root];
-    let mut shape = BuilderShape::default();
     while let Some(n) = stack.pop() {
+        // Any `impl ... for <name>` block, inherent (`impl <name>`) or trait
+        // (`impl Trait for <name>`): the `type` field is the implementing type
+        // in both, so no `trait`-presence filter is applied.
         if n.kind() == "impl_item"
-            && n.child_by_field_name("trait").is_none()
             && let Some(target) = n.child_by_field_name("type")
             && base_type_name(target, source) == Some(name)
             && let Some(body) = n.child_by_field_name("body")
+            && impl_defines_consuming_setter(body, name, source)
         {
-            shape.has_inherent_impl = true;
-            classify_setters(body, name, source, &mut shape);
+            return true;
         }
         for child in n.children(&mut cursor) {
             stack.push(child);
         }
     }
-    shape
+    false
 }
 
-/// Inspect every `function_item` in an `impl` body and fold its receiver/return
-/// shape into `shape`.
-fn classify_setters(body: tree_sitter::Node, name: &str, source: &[u8], shape: &mut BuilderShape) {
+/// True when `body` (an `impl` block's `declaration_list`) contains a method
+/// taking `self` by value and returning the builder type.
+fn impl_defines_consuming_setter(body: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
     let mut cursor = body.walk();
-    for method in body.children(&mut cursor) {
-        if method.kind() != "function_item" {
-            continue;
-        }
-        let Some(return_type) = method.child_by_field_name("return_type") else {
-            continue;
-        };
-        let receiver = self_receiver(method, source);
-        match return_kind(return_type, name, source) {
-            ReturnKind::ByValue => {
-                shape.returns_builder = true;
-                if receiver == Receiver::ByValue {
-                    shape.has_consuming_setter = true;
-                }
-            }
-            ReturnKind::ByMutRef => {
-                shape.returns_builder = true;
-                if receiver == Receiver::MutRef {
-                    shape.has_non_consuming_setter = true;
-                }
-            }
-            ReturnKind::Other => {
-                if receiver == Receiver::ByValue {
-                    shape.has_consuming_terminal = true;
-                }
-            }
-        }
-    }
+    body.children(&mut cursor).any(|method| {
+        method.kind() == "function_item"
+            && takes_self_by_value(method, source)
+            && method
+                .child_by_field_name("return_type")
+                .is_some_and(|rt| returns_builder_type(rt, name, source))
+    })
 }
 
-#[derive(PartialEq)]
-enum Receiver {
-    /// `self` or `mut self` — by-value receiver.
-    ByValue,
-    /// `&mut self` (with optional lifetime).
-    MutRef,
-    /// `&self`, or no `self` parameter (associated/free function).
-    Other,
-}
-
-/// Classify the receiver of `method` from its `self_parameter` text.
-fn self_receiver(method: tree_sitter::Node, source: &[u8]) -> Receiver {
+/// True when `method`'s receiver is `self` / `mut self` by value — not `&self`,
+/// `&mut self`, or an associated function with no receiver.
+fn takes_self_by_value(method: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(params) = method.child_by_field_name("parameters") else {
-        return Receiver::Other;
+        return false;
     };
     let mut cursor = params.walk();
     for child in params.children(&mut cursor) {
         if child.kind() != "self_parameter" {
             continue;
         }
-        let Ok(text) = child.utf8_text(source) else {
-            return Receiver::Other;
-        };
-        let text = text.trim_start();
-        let Some(rest) = text.strip_prefix('&') else {
-            // `self` or `mut self` — by-value receiver.
-            return Receiver::ByValue;
-        };
-        // `&self`, `&mut self`, or with an explicit lifetime
-        // (`&'a self` / `&'a mut self`). A `mut` token before `self`
-        // marks an exclusive borrow.
-        let mutable = rest
-            .split_whitespace()
-            .take_while(|tok| *tok != "self")
-            .any(|tok| tok == "mut");
-        return if mutable {
-            Receiver::MutRef
-        } else {
-            Receiver::Other
-        };
+        // A `self_parameter`'s text is the receiver: `self`, `mut self`,
+        // `&self`, `&mut self`, `&'a self`, ... A leading `&` marks a borrow;
+        // everything else is by value.
+        return matches!(child.utf8_text(source), Ok(t) if !t.trim_start().starts_with('&'));
     }
-    Receiver::Other
+    false
 }
 
-enum ReturnKind {
-    /// Returns the builder by value: `Self` or `<name>`.
-    ByValue,
-    /// Returns the builder by mutable reference: `&mut Self` / `&mut <name>`.
-    ByMutRef,
-    /// Anything else (a different type, `&self`-style read, etc.).
-    Other,
-}
-
-/// Classify a method's `return_type` relative to the builder `name`.
-fn return_kind(return_type: tree_sitter::Node, name: &str, source: &[u8]) -> ReturnKind {
+/// True when `return_type` names the builder itself — `Self`, the bare struct
+/// `name`, or the struct with generic arguments (`<name><..>`). A different
+/// type (e.g. a `finish(self) -> Product` consuming terminal) returns false: a
+/// terminal is not a setter and leaves no dangling builder value.
+fn returns_builder_type(return_type: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
     match return_type.kind() {
         "type_identifier" => {
-            if is_builder_type(return_type, name, source) {
-                ReturnKind::ByValue
-            } else {
-                ReturnKind::Other
-            }
+            matches!(return_type.utf8_text(source), Ok(t) if t == "Self" || t == name)
         }
-        "reference_type" => {
-            let is_mut = return_type
-                .children(&mut return_type.walk())
-                .any(|c| c.kind() == "mutable_specifier");
-            match return_type.child_by_field_name("type") {
-                Some(inner) if is_mut && is_builder_type(inner, name, source) => {
-                    ReturnKind::ByMutRef
-                }
-                _ => ReturnKind::Other,
-            }
-        }
-        _ => ReturnKind::Other,
+        "generic_type" => base_type_name(return_type, source) == Some(name),
+        _ => false,
     }
 }
 
-/// True when `type_node` names the builder: `Self` or the bare struct
-/// `name` (a `type_identifier`).
-fn is_builder_type(type_node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
-    matches!(type_node.utf8_text(source), Ok(t) if t == "Self" || t == name)
-}
-
-/// The base type identifier of an `impl` target, ignoring generic
-/// arguments and a leading module path. `Wrapper<T>` (`generic_type`) →
-/// `Wrapper`; `Builder` (`type_identifier`) → `Builder`; `crate::Builder`
-/// (`scoped_type_identifier`) → `Builder`. Returns `None` for shapes with
-/// no single base name (references, tuples, etc.).
+/// The base type identifier of a type node, ignoring generic arguments and a
+/// leading module path. `Wrapper<T>` (`generic_type`) → `Wrapper`; `Builder`
+/// (`type_identifier`) → `Builder`; `crate::Builder` (`scoped_type_identifier`)
+/// → `Builder`. Returns `None` for shapes with no single base name (references,
+/// tuples, etc.).
 fn base_type_name<'a>(target: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     match target.kind() {
         "generic_type" => base_type_name(target.child_by_field_name("type")?, source),
@@ -330,10 +222,22 @@ mod tests {
 
     #[test]
     fn flags_builder_without_must_use() {
-        assert_eq!(
-            run_on("pub struct RequestBuilder { headers: Vec<String> }").len(),
-            1
-        );
+        // A pub consuming builder — a by-value `self -> Self` setter and no
+        // `#[must_use]` — is flagged: a forgotten terminal drops the value.
+        let source = "\
+pub struct RequestBuilder { url: String }
+impl RequestBuilder {
+    pub fn url(self, u: String) -> Self { self }
+}";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_builder_with_no_consuming_setter() {
+        // A `...Builder` with no by-value `self -> Self` setter in view (here,
+        // no impl at all) leaves no droppable builder value, so struct-level
+        // `#[must_use]` is inert and the rule stays silent.
+        assert!(run_on("pub struct RequestBuilder { headers: Vec<String> }").is_empty());
     }
 
     #[test]
@@ -396,6 +300,18 @@ impl CBuilder {
     }
 
     #[test]
+    fn flags_consuming_self_builder_returning_generic_self_type() {
+        // A by-value setter returning the builder *with generics*
+        // (`-> GBuilder<T>`) is still a consuming setter and still flags.
+        let source = "\
+pub struct GBuilder<T> { opt: T }
+impl<T> GBuilder<T> {
+    pub fn opt(self, x: T) -> GBuilder<T> { GBuilder { opt: x } }
+}";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
     fn flags_mixed_builder_with_a_consuming_setter() {
         // A consuming setter present alongside a non-consuming one keeps the
         // builder flaggable: `#[must_use]` is effective for the consuming path.
@@ -411,8 +327,12 @@ impl MBuilder {
     #[test]
     fn allows_builder_in_test_support_file_issue_6713() {
         // test_helpers.rs is #[cfg(test)]-gated scaffold; #[must_use] has no
-        // production API boundary there.
-        let src = "pub struct TestProcessPluginFileBuilder { name: Option<String> }";
+        // production API boundary there — even for a consuming builder.
+        let src = "\
+pub struct TestProcessPluginFileBuilder { name: Option<String> }
+impl TestProcessPluginFileBuilder {
+    pub fn name(self, n: String) -> Self { self }
+}";
         assert!(
             crate::rules::test_helpers::run_rule_gated(
                 &Check,
@@ -425,8 +345,13 @@ impl MBuilder {
 
     #[test]
     fn flags_builder_in_production_file_via_gate() {
-        // A normal source file still applies the gate and flags.
-        let src = "pub struct RequestBuilder { headers: Vec<String> }";
+        // A normal source file still applies the gate and flags a consuming
+        // builder.
+        let src = "\
+pub struct RequestBuilder { headers: Vec<String> }
+impl RequestBuilder {
+    pub fn header(self, h: String) -> Self { self }
+}";
         assert_eq!(
             crate::rules::test_helpers::run_rule_gated(&Check, src, "src/client.rs").len(),
             1
@@ -447,9 +372,9 @@ impl PBuilder {
     #[test]
     fn allows_factory_builder_with_no_builder_shape_issue_7269() {
         // alacritty's `SequenceBuilder`: a stateful factory whose entire inherent
-        // impl is `&self -> Option<Product>` methods. No method returns the
-        // builder type and there is no `self`-consuming terminal, so struct-level
-        // `#[must_use]` is inert — nothing to drop, no `.build()` to forget.
+        // impl is `&self -> Option<Product>` methods. No by-value setter returns
+        // the builder, so struct-level `#[must_use]` is inert — nothing to drop,
+        // no `.build()` to forget.
         let source = "\
 pub struct SequenceBuilder { mode: u8 }
 impl SequenceBuilder {
@@ -462,8 +387,8 @@ impl SequenceBuilder {
     #[test]
     fn flags_consuming_builder_with_terminal_and_no_must_use() {
         // A genuine consuming builder still flags: the `self`-by-value setter
-        // returns the builder by value and `build(self)` is a consuming terminal,
-        // so struct-level `#[must_use]` is effective.
+        // returns the builder by value (`x(self) -> Self`), and `build(self)` is
+        // a consuming terminal, so struct-level `#[must_use]` is effective.
         let source = "\
 pub struct FooBuilder { x: u8 }
 impl FooBuilder {
@@ -474,15 +399,80 @@ impl FooBuilder {
     }
 
     #[test]
-    fn flags_build_only_consuming_builder() {
-        // A `self`-consuming terminal alone (no builder-returning setter) is
-        // enough builder shape: the constructed value can be dropped without
-        // calling `build`, so struct-level `#[must_use]` is effective.
+    fn allows_build_only_terminal_without_setter() {
+        // A `self`-consuming terminal alone (no by-value `self -> Self` setter)
+        // is not a fluent chain: the value is constructed, bound, and dropped
+        // without ever being an unused expression result, so struct-level
+        // `#[must_use]` is inert. `finish(self) -> Product` is a terminal, not a
+        // setter.
         let source = "\
 pub struct XBuilder { x: u8 }
 impl XBuilder {
     fn build(self) -> Foo { Foo }
 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_trait_impl_accumulator_issue_7629() {
+        // risingwave's `PrimitiveArrayBuilder`: its whole API lives in a trait
+        // impl and it is a mutable accumulator — a `new(cap) -> Self`
+        // constructor, `&mut self` mutators, and a `finish(self) -> Product`
+        // terminal. No by-value setter returns the builder, so `#[must_use]` is
+        // inert. Trait-impl methods must be seen for this to be recognized.
+        let source = "\
+pub struct PrimitiveArrayBuilder<T> { data: Vec<T> }
+impl<T> ArrayBuilder for PrimitiveArrayBuilder<T> {
+    fn new(cap: usize) -> Self { todo!() }
+    fn append_n(&mut self, n: usize, v: T) { }
+    fn append_array(&mut self, other: &PrimitiveArray<T>) { }
+    fn finish(self) -> PrimitiveArray<T> { todo!() }
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_by_value_setter_in_trait_impl() {
+        // A by-value consuming setter (`self -> Self`) living in a *trait* impl
+        // still flags: trait-impl methods are scanned, so struct-level
+        // `#[must_use]` is effective. Locks that the trait impls are inspected.
+        let source = "\
+pub struct TBuilder { x: u8 }
+impl SomeTrait for TBuilder {
+    fn with_x(self, v: u8) -> Self { self }
+}";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_inherent_accumulator_issue_7629() {
+        // risingwave's `DataChunkBuilder`: an inherent impl whose every setter
+        // takes `&mut self` and returns `()` / a product, with a consuming
+        // `finish(mut self) -> Product` terminal. No by-value setter returns the
+        // builder, so `#[must_use]` is inert.
+        let source = "\
+pub struct DataChunkBuilder { rows: Vec<u8> }
+impl DataChunkBuilder {
+    fn append_chunk(&mut self) -> AppendDataChunk { todo!() }
+    fn append_one_row(&mut self) -> Option<DataChunk> { None }
+    fn clear(&mut self) { }
+    fn finish(mut self) -> DataChunk { todo!() }
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_receiverless_new_factory_issue_7672() {
+        // tabby's `StructuredDocBuilder`/`TantivyDocBuilder`: a `new() -> Self`
+        // constructor (by-value return but no receiver, so not a setter) plus
+        // `&self` producers or trait-impl methods. No by-value setter returns
+        // the builder, so `#[must_use]` is inert.
+        let source = "\
+pub struct ThingBuilder { x: u8 }
+impl ThingBuilder {
+    pub fn new() -> Self { ThingBuilder { x: 0 } }
+    pub fn build(&self, input: &str) -> Thing { Thing }
+}";
+        assert!(run_on(source).is_empty());
     }
 }
