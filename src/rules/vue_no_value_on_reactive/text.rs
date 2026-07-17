@@ -175,11 +175,15 @@ fn collect_reactives(source: &str) -> Vec<String> {
 
 crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
-    let names = collect_reactives(ctx.source);
+    // Mask JS comments inside every `<script>` block so a `reactive()` binding or
+    // a `name.value` access that appears only in commented-out code is never
+    // scanned. The mask is offset-preserving, so line numbers stay correct.
+    let masked = crate::rules::vue_template_helpers::mask_script_comments(ctx.source);
+    let names = collect_reactives(&masked);
     if names.is_empty() {
         return;
     }
-    for (idx, line) in ctx.source.lines().enumerate() {
+    for (idx, line) in masked.lines().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("const ") || trimmed.starts_with("let ") || trimmed.starts_with("var ") {
             continue;
@@ -295,6 +299,53 @@ mod tests {
         let sfc =
             "<script setup>\nconst state = reactive({ n: 0 })\nconsole.log(state.valueOf())\n</script>";
         assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_value_in_line_comment() {
+        // Regression #7694: `state.value` sits in a `//` comment — dead code, no
+        // runtime access, must not be flagged.
+        let sfc = "<script setup>\nconst state = reactive({ n: 0 })\nfunction f() {\n  //state.value = 1\n}\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_value_in_block_comment() {
+        let sfc =
+            "<script setup>\nconst state = reactive({ n: 0 })\n/* state.value */\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_value_in_multiline_block_comment() {
+        let sfc =
+            "<script setup>\nconst state = reactive({ n: 0 })\n/*\n state.value = 1\n*/\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_value_after_url_string_on_live_line() {
+        // The `//` inside the string literal is not a comment, so the masker must
+        // not strip the rest of the line — the live `state.value` still fires.
+        let sfc = "<script setup>\nconst state = reactive({ n: 0 })\nfoo('http://a'); state.value = 1\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_value_with_trailing_line_comment() {
+        // The live access precedes the `//` comment on the same line, so masking
+        // the trailing comment leaves the access intact and it is still flagged.
+        let sfc =
+            "<script setup>\nconst state = reactive({ n: 0 })\nstate.value = 1 // note\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_live_value_in_template_after_double_slash() {
+        // `//` in `<template>` is literal HTML text, not a comment, so it must not
+        // mask a live `state.value` interpolation on the same line.
+        let sfc = "<script setup>\nconst state = reactive({ n: 0 })\n</script>\n<template>\n  <a href=\"x\">//</a> {{ state.value }}\n</template>";
+        assert_eq!(run(sfc).len(), 1);
     }
 
     #[test]
