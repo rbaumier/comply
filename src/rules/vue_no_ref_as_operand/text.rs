@@ -450,4 +450,47 @@ mod tests {
         let src = "const inner = ref(false);\nconst f = ({ isInner: flag = inner }) => { return inner === flag; };";
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn allows_ref_operand_in_template_when_sfc_fails_to_parse() {
+        // element-plus/rate.vue repro (reduced): a bare `>` in a directive value
+        // (`v-show="item > currentValue"`) is read as a tag terminator, so the
+        // Vue grammar bails to a top-level ERROR with no `template_element` and
+        // the grammar-based template lookup returns None. The `hoverIndex ===
+        // item` comparison is still inside the `<template>`, where top-level
+        // refs auto-unwrap, so it must not flag. Regression for #7633.
+        let src = concat!(
+            "<template>\n",
+            "  <el-icon>\n",
+            "    <component v-show=\"item > currentValue\" />\n",
+            "  </el-icon>\n",
+            "  <span :class=\"{ active: hoverIndex === item }\">{{ text }}</span>\n",
+            "</template>\n",
+            "<script setup lang=\"ts\">\n",
+            "const hoverIndex = ref(-1)\n",
+            "</script>",
+        );
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_ref_operand_in_script_when_sfc_fails_to_parse() {
+        // The same grammar bail-out must not suppress a genuine `<script>`
+        // misuse: the text-scan template carve-out ends at `</template>`, so the
+        // trailing script stays scanned and `count + 1` (where `.value` IS
+        // required) still flags. Guards the #7633 fix against over-suppression.
+        let src = concat!(
+            "<template>\n",
+            "  <el-icon>\n",
+            "    <component v-show=\"item > currentValue\" />\n",
+            "  </el-icon>\n",
+            "  <span>{{ text }}</span>\n",
+            "</template>\n",
+            "<script setup lang=\"ts\">\n",
+            "const count = ref(0)\n",
+            "const doubled = count + 1\n",
+            "</script>",
+        );
+        assert_eq!(run(src).len(), 1);
+    }
 }

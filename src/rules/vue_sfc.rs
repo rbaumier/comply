@@ -106,6 +106,80 @@ pub fn template_block<'src>(tree: &tree_sitter::Tree, source: &'src str) -> Opti
     source.get(content_start..content_end)
 }
 
+/// Text-scan fallback for [`template_block`] when the grammar produced no
+/// `template_element`.
+///
+/// `tree-sitter-vue-updated` sometimes bails to a single top-level `ERROR`
+/// node on an otherwise valid SFC (e.g. a bare `<`/`>` in a directive or
+/// binding value, read as a tag terminator). The `<template>` then never
+/// becomes a
+/// `template_element`, so [`template_block`] returns `None` and every
+/// template-aware rule loses awareness of the template region. This recovers
+/// that region from the raw text so suppression / scanning keep working.
+///
+/// A valid SFC has exactly one root `<template>`; its opening `<template …>`
+/// tag and final `</template>` are unambiguous at the top level, and nested
+/// `<template v-if>`/`<template #slot>` closes all precede the root's. The
+/// returned slice is the **inner content** — the bytes between the opening
+/// tag's `>` and the final `</template>`'s `<` — matching [`template_block`]'s
+/// well-parsed result exactly, so byte offsets line up. The slice borrows from
+/// `source`, so callers recover its offset by pointer arithmetic. Returns
+/// `None` unless the source has both a root `<template` opening tag and a
+/// `</template>` close.
+///
+/// This is a best-effort text scan: unlike the AST path it does not skip a
+/// `<template`/`</template>` substring sitting inside a `<script>` string
+/// literal, so it may over-approximate the region (first raw `<template` open,
+/// last raw `</template>` close) — never under-approximate. For an
+/// over-suppressing rule this only risks a missed detection on the already
+/// parse-broken file, never a new false positive.
+pub(crate) fn template_block_text_fallback(source: &str) -> Option<&str> {
+    let bytes = source.as_bytes();
+    let open_tag_start = root_template_open(bytes)?;
+    let content_start = tag_close_offset(bytes, open_tag_start)? + 1;
+    let content_end = source.rfind("</template>")?;
+    if content_end <= content_start {
+        return None;
+    }
+    source.get(content_start..content_end)
+}
+
+/// Byte offset of the root `<template` opening tag: the first `<template` whose
+/// next byte is a tag boundary (`>`, `/`, or ASCII whitespace), so
+/// `<templates>` / `<template-x>` don't match.
+fn root_template_open(bytes: &[u8]) -> Option<usize> {
+    const NEEDLE: &[u8] = b"<template";
+    let mut i = 0;
+    while i + NEEDLE.len() <= bytes.len() {
+        if &bytes[i..i + NEEDLE.len()] == NEEDLE {
+            match bytes.get(i + NEEDLE.len()) {
+                None => return Some(i),
+                Some(&b) if b == b'>' || b == b'/' || b.is_ascii_whitespace() => return Some(i),
+                Some(_) => {}
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Byte offset of the `>` that terminates the opening tag starting at `from`,
+/// skipping any `>` inside a quoted attribute value. Mirrors the quote-aware
+/// scan in `vue_template_helpers::extract_elements`.
+fn tag_close_offset(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut in_string: Option<u8> = None;
+    for (offset, &b) in bytes.iter().enumerate().skip(from) {
+        match in_string {
+            Some(q) if b == q => in_string = None,
+            Some(_) => {}
+            None if b == b'"' || b == b'\'' => in_string = Some(b),
+            None if b == b'>' => return Some(offset),
+            None => {}
+        }
+    }
+    None
+}
+
 /// Blank every byte that lies outside the SFC's `<script>` and `<template>`
 /// blocks, so a `TextCheck` rule never matches a needle inside a custom block
 /// (`<docs>`, `<i18n>`, `<config>`, …) or a `<style>` block, whose content is
@@ -370,5 +444,93 @@ mod tests {
         // Non-SFC source (no script_element/template_element) passes through.
         let src = "const x = 1;\nconst y = x + 1;";
         assert_eq!(mask_non_code_blocks(src), src);
+    }
+
+    #[test]
+    fn text_fallback_matches_ast_inner_content() {
+        // On a well-parsed SFC the text fallback returns byte-for-byte the same
+        // inner slice the grammar path returns, so suppression offsets line up.
+        let src = "<template>\n  <div>hi</div>\n</template>\n<script>\nconst x = 1\n</script>";
+        let tree = parse(src);
+        let ast = template_block(&tree, src).expect("grammar parses this SFC");
+        let text = template_block_text_fallback(src).expect("text fallback finds the template");
+        assert_eq!(text, ast);
+        assert_eq!(text, "\n  <div>hi</div>\n");
+    }
+
+    #[test]
+    fn text_fallback_keeps_nested_template() {
+        // First-open → last-close: a nested `<template v-if>` is included, and the
+        // span stops at the root's final `</template>`.
+        let src = "<template>\n  <template v-if=\"x\">\n    <span>a</span>\n  </template>\n  <div></div>\n</template>";
+        let inner = template_block_text_fallback(src).expect("root template recovered");
+        assert!(inner.starts_with("\n  <template v-if"));
+        assert!(inner.contains("<span>a</span>"));
+        assert!(inner.trim_end().ends_with("<div></div>"));
+    }
+
+    #[test]
+    fn text_fallback_handles_multiline_open_tag_and_gt_in_attr() {
+        // A multi-line opening tag whose attribute value contains a `>` must not
+        // terminate the tag early: the `>` inside the quoted value is skipped.
+        let src = "<template\n  data-x=\"a>b\"\n>\n  <p>hi</p>\n</template>";
+        let inner = template_block_text_fallback(src).expect("root template recovered");
+        assert_eq!(inner, "\n  <p>hi</p>\n");
+    }
+
+    #[test]
+    fn text_fallback_preserves_crlf() {
+        // CRLF newlines inside the template are returned verbatim (byte offsets
+        // index the original source; no reindexing).
+        let src = "<template>\r\n  <p>hi</p>\r\n</template>";
+        let inner = template_block_text_fallback(src).expect("root template recovered");
+        assert_eq!(inner, "\r\n  <p>hi</p>\r\n");
+    }
+
+    #[test]
+    fn text_fallback_returns_none_without_a_full_root_template() {
+        // No `<template` opening, a `<templates>` near-match, and an unterminated
+        // template all yield `None` — the fallback never invents a range.
+        assert!(template_block_text_fallback("<script>const x = 1</script>").is_none());
+        assert!(template_block_text_fallback("<templates>\n  <p>x</p>\n</templates>").is_none());
+        assert!(template_block_text_fallback("<template>\n  <p>x</p>\n").is_none());
+    }
+
+    #[test]
+    fn text_fallback_recovers_template_when_grammar_bails_to_error() {
+        // element-plus/rate.vue reducer: a bare `>` in a directive value
+        // (`v-show="item > currentValue"`) is read as a tag terminator, so
+        // tree-sitter-vue-updated bails to a single top-level ERROR — no
+        // `template_element`, and the script is swallowed into the error (so
+        // extract_scripts can't recover it either). The text fallback still
+        // carves out the root template, excluding the trailing <script>.
+        let src = concat!(
+            "<template>\n",
+            "  <el-icon>\n",
+            "    <component v-show=\"item > currentValue\" />\n",
+            "  </el-icon>\n",
+            "  <span>{{ text }}</span>\n",
+            "</template>\n",
+            "<script setup>\n",
+            "const hoverIndex = ref(-1)\n",
+            "</script>",
+        );
+        let tree = parse(src);
+        assert!(
+            template_block(&tree, src).is_none(),
+            "fixture must defeat the grammar (no template_element)"
+        );
+        assert!(
+            extract_scripts(&tree, src).is_empty(),
+            "the script is inside the top-level ERROR, not structurally recoverable"
+        );
+        let inner = template_block_text_fallback(src).expect("text fallback recovers the template");
+        assert!(inner.starts_with("\n  <el-icon>"));
+        assert!(inner.contains("item > currentValue"));
+        assert!(inner.trim_end().ends_with("</el-icon>\n  <span>{{ text }}</span>"));
+        assert!(
+            !inner.contains("const hoverIndex"),
+            "the trailing <script> is excluded from the template range"
+        );
     }
 }
