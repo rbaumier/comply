@@ -35,6 +35,15 @@
 //! enclosing `if <recv>.is_some() { … }` / `if <recv>.is_ok() { … }` guard on
 //! the same receiver is exempt: the branch body runs only when the value is
 //! `Some`/`Ok`, so the unwrap is infallible there and cannot panic.
+//!
+//! A statement-level panic/unwrap/expect preceded by an early-return guard
+//! `if <cond> { … return … }` — whose then-branch diverges via `return` and
+//! whose `<cond>` references `std::thread::panicking()` as the whole condition
+//! or as a `||` disjunct — is exempt: control reaches the op only when every
+//! operand is false, i.e. the thread is not unwinding. The guard may be a direct
+//! preceding sibling or sit at the top level of a preceding `unsafe`/plain block
+//! (a `return` there still exits `drop`). A `&&` guard does not qualify, since
+//! fall-through can still occur while panicking.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -141,6 +150,137 @@ fn is_bare_panicking_call(expr: tree_sitter::Node, source: &[u8]) -> bool {
         _ => return false,
     };
     last_segment == "panicking"
+}
+
+/// True when a statement-level panic/unwrap/expect `node` in the drop body is
+/// made unreachable during an unwind by a *preceding* early-return guard. Walks
+/// the block ancestors of `node` up to `body` and inspects the siblings that run
+/// unconditionally before it: an `if <cond> { … return … }` whose then-branch
+/// diverges via `return` and whose `<cond>` references `std::thread::panicking()`
+/// as the whole condition or as a `||` disjunct. Falling through such a guard
+/// requires every operand false, so the thread is not unwinding when the op runs.
+/// The guard may be a direct preceding sibling or sit at the top level of a
+/// preceding `unsafe`/plain block sibling (a `return` there still exits `drop`).
+///
+/// The polarity is the inverse of the nested case in
+/// [`is_guarded_by_not_panicking`]: here a *bare* `if panicking() { return }`
+/// guards and a `||` disjunct guards, whereas `&&` does not — fall-through can
+/// still occur while panicking when the other operand is false.
+fn is_guarded_by_preceding_early_return(
+    node: tree_sitter::Node,
+    body: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "block" {
+            let mut sibling = cur.prev_named_sibling();
+            while let Some(prev) = sibling {
+                if preceding_statement_guards(prev, source) {
+                    return true;
+                }
+                sibling = prev.prev_named_sibling();
+            }
+        }
+        if parent == body {
+            return false;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True when `statement` — which executes unconditionally before the fallible
+/// op — is, or directly contains, an early-return `panicking()` guard. A
+/// preceding `unsafe`/plain block is unwrapped so a guard at its top level is
+/// seen, since a `return` inside it still exits `drop`.
+fn preceding_statement_guards(statement: tree_sitter::Node, source: &[u8]) -> bool {
+    let core = unwrap_expression_statement(statement);
+    if core.kind() == "if_expression" {
+        return is_early_return_panicking_guard(core, source);
+    }
+    if let Some(block) = block_body(core) {
+        let mut cursor = block.walk();
+        return block.named_children(&mut cursor).any(|child| {
+            let inner = unwrap_expression_statement(child);
+            inner.kind() == "if_expression" && is_early_return_panicking_guard(inner, source)
+        });
+    }
+    false
+}
+
+/// True when `if_node` is an `if <cond> { … return … }` early-return guard whose
+/// then-branch diverges via a top-level `return` and whose `<cond>` references
+/// `std::thread::panicking()` (see [`condition_is_panicking_disjunct`]).
+fn is_early_return_panicking_guard(if_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(condition) = if_node.child_by_field_name("condition") else {
+        return false;
+    };
+    let Some(consequence) = if_node.child_by_field_name("consequence") else {
+        return false;
+    };
+    condition_is_panicking_disjunct(condition, source) && block_diverges_via_return(consequence)
+}
+
+/// True when `condition` is a bare `panicking()` call (the whole condition) or a
+/// `||` disjunct containing one (`<other> || panicking()`, any position in a
+/// `||` chain). Falling through a `{ return }` under such a condition requires
+/// every operand false, so the thread is not unwinding. `&&` is rejected: its
+/// fall-through occurs whenever any operand is false, which can still be while
+/// panicking. A negated `!panicking()` is not a bare call, so it does not match.
+fn condition_is_panicking_disjunct(condition: tree_sitter::Node, source: &[u8]) -> bool {
+    if is_bare_panicking_call(condition, source) {
+        return true;
+    }
+    if condition.kind() != "binary_expression" {
+        return false;
+    }
+    let Some(op) = condition.child_by_field_name("operator") else {
+        return false;
+    };
+    if op.utf8_text(source).unwrap_or("") != "||" {
+        return false;
+    }
+    let left = condition.child_by_field_name("left");
+    let right = condition.child_by_field_name("right");
+    left.is_some_and(|n| condition_is_panicking_disjunct(n, source))
+        || right.is_some_and(|n| condition_is_panicking_disjunct(n, source))
+}
+
+/// True when `block` has a top-level `return`, so reaching it makes the
+/// enclosing `drop` diverge. Only direct statements count: a `return` nested in
+/// an inner branch does not unconditionally exit.
+fn block_diverges_via_return(block: tree_sitter::Node) -> bool {
+    let mut cursor = block.walk();
+    block
+        .named_children(&mut cursor)
+        .any(|child| unwrap_expression_statement(child).kind() == "return_expression")
+}
+
+/// The inner `block` of an `unsafe { … }` or a bare `{ … }` statement, or `None`
+/// for any other node.
+fn block_body(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    match node.kind() {
+        "block" => Some(node),
+        "unsafe_block" => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .find(|child| child.kind() == "block")
+        }
+        _ => None,
+    }
+}
+
+/// The inner expression of an `expression_statement`, or `node` itself when it is
+/// not such a wrapper. Statement-position expressions ending in a block (`if`,
+/// `unsafe`, `{ … }`) and `expr;` statements are wrapped in an
+/// `expression_statement`; unwrapping exposes the underlying construct.
+fn unwrap_expression_statement(node: tree_sitter::Node) -> tree_sitter::Node {
+    if node.kind() == "expression_statement" {
+        node.named_child(0).unwrap_or(node)
+    } else {
+        node
+    }
 }
 
 /// True when `call` is an `<recv>.unwrap()` / `.expect(...)` whose receiver is
@@ -325,6 +465,7 @@ impl AstCheck for Check {
                         let bare = name.rsplit("::").next().unwrap_or(name);
                         if PANIC_MACROS.contains(&bare)
                             && !is_guarded_by_not_panicking(n, body, source_bytes)
+                            && !is_guarded_by_preceding_early_return(n, body, source_bytes)
                         {
                             diagnostics.push(Diagnostic::at_node(
                                 std::sync::Arc::clone(&ctx.path_arc),
@@ -349,6 +490,7 @@ impl AstCheck for Check {
                         if (name == "unwrap" || name == "expect")
                             && !is_guarded_by_not_panicking(n, body, source_bytes)
                             && !is_guarded_by_some_or_ok(n, body, source_bytes)
+                            && !is_guarded_by_preceding_early_return(n, body, source_bytes)
                         {
                             diagnostics.push(Diagnostic::at_node(
                                 std::sync::Arc::clone(&ctx.path_arc),
@@ -705,5 +847,102 @@ mod tests {
         assert!(
             crate::rules::test_helpers::run_rule_gated(&Check, source, "tests/array.rs").is_empty()
         );
+    }
+
+    #[test]
+    fn allows_expect_after_preceding_bare_panicking_early_return_in_unsafe() {
+        // paradedb pg_search/src/postgres/fake_aminsertcleanup.rs: a bare
+        // `if std::thread::panicking() { return; }` precedes the `.expect()`,
+        // which is unreachable while the thread is unwinding.
+        let source = "struct FrameGuard; impl Drop for FrameGuard { fn drop(&mut self) { \
+                      unsafe { if std::thread::panicking() { return; } \
+                      let frame = STACK.pop().expect(\"stack underflow\"); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_after_or_panicking_early_return_in_preceding_unsafe_sibling() {
+        // paradedb pg_search/src/postgres/storage/linked_items.rs: the `panic!()`
+        // is a sibling of a preceding `unsafe {}` block whose early-return guard
+        // `if !is_tx() || std::thread::panicking() { return; }` bails out while
+        // unwinding, so control reaches the panic only when not panicking.
+        let source = "struct AtomicGuard; impl Drop for AtomicGuard { fn drop(&mut self) { \
+                      if self.original.is_none() { return; } \
+                      unsafe { if !pg_sys::IsTransactionState() || std::thread::panicking() \
+                      { return; } } panic!(\"failed to call commit()\"); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_panic_after_and_panicking_early_return_guard() {
+        // `if cond && panicking() { return; }` does not guard: fall-through
+        // happens whenever `cond` is false, which can still be while unwinding.
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if cond && std::thread::panicking() { return; } panic!(\"x\"); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_panic_with_panicking_early_return_guard_after_the_op() {
+        // The guard follows the panic; it cannot make an earlier statement
+        // unreachable.
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      panic!(\"x\"); if std::thread::panicking() { return; } } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_panic_after_non_diverging_panicking_guard() {
+        // The `panicking()` guard does not `return`, so control still reaches the
+        // panic while unwinding.
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if std::thread::panicking() { eprintln!(\"x\"); } panic!(\"y\"); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_expect_after_negated_panicking_early_return_guard() {
+        // `if !panicking() { return; }` returns when *not* unwinding, so the op
+        // runs precisely while unwinding — still a double-panic bug.
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if !std::thread::panicking() { return; } \
+                      let _ = self.h.expect(\"e\"); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_panic_after_conditionally_nested_panicking_early_return() {
+        // The `panicking()` guard runs only when `cond` holds, so fall-through
+        // does not imply not-unwinding — the preceding-sibling check must test
+        // the *outer* condition and not recurse into its consequence.
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if cond { if std::thread::panicking() { return; } } panic!(\"x\"); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_panic_after_deeply_nested_return_in_panicking_guard() {
+        // The `return` is nested under an inner `if`, so the guard does not
+        // unconditionally diverge — the panic can still run while unwinding.
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if std::thread::panicking() { if x { return; } } panic!(\"y\"); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_panic_after_panicking_early_return_in_preceding_plain_block() {
+        // A bare `{ … }` preceding block is unwrapped like `unsafe { … }`: a
+        // top-level early-return guard inside it still exits `drop`.
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      { if std::thread::panicking() { return; } } panic!(\"x\"); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_after_left_operand_or_panicking_early_return() {
+        // `panicking()` as the *left* `||` operand guards just as the right does.
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if std::thread::panicking() || other { return; } panic!(\"x\"); } }";
+        assert!(run_on(source).is_empty());
     }
 }
