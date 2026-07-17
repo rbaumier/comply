@@ -42,7 +42,7 @@ impl OxcCheck for Check {
         let Some(expr) = first_arg.as_expression() else {
             return;
         };
-        if is_safe_pattern(expr, semantic) {
+        if is_safe_pattern(expr, semantic, ctx) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
@@ -70,6 +70,11 @@ impl OxcCheck for Check {
 ///   safe pattern (string literal, const literal binding, const-keys join, …).
 /// - An identifier bound by a module/function-local `const` whose initializer is
 ///   itself a safe pattern (a constant pattern defined once, not runtime input).
+/// - An identifier bound by an `import` specifier whose source-module export is a
+///   `const` string-literal binding (`export const X = 'lit'`) — the same
+///   developer-controlled-const-slot predicate as the local case, resolved
+///   cross-file through the import graph. A local binding of the same name (a
+///   shadow) resolves to that binding instead, not the import.
 /// - A `.source` member access whose object is itself a safe pattern, i.e.
 ///   `new RegExp(RE.source, flags)` rebuilding a regex from a const literal regex
 ///   with different flags — `.source` reads the compile-time pattern text.
@@ -83,21 +88,24 @@ impl OxcCheck for Check {
 ///   author-fixed elements, so joining them (optionally after mapping each through a
 ///   callback whose only free value is the element) yields a string fixed at author
 ///   time.
-fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic, ctx: &CheckCtx) -> bool {
     match expr {
         Expression::StringLiteral(_) | Expression::RegExpLiteral(_) => true,
-        Expression::TemplateLiteral(tpl) => template_slots_all_safe(tpl, semantic),
-        Expression::Identifier(ident) => is_const_literal_binding(ident, semantic),
+        Expression::TemplateLiteral(tpl) => template_slots_all_safe(tpl, semantic, ctx),
+        Expression::Identifier(ident) => {
+            is_const_literal_binding(ident, semantic, ctx)
+                || is_imported_string_literal_const(ident, semantic, ctx)
+        }
         // `RE.source` is safe only when the object is itself a safe pattern (a const
         // bound to a regex/string literal), so the read yields a compile-time-fixed
         // string. `.source` on a non-const or call-expression object (e.g.
         // `buildPattern().source`) is not provably static and stays flagged.
         Expression::StaticMemberExpression(member) if member.property.name.as_str() == "source" => {
-            is_safe_pattern(&member.object, semantic)
+            is_safe_pattern(&member.object, semantic, ctx)
         }
         Expression::CallExpression(call) => {
             is_object_keys_join_of_const(call, semantic)
-                || is_const_string_array_join(call, semantic)
+                || is_const_string_array_join(call, semantic, ctx)
         }
         _ => false,
     }
@@ -106,10 +114,14 @@ fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool
 /// True when every `${}` slot of `tpl` is provably developer-controlled: a
 /// statically numeric expression (digits only) or any other safe pattern. A
 /// slot-free template is vacuously safe.
-fn template_slots_all_safe(tpl: &TemplateLiteral, semantic: &oxc_semantic::Semantic) -> bool {
+fn template_slots_all_safe(
+    tpl: &TemplateLiteral,
+    semantic: &oxc_semantic::Semantic,
+    ctx: &CheckCtx,
+) -> bool {
     tpl.expressions
         .iter()
-        .all(|slot| is_static_numeric_expr(slot, semantic) || is_safe_pattern(slot, semantic))
+        .all(|slot| is_static_numeric_expr(slot, semantic) || is_safe_pattern(slot, semantic, ctx))
 }
 
 /// True when `call` is the chain `Object.keys(<const-object>).join(<string literal>)`.
@@ -200,6 +212,7 @@ fn is_object_keys_of_const(
 fn is_const_string_array_join(
     call: &oxc_ast::ast::CallExpression,
     semantic: &oxc_semantic::Semantic,
+    ctx: &CheckCtx,
 ) -> bool {
     // Outer call must be `<receiver>.join(<StringLiteral>)`.
     let Expression::StaticMemberExpression(join_member) = &call.callee else {
@@ -218,7 +231,7 @@ fn is_const_string_array_join(
     };
     // `<receiver>` is either `<arr>.map(<callback>)` or `<arr>` directly.
     match &join_member.object {
-        Expression::CallExpression(map_call) => is_const_string_array_map(map_call, semantic),
+        Expression::CallExpression(map_call) => is_const_string_array_map(map_call, semantic, ctx),
         receiver => is_const_string_literal_array(receiver, semantic),
     }
 }
@@ -231,6 +244,7 @@ fn is_const_string_array_join(
 fn is_const_string_array_map(
     call: &oxc_ast::ast::CallExpression,
     semantic: &oxc_semantic::Semantic,
+    ctx: &CheckCtx,
 ) -> bool {
     let Expression::StaticMemberExpression(map_member) = &call.callee else {
         return false;
@@ -260,7 +274,7 @@ fn is_const_string_array_map(
     let Some(Statement::ExpressionStatement(body)) = arrow.body.statements.first() else {
         return false;
     };
-    is_safe_pattern_with_param(&body.expression, param.name.as_str(), semantic)
+    is_safe_pattern_with_param(&body.expression, param.name.as_str(), semantic, ctx)
 }
 
 /// True when `expr` is an inline array literal, or an identifier resolving to a local
@@ -303,14 +317,15 @@ fn is_safe_pattern_with_param(
     expr: &Expression,
     element_param: &str,
     semantic: &oxc_semantic::Semantic,
+    ctx: &CheckCtx,
 ) -> bool {
     match expr {
         Expression::Identifier(ident) if ident.name.as_str() == element_param => true,
         Expression::TemplateLiteral(tpl) => tpl.expressions.iter().all(|slot| {
             is_static_numeric_expr(slot, semantic)
-                || is_safe_pattern_with_param(slot, element_param, semantic)
+                || is_safe_pattern_with_param(slot, element_param, semantic, ctx)
         }),
-        _ => is_safe_pattern(expr, semantic),
+        _ => is_safe_pattern(expr, semantic, ctx),
     }
 }
 
@@ -331,6 +346,7 @@ fn is_static_numeric_expr(expr: &Expression, semantic: &oxc_semantic::Semantic) 
 fn is_const_literal_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
+    ctx: &CheckCtx,
 ) -> bool {
     use oxc_ast::AstKind as AK;
 
@@ -346,7 +362,7 @@ fn is_const_literal_binding(
     let Some(init) = &decl.init else {
         return false;
     };
-    is_safe_pattern(init, semantic)
+    is_safe_pattern(init, semantic, ctx)
 }
 
 /// True when `ident` resolves to a binding (parameter or variable declarator) whose
@@ -406,6 +422,67 @@ fn resolve_binding_declarator<'a>(
     std::iter::once(nodes.kind(decl_node_id))
         .chain(nodes.ancestor_kinds(decl_node_id))
         .find(|kind| matches!(kind, AK::FormalParameter(_) | AK::VariableDeclarator(_)))
+}
+
+/// True when `ident` is a bare identifier bound by an `import` specifier whose
+/// source-module export is a `const` string-literal binding (`export const X =
+/// 'lit'`), resolved cross-file through the project's import graph. This is the
+/// same "developer-controlled const string" verdict as the same-file
+/// `is_const_literal_binding`, applied to a constant that lives in another module.
+///
+/// The binding must actually resolve to an import in this file: a local same-name
+/// binding (a `const`/`let`/parameter shadow) resolves to that binding via
+/// `binding_is_import` returning `false`, so it is never treated as the import.
+/// An identifier whose import does not resolve to a known exporting file (an
+/// external package), or whose export is not a `const` string literal, stays
+/// flagged.
+fn is_imported_string_literal_const(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    ctx: &CheckCtx,
+) -> bool {
+    if !binding_is_import(ident, semantic) {
+        return false;
+    }
+    let name = ident.name.as_str();
+    let index = ctx.project.import_index();
+    if index.is_empty() {
+        return false;
+    }
+    let canon = index.canonical(ctx.path);
+    index.get_imports(&canon).iter().any(|imp| {
+        imp.local_name == name
+            && imp.source_path.as_deref().is_some_and(|src| {
+                index
+                    .get_exports(src)
+                    .iter()
+                    .any(|export| export.name == imp.imported_name && export.is_string_literal_const)
+            })
+    })
+}
+
+/// True when `ident`'s binding is declared by an `import` specifier in this file
+/// (a named or default import), rather than a local variable or parameter. Used
+/// as a shadow guard: a local binding of the same name resolves to its own
+/// declaration node, not an import, and must not be treated as the import.
+fn binding_is_import(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind as AK;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .any(|kind| matches!(kind, AK::ImportSpecifier(_) | AK::ImportDefaultSpecifier(_)))
 }
 
 #[cfg(test)]
@@ -769,5 +846,127 @@ mod tests {
             const r = new RegExp(arr.map((x) => `${x}${suffix}`).join("|"));
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    /// Build a temp project from `(rel_path, source)` pairs, index it so the
+    /// cross-file `ImportIndex` is populated, and run the rule on `target_rel`.
+    fn run_on_project(files: &[(&str, &str)], target_rel: &str) -> Vec<Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        let target_path = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let canon = fs::canonicalize(&target_path).unwrap();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_oxc_check(&Check, &source, &canon, &project, file)
+    }
+
+    #[test]
+    fn allows_imported_const_string_in_template_slot() {
+        // Issue #7639: ghostfolio yahoo-finance.service.ts — `DEFAULT_CURRENCY` is
+        // `export const DEFAULT_CURRENCY = 'USD'` in another module, imported and
+        // used as the only `${}` slot. The pattern `-USD$` is fixed at compile
+        // time — the cross-file analogue of the already-exempt same-file const slot.
+        let files = &[
+            ("config.ts", "export const DEFAULT_CURRENCY = 'USD';"),
+            (
+                "yahoo.ts",
+                "import { DEFAULT_CURRENCY } from './config';\n\
+                 const r = new RegExp(`-${DEFAULT_CURRENCY}$`);",
+            ),
+        ];
+        assert!(run_on_project(files, "yahoo.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_imported_const_string_direct() {
+        // The same imported const passed directly (no template wrapper).
+        let files = &[
+            ("config.ts", "export const DEFAULT_CURRENCY = 'USD';"),
+            (
+                "yahoo.ts",
+                "import { DEFAULT_CURRENCY } from './config';\n\
+                 const r = new RegExp(DEFAULT_CURRENCY);",
+            ),
+        ];
+        assert!(run_on_project(files, "yahoo.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_imported_non_literal_const_slot() {
+        // Over-exemption guard: an imported const bound to a NON-literal
+        // (`compute()`) is not provably static — the slot still flags.
+        let files = &[
+            ("config.ts", "export const DYNAMIC = compute();"),
+            (
+                "consumer.ts",
+                "import { DYNAMIC } from './config';\n\
+                 const r = new RegExp(`-${DYNAMIC}$`);",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
+    }
+
+    #[test]
+    fn flags_imported_let_string_slot() {
+        // Parity with the same-file `const`-only predicate: a `let` export can be
+        // reassigned in its module, so an imported `let` string binding is not
+        // provably static and still flags.
+        let files = &[
+            ("config.ts", "export let CURRENCY = 'USD';"),
+            (
+                "consumer.ts",
+                "import { CURRENCY } from './config';\n\
+                 const r = new RegExp(`-${CURRENCY}$`);",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
+    }
+
+    #[test]
+    fn flags_local_shadow_of_imported_const() {
+        // Shadow guard: a local binding of the same name as an imported string
+        // const, initialized to runtime input, resolves to the local binding — not
+        // the import — and must still flag.
+        let files = &[
+            ("config.ts", "export const DEFAULT_CURRENCY = 'USD';"),
+            (
+                "consumer.ts",
+                "import { DEFAULT_CURRENCY } from './config';\n\
+                 function f() {\n\
+                   const DEFAULT_CURRENCY = getInput();\n\
+                   return new RegExp(`-${DEFAULT_CURRENCY}$`);\n\
+                 }",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
+    }
+
+    #[test]
+    fn flags_unresolvable_external_import() {
+        // An import from an external package is not in the scanned set, so its
+        // source export cannot be resolved — the slot stays conservatively flagged.
+        let files = &[(
+            "consumer.ts",
+            "import { CURRENCY } from 'some-external-pkg';\n\
+             const r = new RegExp(`-${CURRENCY}$`);",
+        )];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
     }
 }
