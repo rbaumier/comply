@@ -53,6 +53,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Allow `Object.assign(this, ...)` — populating the current instance
+        // from a props object. `this` is not reassignable and a spread rewrite
+        // (`{...this, ...source}`) yields a plain object, dropping the class
+        // prototype and the instance identity, so there is no equivalent
+        // non-mutating alternative (same reasoning as the `Object.create(proto)`
+        // target above).
+        if matches!(first, oxc_ast::ast::Argument::ThisExpression(_)) {
+            return;
+        }
+
         // Allow `Object.assign({ ... }, ...)` — any object-literal target is a
         // fresh, unaliased object (whether or not it has properties); nothing
         // else references it, so `Object.assign({ x }, src)` is `{ x, ...src }`,
@@ -367,6 +377,36 @@ mod oxc_tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // === this target (issue #7707) ===
+
+    #[test]
+    fn allows_this_target_in_constructor() {
+        // Regression for #7707 — `Object.assign(this, initProps)` initializes
+        // the instance being constructed. `this` is not reassignable and a
+        // spread rewrite would drop the class prototype, so there is no
+        // non-mutating alternative.
+        let src = r#"
+            class C {
+                constructor(initProps?: X) {
+                    Object.assign(this, initProps);
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_target_with_multiple_sources() {
+        let src = r#"
+            class C {
+                constructor(a: X, b: Y) {
+                    Object.assign(this, a, b);
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
     }
 
     // === test-file exemption (issue #481) ===
