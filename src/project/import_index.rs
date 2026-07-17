@@ -2247,9 +2247,13 @@ fn extract_glob_import(node: Node, source: &[u8], out: &mut Vec<GlobImport>) {
         return;
     };
     // Vite's signature is `glob(pattern, options)`: the first value argument is
-    // the pattern, the second the options object.
+    // the pattern, the second the options object. An interleaved comment is a
+    // named child of the argument list, so it is filtered out to keep these
+    // positions aligned with the oxc path's `call.arguments`.
     let mut cursor = args.walk();
-    let mut value_args = args.named_children(&mut cursor);
+    let mut value_args = args
+        .named_children(&mut cursor)
+        .filter(|arg| arg.kind() != "comment");
     let Some(pattern_arg) = value_args.next() else {
         return;
     };
@@ -2288,8 +2292,9 @@ fn glob_options_are_eager(options: Node, source: &[u8]) -> bool {
     let mut cursor = options.walk();
     options.named_children(&mut cursor).any(|prop| {
         // Only a `key: value` pair can carry a literal `true`; a shorthand
-        // (`{ eager }`), a spread (`{ ...opts }`) and a computed key
-        // (`{ ['eager']: true }`) are all distinct node kinds.
+        // (`{ eager }`) and a spread (`{ ...opts }`) are distinct node kinds. A
+        // computed key (`{ ['eager']: true }`) does form a pair — the key match
+        // below is what rejects it.
         if prop.kind() != "pair" {
             return false;
         }
@@ -4343,8 +4348,9 @@ fn oxc_glob_options_are_eager(options: &oxc_ast::ast::Argument) -> bool {
             return false;
         };
         // A computed key (`{ ['eager']: true }`) names no statically-known
-        // property here; tree-sitter models it as a distinct node kind, so
-        // skipping it keeps both extractors in step.
+        // property here, and its key parses as a plain `StringLiteral` — the
+        // computed flag is the only thing that rejects it, as the tree-sitter
+        // path's key match does.
         if prop.computed {
             return false;
         }
@@ -7732,6 +7738,7 @@ mod tests {
             ("import.meta.glob('./modules/*.ts', { eager: false })", true),
             ("import.meta.glob('./modules/*.ts', opts)", true),
             ("import.meta.glob('./modules/*.ts', { eager: true })", false),
+            ("import.meta.glob('./modules/*.ts', { 'eager': true })", false),
             ("import.meta.globEager('./modules/*.ts')", false),
         ] {
             let main_src = format!("declare const opts: any;\nexport const m = {call};\n");
@@ -7947,6 +7954,11 @@ mod tests {
         "declare const flag: boolean; const g11 = import.meta.glob('./mods/*.ts', { eager: flag });",
         "const g12 = import.meta.glob(['./a/*.ts', './b/*.ts'], { eager: true });",
         "const g13 = import.meta.glob('./mods/*.ts', { eager: true, import: 'default' });",
+        // an interleaved comment is a named child of the tree-sitter argument
+        // list but never an oxc `Argument`: both extractors must still read the
+        // pattern and the options from the same argument positions.
+        "const g14 = import.meta.glob('./mods/*.ts', /* opts */ { eager: true });",
+        "const g15 = import.meta.glob(/* pattern */ './mods/*.ts');",
         // --- exports ---
         "export * from './m';",
         "export * as ns from './m';",
