@@ -2176,7 +2176,7 @@ fn find_binding_type_before(node: Node, limit: usize, name: &str, source: &[u8])
     None
 }
 
-fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool {
+pub(crate) fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool {
     if pattern.kind() == "identifier" {
         return pattern.utf8_text(source).is_ok_and(|text| text == name);
     }

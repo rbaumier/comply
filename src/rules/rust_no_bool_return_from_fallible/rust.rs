@@ -56,7 +56,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_trait_impl;
+use crate::rules::rust_helpers::{is_in_trait_impl, pattern_contains_identifier};
 
 const KINDS: &[&str] = &["function_item"];
 
@@ -278,10 +278,16 @@ fn identifier_tail_is_computed(
 /// the second). A binding inside a nested block or closure is out of scope at
 /// `limit` and is not scanned. `None` when `block` declares no such binding.
 ///
-/// Only a plain name pattern (`let x`, `let mut x`) qualifies: under a
+/// Only a plain name pattern (`let x`, `let mut x`) resolves to a value: under a
 /// destructuring pattern (`let (a, x)`, `let Some(x)`) the initializer *holds*
 /// the bound value rather than being it, so judging the initializer would not
-/// judge `<name>`.
+/// judge `<name>`. Such a rebind is still the nearest binding, so it drops the
+/// earlier one to `None` — the tail is then unresolved and stays flagged, rather
+/// than resolving to a stale pre-shadow binding.
+///
+/// No self-reference guard is needed (unlike a bool-tracing resolver): the
+/// returned initializer is judged only by `expression_is_computed`, which never
+/// re-resolves an identifier, so `let x = x;` cannot recurse.
 fn nearest_let_initializer<'a>(
     block: tree_sitter::Node<'a>,
     limit: usize,
@@ -297,11 +303,13 @@ fn nearest_let_initializer<'a>(
         if child.kind() != "let_declaration" {
             continue;
         }
-        if child
-            .child_by_field_name("pattern")
-            .is_some_and(|pattern| pattern_binds_exactly(pattern, name, source))
-        {
+        let Some(pattern) = child.child_by_field_name("pattern") else {
+            continue;
+        };
+        if pattern_binds_exactly(pattern, name, source) {
             nearest = child.child_by_field_name("value");
+        } else if pattern_contains_identifier(pattern, name, source) {
+            nearest = None;
         }
     }
     nearest
@@ -1694,6 +1702,20 @@ mod tests {
             fn remove_entry(m: &mut HashMap<u64, u8>, k: u64) -> bool {\n\
                 let x = m.remove(&k).is_some();\n\
                 let x = false;\n\
+                x\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_identifier_tail_shadowed_by_destructuring_binding() {
+        // A later destructuring rebind of the tail name is the nearest binding,
+        // but its initializer holds the value rather than being it — unjudgeable,
+        // so the earlier computed binding does not exempt it.
+        let src = "\
+            fn remove_entry(m: &mut HashMap<u64, u8>, k: u64) -> bool {\n\
+                let x = m.remove(&k).is_some();\n\
+                let (x, _) = (false, 0);\n\
                 x\n\
             }";
         assert_eq!(run_on(src).len(), 1);
