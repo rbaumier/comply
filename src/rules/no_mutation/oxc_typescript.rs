@@ -828,6 +828,23 @@ mod tests {
     }
 
     #[test]
+    fn allows_property_assignment_on_object_literal_cast_builder_issue_7654() {
+        // Regression for rbaumier/comply#7654 — `{} as T` is a compile-time-only
+        // annotation over a fresh object literal, so an indexed write building it up
+        // in a loop stays exempt exactly like a bare `{}` builder.
+        let src = r#"
+            function getBaseURLs(items) {
+                const otherBaseURL = {} as Record<App.Service.OtherBaseURLKey, string>;
+                items.forEach((item) => {
+                    otherBaseURL[item.key] = item.url;
+                });
+                return otherBaseURL;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn still_flags_property_assignment_on_const_from_external_call() {
         // A `const` initialized from a function call (not an object literal /
         // spread) references external state — mutating it is still flagged.
@@ -1204,6 +1221,21 @@ mod tests {
     }
 
     #[test]
+    fn allows_reactive_object_mutation_through_as_cast_issue_7654() {
+        // Regression for rbaumier/comply#7654 — a `reactive({…}) as T` cast does not
+        // change the reactive proxy the factory returns, so property writes stay the
+        // intended Vue 3 reactivity path, same as an uncast `reactive(…)`.
+        let src = r#"
+            import { reactive } from 'vue'
+            const pagination = reactive({ page: 1, pageSize: 10 }) as PaginationProps;
+            function setPage(page) {
+                pagination.page = page;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn still_flags_property_mutation_on_non_reactive_call_const() {
         // Negative space: a const initialised by a non-reactive factory call is
         // not a reactive proxy — the property write stays flagged.
@@ -1448,6 +1480,25 @@ mod tests {
             state.items.push(1)
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_valtio_proxy_mutation_through_type_only_wrappers() {
+        // A `proxy({…}) as Store` cast or a `proxy({…})!` non-null assertion is
+        // transparent to the reactive Proxy the factory returns, so direct
+        // mutation stays the intended valtio update path.
+        let cast = r#"
+            import { proxy } from 'valtio'
+            const state = proxy({ n: 0 }) as Store;
+            state.n = 1;
+        "#;
+        assert!(run(cast).is_empty());
+        let non_null = r#"
+            import { proxy } from 'valtio'
+            const state = proxy({ n: 0 })!;
+            state.n = 1;
+        "#;
+        assert!(run(non_null).is_empty());
     }
 
     #[test]

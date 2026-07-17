@@ -860,10 +860,41 @@ mod tests {
     }
 
     #[test]
+    fn allows_property_assignment_on_object_literal_cast_builder_issue_7654() {
+        // Regression for rbaumier/comply#7654 — `{} as T` is a compile-time-only
+        // annotation over a fresh object literal, so indexed writes building it up
+        // in a loop stay exempt exactly like a bare `{}` builder.
+        let src = r#"
+            function getColorPalette(colors) {
+                const colorPaletteVar = {} as App.Theme.ThemePaletteColor;
+                colors.forEach((color) => {
+                    colorPaletteVar[color] = `rgb(0 0 0)`;
+                });
+                return colorPaletteVar;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn still_flags_property_assignment_on_function_parameter() {
         // A function parameter is external state, not a local object builder.
         let src = r#"
             function mutate(value) {
+                value.x = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_property_assignment_on_cast_external_call_result() {
+        // Negative space: peeling the `as T` cast must not over-exempt — the
+        // peeled initializer is a plain function call, not a fresh object literal,
+        // so it references external state and the mutation stays flagged.
+        let src = r#"
+            function f() {
+                const value = makeObj() as Config;
                 value.x = 1;
             }
         "#;
@@ -1796,6 +1827,23 @@ mod tests {
             import { shallowReactive } from 'vue'
             const state = shallowReactive({ n: 0 });
             state.n = 5;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_reactive_object_mutation_through_as_cast_issue_7654() {
+        // Regression for rbaumier/comply#7654 — a `reactive({…}) as T` cast does not
+        // change the reactive proxy the factory returns, so property writes stay the
+        // idiomatic Vue 3 reactivity-update path, same as an uncast `reactive(…)`.
+        let src = r#"
+            import { reactive } from 'vue'
+            function useTable() {
+                const pagination = reactive({ page: 1, pageSize: 10 }) as PaginationProps;
+                function setPage(page) {
+                    pagination.page = page;
+                }
+            }
         "#;
         assert!(run(src).is_empty());
     }
