@@ -1,13 +1,13 @@
 //! no-double-cast Rust backend — flag `x as u32 as u64` chained casts.
 //!
-//! A double cast whose inner cast target is a raw pointer type
-//! (`<expr> as *raw as <ptr|usize|...>`) is exempt: it is a pointer
-//! reinterpretation / address extraction (repr(transparent) reinterpret,
-//! byte-pointer, fn-pointer-to-address, FFI `c_void` erasure,
-//! `&T as *const T as *mut T` const-to-mut promotion), not a numeric
-//! "misaligned type" double cast. Rust forbids the single-step form in those
-//! cases, so the two-step chain is mandatory and has no `From`/`Into`
-//! alternative.
+//! A double cast whose chained-cast spine contains a raw-pointer cast at any
+//! link (`<expr> as *raw as <ptr|usize|...>`, including through a raw-pointer
+//! type *alias* such as `self as *const _ as void_ptr as usize`) is exempt: the
+//! `*raw` link proves a pointer reinterpretation / address extraction
+//! (repr(transparent) reinterpret, byte-pointer, fn-pointer-to-address, FFI
+//! `c_void` erasure, `&T as *const T as *mut T` const-to-mut promotion), not a
+//! numeric "misaligned type" double cast. Rust forbids the single-step form in
+//! those cases, so the chain is mandatory and has no `From`/`Into` alternative.
 //!
 //! The symmetric complement: an `<operand> as usize/isize as <int>` chain whose
 //! operand is not provably numeric is exempt. A raw pointer casts directly only
@@ -140,6 +140,27 @@ fn is_ptr_sized_int(ty: tree_sitter::Node, source: &[u8]) -> bool {
     ty.kind() == "primitive_type" && matches!(ty.utf8_text(source), Ok("usize") | Ok("isize"))
 }
 
+/// True when any cast in the `value`-spine of a chained-cast expression targets a
+/// syntactic raw-pointer type (`*const _` / `*mut _`). Starting from a
+/// `type_cast_expression`, descends through each `value` while it remains a
+/// `type_cast_expression`, inspecting every link's target `type`. A raw-pointer
+/// cast anywhere in the chain proves a pointer reinterpretation / address
+/// extraction — even when a raw-pointer type *alias* (`void_ptr`, an alias of
+/// `*mut c_void`) sits in a later link, since an alias parses as `type_identifier`,
+/// not `pointer_type`, so inspecting only the immediate inner link would miss it.
+fn chain_has_pointer_cast(cast: tree_sitter::Node) -> bool {
+    let mut current = cast;
+    loop {
+        if current.child_by_field_name("type").is_some_and(|ty| ty.kind() == "pointer_type") {
+            return true;
+        }
+        match current.child_by_field_name("value") {
+            Some(value) if value.kind() == "type_cast_expression" => current = value,
+            _ => return false,
+        }
+    }
+}
+
 /// Strip `parenthesized_expression` wrappers, returning the inner expression.
 fn peel_parens(node: tree_sitter::Node) -> tree_sitter::Node {
     if node.kind() == "parenthesized_expression"
@@ -240,12 +261,16 @@ crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnosti
     }
     let Some(inner_ty) = inner.child_by_field_name("type") else { return };
 
-    // A cast chained off a raw pointer (`<expr> as *raw as <ptr|usize|...>`) is a
-    // pointer reinterpretation / address extraction (repr(transparent) reinterpret,
-    // byte-pointer, fn-pointer-to-address, FFI `c_void` erasure), not a numeric
-    // "misaligned type" double cast. Rust forbids the single-step form, so the
-    // two-step chain is mandatory and has no `From`/`Into` alternative. Exempt it.
-    if inner_ty.kind() == "pointer_type" {
+    // Exempt when the chained-cast spine contains a raw-pointer cast at any link
+    // (`<expr> as *raw as <ptr|usize|...>`, including through a raw-pointer type
+    // alias like `self as *const _ as void_ptr as usize`): the `*raw` link proves
+    // the chain is a pointer reinterpretation / address extraction (repr(transparent)
+    // reinterpret, byte-pointer, fn-pointer-to-address, FFI `c_void` erasure), not a
+    // numeric "misaligned type" double cast. Rust forbids the single-step form, so
+    // the chain is mandatory and has no `From`/`Into` alternative. The walk starts at
+    // the immediate inner cast, so a numeric-to-pointer outer step
+    // (`x as usize as *mut c_void`, which needs no bridge) still fires.
+    if chain_has_pointer_cast(inner) {
         return;
     }
 
@@ -457,6 +482,37 @@ mod tests {
         // raw pointer, so the pointer-chain exemption does not apply — still a
         // suspicious double cast.
         assert_eq!(run_on("fn f(x: usize) { let _ = x as usize as *mut c_void; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_to_ptr_to_alias_to_usize_chain() {
+        // #7708, paradedb options.rs: `self as *const _ as void_ptr as usize`.
+        // `void_ptr` is a raw-pointer type alias (`*mut c_void`), so it parses as a
+        // `type_identifier`, not a `pointer_type`, and is the immediate inner link
+        // of the outer `as usize` cast. The syntactic `*const _` pointer cast that
+        // proves this is a mandatory address-extraction chain sits one link deeper,
+        // so the spine walk finds it. Rust forbids `self as usize` directly (E0606),
+        // so the pointer hop is compiler-mandated.
+        let src = "impl S { fn f(&self) -> usize { \
+                   let opts = self as *const _ as void_ptr as usize; opts } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mut_ref_to_ptr_to_alias_to_usize_chain() {
+        // A `*mut` variant: `&mut val as *mut _ as some_ptr as usize`. The `*mut _`
+        // link (two deep) exempts the whole chain despite the `some_ptr` alias link.
+        let src = "fn f() -> usize { &mut val as *mut _ as some_ptr as usize }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_non_pointer_alias_double_cast() {
+        // Negative-space guard: `a as AliasA as AliasB` has no syntactic
+        // `pointer_type` anywhere in the spine (both targets are `type_identifier`
+        // aliases), so the pointer-chain exemption must not catch it — a genuine
+        // suspicious double cast that still fires.
+        assert_eq!(run_on("fn f(a: T) -> AliasB { a as AliasA as AliasB }").len(), 1);
     }
 
     #[test]
