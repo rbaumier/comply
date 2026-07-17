@@ -491,6 +491,88 @@ fn is_async_method_of_contract_typed_object_literal(
     type_reference_is_object_literal_contract(&rt.type_annotation, method_name, semantic, source)
 }
 
+/// Check if the async function is the value of an assignment
+/// `<identifier>.<name> = async () => {...}` where the target identifier's binding
+/// carries an explicit named type annotation whose member `<name>` is a `Promise`
+/// contract. Reassigning the member must preserve its declared type: an `async`
+/// arrow returns `Promise<T>`, so dropping `async` would leave a `() => void`
+/// value that no longer satisfies the annotated `() => Promise<T>` member — the
+/// missing `await` is not a smell. This is the interface-typed-binding analog of
+/// `is_async_method_override_on_this` (a `this.<name>` reassignment tied to a
+/// same-class `async <name>()`), keyed on the binding's type annotation instead of
+/// the enclosing class.
+///
+/// The identifier is resolved to its binding by symbol resolution
+/// (reference → symbol → declarator), never by name, and the contract decision is
+/// delegated to `type_reference_is_object_literal_contract` — the same predicate
+/// the object-literal exemption uses — so the two stay identical: a same-file
+/// `interface`/object-`type` must declare `<name>` as `Promise`-returning; a
+/// namespaced type reference counts on its presence alone; a bare unresolved
+/// (imported-by-plain-name) type, a non-`Promise` member, a computed target
+/// (`obj[name] = ...`), a `this` target, or an identifier with no annotation all
+/// keep the diagnostic firing.
+fn is_async_assign_to_promise_typed_member(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    use oxc_ast::ast::{AssignmentTarget, Expression};
+
+    let nodes = semantic.nodes();
+    let parent = nodes.parent_node(func_node.id());
+    let AstKind::AssignmentExpression(assign) = parent.kind() else {
+        return false;
+    };
+    // The function must be the assigned value (RHS), not a sub-expression of the
+    // target.
+    if assign.right.span() != func_node.kind().span() {
+        return false;
+    }
+    // LHS must be `<identifier>.<name>` — a static member rooted at a plain
+    // identifier binding. A computed target is an
+    // `AssignmentTarget::ComputedMemberExpression` (not matched here), and a
+    // `this.<name>` target has a `ThisExpression` object handled by
+    // `is_async_method_override_on_this`.
+    let AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
+        return false;
+    };
+    let Expression::Identifier(object_ref) = &member.object else {
+        return false;
+    };
+    let property_name = member.property.name.as_str();
+
+    // Resolve the identifier to its binding declaration and read its explicit
+    // type annotation (`Script` in `const script: Script = ...`). An unresolved
+    // reference (a global with no binding), a binding that is not a
+    // `VariableDeclarator`, or one with no annotation all leave the function flagged.
+    let Some(ref_id) = object_ref.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let declarator = std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(decl) => Some(decl),
+            _ => None,
+        });
+    let Some(declarator) = declarator else {
+        return false;
+    };
+    let Some(annotation) = declarator.type_annotation.as_ref() else {
+        return false;
+    };
+    type_reference_is_object_literal_contract(
+        &annotation.type_annotation,
+        property_name,
+        semantic,
+        source,
+    )
+}
+
 /// True if `b` can appear inside a JS/TS identifier, used to require that an
 /// alias name occurs in a type's text as a standalone identifier rather than as
 /// a substring of a longer one (so `Unregister` is not matched inside
@@ -766,6 +848,20 @@ impl OxcCheck for Check {
             // dropping it would break every `await` call site. The matching
             // `async` method ties the reassignment to the method's type contract.
             if is_async_method_override_on_this(node, semantic) {
+                continue;
+            }
+
+            // Async function reassigned to `<identifier>.<name>` where the
+            // identifier's binding carries an explicit named type annotation whose
+            // member `<name>` is a `Promise` contract (`script.exec = async () =>
+            // {...}` with `script: Script` and `interface Script { exec: () =>
+            // Promise<void> }`). The annotation owns the contract exactly as an
+            // enclosing class's `async <name>()` does for a `this.<name>`
+            // reassignment: an async arrow returns `Promise<T>`, so dropping
+            // `async` would break the declared `() => Promise<T>` member type. A
+            // computed target, a non-`Promise` member, or an unannotated
+            // identifier stay flagged.
+            if is_async_assign_to_promise_typed_member(node, semantic, ctx.source) {
                 continue;
             }
 
@@ -1616,6 +1712,81 @@ mod tests {
         // return type has no interface contract — its object literal's async
         // method (no await, not a single forwarding call) stays flagged.
         let src = "const make = () => ({ async m() { const x = 1; return x; } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_async_assigned_to_promise_typed_interface_member() {
+        // Regression for rbaumier/comply#7631 — laurent22/joplin
+        // `packages/lib/migrations/27.ts`. The async arrow is assigned to
+        // `script.exec` where `script: Script` and the same-file `interface Script`
+        // declares `exec` as `() => Promise<void>`. Dropping `async` would make the
+        // arrow return `void`, not assignable to the interface's `Promise<void>`
+        // member, so `async` is mandatory even though the body never awaits.
+        let src = r#"interface Script { exec: () => Promise<void>; }
+        const script: Script = <Script>{};
+        script.exec = async () => {
+            Setting.setValue('markdown.plugin.softbreaks', Setting.value('markdown.softbreaks'));
+            Setting.setValue('markdown.plugin.typographer', Setting.value('markdown.typographer'));
+        };"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_assigned_to_namespaced_typed_member() {
+        // A namespaced (qualified) binding annotation cannot be a same-file
+        // top-level declaration, so — as with a class's imported base in
+        // `implements` — its presence alone is the Promise contract, mirroring the
+        // object-literal exemption's namespaced branch.
+        let src = r#"const svc: Modules.Service.Api = <any>{};
+        svc.run = async () => { doSync(); doMore(); };"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_assigned_to_non_promise_typed_member() {
+        // Negative space for #7631: the same-file interface declares the assigned
+        // member as `() => void`, not Promise-returning, so `async` carries no
+        // contract — the assignment stays flagged.
+        let src = r#"interface S { exec: () => void; }
+        const s: S = <S>{};
+        s.exec = async () => { doSync(); doMore(); };"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_assigned_to_untyped_binding_member() {
+        // Negative space for #7631: the target identifier has no type annotation,
+        // so there is no interface contract mandating `async` — stays flagged.
+        let src = r#"const obj = {};
+        obj.method = async () => { doSync(); doMore(); };"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_assigned_to_computed_member() {
+        // Negative space for #7631: a computed assignment target
+        // (`api["run"] = ...`) is an `AssignmentTarget::ComputedMemberExpression`,
+        // not a static member, so it is not covered even when the binding is
+        // Promise-typed.
+        let src = r#"interface Api { run: () => Promise<void>; }
+        const api: Api = <Api>{};
+        api["run"] = async () => { doSync(); doMore(); };"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_assigned_to_bare_imported_interface_member() {
+        // Negative space for #7631: the binding annotation is a BARE identifier
+        // (`Script`) not declared in this file (imported by its plain name). As with
+        // the object-literal exemption's bare-identifier branch, an unresolved bare
+        // type reference is not treated as a contract — comply is single-file and
+        // cannot confirm the member is Promise-returning — so the assignment stays
+        // flagged. A namespaced reference, being structurally unresolvable, is the
+        // one imported shape exempted on presence.
+        let src = r#"import { Script } from './types';
+        const script: Script = <Script>{};
+        script.exec = async () => { doSync(); doMore(); };"#;
         assert_eq!(run_on(src).len(), 1);
     }
 }
