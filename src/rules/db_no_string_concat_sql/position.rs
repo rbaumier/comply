@@ -6,10 +6,13 @@
 //! names a relation or column cannot be a bind parameter, and interpolating it
 //! is the only possible form — not an injection the rule should flag.
 
-/// Keywords whose following token is a SQL identifier (relation or, for
-/// `UPDATE`/`TABLE`, the target table). A placeholder right after one of these
-/// names a relation/column and cannot be parameterized.
-const IDENTIFIER_KEYWORDS: &[&str] = &["FROM", "JOIN", "INTO", "UPDATE", "TABLE"];
+/// Keywords whose following token is a SQL identifier, not a value: a relation
+/// (`FROM`/`JOIN`/`INTO`), the target table (`UPDATE`/`TABLE`), or the
+/// projection column list (`SELECT`). A placeholder right after one of these
+/// names an identifier — a relation, table, or column list — which cannot be a
+/// bind parameter (`SELECT $1 FROM t` selects a literal, never a dynamic column
+/// list), so interpolating it is the only possible form.
+const IDENTIFIER_KEYWORDS: &[&str] = &["SELECT", "FROM", "JOIN", "INTO", "UPDATE", "TABLE"];
 
 /// Whether the placeholder beginning at `brace_index` in `sql_text` sits in an
 /// identifier position (a table/column name) rather than a value position.
@@ -113,6 +116,41 @@ mod tests {
     fn keyword_match_is_case_insensitive() {
         assert!(is_ident_pos("select * from {t}"));
         assert!(is_ident_pos("delete From {t}"));
+    }
+
+    #[test]
+    fn select_projection_column_list_is_identifier_position() {
+        // The SELECT projection column list is a set of column identifiers, not
+        // a value: `SELECT $1 FROM t` selects a literal, never a dynamic column
+        // list, so an interpolated column list right after SELECT is the only
+        // possible form — an identifier position like FROM/JOIN/INTO/UPDATE/TABLE.
+        assert!(is_ident_pos("SELECT {} FROM t"));
+        assert!(is_ident_pos("SELECT {cols} FROM script WHERE path = $1"));
+        assert!(is_ident_pos("select {} from t"));
+    }
+
+    #[test]
+    fn value_after_select_projection_is_still_value_position() {
+        // A value placeholder later in the same query is a value position even
+        // though the query starts with SELECT — the projection exemption only
+        // covers a placeholder immediately after SELECT.
+        assert!(!is_ident_pos("SELECT col FROM t WHERE x = {val}"));
+        // A second projection element after a comma is not immediately after
+        // SELECT, so it stays a (conservatively flagged) value position.
+        assert!(!is_ident_pos("SELECT col, {val} FROM t"));
+        // A scalar behind an intervening keyword stays a value position.
+        assert!(!is_ident_pos("SELECT CASE WHEN x THEN {val} END FROM t"));
+    }
+
+    #[test]
+    fn select_projection_and_from_both_identifier_position() {
+        // `SELECT {} FROM {}` — both the projection list and the table name are
+        // identifier positions.
+        assert!(all_substitutions_in_identifier_position(&[
+            "SELECT ",
+            " FROM ",
+            ""
+        ]));
     }
 
     #[test]

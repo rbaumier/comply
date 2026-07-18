@@ -315,4 +315,49 @@ mod tests {
         let src = r#"fn f(t: &str, user_id: i32) { let q = format!("SELECT * FROM {t} WHERE id = {user_id}"); }"#;
         assert_eq!(run_on(src).len(), 1);
     }
+
+    // Issue #7780 — the SELECT projection column list is a set of column
+    // identifiers, not a value. Column identifiers cannot be bind parameters
+    // (there is no `SELECT $1 FROM t` selecting a dynamic column list), so
+    // interpolating one is the only possible form, mirroring the FROM slot of
+    // the same string.
+    #[test]
+    fn does_not_flag_select_projection_column_list() {
+        let src = r#"fn f(select_clause: &str, table: &str) { let q = format!("SELECT {} FROM {}", select_clause, table); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_select_projection_with_parameterized_where() {
+        // The projection `{}` is the only interpolation; the WHERE values are
+        // already bind parameters (`$1`, `$2`), so nothing here is a value slot.
+        let src = r#"fn f() { let q = format!("SELECT {} FROM script WHERE path = $1 AND workspace_id = $2 AND archived = false", SCRIPT_COLUMNS); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #7780 guard — the SELECT projection exemption must not leak into value
+    // positions elsewhere in the query.
+    #[test]
+    fn flags_value_in_where_after_select_star() {
+        let src = r#"fn f(table: &str) { let q = format!("SELECT * FROM pg_class WHERE relname = '{}'", table); }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_value_in_values_list() {
+        let src = r#"fn f(values_str: &str) { let q = format!("INSERT INTO t VALUES ({})", values_str); }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_value_in_where_with_static_projection() {
+        let src = r#"fn f(val: i32) { let q = format!("SELECT col FROM t WHERE x = {}", val); }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_value_in_set_clause() {
+        let src = r#"fn f(val: i32) { let q = format!("UPDATE t SET x = {} WHERE id = 1", val); }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
 }
