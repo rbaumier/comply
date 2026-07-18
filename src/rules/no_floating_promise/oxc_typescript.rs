@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_semantic::SymbolId;
+use oxc_semantic::{NodeId, SymbolId};
 use oxc_span::GetSpan;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -44,7 +44,9 @@ impl OxcCheck for Check {
             if has_promise_handler(call) {
                 continue;
             }
-            if is_promise_combinator(call) || evidence.call_is_promise(call, ctx.source, semantic) {
+            if is_promise_combinator(call)
+                || evidence.call_is_promise(call, node.id(), ctx.source, semantic)
+            {
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, call.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -73,10 +75,18 @@ impl OxcCheck for Check {
 /// is never flagged.
 struct AsyncEvidence {
     /// Receiver-method shapes (`"<receiver-text>.<method>"`) that are `await`ed or
-    /// `.then`/`.catch`/`.finally`-chained somewhere in the file. Seeing the same
-    /// shape used as an awaited/handled promise proves that method returns a
-    /// Promise on that receiver, so an un-awaited sibling call genuinely floats.
+    /// `.then`/`.catch`/`.finally`-chained somewhere in the file, for receivers
+    /// that are NOT rooted at `this`. Seeing the same shape used as an
+    /// awaited/handled promise proves that method returns a Promise on that
+    /// receiver, so an un-awaited sibling call genuinely floats.
     awaited_member_shapes: HashSet<String>,
+    /// Awaited/handled `this.`-rooted shapes, each paired with the `NodeId` of
+    /// its nearest enclosing class. `this` means a different receiver in each
+    /// class, so keying by receiver text alone would let one class's awaited
+    /// evidence match a sibling class's identically-named call; scoping to the
+    /// enclosing class keeps sibling classes distinct — mirroring the per-symbol
+    /// scoping already applied to bare async-function calls.
+    awaited_this_shapes: HashSet<(NodeId, String)>,
     /// `SymbolId`s of functions declared `async` in this file (`async function f`
     /// / `const f = async () => ...`). A bare `f()` statement whose callee
     /// reference resolves to one of these symbols floats the returned promise.
@@ -88,6 +98,7 @@ struct AsyncEvidence {
 impl AsyncEvidence {
     fn collect(semantic: &oxc_semantic::Semantic, source: &str) -> Self {
         let mut awaited_member_shapes = HashSet::new();
+        let mut awaited_this_shapes = HashSet::new();
         let mut async_function_symbols = HashSet::new();
 
         for node in semantic.nodes() {
@@ -97,7 +108,14 @@ impl AsyncEvidence {
                     if let Expression::CallExpression(call) = &await_expr.argument
                         && let Some(shape) = member_call_shape(call, source)
                     {
-                        awaited_member_shapes.insert(shape);
+                        match classify_member_shape(call, shape, node.id(), semantic) {
+                            ShapeEvidence::ScopedToClass(class_id, shape) => {
+                                awaited_this_shapes.insert((class_id, shape));
+                            }
+                            ShapeEvidence::ByText(shape) => {
+                                awaited_member_shapes.insert(shape);
+                            }
+                        }
                     }
                 }
                 // `<expr>.then(...)` / `.catch(...)` / `.finally(...)` — the inner
@@ -106,7 +124,14 @@ impl AsyncEvidence {
                     if let Some(inner) = promise_handler_inner_call(call)
                         && let Some(shape) = member_call_shape(inner, source)
                     {
-                        awaited_member_shapes.insert(shape);
+                        match classify_member_shape(inner, shape, node.id(), semantic) {
+                            ShapeEvidence::ScopedToClass(class_id, shape) => {
+                                awaited_this_shapes.insert((class_id, shape));
+                            }
+                            ShapeEvidence::ByText(shape) => {
+                                awaited_member_shapes.insert(shape);
+                            }
+                        }
                     }
                 }
                 AstKind::Function(func) => {
@@ -128,6 +153,7 @@ impl AsyncEvidence {
 
         Self {
             awaited_member_shapes,
+            awaited_this_shapes,
             async_function_symbols,
         }
     }
@@ -135,10 +161,13 @@ impl AsyncEvidence {
     /// True when `call` has real evidence of returning a Promise: it is a bare
     /// call whose callee reference resolves to a locally-declared `async` function
     /// symbol, or a `receiver.method(...)` whose same shape is awaited /
-    /// promise-handled elsewhere in the file.
+    /// promise-handled elsewhere in the file. `stmt_node_id` is the id of the
+    /// statement node holding `call`, used to resolve the enclosing class when the
+    /// receiver is rooted at `this`.
     fn call_is_promise(
         &self,
         call: &CallExpression,
+        stmt_node_id: NodeId,
         source: &str,
         semantic: &oxc_semantic::Semantic,
     ) -> bool {
@@ -148,8 +177,17 @@ impl AsyncEvidence {
                 .get()
                 .and_then(|ref_id| semantic.scoping().get_reference(ref_id).symbol_id())
                 .is_some_and(|symbol_id| self.async_function_symbols.contains(&symbol_id)),
-            Expression::StaticMemberExpression(_) => member_call_shape(call, source)
-                .is_some_and(|shape| self.awaited_member_shapes.contains(&shape)),
+            Expression::StaticMemberExpression(_) => {
+                let Some(shape) = member_call_shape(call, source) else {
+                    return false;
+                };
+                match classify_member_shape(call, shape, stmt_node_id, semantic) {
+                    ShapeEvidence::ScopedToClass(class_id, shape) => {
+                        self.awaited_this_shapes.contains(&(class_id, shape))
+                    }
+                    ShapeEvidence::ByText(shape) => self.awaited_member_shapes.contains(&shape),
+                }
+            }
             _ => false,
         }
     }
@@ -165,6 +203,67 @@ fn member_call_shape(call: &CallExpression, source: &str) -> Option<String> {
     let obj_span = object.span();
     let obj_text = &source[obj_span.start as usize..obj_span.end as usize];
     Some(format!("{obj_text}.{}", member.property.name.as_str()))
+}
+
+/// Which evidence bucket a member-call `shape` belongs to. `this` denotes a
+/// different receiver in each class, so a `this.`-rooted shape is scoped to the
+/// id of its nearest enclosing class; every other receiver keeps its plain text
+/// key. Both collection and lookup route through here, so the two sides always
+/// agree on the bucket.
+enum ShapeEvidence {
+    /// A `this.`-rooted shape, scoped to its nearest enclosing class node.
+    ScopedToClass(NodeId, String),
+    /// Any non-`this` receiver (or a `this.` shape with no enclosing class),
+    /// keyed by receiver text alone.
+    ByText(String),
+}
+
+/// Classify `shape` for `call` located under `node_id`: a `this.`-rooted call
+/// with an enclosing class is scoped to that class; anything else falls back to
+/// the text key.
+fn classify_member_shape(
+    call: &CallExpression,
+    shape: String,
+    node_id: NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> ShapeEvidence {
+    match member_call_receiver_is_this(call)
+        .then(|| nearest_enclosing_class_id(node_id, semantic))
+        .flatten()
+    {
+        Some(class_id) => ShapeEvidence::ScopedToClass(class_id, shape),
+        None => ShapeEvidence::ByText(shape),
+    }
+}
+
+/// True when the root receiver of a static-member call is `this` — i.e. the
+/// shape is anchored to `this` (`this.m()`, `this.p.m()`, `this.p[i].m()`, ...).
+fn member_call_receiver_is_this(call: &CallExpression) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let mut current = peel_parens(&member.object);
+    loop {
+        match current {
+            Expression::ThisExpression(_) => return true,
+            Expression::StaticMemberExpression(m) => current = peel_parens(&m.object),
+            Expression::ComputedMemberExpression(m) => current = peel_parens(&m.object),
+            _ => return false,
+        }
+    }
+}
+
+/// `NodeId` of the nearest enclosing `class` for `node_id`, or `None` when the
+/// node is not inside a class.
+fn nearest_enclosing_class_id(
+    node_id: NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<NodeId> {
+    semantic
+        .nodes()
+        .ancestors(node_id)
+        .find(|ancestor| matches!(ancestor.kind(), AstKind::Class(_)))
+        .map(|ancestor| ancestor.id())
 }
 
 /// When `call` is `<inner>.then(...)` / `.catch(...)` / `.finally(...)`, return
@@ -483,6 +582,74 @@ async function run() {
   await db.save(a);
   db.save(b);
   doc.save();
+}
+";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- `this.`-rooted shapes are scoped to their enclosing class, so sibling
+    // classes sharing a method name do not leak awaited evidence to each other ---
+
+    #[test]
+    fn allows_sync_this_calls_when_async_sibling_class_shares_method_names() {
+        // Issue #7797: two classes in one file share method names on a `this.`
+        // receiver — one sync (`: void`), one async. The async class awaits its
+        // own methods; that evidence must not leak across the class boundary and
+        // implicate the sync class's identically-named `this.` calls.
+        let src = "\
+class SyncCrawler {
+  crawlObject(): void {
+    this.crawlObject();
+    this.helper();
+  }
+  helper(): void {}
+}
+class AsyncCrawler {
+  async crawlObject(): Promise<void> {
+    await this.crawlObject();
+    await this.helper();
+  }
+  async helper(): Promise<void> {}
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_floating_this_call_in_async_class_despite_sync_sibling() {
+        // The async class awaits `this.helper()` once (proving it returns a
+        // Promise in *this* class) and floats it once — the floating call still
+        // flags. The sync sibling sharing the name is untouched: one diagnostic.
+        let src = "\
+class SyncCrawler {
+  crawlObject(): void {
+    this.helper();
+  }
+  helper(): void {}
+}
+class AsyncCrawler {
+  async crawlObject(): Promise<void> {
+    await this.helper();
+    this.helper();
+  }
+  async helper(): Promise<void> {}
+}
+";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_floating_this_call_matching_same_class_awaited_evidence() {
+        // Class-scoping must not be too coarse: within one class, `this.load()`
+        // is awaited once and floated once — the same-class evidence still
+        // matches the floating sibling.
+        let src = "\
+class Repo {
+  async sync(): Promise<void> {
+    await this.load();
+    this.load();
+  }
+  async load(): Promise<void> {}
 }
 ";
         assert_eq!(run_on(src).len(), 1);
