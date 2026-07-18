@@ -26,9 +26,13 @@
 //! Four further usage-context exemptions, because `computed()` is read-only:
 //! - A constant RHS (`''`, `0`, `true`, ...) is a reset on a trigger, not a
 //!   derivation; `computed()` would freeze the ref to that constant.
-//! - A target ref assigned at another site in the file is mutable interactive
-//!   state, not a derived value; converting it to `computed()` would break the
-//!   other assignment.
+//! - A target ref written at another site in the file is mutable interactive
+//!   state, not a derived value; converting it to `computed()` would break that
+//!   write. Both reassignment (`<ident>.value = …` at a second site) and in-place
+//!   mutation of its contents count as such a write: a mutating array/object
+//!   method call (`<ident>.value.push(…)` / `.splice(…)` / ...), an element write
+//!   (`<ident>.value[i] = …`), or a property write (`<ident>.value.k = …`). A
+//!   read-only `computed()` cannot be pushed into or edited in place.
 //! - A target ref bound by `v-model` in the template is two-way interactive
 //!   state: the user's input writes its `.value` too — a second write site the
 //!   textual assignment scan can't see (it appears as `v-model="ref"`, never as
@@ -90,6 +94,16 @@ impl TextCheck for Check {
                 // interactive state, not a derived value; `computed()` is
                 // read-only and would break it.
                 if value_assignment_count(src, &ident) >= 2 {
+                    continue;
+                }
+                // A ref whose contents are mutated in place at any site
+                // (`<ident>.value.push(…)`, an element write, or a property
+                // write) is also mutable interactive state. One such site
+                // suffices: it can never be the watch body being analysed, which
+                // is a bare `<ident>.value = …` reassignment, so this signal is
+                // always "another write site". A read-only `computed()` can't be
+                // pushed into or edited in place, so it can't replace the ref.
+                if has_in_place_mutation(src, &ident) {
                     continue;
                 }
                 // A ref bound by `v-model` in the template is two-way
@@ -356,14 +370,117 @@ fn value_assignment_count(src: &str, ident: &str) -> usize {
         let before_ok = pos == 0
             || !matches!(bytes[pos - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$' | b'.');
         let after = src[pos + needle.len()..].trim_start();
-        let is_assign =
-            after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>");
-        if before_ok && is_assign {
+        if before_ok && is_plain_assignment(after) {
             count += 1;
         }
         from = pos + needle.len();
     }
     count
+}
+
+/// Returns true when `after` (the text following an `<ident>.value`, leading
+/// whitespace already trimmed) begins a plain assignment `=`, not a comparison
+/// (`==`/`===`) or an arrow (`=>`). Compound operators (`+=`, `<=`, ...) carry
+/// their operator *before* the `=`, so they never reach this predicate with a
+/// leading `=`.
+fn is_plain_assignment(after: &str) -> bool {
+    after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>")
+}
+
+/// Mutating array/object methods that write through `<ident>.value` in place. A
+/// call to one of these on the ref's contents proves the ref holds mutable
+/// interactive state a read-only `computed()` can't replace. Read-only methods
+/// (`map`/`filter`/`slice`/`find`/`toFixed`/`length`/...) are deliberately
+/// excluded so a pure derivation that merely *reads* its value stays flagged.
+const MUTATING_METHODS: &[&str] = &[
+    "push",
+    "splice",
+    "pop",
+    "shift",
+    "unshift",
+    "sort",
+    "reverse",
+    "fill",
+    "copyWithin",
+];
+
+/// Returns true when `src` mutates `<ident>.value` in place at any site — a
+/// write mode distinct from the bare `<ident>.value = …` reassignment
+/// `value_assignment_count` sees. Three shapes count:
+/// - a mutating-method call: `<ident>.value.push(` / `.splice(` / ... (see
+///   `MUTATING_METHODS`), never a read-only method like `.map(`/`.toFixed(`;
+/// - an element write: `<ident>.value[…] = …`;
+/// - a property write: `<ident>.value.<prop> = …`.
+///
+/// The match requires a non-identifier char before `ident` (so `overview.value`
+/// doesn't match `view`), and excludes comparisons (`==`/`===`) and arrows
+/// (`=>`) via `is_plain_assignment`. Any single such site is proof the ref is
+/// mutable interactive state.
+fn has_in_place_mutation(src: &str, ident: &str) -> bool {
+    let needle = format!("{ident}.value");
+    let bytes = src.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = src[from..].find(&needle) {
+        let pos = from + rel;
+        from = pos + needle.len();
+        let before_ok = pos == 0
+            || !matches!(
+                bytes[pos - 1],
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$' | b'.'
+            );
+        if !before_ok {
+            continue;
+        }
+        let after = src[pos + needle.len()..].trim_start();
+        if let Some(rest) = after.strip_prefix('.') {
+            // `<ident>.value.<member>` — a mutating method call or property write.
+            let rest = rest.trim_start();
+            let name_end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+                .unwrap_or(rest.len());
+            let member = &rest[..name_end];
+            if member.is_empty() {
+                continue;
+            }
+            let tail = rest[name_end..].trim_start();
+            if tail.starts_with('(') {
+                if MUTATING_METHODS.contains(&member) {
+                    return true;
+                }
+            } else if is_plain_assignment(tail) {
+                return true;
+            }
+        } else if after.starts_with('[') {
+            // `<ident>.value[…] = …` — an element write (not a `[…]` read).
+            if let Some(close) = matching_bracket(after) {
+                let tail = after[close + 1..].trim_start();
+                if is_plain_assignment(tail) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Returns the byte offset of the `]` matching the `[` at the start of `s`,
+/// tracking nested bracket depth. `None` when unbalanced or `s` does not open
+/// with `[`.
+fn matching_bracket(s: &str) -> Option<usize> {
+    let mut depth: i32 = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Returns true when `src` contains a `v-model` directive bound to exactly
@@ -957,6 +1074,65 @@ mod tests {
                    <template>\n\
                    <input type=\"checkbox\" v-model=\"checkAllOther\" />\n\
                    </template>";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_mutated_in_place_via_push_and_splice() {
+        // #7740: `tags` is prop-synced local list state — the watch re-seeds it,
+        // but the component mutates the SAME ref in place on user edits. A
+        // read-only `computed()` can't be pushed into.
+        let src = "const tags = ref(props.modelValue)\n\
+                   function add(value) {\n  tags.value.push(value)\n}\n\
+                   function remove(index) {\n  tags.value.splice(index, 1)\n}\n\
+                   watch(() => props.modelValue, (newValue) => {\n\
+                   tags.value = newValue\n\
+                   })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ref_mutated_in_place_via_element_write() {
+        let src = "const xs = ref([])\n\
+                   xs.value[0] = 1\n\
+                   watch(src, (n) => {\n  xs.value = n\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ref_mutated_in_place_via_property_write() {
+        let src = "const o = ref({})\n\
+                   o.value.foo = 1\n\
+                   watch(src, (n) => {\n  o.value = n\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_pure_derivation_with_no_in_place_mutation() {
+        // No `.push`/element/property write to `doubled.value` anywhere: it's a
+        // pure derivation, so the in-place-mutation exemption must not fire.
+        let src = "const doubled = ref(0)\n\
+                   watch(() => props.n, (n) => {\n  doubled.value = n * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_only_a_read_only_method_reads_the_value() {
+        // `.toFixed(` is a read-only method, not a mutation; it must not exempt
+        // a ref that is otherwise a pure derivation.
+        let src = "const d = ref(0)\n\
+                   const y = d.value.toFixed(2)\n\
+                   watch(src, (n) => {\n  d.value = n\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_element_access_is_a_read_not_a_write() {
+        // `xs.value[0]` read into a const is not an element write; a pure
+        // derivation target stays flagged.
+        let src = "const xs = ref([])\n\
+                   const first = xs.value[0]\n\
+                   watch(src, (n) => {\n  xs.value = n\n})";
         assert_eq!(run(src).len(), 1);
     }
 
