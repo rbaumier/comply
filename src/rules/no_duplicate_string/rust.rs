@@ -104,6 +104,49 @@ pub(super) fn is_cfg_macro_arg(node: tree_sitter::Node<'_>, source: &[u8]) -> bo
     false
 }
 
+/// True when `node` is a string literal lexically inside a `#[ ... ]`
+/// attribute that itself sits inside a function-like macro
+/// invocation's token tree — e.g. a struct field's
+/// `#[serde(skip_serializing_if = "Option::is_none")]` passed to a
+/// struct-generating macro like `config_struct!( ... )`. tree-sitter tokenizes
+/// macro-invocation arguments as raw `token_tree`s, so the attribute is not
+/// parsed as an `attribute_item` and the string has no `attribute_item`
+/// ancestor; this is the macro-invocation analogue of the `attribute_item` arm
+/// in `should_ignore_string_node`. The shape is recognized structurally by
+/// ascending `token_tree` wrappers and matching an ancestor that is a
+/// `[ ... ]` bracket group whose immediately-preceding sibling token is `#`.
+/// Such a value is a compiler-mandated inline attribute literal that cannot be
+/// hoisted to a `const`, so it must not count toward the duplicate tally. A
+/// `[ ... ]` group *not* preceded by `#` (an array literal in macro-argument
+/// position) is left subject to the count.
+pub(super) fn is_macro_attribute_arg(node: tree_sitter::Node<'_>) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() != "token_tree" {
+            return false;
+        }
+        if is_hash_prefixed_bracket_group(parent) {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// True when `token_tree` is a `[ ... ]` bracket group immediately preceded by
+/// a `#` marker token — the `#[ ... ]` attribute shape as it
+/// appears among raw macro tokens. The opening `[` is the group's first child;
+/// the `#` is an anonymous sibling token directly before the group.
+fn is_hash_prefixed_bracket_group(token_tree: tree_sitter::Node<'_>) -> bool {
+    let opens_with_bracket = token_tree
+        .child(0)
+        .is_some_and(|delimiter| delimiter.kind() == "[");
+    opens_with_bracket
+        && token_tree
+            .prev_sibling()
+            .is_some_and(|marker| marker.kind() == "#")
+}
+
 /// True when `node` sits inside a `macro_rules!` definition body. The arm
 /// bodies of a `macro_definition` are raw token trees: a string literal there
 /// is template code spliced into every expansion (typically a `concat!`
@@ -555,6 +598,48 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_serde_skip_serializing_if_in_config_macro() {
+        // The issue's FP (moonrepo/moon): structs generated via a
+        // `config_struct!( ... )` macro carry `#[serde(...)]` field attributes.
+        // tree-sitter tokenizes the macro arguments as a raw `token_tree`, so
+        // `"Option::is_none"` has no `attribute_item` ancestor — but it is a
+        // serde attribute argument that must be an inline literal and cannot be
+        // hoisted to a `const`, exactly like a real `#[serde(...)]` attribute.
+        let src = r#"
+            config_struct!(
+                pub struct S {
+                    #[serde(default, skip_serializing_if = "Option::is_none")]
+                    a: Option<i32>,
+                    #[serde(default, skip_serializing_if = "Option::is_none")]
+                    b: Option<i32>,
+                    #[serde(default, skip_serializing_if = "Option::is_none")]
+                    c: Option<i32>,
+                    #[serde(default, skip_serializing_if = "Option::is_none")]
+                    d: Option<i32>
+                }
+            );
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_literal_in_macro_arg() {
+        // Precision for the `#` marker: only a `[ ... ]` group preceded by `#`
+        // (the attribute shape) is exempt. A plain array literal in
+        // macro-argument position is a `[ ... ]` group with no `#` marker, so
+        // its repeated elements stay extractable duplicates.
+        let src = r#"
+            my_macro!([
+                "duplicated-value",
+                "duplicated-value",
+                "duplicated-value",
+                "duplicated-value"
+            ]);
+        "#;
+        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
