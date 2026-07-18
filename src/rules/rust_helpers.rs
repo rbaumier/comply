@@ -256,6 +256,51 @@ fn is_thread_spawn_fn(text: &str) -> bool {
         || text.ends_with("rayon::spawn")
 }
 
+/// True if `spawn_call`'s closure argument hosts its own Tokio runtime: the
+/// closure body drives `block_on(..)`, constructs a runtime (`Runtime::new(..)`),
+/// or builds one (`runtime::Builder::…build()`). Such a `std::thread::spawn`
+/// owns a dedicated runtime on its own OS thread and cannot be replaced by
+/// `tokio::spawn` (which schedules on the current runtime) or
+/// `tokio::task::spawn_blocking` (a capped pool for short sync calls).
+///
+/// `rust-thread-spawn-in-async` skips a spawn matched by this predicate;
+/// `rust-block-on-in-async` recognises the inverse — a `block_on` lexically
+/// inside such a closure — so the two rules stay consistent on this pattern.
+/// The `block_on` signal uses the same final-segment match as that sibling.
+pub fn spawn_closure_hosts_runtime(spawn_call: Node, source: &[u8]) -> bool {
+    let Some(args) = spawn_call.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    args.named_children(&mut cursor)
+        .filter(|child| child.kind() == "closure_expression")
+        .any(|closure| subtree_drives_runtime(closure, source))
+}
+
+/// True if any `call_expression` in `node`'s subtree drives a Tokio runtime.
+/// Recurses the whole subtree so the signal is found through nested blocks,
+/// `let`-`else`, and match arms.
+fn subtree_drives_runtime(node: Node, source: &[u8]) -> bool {
+    if node.kind() == "call_expression" && call_drives_runtime(node, source) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| subtree_drives_runtime(child, source))
+}
+
+/// True if `call`'s function path ends in `block_on` or `Runtime::new`, or is a
+/// `runtime::Builder::…build()` chain — the shapes that drive or construct a
+/// Tokio runtime.
+fn call_drives_runtime(call: Node, source: &[u8]) -> bool {
+    let Some(name) = crate::rules::call_expression::call_function_name(call, source) else {
+        return false;
+    };
+    name.ends_with("block_on")
+        || name.ends_with("Runtime::new")
+        || (name.contains("runtime::Builder") && name.ends_with("build"))
+}
+
 /// If `node` is a `Result<T, E>` `generic_type`, return its second
 /// positional type argument (the error type `E`). Returns `None` for
 /// any other node, or for `Result<T>` aliases like `io::Result<T>`
