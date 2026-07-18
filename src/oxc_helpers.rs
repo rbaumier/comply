@@ -3589,14 +3589,16 @@ const VUE_DEEP_REACTIVE_FACTORIES: &[&str] = &["reactive"];
 /// write reaches a raw object and is a plain-object mutation.
 const VUE_SHALLOW_REACTIVE_FACTORIES: &[&str] = &["shallowReactive"];
 
-/// Vue 3 ref-wrapper type-annotation names. A function parameter annotated with
-/// one of these receives a `Ref<T>` whose `.value` property is the intended
-/// mutation point, exactly like a locally-created `ref()` binding: the caller
-/// produced the ref elsewhere, so `param.value = x` is a reactive write, not a
-/// plain object-property mutation. The match is on the ref-wrapper name only, so
-/// a plain `{ value: T }`-typed parameter stays flagged.
-const VUE_REF_TYPE_NAMES: &[&str] =
-    &["Ref", "ShallowRef", "ComputedRef", "WritableComputedRef", "ModelRef"];
+/// Vue 3 *writable* ref-wrapper type-annotation names. A binding declared with
+/// one of these holds a ref whose `.value` is the intended, assignable mutation
+/// point, exactly like a locally-created `ref()` binding: the caller produced the
+/// ref elsewhere, so `binding.value = x` is a reactive write, not a plain
+/// object-property mutation. The read-only `ComputedRef` is excluded: a
+/// `computed(getter)` value's `.value` is not assignable, so writing it is a
+/// genuine error the rule keeps flagging. `WritableComputedRef` (from
+/// `computed({ get, set })`) and `ModelRef` (from `defineModel`) are writable.
+const VUE_WRITABLE_REF_TYPE_NAMES: &[&str] =
+    &["Ref", "ShallowRef", "WritableComputedRef", "ModelRef"];
 
 /// True when `ident` resolves to a `const`/`let` binding initialised by one of
 /// `factories`, where the factory is Vue's. Resolves the binding via
@@ -3685,31 +3687,250 @@ pub fn reference_resolves_to_no_local_binding(
     semantic.scoping().get_reference(ref_id).symbol_id().is_none()
 }
 
-/// The final identifier of a `TSTypeReference`'s name — `Ref` for `Ref<T>` and
-/// for a qualified `Vue.Ref<T>` (final segment). `None` for a non-reference type
-/// or a `this`-qualified name.
-fn ref_type_reference_name<'a>(ty: &'a oxc_ast::ast::TSType<'a>) -> Option<&'a str> {
+/// The type-name identifier of a *writable* Vue ref annotation — `Ref` for
+/// `Ref<T>`, and likewise `ShallowRef`/`WritableComputedRef`/`ModelRef` (see
+/// [`VUE_WRITABLE_REF_TYPE_NAMES`]). `None` for any other type, for the read-only
+/// `ComputedRef`, and for a qualified (`Vue.Ref`) or `this`-qualified name: the
+/// exemption is restricted to a bare ref-wrapper reference whose import
+/// provenance a caller can resolve.
+fn writable_vue_ref_type_ident<'a>(
+    ty: &'a oxc_ast::ast::TSType<'a>,
+) -> Option<&'a oxc_ast::ast::IdentifierReference<'a>> {
     use oxc_ast::ast::{TSType, TSTypeName};
     let TSType::TSTypeReference(tref) = ty else {
         return None;
     };
-    match &tref.type_name {
-        TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
-        TSTypeName::QualifiedName(q) => Some(q.right.name.as_str()),
-        TSTypeName::ThisExpression(_) => None,
+    let TSTypeName::IdentifierReference(id) = &tref.type_name else {
+        return None;
+    };
+    VUE_WRITABLE_REF_TYPE_NAMES
+        .contains(&id.name.as_str())
+        .then_some(id.as_ref())
+}
+
+/// True when `ident` resolves to a binding whose declared type is a writable Vue
+/// ref (see [`is_writable_vue_ref_type`] and [`binding_declared_ts_type`]): a
+/// `Ref`/`ShallowRef`/`WritableComputedRef`/`ModelRef`-typed function parameter
+/// (`x: Ref<T>`), annotated variable (`const x: Ref<T> = …`), or parameter
+/// destructured from a same-file interface/type whose matching member carries
+/// that type (`{ x }: Ctx` where `interface Ctx { x: Ref<T> }`). The caller
+/// produced the ref, so `binding.value = x` is a reactive write, not a
+/// plain-object mutation.
+fn binding_is_writable_vue_ref_typed(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    binding_declared_ts_type(ident, semantic)
+        .is_some_and(|ty| is_writable_vue_ref_type(ty, semantic))
+}
+
+/// True when `ty` is a writable Vue ref type whose type name is Vue's: a
+/// `Ref`/`ShallowRef`/`WritableComputedRef`/`ModelRef` reference (see
+/// [`writable_vue_ref_type_ident`]) whose name is imported from `vue`, or is a
+/// bare/ambient name resolving to no other import (Vue's globally-declared or
+/// `unplugin-auto-import`-injected ref types). A name imported from a non-`vue`
+/// module is rejected, so a look-alike `Ref` from another package stays flagged.
+fn is_writable_vue_ref_type(
+    ty: &oxc_ast::ast::TSType,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    writable_vue_ref_type_ident(ty).is_some_and(|id| {
+        type_ident_import_source(id, semantic).is_none_or(|module| module == "vue")
+    })
+}
+
+/// The module a type-position identifier is imported from (`import { Ref } from
+/// 'vue'` → `"vue"`), or `None` when it resolves to no import — an ambient/global
+/// type, an auto-imported name, or a same-file declaration. Resolves the specific
+/// reference to its binding (reference → symbol → declaration), so a same-named
+/// local never masks the import and vice versa.
+fn type_ident_import_source<'a>(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    use oxc_ast::AstKind;
+    let ref_id = id.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::ImportDeclaration(import) => Some(import.source.value.as_str()),
+            _ => None,
+        })
+}
+
+/// The effective declared TypeScript type of the binding `ident` resolves to,
+/// across the shapes whose declaration carries a type: a directly-annotated
+/// function parameter (`x: Ref<T>`), an annotated variable (`const x: Ref<T> = …`),
+/// and a binding destructured from a typed object pattern (`{ x }: Ctx`, whose
+/// object pattern's named type is a same-file `interface`/`type` supplying member
+/// `x`'s type). Returns `None` when the binding has no resolvable declared type
+/// (an inferred binding, an un-annotated pattern, or an unresolvable member).
+fn binding_declared_ts_type<'a>(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::BindingPattern;
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    // The binding's declaration is its parameter / variable-declarator (directly,
+    // for a simple `x: T`) or nested under one (for a destructured `{ x }: Ctx`),
+    // so it is the declaration node itself or the nearest such ancestor.
+    let (pattern, annotation) = std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::FormalParameter(param) => {
+                Some((&param.pattern, param.type_annotation.as_ref()))
+            }
+            AstKind::VariableDeclarator(decl) => Some((&decl.id, decl.type_annotation.as_ref())),
+            _ => None,
+        })?;
+    match pattern {
+        // Simple `x: T` — the annotation is the binding's own type.
+        BindingPattern::BindingIdentifier(_) => annotation.map(|ann| &ann.type_annotation),
+        // Destructured `{ x }: Ctx` (or renamed `{ k: x }: Ctx`) — resolve member
+        // `x` (resp. `k`) on the same-file `interface`/`type` `Ctx`.
+        BindingPattern::ObjectPattern(obj) => {
+            let type_name = type_reference_name(&annotation?.type_annotation)?;
+            let key = object_pattern_key_for_symbol(obj, sym_id)?;
+            named_type_member_type(type_name, key, semantic, 0)
+        }
+        _ => None,
     }
 }
 
-/// True when `ident` resolves to a function parameter that is a Vue ref — either
-/// by its syntactic type annotation (`Ref<…>` / `ShallowRef<…>` / `ComputedRef<…>`
-/// / `WritableComputedRef<…>` / `ModelRef<…>`; see [`VUE_REF_TYPE_NAMES`]), or an
-/// annotation-less parameter whose default initializer is a Vue ref factory call
-/// (`queryClicks = ref(0)`). Such a parameter holds a `Ref<T>` whose `.value` is
-/// the intended mutation point regardless of how the caller produced it. The
-/// annotation match is on the ref-wrapper name only, so a plain `{ value: T }`-
-/// typed parameter stays flagged; the default-init match requires a Vue factory
-/// (see [`callee_is_vue_factory`]).
-fn binding_is_ref_typed_parameter(
+/// The object-pattern property key the destructured binding `sym_id` takes — the
+/// member name to look up on the pattern's type. For a shorthand `{ x }` the key
+/// is `x`; for a rename `{ k: x }` it is `k` (the object's member), not the local
+/// `x`. `None` when the binding is not a direct (optionally defaulted) property.
+fn object_pattern_key_for_symbol<'a>(
+    obj: &'a oxc_ast::ast::ObjectPattern<'a>,
+    sym_id: oxc_semantic::SymbolId,
+) -> Option<&'a str> {
+    obj.properties.iter().find_map(|prop| {
+        (binding_pattern_leaf_symbol(&prop.value) == Some(sym_id))
+            .then(|| property_key_name(&prop.key))
+            .flatten()
+    })
+}
+
+/// The symbol a simple (optionally defaulted) binding pattern binds:
+/// `BindingIdentifier` directly, or the left of an `AssignmentPattern` default
+/// (`{ x = d }`). `None` for a nested array/object pattern.
+fn binding_pattern_leaf_symbol(
+    pat: &oxc_ast::ast::BindingPattern,
+) -> Option<oxc_semantic::SymbolId> {
+    use oxc_ast::ast::BindingPattern;
+    match pat {
+        BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
+        BindingPattern::AssignmentPattern(assign) => binding_pattern_leaf_symbol(&assign.left),
+        _ => None,
+    }
+}
+
+/// The static string name of a non-computed property key (`StaticIdentifier` or
+/// `StringLiteral`), or `None` for a computed/numeric/other key.
+fn property_key_name<'a>(key: &'a oxc_ast::ast::PropertyKey<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::PropertyKey;
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+        PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
+    }
+}
+
+/// The declared type of member `member` on the same-file `interface`/object-`type`
+/// named `type_name`, following `extends` heritage and `type X = Y` aliases by name
+/// up to [`OPTIONAL_MEMBER_RESOLUTION_DEPTH`] hops. Mirrors
+/// [`named_type_has_optional_property`] but yields the member's type. Returns
+/// `None` for an unknown type name, an absent member, or an exhausted depth budget.
+fn named_type_member_type<'a>(
+    type_name: &str,
+    member: &str,
+    semantic: &oxc_semantic::Semantic<'a>,
+    depth: u32,
+) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, TSType, TSTypeName};
+    if depth >= OPTIONAL_MEMBER_RESOLUTION_DEPTH {
+        return None;
+    }
+    for node in semantic.nodes().iter() {
+        match node.kind() {
+            AstKind::TSInterfaceDeclaration(decl) if decl.id.name.as_str() == type_name => {
+                if let Some(ty) = signature_member_type(&decl.body.body, member) {
+                    return Some(ty);
+                }
+                for heritage in &decl.extends {
+                    if let Expression::Identifier(base) = &heritage.expression
+                        && let Some(ty) =
+                            named_type_member_type(base.name.as_str(), member, semantic, depth + 1)
+                    {
+                        return Some(ty);
+                    }
+                }
+            }
+            AstKind::TSTypeAliasDeclaration(decl) if decl.id.name.as_str() == type_name => {
+                match &decl.type_annotation {
+                    TSType::TSTypeLiteral(lit) => {
+                        if let Some(ty) = signature_member_type(&lit.members, member) {
+                            return Some(ty);
+                        }
+                    }
+                    // A `type X = Y` alias to another named type — follow it.
+                    TSType::TSTypeReference(tref) => {
+                        if let TSTypeName::IdentifierReference(id) = &tref.type_name
+                            && let Some(ty) =
+                                named_type_member_type(id.name.as_str(), member, semantic, depth + 1)
+                        {
+                            return Some(ty);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The declared type of the non-computed property signature named `member` in
+/// `signatures` (`member: T`), or `None` when absent or untyped.
+fn signature_member_type<'a>(
+    signatures: &'a [oxc_ast::ast::TSSignature<'a>],
+    member: &str,
+) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+    use oxc_ast::ast::{PropertyKey, TSSignature};
+    signatures.iter().find_map(|sig| {
+        let TSSignature::TSPropertySignature(p) = sig else {
+            return None;
+        };
+        let key_matches = !p.computed
+            && match &p.key {
+                PropertyKey::StaticIdentifier(id) => id.name.as_str() == member,
+                PropertyKey::StringLiteral(s) => s.value.as_str() == member,
+                _ => false,
+            };
+        key_matches
+            .then(|| p.type_annotation.as_ref().map(|ann| &ann.type_annotation))
+            .flatten()
+    })
+}
+
+/// True when `ident` resolves to an annotation-less function parameter whose
+/// default initializer is a Vue ref factory call (`queryClicks = ref(0)`). Such a
+/// parameter holds a `Ref<T>` regardless of the caller's argument; its `.value` is
+/// the reactive-update point. The default-init match requires a Vue factory (see
+/// [`callee_is_vue_factory`]), so a plain default (`x = {}`) does not qualify.
+fn binding_default_inits_vue_ref_factory(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
     project: &crate::project::ProjectCtx,
@@ -3729,21 +3950,11 @@ fn binding_is_ref_typed_parameter(
     else {
         return false;
     };
-    // (a) `param: Ref<…>` — a ref-wrapper type annotation.
-    if let Some(ann) = &param.type_annotation
-        && ref_type_reference_name(&ann.type_annotation)
-            .is_some_and(|name| VUE_REF_TYPE_NAMES.contains(&name))
-    {
-        return true;
-    }
-    // (b) `param = ref(0)` — an annotation-less parameter defaulting to a Vue
-    // ref factory call.
     if let Some(init) = &param.initializer
         && let Expression::CallExpression(call) = &**init
         && let Expression::Identifier(callee) = &call.callee
-        && callee_is_vue_factory(callee, VUE_REF_FACTORIES, semantic, project, path)
     {
-        return true;
+        return callee_is_vue_factory(callee, VUE_REF_FACTORIES, semantic, project, path);
     }
     false
 }
@@ -3826,11 +4037,15 @@ fn export_is_vue_ref_factory(
 /// resolves to a `const`/`let` binding initialised by a Vue ref factory —
 /// `ref(...)`, `shallowRef(...)`, `customRef(...)`, or `computed(...)` (imported
 /// from `vue` or auto-injected by `unplugin-auto-import`; see
-/// [`is_vue_factory_binding`]); is a Ref-typed / ref-factory-defaulted function
-/// parameter (see [`binding_is_ref_typed_parameter`]); or is imported from a
-/// module that exports a ref-factory binding (see [`binding_is_imported_vue_ref`]).
-/// Callers gate the `.value` property specifically; any other property write on
-/// the ref stays flagged.
+/// [`is_vue_factory_binding`]); has a declared type that is a writable Vue ref —
+/// `Ref`/`ShallowRef`/`WritableComputedRef`/`ModelRef` resolved to a `vue` import
+/// — on a parameter, a variable, or a parameter destructured from a same-file
+/// interface/type (see [`binding_is_writable_vue_ref_typed`]); is an
+/// annotation-less parameter defaulting to a ref-factory call (see
+/// [`binding_default_inits_vue_ref_factory`]); or is imported from a module that
+/// exports a ref-factory binding (see [`binding_is_imported_vue_ref`]). Callers
+/// gate the `.value` property specifically; any other property write on the ref
+/// stays flagged.
 #[must_use]
 pub fn is_vue_ref_binding(
     ident: &oxc_ast::ast::IdentifierReference,
@@ -3839,7 +4054,8 @@ pub fn is_vue_ref_binding(
     path: &Path,
 ) -> bool {
     is_vue_factory_binding(ident, semantic, VUE_REF_FACTORIES, project, path)
-        || binding_is_ref_typed_parameter(ident, semantic, project, path)
+        || binding_is_writable_vue_ref_typed(ident, semantic)
+        || binding_default_inits_vue_ref_factory(ident, semantic, project, path)
         || binding_is_imported_vue_ref(ident, semantic, project, path)
 }
 

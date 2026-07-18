@@ -2005,6 +2005,107 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    // Vue ref via a writable-Ref-typed binding resolved to a vue import — issue #7757
+
+    #[test]
+    fn allows_value_mutation_on_ref_typed_destructured_interface_param_issue_7757() {
+        // Regression for rbaumier/comply#7757 — `defaultFormModel` is destructured
+        // from a parameter typed by a same-file interface whose member is
+        // `Ref<any>` imported from `vue`; `.value =` is the reactive update.
+        let src = r#"
+            import type { Ref, ComputedRef } from 'vue';
+            interface UseFormValuesContext {
+                defaultFormModel: Ref<any>;
+                getSchema: ComputedRef<FormSchema[]>;
+                formModel: Recordable;
+            }
+            export function useFormValues({ defaultFormModel, getSchema, formModel }: UseFormValuesContext) {
+                function initDefault() {
+                    const obj: Recordable = {};
+                    defaultFormModel.value = obj;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_vue_ref_typed_direct_param_issue_7757() {
+        // A directly-annotated `Ref<T>` parameter whose type resolves to a `vue`
+        // import is a ref; `.value =` is the reactive update.
+        let src = r#"
+            import type { Ref } from 'vue';
+            function f(x: Ref<number>) {
+                x.value = 1;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_vue_shallow_ref_typed_variable_issue_7757() {
+        // An annotated variable typed `ShallowRef<T>` from `vue` is a ref even
+        // when its initializer is not a factory call.
+        let src = r#"
+            import type { ShallowRef } from 'vue';
+            const x: ShallowRef<any> = something;
+            x.value = 1;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_writable_computed_ref_typed_param_issue_7757() {
+        // `WritableComputedRef` (from `computed({ get, set })`) is writable, so a
+        // `.value =` write on it is the reactive update.
+        let src = r#"
+            import type { WritableComputedRef } from 'vue';
+            function f(x: WritableComputedRef<number>) {
+                x.value = 1;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_computed_ref_typed_param_issue_7757() {
+        // Negative space: `ComputedRef` (from `computed(getter)`) is read-only —
+        // its `.value` is not assignable, so writing it is a genuine error the
+        // rule keeps flagging even though the type resolves to `vue`.
+        let src = r#"
+            import type { ComputedRef } from 'vue';
+            function f(x: ComputedRef<number>) {
+                x.value = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_non_vue_ref_typed_param_issue_7757() {
+        // Negative space: a `Ref<T>` whose type name resolves to a non-`vue`
+        // import is a look-alike, not a Vue ref — its `.value =` stays flagged.
+        let src = r#"
+            import type { Ref } from './my-types';
+            function f(x: Ref<number>) {
+                x.value = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_plain_object_typed_param_issue_7757() {
+        // Negative space: a parameter typed `{ value: number }` is a plain object,
+        // not a ref-wrapper reference, so its `.value =` write stays flagged.
+        let src = r#"
+            function f(x: { value: number }) {
+                x.value = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
     // Vue 3 reactive() object property mutation — issue #4457
 
     #[test]
