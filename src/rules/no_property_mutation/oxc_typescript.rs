@@ -292,6 +292,27 @@ fn is_global_object(object: &Expression, semantic: &oxc_semantic::Semantic) -> b
         && crate::oxc_helpers::reference_resolves_to_no_local_binding(id, semantic)
 }
 
+/// True when `object` is *directly* the ambient global `document` — the
+/// identifier `document` resolving to no local binding. Writing a direct property
+/// of `document` (`document.title = x`, `document.body = el`,
+/// `document['dir'] = 'rtl'`) targets a writable `Document` host-object property
+/// whose sole mutation API is assignment; no immutable/spread form exists, the
+/// same host-write class as the Location/History writes in
+/// [`is_imperative_host_write`] and the `document.cookie` carve-out.
+///
+/// The resolution guard keeps it precise: a shadowing `const document = {}` or a
+/// `document` parameter resolves to a symbol, so its property writes stay flagged.
+/// Only the direct object is matched — a nested target such as
+/// `document.body.style = v` has `document.body` (an element), not the `document`
+/// identifier, as its object and stays flagged.
+fn is_document_host_object(object: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+    let Expression::Identifier(id) = object else {
+        return false;
+    };
+    id.name.as_str() == "document"
+        && crate::oxc_helpers::reference_resolves_to_no_local_binding(id, semantic)
+}
+
 /// True when the assignment registers a DOM-style event handler: the property
 /// name has the `on<event>` shape (`onerror`, `onsuccess`, `onupgradeneeded`,
 /// `onclick`, …) and the assigned value is a function (or `null` to deregister).
@@ -507,6 +528,11 @@ impl OxcCheck for Check {
                         // directly on the global object declares a global; no
                         // immutable form (cf. the Location/History writes above).
                         if is_global_object(&m.object, semantic) { return; }
+                        // `document.title = x`, `document.body = el` — a property
+                        // written directly on the ambient global `document` is a
+                        // Document host-object write; no immutable form (cf. the
+                        // Location/History writes and `document.cookie` above).
+                        if is_document_host_object(&m.object, semantic) { return; }
                         // `request.onerror = () => …`, `el.onclick = fn` — DOM-style
                         // event-handler registration, not object-state mutation.
                         if is_event_handler_registration(prop_text, &assign.right) { return; }
@@ -572,6 +598,10 @@ impl OxcCheck for Check {
                         // written directly on the global object declares a global;
                         // no immutable form (cf. the static-member arm).
                         if is_global_object(&m.object, semantic) { return; }
+                        // `document['title'] = x` — direct property write on the
+                        // ambient global `document`; a Document host-object write
+                        // with no immutable form (cf. the static-member arm).
+                        if is_document_host_object(&m.object, semantic) { return; }
                         // Own instance state: `this.cache[id] = v` — see the static-member arm.
                         if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
@@ -1424,6 +1454,78 @@ mod tests {
         let src = r#"
             const o = getConfig();
             o.foo = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Direct `document` host-object property writes — issue #7769
+
+    #[test]
+    fn skips_direct_document_host_object_writes_issue_7769() {
+        // Assigning a writable `Document` property (`title`/`body`/`dir`/…) IS the
+        // DOM API — setting the tab title or document element has no spread/
+        // immutable form, the same host-write class as Location/History.
+        let src = r#"
+            router.afterEach((to) => {
+                document.title = `${to.meta.title} - App`;
+            });
+            document.body = el;
+            document.dir = 'rtl';
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_computed_document_host_object_write_issue_7769() {
+        // The bracket form `document['title'] = x` is the same direct host write.
+        let src = r#"
+            document['title'] = 'Home';
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_write_on_shadowed_document_issue_7769() {
+        // A shadowing local `document` resolves to a binding, not the real global —
+        // the write is an ordinary object mutation and stays flagged. (A fresh `{}`
+        // initializer is exempt via the unrelated object-builder rule, so the
+        // shadow binds a non-fresh value to isolate the resolution guard.)
+        let src = r#"
+            const document = getDoc();
+            document.title = 'x';
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_document_property_write_on_named_param_issue_7769() {
+        // A `document` parameter resolves to a binding, not the real global.
+        let src = r#"
+            function f(document) {
+                document.title = 'x';
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_document_property_write_issue_7769() {
+        // `document.body.style = v` mutates `document.body` (an element), not a
+        // direct property of `document` — stays flagged (the object is
+        // `document.body`, not the `document` identifier).
+        let src = r#"
+            document.body.style = 'x';
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ordinary_object_title_write_issue_7769() {
+        // Negative space: the exemption keys off the resolved `document` global, not
+        // the property name — an ordinary object's `.title` write stays flagged.
+        let src = r#"
+            const o = getConfig();
+            o.title = 'x';
         "#;
         assert_eq!(run(src).len(), 1);
     }
