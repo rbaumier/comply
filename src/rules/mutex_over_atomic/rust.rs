@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    is_in_test_context, is_suppressed_by_clippy_allow, is_under_tests_dir,
+    is_async_mutex_type, is_in_test_context, is_suppressed_by_clippy_allow, is_under_tests_dir,
 };
 
 const ATOMIC_TYPES: &[(&str, &str)] = &[
@@ -31,13 +31,35 @@ crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, sourc
     let Ok(text) = node.utf8_text(source) else { return };
     if text != "Mutex" { return; }
 
+    // Locate the `generic_type` wrapping this `Mutex`. An unqualified `Mutex<…>`
+    // is the direct parent; a qualified `tokio::sync::Mutex<…>` nests the name
+    // under a `scoped_type_identifier` whose parent is the `generic_type`.
     let Some(parent) = node.parent() else { return };
-    if parent.kind() != "generic_type" { return; }
+    let generic = match parent.kind() {
+        "generic_type" => parent,
+        "scoped_type_identifier" => {
+            let Some(grandparent) = parent.parent() else { return };
+            if grandparent.kind() != "generic_type" { return; }
+            if grandparent.child_by_field_name("type") != Some(parent) { return; }
+            grandparent
+        }
+        _ => return,
+    };
+
+    // Async mutexes (`tokio` / `futures` / `async_std` / `async_lock`) exist to
+    // hold a lock across `.await` points; `AtomicX` has no `.lock().await` and
+    // cannot serialize an async critical section, so it is not a valid
+    // replacement. Resolve which `Mutex` this is via import provenance and skip
+    // the async ones — only `std::sync::Mutex` / `parking_lot::Mutex` have an
+    // atomic drop-in equivalent.
+    if is_async_mutex_type(node, source) {
+        return;
+    }
 
     // A `Mutex` paired with a `Condvar` sibling field is the condition-variable
     // latch pattern: `Condvar::wait` takes a `MutexGuard`, so the `Mutex` is
     // structurally required and has no atomic equivalent. Skip it.
-    if has_condvar_sibling_field(parent, source) {
+    if has_condvar_sibling_field(generic, source) {
         return;
     }
 
@@ -49,16 +71,21 @@ crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, sourc
         return;
     }
 
-    let Ok(full) = parent.utf8_text(source) else { return };
+    // The single type argument must be a primitive with an atomic counterpart.
+    let Some(type_args) = generic.child_by_field_name("type_arguments") else { return };
+    let mut cursor = type_args.walk();
+    let mut args = type_args.named_children(&mut cursor);
+    let Some(arg) = args.next() else { return };
+    if args.next().is_some() { return; }
+    let Ok(arg_text) = arg.utf8_text(source) else { return };
 
     for &(prim, atomic) in ATOMIC_TYPES {
-        let pattern = format!("Mutex<{prim}>");
-        if full == pattern {
+        if arg_text == prim {
             diagnostics.push(Diagnostic::at_node(
                 ctx.path,
-                &parent,
+                &generic,
                 super::META.id,
-                format!("`{pattern}` — prefer `{atomic}` for lock-free access."),
+                format!("`Mutex<{prim}>` — prefer `{atomic}` for lock-free access."),
                 Severity::Warning,
             ));
             return;
@@ -257,6 +284,109 @@ mod tests {
     fn flags_field_with_unrelated_clippy_allow() {
         // A *different* clippy lint allow must not suppress `mutex_atomic`.
         let src = "struct S {\n    #[allow(clippy::other_lint)]\n    x: Mutex<bool>,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicBool"));
+    }
+
+    #[test]
+    fn skips_tokio_sync_mutex_via_use() {
+        // openobserve FP (#7753): `tokio::sync::Mutex<bool>` is an async mutex
+        // with no `AtomicBool` equivalent.
+        let src = "use tokio::sync::Mutex;\nstruct LockHolder {\n    lock: Arc<Mutex<bool>>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_tokio_sync_mutex_via_grouped_use() {
+        let src = "use tokio::sync::{Mutex, MutexGuard, RwLock};\nstruct S {\n    m: Mutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_aliased_tokio_sync_mutex() {
+        let src = "use tokio::sync::Mutex as TokioMutex;\nstruct S {\n    m: TokioMutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_qualified_futures_mutex() {
+        let src = "struct S {\n    f: futures::lock::Mutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_qualified_tokio_mutex() {
+        let src = "struct S {\n    t: tokio::sync::Mutex<u8>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_async_std_mutex_via_use() {
+        let src = "use async_std::sync::Mutex;\nstruct S {\n    m: Mutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_qualified_async_lock_mutex() {
+        let src = "struct S {\n    m: async_lock::Mutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_bare_mutex_under_async_glob_import() {
+        let src = "use tokio::sync::*;\nstruct S {\n    m: Mutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_std_sync_mutex_via_use() {
+        let src = "use std::sync::Mutex;\nstruct S {\n    m: Mutex<bool>,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicBool"));
+    }
+
+    #[test]
+    fn flags_parking_lot_mutex_via_use() {
+        let src = "use parking_lot::Mutex;\nstruct S {\n    m: Mutex<u32>,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicU32"));
+    }
+
+    #[test]
+    fn flags_qualified_std_sync_mutex() {
+        let src = "struct S {\n    m: std::sync::Mutex<bool>,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicBool"));
+    }
+
+    #[test]
+    fn flags_bare_mutex_without_async_import() {
+        // No async-mutex `use` in the file: the bare `Mutex` keeps flagging.
+        let src = "struct S {\n    m: Mutex<bool>,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicBool"));
+    }
+
+    #[test]
+    fn flags_std_mutex_beside_async_glob_import() {
+        // An explicit `use std::sync::Mutex` binding wins over a co-present
+        // `use tokio::sync::*` glob, so the primitive `Mutex` still flags.
+        let src = "use std::sync::Mutex;\nuse tokio::sync::*;\nstruct S {\n    m: Mutex<bool>,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicBool"));
+    }
+
+    #[test]
+    fn flags_non_async_type_aliased_to_mutex() {
+        // `use foo::Bar as Mutex` binds the name `Mutex` to a non-async module,
+        // so the primitive `Mutex` still flags — the alias resolves by module.
+        let src = "use foo::Bar as Mutex;\nstruct S {\n    m: Mutex<bool>,\n}";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("AtomicBool"));

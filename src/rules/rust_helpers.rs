@@ -710,6 +710,209 @@ fn attr_allows_clippy_lint(text: &str, lints: &[&str]) -> bool {
     is_allow_or_expect && lints.iter().any(|lint| text.contains(&format!("clippy::{lint}")))
 }
 
+/// The bounded set of async-mutex module paths whose `Mutex` guards an async
+/// critical section across `.await` and therefore has no lock-free `AtomicX`
+/// drop-in replacement. Resolved from import provenance (the `use` path or a
+/// qualified type path), never from a user-chosen identifier.
+pub const ASYNC_MUTEX_MODULES: &[&str] =
+    &["tokio::sync", "futures::lock", "async_std::sync", "async_lock"];
+
+/// True if `module_path` (the `::`-joined segments preceding a type name) names
+/// one of [`ASYNC_MUTEX_MODULES`].
+fn is_async_mutex_module(module_path: &str) -> bool {
+    ASYNC_MUTEX_MODULES.contains(&module_path)
+}
+
+/// True if the `Mutex` named at `name_node` (a `type_identifier` whose text is
+/// `Mutex`) resolves to one of the known async-mutex types — `tokio::sync`,
+/// `futures::lock`, `async_std::sync`, or `async_lock`.
+///
+/// Resolution is by import provenance, not by the identifier text:
+/// - a qualified type path (`tokio::sync::Mutex<…>`) is read off its own module
+///   segments;
+/// - an unqualified `Mutex<…>` is resolved through the file's `use` graph,
+///   covering grouped (`use tokio::sync::{Mutex, …}`) and glob
+///   (`use tokio::sync::*`) imports.
+///
+/// An aliased async import (`use tokio::sync::Mutex as TokioMutex`) is written
+/// `TokioMutex<…>`; its type name is not `Mutex`, so this check is never
+/// reached for it (and the alias is correctly not flagged).
+pub fn is_async_mutex_type(name_node: Node, source: &[u8]) -> bool {
+    if let Some(parent) = name_node.parent()
+        && parent.kind() == "scoped_type_identifier"
+        && parent.child_by_field_name("name") == Some(name_node)
+    {
+        // Qualified `<module>::Mutex` — read the module off the path field.
+        let Some(path) = parent.child_by_field_name("path") else {
+            return false;
+        };
+        let module = rust_path_segments(path, source).join("::");
+        return is_async_mutex_module(&module);
+    }
+
+    // Unqualified `Mutex` — resolve its binding through the file's `use` graph.
+    let Ok(local) = name_node.utf8_text(source) else {
+        return false;
+    };
+    let mut root = name_node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    use_graph_binds_async_mutex(root, source, local)
+}
+
+/// A single leaf symbol of a `use` declaration: the module segments preceding
+/// the bound name, and the local binding name (`*` for a glob import).
+struct UsePathLeaf {
+    module: Vec<String>,
+    local: String,
+}
+
+/// True if the file rooted at `root` binds the type name `local` to a known
+/// async-mutex module via `use`, or — absent any explicit binding of `local` —
+/// glob-imports such a module (`use tokio::sync::*`). An explicit binding
+/// always wins over a glob so `use std::sync::Mutex` still flags even beside a
+/// `use tokio::sync::*`.
+fn use_graph_binds_async_mutex(root: Node, source: &[u8], local: &str) -> bool {
+    let mut leaves = Vec::new();
+    collect_use_leaves(root, source, &mut leaves);
+
+    let mut explicit: Option<bool> = None;
+    let mut async_glob = false;
+    for leaf in &leaves {
+        let module = leaf.module.join("::");
+        if leaf.local == "*" {
+            async_glob |= is_async_mutex_module(&module);
+        } else if leaf.local == local {
+            let is_async = is_async_mutex_module(&module);
+            explicit = Some(explicit.unwrap_or(false) || is_async);
+        }
+    }
+    explicit.unwrap_or(async_glob)
+}
+
+/// Collect one [`UsePathLeaf`] per leaf symbol of every `use_declaration` in the
+/// file (nested-module `use`s included).
+fn collect_use_leaves(node: Node, source: &[u8], out: &mut Vec<UsePathLeaf>) {
+    if node.kind() == "use_declaration" {
+        let mut cursor = node.walk();
+        if let Some(body) = node
+            .named_children(&mut cursor)
+            .find(|c| c.kind() != "visibility_modifier")
+        {
+            scan_use_tree(body, source, &[], out);
+        }
+        // A `use` declaration cannot nest another one; no need to descend.
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_use_leaves(child, source, out);
+    }
+}
+
+/// Walk a `use` tree, accumulating `prefix` module segments down through
+/// grouped (`{…}`), glob (`*`), and aliased (`as`) forms.
+fn scan_use_tree(node: Node, source: &[u8], prefix: &[String], out: &mut Vec<UsePathLeaf>) {
+    match node.kind() {
+        "scoped_identifier" => {
+            let segments = rust_path_segments(node, source);
+            let Some((local, module_tail)) = segments.split_last() else {
+                return;
+            };
+            let mut module = prefix.to_vec();
+            module.extend_from_slice(module_tail);
+            out.push(UsePathLeaf { module, local: local.clone() });
+        }
+        "identifier" | "type_identifier" => {
+            out.push(UsePathLeaf {
+                module: prefix.to_vec(),
+                local: node.utf8_text(source).unwrap_or_default().to_string(),
+            });
+        }
+        "scoped_use_list" => {
+            let mut inner = prefix.to_vec();
+            if let Some(path) = use_path_child(node) {
+                inner.extend(rust_path_segments(path, source));
+            }
+            let mut cursor = node.walk();
+            if let Some(list) = node
+                .named_children(&mut cursor)
+                .find(|c| c.kind() == "use_list")
+            {
+                let mut list_cursor = list.walk();
+                for child in list.named_children(&mut list_cursor) {
+                    scan_use_tree(child, source, &inner, out);
+                }
+            }
+        }
+        "use_list" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                scan_use_tree(child, source, prefix, out);
+            }
+        }
+        "use_wildcard" => {
+            let mut inner = prefix.to_vec();
+            if let Some(path) = use_path_child(node) {
+                inner.extend(rust_path_segments(path, source));
+            }
+            out.push(UsePathLeaf { module: inner, local: "*".to_string() });
+        }
+        "use_as_clause" => {
+            let mut cursor = node.walk();
+            let mut named = node.named_children(&mut cursor);
+            let path = named.next();
+            let alias = named.find(|c| matches!(c.kind(), "identifier" | "type_identifier"));
+            if let (Some(path), Some(alias)) = (path, alias) {
+                let mut tmp = Vec::new();
+                scan_use_tree(path, source, prefix, &mut tmp);
+                if let Some(mut leaf) = tmp.pop() {
+                    leaf.local = alias.utf8_text(source).unwrap_or_default().to_string();
+                    out.push(leaf);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The path child of a `scoped_use_list` / `use_wildcard` node.
+fn use_path_child(node: Node) -> Option<Node> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).find(|c| {
+        matches!(
+            c.kind(),
+            "scoped_identifier" | "identifier" | "self" | "crate" | "super"
+        )
+    })
+}
+
+/// Flatten a `scoped_identifier` / `identifier` path node into its segment
+/// strings, left to right.
+fn rust_path_segments(node: Node, source: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    rust_path_segments_into(node, source, &mut out);
+    out
+}
+
+fn rust_path_segments_into(node: Node, source: &[u8], out: &mut Vec<String>) {
+    match node.kind() {
+        "scoped_identifier" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                rust_path_segments_into(child, source, out);
+            }
+        }
+        "identifier" | "type_identifier" | "self" | "crate" | "super" => {
+            if let Ok(text) = node.utf8_text(source) {
+                out.push(text.to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// True if `text` contains a `cfg(…)` / `cfg_attr(…)` predicate in which the
 /// `test` configuration option appears as a positive standalone predicate.
 ///
