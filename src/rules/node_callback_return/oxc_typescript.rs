@@ -4,8 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, BindingPattern, Expression, FormalParameters, IdentifierReference, Statement, TSType,
-    TSTypeName,
+    Argument, BindingPattern, Expression, FormalParameters, IdentifierReference, PropertyKey,
+    Statement, TSType, TSTypeName,
 };
 use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
@@ -60,6 +60,18 @@ impl OxcCheck for Check {
         // caller must short-circuit on. An untyped or unresolvable callee keeps
         // the default behavior.
         if callee_is_void_visitor(callee, semantic) {
+            return;
+        }
+
+        // A Vue Router navigation guard receives its resolver as the third
+        // parameter (`(to, from, next) => ...`). Vue Router ignores the guard's
+        // return value when `next` is used, so a terminal `next(...)` needs no
+        // `return`; it is a navigation resolver, not a Node error-first
+        // callback. The guard is recognized by framework-API provenance (the
+        // enclosing function is registered through a Vue Router guard API and
+        // `next` is its third parameter), which leaves an Express-style `next`
+        // middleware — registered through different methods — flagged.
+        if is_vue_router_guard_next(callee, semantic) {
             return;
         }
 
@@ -231,6 +243,96 @@ fn is_exemptible_function_body_owner<'a>(
         }
         _ => false,
     }
+}
+
+/// Router instance methods that register a Vue Router navigation guard whose
+/// callback receives the resolver as its third parameter.
+const GUARD_REGISTRAR_METHODS: &[&str] = &["beforeEach", "beforeResolve", "beforeEnter"];
+
+/// Object/class member keys that hold a Vue Router navigation guard: the
+/// route-record `beforeEnter`, and the in-component guards.
+const GUARD_MEMBER_KEYS: &[&str] =
+    &["beforeEnter", "beforeRouteEnter", "beforeRouteUpdate", "beforeRouteLeave"];
+
+/// True when `callee` is the `next` resolver of a Vue Router navigation guard.
+///
+/// The guard is recognized by framework-API provenance, never by the bare name
+/// `next`: the callee must resolve to the third parameter of a function that is
+/// registered through a Vue Router guard API — a `router.beforeEach` /
+/// `.beforeResolve` / `.beforeEnter` call, a route-record `beforeEnter`
+/// property, or an in-component `beforeRouteEnter` / `beforeRouteUpdate` /
+/// `beforeRouteLeave` method. An Express middleware `next` (third parameter of
+/// `app.use` / `app.get` / …) is registered through different methods, so it
+/// stays flagged.
+fn is_vue_router_guard_next<'a>(
+    callee: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    third_param_owner(callee, semantic)
+        .is_some_and(|owner| is_registered_router_guard(owner, semantic))
+}
+
+/// When `callee` resolves to the third parameter (index 2) of a function or
+/// arrow, return that function node; otherwise `None`. A `next` bound to a
+/// variable, an import, or any other parameter position yields `None`.
+fn third_param_owner<'a>(
+    callee: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_semantic::AstNode<'a>> {
+    let ref_id = callee.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(sym_id);
+
+    let mut param_span = None;
+    for anc in std::iter::once(nodes.get_node(decl_id)).chain(nodes.ancestors(decl_id)) {
+        let third_param_span = match anc.kind() {
+            AstKind::FormalParameter(param) => {
+                param_span = Some(param.span);
+                continue;
+            }
+            AstKind::Function(f) => f.params.items.get(2).map(|p| p.span),
+            AstKind::ArrowFunctionExpression(a) => a.params.items.get(2).map(|p| p.span),
+            AstKind::Program(_) => return None,
+            _ => continue,
+        };
+        return match (param_span, third_param_span) {
+            (Some(declared), Some(third)) if declared == third => Some(anc),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// True when `owner` (a function or arrow) is registered as a Vue Router
+/// navigation guard: an argument to a call whose method is in
+/// [`GUARD_REGISTRAR_METHODS`], or the value of an object/class member whose key
+/// is in [`GUARD_MEMBER_KEYS`].
+fn is_registered_router_guard<'a>(
+    owner: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let owner_span = owner.kind().span();
+    let parent = semantic.nodes().parent_node(owner.id());
+    match parent.kind() {
+        AstKind::CallExpression(call) => {
+            matches!(
+                &call.callee,
+                Expression::StaticMemberExpression(m)
+                    if GUARD_REGISTRAR_METHODS.contains(&m.property.name.as_str())
+            ) && is_argument(owner_span, &call.arguments)
+        }
+        AstKind::ObjectProperty(prop) => property_key_is(&prop.key, GUARD_MEMBER_KEYS),
+        AstKind::MethodDefinition(m) => property_key_is(&m.key, GUARD_MEMBER_KEYS),
+        _ => false,
+    }
+}
+
+/// True when a property/method key statically resolves to one of `names`.
+fn property_key_is(key: &PropertyKey, names: &[&str]) -> bool {
+    key.static_name()
+        .is_some_and(|name| names.contains(&name.as_ref()))
 }
 
 /// True when `node` (a statement) is in terminal position: after it completes,
@@ -956,6 +1058,101 @@ mod tests {
         // is not the last statement of its block — a real dropped-return, still
         // flagged.
         let src = "function g(err, cb) { if (err) { cb(err); doMore(); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_vue_router_before_each_guard() {
+        // Issue #7865 (lin-xin/vue-manage-system): `next` is the Vue Router
+        // navigation-guard resolver — the third parameter of the guard passed to
+        // `router.beforeEach`. The guard's return value is ignored, so a terminal
+        // `next('/login')`/`next('/403')` needs no `return`.
+        let src = r#"
+            router.beforeEach((to, from, next) => {
+              if (x) {
+                next('/login');
+              } else if (y) {
+                next('/403');
+              } else {
+                next();
+              }
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_vue_router_before_resolve_guard() {
+        // `router.beforeResolve` is also a guard registrar; its `next` resolver
+        // needs no `return`.
+        let src = "router.beforeResolve((to, from, next) => { next('/x'); });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_vue_router_before_enter_method_guard() {
+        // `router.beforeEnter` registrar call.
+        let src = "router.beforeEnter((to, from, next) => { next('/x'); });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_vue_router_route_record_before_enter() {
+        // Route-record `beforeEnter: (to, from, next) => ...` — `next` is the
+        // guard resolver via the route-config property.
+        let src = "const routes = [{ path: '/', beforeEnter: (to, from, next) => { next(false); } }];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_vue_router_in_component_guard() {
+        // In-component guard `beforeRouteEnter(to, from, next) { next(vm => {}); }`
+        // — `next` is the guard resolver, recognized by the method key.
+        let src = "const Comp = { beforeRouteEnter(to, from, next) { next(vm => {}); } };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_vue_router_class_component_guard() {
+        // In-component guard defined as a class method (vue-class-component). The
+        // trailing `this.log()` makes `next(false)` non-terminal, so only the
+        // guard recognition — via the `MethodDefinition` key — exempts it.
+        let src = "class Comp { beforeRouteUpdate(to, from, next) { next(false); this.log(); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_express_next_middleware_with_trailing_work() {
+        // Negative space for #7865: Express middleware registers through `app.use`
+        // (not a Vue Router guard registrar), and `next(err)` is followed by more
+        // work in the same branch — a genuine dropped-return, still flagged.
+        let src = "app.use((req, res, next) => { if (err) { next(err); doMore(); } });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_terminal_express_next_isolating_registrar_method() {
+        // Negative space for #7865: same terminal shape as the Vue Router repro
+        // (arrow is a call argument, `next` is the last statement), but `app.use`
+        // is not a guard registrar — so the discriminator keys on the method, not
+        // the terminal position or the name `next`. Stays flagged.
+        let src = "app.use((req, res, next) => { next(err); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_node_error_first_callback_in_readfile() {
+        // Negative space for #7865: a Node error-first `cb(err)` followed by more
+        // work is not a Vue Router guard `next` and stays flagged.
+        let src = "fs.readFile(p, (err, data) => { if (err) { cb(err); process(data); } });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_local_variable_named_next() {
+        // Negative space for #7865: a local `next` that is not the third parameter
+        // of a Vue Router guard is not exempt — dropped result still flagged.
+        let src = "function f() { const next = getNext(); next('/login'); doMore(); }";
         assert_eq!(run(src).len(), 1);
     }
 }
