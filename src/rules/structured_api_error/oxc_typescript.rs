@@ -17,10 +17,14 @@ const ROUTER_RECEIVERS: &[&str] = &[
     "app", "router", "server", "route", "api", "fastify", "koa", "hono", "srv", "r",
 ];
 
-/// Import sources that mark a file as a web-framework route module even without
-/// an `<router>.<method>(` call (e.g. NestJS decorator-based controllers).
-const FRAMEWORK_IMPORTS: &[&str] =
-    &["hono", "express", "fastify", "koa", "@nestjs", "elysia"];
+/// Import sources for decorator-based frameworks that register routes without a
+/// `<router>.<method>(` call, so importing them marks a route module on its own
+/// (NestJS controllers). Method-call frameworks (fastify/express/koa/hono/elysia)
+/// are deliberately excluded: their routes are registered via a
+/// `<router>.<method>('/path', …)` call that `has_route_registration` detects,
+/// so an import alone — frequently a type-only import such as `FastifyBaseLogger`
+/// — must not classify a service or helper file as a route module.
+const FRAMEWORK_IMPORTS: &[&str] = &["@nestjs"];
 
 /// Whether `line` imports from one of the known route frameworks, i.e. contains
 /// `from 'pkg'`, `from "pkg"`, or (for scoped packages) the `@scope/` prefix.
@@ -170,14 +174,76 @@ function handler() {
     }
 
     #[test]
-    fn flags_bare_error_in_express_import_file() {
+    fn flags_bare_error_in_express_route_file() {
         let src = r#"
 import express from "express";
-function handler() {
+const app = express();
+app.post("/login", (req, res) => {
     throw new Error("bad");
+});
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_error_in_fastify_route_file() {
+        let src = r#"
+import Fastify from 'fastify'
+const fastify = Fastify()
+fastify.get('/users', async (req, reply) => {
+    throw new Error('x')
+})
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_error_in_nestjs_decorator_controller() {
+        // NestJS registers routes via decorators, not a `<router>.<method>(` call,
+        // so the import-only fallback is what classifies the controller as a route
+        // module.
+        let src = r#"
+import { Controller, Get } from '@nestjs/common'
+@Controller('users')
+export class UsersController {
+    @Get()
+    find() {
+        throw new Error('boom')
+    }
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_error_with_fastify_type_import_and_no_route() {
+        // Issue #7755: `FastifyBaseLogger` is a type-only import threaded through the
+        // DI logger; the file registers no route, so the precondition guard throw is
+        // not an API response.
+        let src = r#"
+import { FastifyBaseLogger } from 'fastify'
+function loadSecret(log: FastifyBaseLogger, secret?: string) {
+    if (!secret) {
+        throw new Error('Secret value is empty or binary')
+    }
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_error_with_express_type_only_import_and_no_route() {
+        // Issue #7755: a `import type` from a method-call framework registers no
+        // route, so the file must not be classified as a route module.
+        let src = r#"
+import type { Request } from 'express'
+function parse(req: Request) {
+    if (!req.body) {
+        throw new Error('missing body')
+    }
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
     }
 
     #[test]
