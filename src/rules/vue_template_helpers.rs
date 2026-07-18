@@ -416,6 +416,31 @@ pub fn is_vue_builtin_element(tag: &str) -> bool {
     VUE_BUILTIN_ELEMENTS.contains(&tag)
 }
 
+/// Obsolete/deprecated native HTML elements (WHATWG "non-conforming features":
+/// `<font>`, `<center>`, `<marquee>`, `<frame>`, `<xmp>`, …). Though authors
+/// should no longer use them, they remain native host elements: the browser and
+/// the Vue template compiler treat them as plain HTML tags, never as
+/// user-defined components. Rules keying on a native-vs-component distinction
+/// must therefore recognize them as native. Entries are the lowercase tag
+/// spellings; HTML tag names are case-insensitive, so [`is_obsolete_html_tag`]
+/// compares case-insensitively.
+const OBSOLETE_HTML_TAGS: &[&str] = &[
+    "acronym", "applet", "basefont", "bgsound", "big", "blink", "center", "dir", "font", "frame",
+    "frameset", "isindex", "keygen", "listing", "marquee", "menuitem", "multicol", "nextid", "nobr",
+    "noembed", "noframes", "param", "plaintext", "rb", "rtc", "spacer", "strike", "tt", "xmp",
+];
+
+/// True when `tag` names an obsolete/deprecated native HTML element (see
+/// [`OBSOLETE_HTML_TAGS`]). Compared case-insensitively because HTML tag names
+/// are case-insensitive. Rules distinguishing native elements from Vue
+/// components consult this so a deprecated native tag is never mistaken for a
+/// user-defined component.
+pub fn is_obsolete_html_tag(tag: &str) -> bool {
+    OBSOLETE_HTML_TAGS
+        .iter()
+        .any(|obsolete| obsolete.eq_ignore_ascii_case(tag))
+}
+
 /// Collect all attribute names from an attributes string.
 pub fn collect_attr_names(attrs: &str) -> Vec<&str> {
     let mut names = Vec::new();
@@ -707,6 +732,24 @@ mod tests {
         assert!(!is_vue_builtin_element("div"));
         assert!(!is_vue_builtin_element("button"));
         assert!(!is_vue_builtin_element("Transition"));
+    }
+
+    #[test]
+    fn is_obsolete_html_tag_works() {
+        // Deprecated native HTML elements are still native tags, matched
+        // case-insensitively.
+        assert!(is_obsolete_html_tag("font"));
+        assert!(is_obsolete_html_tag("FONT"));
+        assert!(is_obsolete_html_tag("center"));
+        assert!(is_obsolete_html_tag("marquee"));
+        assert!(is_obsolete_html_tag("strike"));
+        assert!(is_obsolete_html_tag("tt"));
+        assert!(is_obsolete_html_tag("blink"));
+        assert!(is_obsolete_html_tag("frameset"));
+        // Genuine component / non-obsolete names are not native obsolete tags.
+        assert!(!is_obsolete_html_tag("mycomponent"));
+        assert!(!is_obsolete_html_tag("div"));
+        assert!(!is_obsolete_html_tag("foobar"));
     }
 
     #[test]

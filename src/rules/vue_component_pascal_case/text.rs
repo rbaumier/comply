@@ -6,7 +6,7 @@ use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_elements, is_vue_file};
+use crate::rules::vue_template_helpers::{extract_elements, is_obsolete_html_tag, is_vue_file};
 
 #[derive(Debug)]
 pub struct Check;
@@ -199,6 +199,11 @@ fn is_renderer_builtin(tag: &str) -> bool {
 fn is_html_builtin(tag: &str) -> bool {
     // Hyphenated names are web components — always allowed.
     if tag.contains('-') {
+        return true;
+    }
+    // Obsolete/deprecated native HTML elements (`<font>`, `<center>`,
+    // `<marquee>`, …) are still native host elements, never user components.
+    if is_obsolete_html_tag(tag) {
         return true;
     }
     // SVG elements that use camelCase (matched case-sensitively), including
@@ -597,6 +602,26 @@ mod tests {
         // components.
         let src = "<template>\n  <svg>\n    <desc>A shape</desc>\n    <metadata />\n    <switch>\n      <set attributeName=\"x\" to=\"10\" />\n    </switch>\n    <view id=\"v\" />\n    <animateMotion><mpath href=\"#p\" /></animateMotion>\n  </svg>\n</template>";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_obsolete_native_html_tags() {
+        // Issue #7820: obsolete/deprecated native HTML elements (`<font>`,
+        // `<center>`, `<marquee>`, `<strike>`, `<tt>`, `<blink>`) are still
+        // native host elements, not Vue components; renaming them to PascalCase
+        // would turn them into undefined components.
+        let src = "<template>\n  <strong><font style=\"font-family: SimSun\">x</font></strong>\n  <center>y</center>\n  <marquee>z</marquee>\n  <strike>s</strike>\n  <tt>t</tt>\n  <blink>b</blink>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_lowercase_custom_component_alongside_obsolete_tag() {
+        // Negative-space guard: a genuine lowercase custom component must still
+        // fire even when an obsolete native tag is present.
+        let src = "<template>\n  <font>x</font>\n  <mycomponent />\n</template>";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("mycomponent"));
     }
 
     #[test]
