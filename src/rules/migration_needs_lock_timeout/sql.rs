@@ -14,6 +14,9 @@ impl TextCheck for Check {
         if !crate::rules::sql_helpers::is_migration_path(ctx.path) {
             return vec![];
         }
+        if crate::rules::sql_helpers::is_clickhouse_ddl(ctx.source) {
+            return vec![];
+        }
         if !super::contains_ddl(ctx.source) {
             return vec![];
         }
@@ -74,6 +77,15 @@ mod tests {
         let diags = run(
             "/app/migrations/002_seed.sql",
             "INSERT INTO users (name) VALUES ('alice');",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn skips_clickhouse_migration_issue_7765() {
+        let diags = run(
+            "/app/migrations/003_ch.sql",
+            "CREATE TABLE Events (id UInt64) ENGINE = MergeTree ORDER BY id;\nALTER TABLE Events ADD COLUMN name String;",
         );
         assert!(diags.is_empty());
     }

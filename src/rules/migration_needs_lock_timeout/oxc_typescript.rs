@@ -30,6 +30,9 @@ impl OxcCheck for Check {
             }
             _ => return,
         };
+        if crate::rules::sql_helpers::is_clickhouse_ddl(&text) {
+            return;
+        }
         if !super::contains_ddl(&text) {
             return;
         }

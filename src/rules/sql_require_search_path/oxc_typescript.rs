@@ -25,6 +25,7 @@ impl OxcCheck for Check {
         }
 
         let mut any_sets_search_path = false;
+        let mut any_clickhouse = false;
         let mut first_ddl: Option<usize> = None;
 
         for node in semantic.nodes().iter() {
@@ -35,6 +36,10 @@ impl OxcCheck for Check {
                 }
                 _ => continue,
             };
+            if crate::rules::sql_helpers::is_clickhouse_ddl(&text) {
+                any_clickhouse = true;
+                continue;
+            }
             if super::sql_sets_search_path(&text) {
                 any_sets_search_path = true;
                 continue;
@@ -49,7 +54,7 @@ impl OxcCheck for Check {
             }
         }
 
-        if any_sets_search_path {
+        if any_sets_search_path || any_clickhouse {
             return Vec::new();
         }
         let Some(offset) = first_ddl else {

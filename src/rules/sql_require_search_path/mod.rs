@@ -1,4 +1,7 @@
 //! sql-require-search-path
+//!
+//! `search_path` is a PostgreSQL concept, so a migration file whose SQL is
+//! ClickHouse DDL (`is_clickhouse_ddl`) is skipped entirely.
 
 mod rust;
 mod sql;

@@ -11,6 +11,9 @@ impl TextCheck for Check {
         if !super::is_migration_path(ctx.path) {
             return vec![];
         }
+        if crate::rules::sql_helpers::is_clickhouse_ddl(ctx.source) {
+            return vec![];
+        }
         if !super::sql_creates_or_alters_table(ctx.source) {
             return vec![];
         }
@@ -60,5 +63,16 @@ mod tests {
     #[test]
     fn skips_non_migration() {
         assert!(run("/app/src/schema.sql", "CREATE TABLE users (id INT);").is_empty());
+    }
+
+    #[test]
+    fn skips_clickhouse_migration_issue_7765() {
+        assert!(
+            run(
+                "/app/migrations/003.sql",
+                "CREATE TABLE Events (id UInt64) ENGINE = MergeTree ORDER BY id;"
+            )
+            .is_empty()
+        );
     }
 }

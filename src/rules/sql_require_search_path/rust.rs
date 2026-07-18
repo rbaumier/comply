@@ -7,6 +7,9 @@ use crate::rules::sql_helpers::RUST_STRING_KINDS;
 #[derive(Default)]
 struct State {
     any_sets_search_path: bool,
+    /// Any SQL string in this file is ClickHouse DDL, which has no
+    /// `search_path` concept — the Postgres-only rule must not fire on it.
+    any_clickhouse: bool,
     /// Location of the first CREATE/ALTER TABLE string seen, for the
     /// diagnostic emitted in `finish` when no search_path is set.
     first_ddl: Option<(usize, usize, usize, usize)>, // line, col, byte_start, byte_len
@@ -40,6 +43,10 @@ impl AstCheck for Check {
         let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
             return;
         };
+        if crate::rules::sql_helpers::is_clickhouse_ddl(text) {
+            state.any_clickhouse = true;
+            return;
+        }
         if super::sql_sets_search_path(text) {
             state.any_sets_search_path = true;
             return;
@@ -63,7 +70,7 @@ impl AstCheck for Check {
         let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
             return;
         };
-        if state.any_sets_search_path {
+        if state.any_sets_search_path || state.any_clickhouse {
             return;
         }
         let Some((line, column, byte_start, byte_len)) = state.first_ddl else {
@@ -114,5 +121,32 @@ mod tests {
     fn ignores_non_migration_files() {
         let src = r#"fn f() { let m = "CREATE TABLE account (id INT);"; }"#;
         assert!(run_at("src/repo.rs", src).is_empty());
+    }
+
+    #[test]
+    fn skips_clickhouse_create_table_issue_7765() {
+        // ClickHouse has no search_path concept; the ENGINE = MergeTree clause
+        // proves the DDL is not PostgreSQL.
+        let src = r#"fn f() { let m = "CREATE TABLE Events (id UInt64) ENGINE = MergeTree ORDER BY id"; }"#;
+        assert!(run_at("db/clickhouse/migrations/001.rs", src).is_empty());
+    }
+
+    #[test]
+    fn skips_marker_less_clickhouse_string_via_file_level_gate_issue_7765() {
+        // The marker-less ALTER string sits alongside a MergeTree CREATE; the
+        // file is classified ClickHouse, so neither string is flagged.
+        let src = r#"fn f() {
+            let create = "CREATE TABLE Events (id UInt64) ENGINE = MergeTree ORDER BY id";
+            let alter = "ALTER TABLE Events ADD COLUMN name String";
+        }"#;
+        assert!(run_at("db/migrations/002.rs", src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_postgres_migration_alongside_clickhouse_repo_issue_7765() {
+        // A genuine Postgres migration (no ENGINE / ClickHouse markers) must
+        // still be flagged, even in a repo that also ships ClickHouse.
+        let src = r#"fn f() { let m = "CREATE TABLE users (id serial primary key)"; }"#;
+        assert_eq!(run_at("db/postgres/migrations/001.rs", src).len(), 1);
     }
 }
