@@ -1126,22 +1126,21 @@ pub fn is_in_loop_body(node: Node) -> bool {
 /// attribute whose name merely ends in the segment (`#[my_track_caller]`) does
 /// not match.
 pub fn has_outer_attribute(item: Node, source: &[u8], attr_path: &str) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if let Ok(text) = s.utf8_text(source)
-                    && attr_names_path(text, attr_path)
-                {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_preceding_attribute_text(item, source, |text| attr_names_path(text, attr_path))
+}
+
+/// True if `item` carries a symbol-export outer attribute — `#[no_mangle]`,
+/// `#[export_name = "…"]`, or `#[link_section = "…"]`, in either the bare form or
+/// the edition-2024 `#[unsafe(…)]` wrapper. Each of these pins a real,
+/// uniquely-addressed symbol for the linker / FFI, which a `const` (inlined at
+/// every use site, with no address and no symbol) cannot provide, so an item
+/// carrying one cannot be rewritten as a `const`.
+///
+/// Reads the attribute path from the `attribute_item` text — tolerating the
+/// `= "…"` value form and seeing through the `unsafe(…)` wrapper — so an
+/// unrelated attribute (`#[allow(…)]`, `#[cfg(…)]`) does not match.
+pub fn has_symbol_export_attribute(item: Node, source: &[u8]) -> bool {
+    any_preceding_attribute_text(item, source, attr_path_is_symbol_export)
 }
 
 /// True if an `attribute_item`'s source text names `attr_path` as its last path
@@ -1151,6 +1150,61 @@ pub fn has_outer_attribute(item: Node, source: &[u8], attr_path: &str) -> bool {
 fn attr_names_path(attr_text: &str, attr_path: &str) -> bool {
     attr_text.contains(&format!("[{attr_path}]"))
         || attr_text.contains(&format!("::{attr_path}]"))
+}
+
+/// Outer-attribute path identifiers that require a uniquely-addressed `static`
+/// symbol and are therefore invalid on a `const` item.
+const SYMBOL_EXPORT_ATTRS: &[&str] = &["no_mangle", "export_name", "link_section"];
+
+/// True if an outer attribute's source text names a [`SYMBOL_EXPORT_ATTRS`]
+/// attribute as its path. Strips the `#[ … ]` framing, sees through an
+/// `unsafe( … )` wrapper, then reads the leading path identifier (before any
+/// `= value` or `( … )` arguments) and matches its last `::` segment — so
+/// `#[core::no_mangle]` counts while `#[allow(no_mangle)]` (a different path) and
+/// a hypothetical `#[no_mangle_x]` do not.
+fn attr_path_is_symbol_export(attr_text: &str) -> bool {
+    let inner = attr_text
+        .trim()
+        .trim_start_matches('#')
+        .trim()
+        .strip_prefix('[')
+        .and_then(|s| s.trim_end().strip_suffix(']'))
+        .map(str::trim)
+        .unwrap_or("");
+    let inner = inner
+        .strip_prefix("unsafe")
+        .map(str::trim_start)
+        .and_then(|s| s.strip_prefix('('))
+        .and_then(|s| s.trim_end().strip_suffix(')'))
+        .map(str::trim)
+        .unwrap_or(inner);
+    let path = inner
+        .split(|c: char| c == '=' || c == '(' || c.is_whitespace())
+        .next()
+        .unwrap_or("");
+    let segment = path.rsplit("::").next().unwrap_or(path);
+    SYMBOL_EXPORT_ATTRS.contains(&segment)
+}
+
+/// Walk `item`'s preceding outer-attribute siblings — skipping interleaved
+/// `line_comment`/`block_comment` nodes and stopping at the first non-attribute
+/// sibling — and return true if any `attribute_item`'s source text satisfies
+/// `matches`. Shared by the attribute-presence predicates above.
+fn any_preceding_attribute_text(item: Node, source: &[u8], matches: impl Fn(&str) -> bool) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if s.utf8_text(source).is_ok_and(&matches) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
 }
 
 /// True if `item` carries a rustdoc `# Panics` section as a preceding doc-comment

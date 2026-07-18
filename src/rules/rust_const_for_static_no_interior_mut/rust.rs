@@ -14,9 +14,15 @@
 //! - skip if the static's address is taken (`&NAME`) in scope — a stable,
 //!   unique address is being relied upon (e.g. an FFI pointer handed to C),
 //!   which a `const` inlined at each use site would not provide.
+//! - skip if the static carries a symbol-export attribute (`#[no_mangle]`,
+//!   `#[export_name = "…"]`, `#[link_section = "…"]`, including the edition-2024
+//!   `#[unsafe(…)]` wrapper): each pins a real, uniquely-addressed linker/FFI
+//!   symbol, which a `const` (inlined, with no address and no symbol) cannot
+//!   carry, so the transformation is invalid.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::has_symbol_export_attribute;
 
 const KINDS: &[&str] = &["static_item"];
 
@@ -70,6 +76,14 @@ impl AstCheck for Check {
             return;
         };
         if !is_literal_value(value) {
+            return;
+        }
+        // A static carrying a symbol-export attribute defines a real,
+        // uniquely-addressed linker/FFI symbol (jemalloc `malloc_conf`, a CRT
+        // init pointer, a `#[no_mangle]` C entry point). A `const` is inlined at
+        // each use site with no address and no symbol, so the compiler rejects
+        // these attributes on it — the suggested rewrite is invalid.
+        if has_symbol_export_attribute(node, source) {
             return;
         }
         let name = node
@@ -235,5 +249,77 @@ mod tests {
     fn flags_function_local_static_used_by_value_only() {
         let src = "fn k() { static Z: u32 = 7; let _ = Z + 1; }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_static_with_unsafe_export_name_attr() {
+        // openobserve jemalloc profiling: the static exports the `malloc_conf`
+        // linker symbol the jemalloc C runtime reads at startup (issue #7754).
+        let src = r#"
+            #[allow(non_upper_case_globals)]
+            #[unsafe(export_name = "malloc_conf")]
+            pub static malloc_conf: &[u8] = b"prof:true,prof_active:true\0";
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_static_with_no_mangle_attr() {
+        let src = "#[no_mangle] static X: u8 = 1;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_static_with_export_name_attr() {
+        let src = r#"#[export_name = "y"] static Y: u8 = 1;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_static_with_link_section_attr() {
+        let src = r#"#[link_section = ".foo"] static Z: u8 = 1;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_static_with_unsafe_no_mangle_attr() {
+        let src = "#[unsafe(no_mangle)] static A: u8 = 1;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_static_with_unsafe_link_section_attr() {
+        let src = r#"#[unsafe(link_section = ".x")] static B: u8 = 1;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_static_with_no_export_attr() {
+        let src = "static PLAIN: u8 = 1;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_static_with_unrelated_attr() {
+        // An unrelated attribute must not neuter the rule: `const` is a valid
+        // rewrite here, so the static is still flagged.
+        let src = "#[allow(dead_code)] static Q: u8 = 1;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_static_with_export_word_only_as_attr_argument() {
+        // Match on the attribute PATH, not its arguments: `no_mangle` here is an
+        // argument to `#[allow(…)]`, not the attribute path, so `const` is still
+        // a valid rewrite and the static stays flagged.
+        let src = "#[allow(no_mangle)] static X: u8 = 1;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_static_with_path_qualified_no_mangle_attr() {
+        // A `::`-qualified attribute path matches on its last segment.
+        let src = "#[core::no_mangle] static X: u8 = 1;";
+        assert!(run_on(src).is_empty());
     }
 }
