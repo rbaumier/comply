@@ -5,6 +5,11 @@
 //! normalized name is sensitive (see `is_sensitive_identifier`). Operands
 //! that are string literals, call expressions, or any other shape are
 //! ignored, so a string like `"index_signature"` is never inspected.
+//!
+//! A comparison is also exempt when it cannot leak a secret through timing:
+//! when it is a scalar-integer comparison (a single constant-time instruction),
+//! or when either operand is a string / char literal (a public compile-time
+//! constant baked into the binary, not a runtime secret).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -44,6 +49,14 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     // to a count / dimension), the sensitively-named operand is a numeric count
     // (e.g. `pin` = the length of an HMM initial-state vector), not a credential.
     if comparison_is_scalar_integer(left, right, source) {
+        return;
+    }
+    // A string / char literal operand is a public compile-time constant baked
+    // into the binary, not a runtime secret. Comparing a sensitively-named value
+    // against a literal (e.g. `password == "iamrds"`, a mode-selecting sentinel)
+    // has no timing-attack surface: leaking that the value matches a known public
+    // constant reveals nothing. Sibling to the integer-literal exemption above.
+    if comparison_has_string_or_char_literal(left, right) {
         return;
     }
 
@@ -89,6 +102,24 @@ fn operand_is_scalar_integer(node: tree_sitter::Node, source: &[u8]) -> bool {
         }),
         _ => false,
     }
+}
+
+/// True when either operand is a string, raw-string, or char literal — a public
+/// compile-time constant, so the comparison holds no secret to leak. Byte strings
+/// (`b"..."`) and byte chars (`b'x'`) parse as `string_literal` / `char_literal`,
+/// so they are covered too.
+fn comparison_has_string_or_char_literal(
+    left: tree_sitter::Node,
+    right: tree_sitter::Node,
+) -> bool {
+    operand_is_string_or_char_literal(left) || operand_is_string_or_char_literal(right)
+}
+
+fn operand_is_string_or_char_literal(node: tree_sitter::Node) -> bool {
+    matches!(
+        node.kind(),
+        "string_literal" | "raw_string_literal" | "char_literal"
+    )
 }
 
 /// True if `node` sits inside the `eq` method of an `impl PartialEq for T`.
@@ -471,6 +502,47 @@ fn validate(transition: &Mat, observation: &Mat, initial: &Vec) {
     #[test]
     fn flags_auth_digest_comparison() {
         let src = "fn f(auth_digest: &str, expected_digest: &str) -> bool { auth_digest != expected_digest }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// windmill-common/src/lib.rs:1356 (#7783) — `"iamrds"` is a public sentinel
+    /// selecting an auth mode, not a hidden secret; the RHS is a string literal
+    /// (a compile-time constant), so the comparison has no timing-attack surface.
+    #[test]
+    fn does_not_flag_password_against_string_literal_sentinel() {
+        let src = r#"fn f(password: &str) -> bool { password == "iamrds" }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// windmill-common/src/lib.rs:1386 (#7783) — the `!=` / `entraid` variant.
+    #[test]
+    fn does_not_flag_password_not_equal_string_literal() {
+        let src = r#"fn f(password: &str) -> bool { password != "entraid" }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A sensitively-named value compared against a char literal is compared
+    /// against a public compile-time constant — no secret to leak.
+    #[test]
+    fn does_not_flag_secret_against_char_literal() {
+        let src = "fn f(secret: char) -> bool { secret == 'x' }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A raw string literal is likewise a public compile-time constant; the LHS
+    /// is a sensitive identifier so the exemption (not the non-sensitive early
+    /// return) is what suppresses the diagnostic.
+    #[test]
+    fn does_not_flag_password_against_raw_string_literal() {
+        let src = r##"fn f(password: &str) -> bool { password == r"abc" }"##;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Over-exemption guard: `secret == other_secret` has no literal operand and
+    /// must still flag.
+    #[test]
+    fn flags_secret_against_other_secret() {
+        let src = "fn f(secret: &str, other_secret: &str) -> bool { secret == other_secret }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
