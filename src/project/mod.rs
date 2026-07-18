@@ -4735,6 +4735,39 @@ impl ProjectCtx {
         ts_dir != pkg_dir && ts_dir.starts_with(&pkg_dir)
     }
 
+    /// True when the file at `path` is governed by genuine Node ESM, where a
+    /// JSON `import` must carry a `with { type: "json" }` import attribute. Both
+    /// conditions must hold:
+    ///
+    /// - the nearest tsconfig selects Node's ESM module system —
+    ///   `compilerOptions.module` or `moduleResolution` is
+    ///   `node16`/`node18`/`nodenext` (case-insensitive), directly or inherited
+    ///   through its `extends` chain; and
+    /// - the file's package scope is ESM — the nearest `package.json` declares
+    ///   `"type":"module"` (see [`nearest_package_type`]). Under those module
+    ///   systems a file without that field is CommonJS, where the JSON import
+    ///   compiles to `require()` and needs no attribute.
+    ///
+    /// Under any other module system (`esnext`/bundler, classic `node`
+    /// resolution, `commonjs`), TypeScript resolves the JSON import without the
+    /// attribute, so this returns false. Defaults to false when no tsconfig
+    /// governs `path`.
+    ///
+    /// [`nearest_package_type`]: ProjectCtx::nearest_package_type
+    pub fn requires_node_esm_import_attributes(&self, path: &Path) -> bool {
+        fn is_node_esm(m: &str) -> bool {
+            m.eq_ignore_ascii_case("node16")
+                || m.eq_ignore_ascii_case("node18")
+                || m.eq_ignore_ascii_case("nodenext")
+        }
+        let Some(tsc) = self.nearest_tsconfig(path) else {
+            return false;
+        };
+        let module_is_node_esm = tsc.module.as_deref().is_some_and(is_node_esm)
+            || tsc.module_resolution.as_deref().is_some_and(is_node_esm);
+        module_is_node_esm && self.nearest_package_type(path) == ModuleType::Module
+    }
+
     /// The package-scope module type governing `path` under `node16`/`nodenext`
     /// resolution: the `type` of the nearest enclosing `package.json`, counting
     /// bare `{"type":"module"}` marker manifests (whose sole purpose is to flag
