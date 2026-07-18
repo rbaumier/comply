@@ -331,6 +331,16 @@ fn contains_password_in_url(line: &str) -> bool {
                 }
                 let username = &after[..colon];
                 let password = &rest[..at];
+                // A brace placeholder in the password component — a Rust
+                // `format!` slot (`{}`, `{0}`, `{name}`) or a template
+                // substitution — fills the credential at runtime, so it is not a
+                // hardcoded literal. Braces are not valid unencoded characters in
+                // a real URL userinfo, so a brace-delimited password is
+                // unambiguously an interpolation, mirroring the `${...}` carve-out
+                // above.
+                if password.contains('{') {
+                    return false;
+                }
                 if is_placeholder_credential_pair(username, password) {
                     return false;
                 }
@@ -976,5 +986,42 @@ mod tests {
             run(r#"const u = `redis://admin:hunter2@${host}:${port}/${db}`;"#).len(),
             1
         );
+    }
+
+    // Regression tests for #7784 — a Rust `format!` placeholder in the URL
+    // password position fills the credential at runtime, so it is not a
+    // hardcoded literal (windmill git_sync_oss.rs).
+    #[test]
+    fn allows_rust_format_placeholder_in_url_password() {
+        assert!(
+            run(r#"Ok(format!("https://x-access-token:{}@{}{}", installation_token, host, url.path()))"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_indexed_format_placeholder_in_url_password() {
+        assert!(run(r#"format!("https://user:{0}@host")"#).is_empty());
+    }
+
+    #[test]
+    fn allows_named_format_placeholder_in_url_password() {
+        assert!(run(r#"format!("https://user:{tok}@host")"#).is_empty());
+    }
+
+    #[test]
+    fn allows_template_substitution_password_preserved() {
+        // The existing JS `${...}` template-substitution case still exempts.
+        assert!(run(r#"const u = `postgres://user:${token}@host/db`;"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_literal_password_no_brace_placeholder() {
+        // A brace-free literal password is a real credential and still flags.
+        assert_eq!(
+            run(r#"const db = "postgres://admin:s3cretProd@host:5432/db";"#).len(),
+            1
+        );
+        assert_eq!(run("const db = 'redis://user:hunter2@host:6379';").len(), 1);
     }
 }
