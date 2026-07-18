@@ -422,6 +422,93 @@ fn is_param_of_implements_class_method(
     }) == Some(true)
 }
 
+/// True when any binding identifier reachable in `pattern` — a simple
+/// identifier, or any leaf of a destructuring / rest pattern — has a resolved
+/// reference. Used to decide whether a parameter *position* is consumed,
+/// regardless of whether it destructures.
+fn pattern_has_referenced_binding(
+    pattern: &oxc_ast::ast::BindingPattern<'_>,
+    scoping: &oxc_semantic::Scoping,
+) -> bool {
+    use oxc_ast::ast::BindingPattern;
+    match pattern {
+        BindingPattern::BindingIdentifier(id) => id.symbol_id.get().is_some_and(|sym| {
+            scoping.get_resolved_references(sym).next().is_some()
+        }),
+        BindingPattern::ObjectPattern(obj) => {
+            obj.properties
+                .iter()
+                .any(|prop| pattern_has_referenced_binding(&prop.value, scoping))
+                || obj
+                    .rest
+                    .as_ref()
+                    .is_some_and(|rest| pattern_has_referenced_binding(&rest.argument, scoping))
+        }
+        BindingPattern::ArrayPattern(arr) => {
+            arr.elements
+                .iter()
+                .flatten()
+                .any(|el| pattern_has_referenced_binding(el, scoping))
+                || arr
+                    .rest
+                    .as_ref()
+                    .is_some_and(|rest| pattern_has_referenced_binding(&rest.argument, scoping))
+        }
+        BindingPattern::AssignmentPattern(assign) => {
+            pattern_has_referenced_binding(&assign.left, scoping)
+        }
+    }
+}
+
+/// True when the simple-identifier parameter declared at `decl_node` precedes a
+/// later parameter, in the same parameter list, whose binding is referenced.
+/// Such a leading unused parameter is positionally mandated: dropping or
+/// renaming it would shift every parameter after it, so an absence of references
+/// is by design, not dead code. This is ESLint's `args: "after-used"` default —
+/// a leading unused argument is reported only when no later argument in the same
+/// list is used.
+///
+/// Scoped to simple-identifier parameters (`function f(h, conf, key)`), which is
+/// the reported class and the clear-cut positional case: a leading destructured
+/// binding can be dropped individually without shifting later parameters, so its
+/// per-binding behavior is left unchanged. A trailing unused parameter (none
+/// used after it) stays reportable, as does an all-unused list.
+fn is_unused_param_before_used(
+    decl_node: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::BindingPattern;
+
+    let nodes = semantic.nodes();
+    let AstKind::FormalParameter(param) = nodes.kind(decl_node) else {
+        return false;
+    };
+    if !matches!(param.pattern, BindingPattern::BindingIdentifier(_)) {
+        return false;
+    }
+    let AstKind::FormalParameters(params) = nodes.parent_kind(decl_node) else {
+        return false;
+    };
+    let Some(index) = params
+        .items
+        .iter()
+        .position(|item| item.node_id.get() == decl_node)
+    else {
+        return false;
+    };
+
+    let scoping = semantic.scoping();
+    // A used binding at any later positional slot — a following parameter or the
+    // trailing rest element — makes this leading parameter positionally required.
+    params.items[index + 1..]
+        .iter()
+        .any(|item| pattern_has_referenced_binding(&item.pattern, scoping))
+        || params
+            .rest
+            .as_ref()
+            .is_some_and(|rest| pattern_has_referenced_binding(&rest.rest.argument, scoping))
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -496,6 +583,14 @@ impl OxcCheck for Check {
             // without breaking the contract, so an unreferenced one (stub/noop
             // implementation) is by design, not dead code.
             if is_param_of_implements_class_method(decl_node, semantic) {
+                continue;
+            }
+
+            // An unused parameter followed by a later used one is positionally
+            // mandated — dropping or renaming it would shift every parameter
+            // after it — so it is not removable dead code (ESLint's
+            // `args: "after-used"` default).
+            if is_unused_param_before_used(decl_node, semantic) {
                 continue;
             }
 
@@ -1543,6 +1638,93 @@ export { hasProperty };
             !diags.iter().any(|d| d.message.contains("`k`")),
             "FP on mapped-type key parameter `k`"
         );
+    }
+
+    #[test]
+    fn no_fp_on_leading_unused_param_before_used() {
+        // A leading unused parameter followed by used ones is positionally
+        // mandated: `h` cannot be dropped or renamed without shifting `conf`
+        // and `key`, which the body uses. ESLint's `args: "after-used"`
+        // default. (Closes #7796)
+        let src = "function f(h, conf, key) {\n  return conf[key];\n}\nexport { f };";
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`h`")),
+            "FP on leading unused param `h` before used `conf`/`key`: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_leading_unused_param_in_method_shorthand() {
+        // The method-shorthand form from the repro: `h` is the leading
+        // positional parameter and `conf`/`key` after it are used, so `h` is
+        // positionally required. (Closes #7796)
+        let src = r#"
+const componentChild = {
+    default(h, conf, key) {
+        return conf[key];
+    },
+};
+export { componentChild };
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`h`")),
+            "FP on leading unused param `h` in a method shorthand: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_middle_unused_param_before_used_trailer() {
+        // `b` is unused but `c` after it is used, so `b` is positionally
+        // required; `a`/`c` are used and never flagged. (Closes #7796)
+        let src = "const f = (a, b, c) => a + c;\nexport { f };";
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "expected no diagnostics (b positionally required, a/c used): {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_all_unused_params() {
+        // Negative-space guard for #7796 — when NO later parameter is used,
+        // every parameter stays reportable (after-used reports the whole list).
+        let src = "function f(a, b) {}\nexport { f };";
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`a`")),
+            "expected all-unused leading param `a` to still be flagged: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("`b`")),
+            "expected all-unused param `b` to still be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_last_unused_param_after_used() {
+        // Negative-space guard for #7796 — a trailing unused parameter has no
+        // used parameter after it, so after-used still flags it; `a` is used.
+        let src = "const f = (a, b) => a;\nexport { f };";
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`b`")),
+            "expected trailing unused param `b` to still be flagged: {diags:?}"
+        );
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`a`")),
+            "used param `a` must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_leading_underscore_param_before_used() {
+        // The leading-`_` exemption is unchanged: `_` is a conventional ignored
+        // positional placeholder and `value` after it is used. (Closes #7796)
+        let src = "const f = (_, value) => value;\nexport { f };";
+        let diags = run(src);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 
 }
