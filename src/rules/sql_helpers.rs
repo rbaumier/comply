@@ -270,6 +270,14 @@ pub fn contains_complete_ddl_statement(text: &str) -> bool {
 /// like `VARCHAR(255)`, `DECIMAL(10, 2)`, etc., without matching
 /// identifiers like `same_char(` or `bpchar_value`.
 pub fn word_followed_by_open_paren(lower_text: &str, word: &str) -> bool {
+    word_followed_by_byte(lower_text, word, b'(')
+}
+
+/// Returns true if `lower_text` (already lowercase) contains `word`
+/// (lowercase) at a word boundary AND the next non-whitespace byte is
+/// `target`. Word-boundary matching means an identifier that merely
+/// contains `word` (`same_char`, `varchar_value`) doesn't trigger.
+fn word_followed_by_byte(lower_text: &str, word: &str, target: u8) -> bool {
     let bytes = lower_text.as_bytes();
     let needle = word.as_bytes();
     if needle.is_empty() || bytes.len() < needle.len() {
@@ -284,7 +292,7 @@ pub fn word_followed_by_open_paren(lower_text: &str, word: &str) -> bool {
                 while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                     j += 1;
                 }
-                if j < bytes.len() && bytes[j] == b'(' {
+                if j < bytes.len() && bytes[j] == target {
                     return true;
                 }
             }
@@ -292,6 +300,57 @@ pub fn word_followed_by_open_paren(lower_text: &str, word: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// True if whole-word `first` (lowercase) is immediately followed, across
+/// whitespace only, by whole-word `second` (lowercase). Matches multi-token
+/// SQL clauses (`ON CLUSTER`, `MODIFY COLUMN`) while tolerating arbitrary
+/// whitespace and rejecting identifiers that merely contain either word.
+fn words_adjacent(lower_text: &str, first: &str, second: &str) -> bool {
+    let bytes = lower_text.as_bytes();
+    let mut from = 0;
+    while let Some((_, first_end)) = find_word(lower_text, first, from) {
+        let mut j = first_end;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if let Some((second_start, _)) = find_word(lower_text, second, j) {
+            if second_start == j {
+                return true;
+            }
+        }
+        from = first_end;
+    }
+    false
+}
+
+/// True if `sql` is ClickHouse DDL — it uses a grammar production that
+/// PostgreSQL cannot emit. Postgres-only migration rules
+/// (`sql-require-search-path`, `migration-needs-lock-timeout`) must not fire
+/// on it, because their remediations (`SET search_path`, `SET lock_timeout`)
+/// are not valid ClickHouse settings.
+///
+/// The discriminator keys on structural ClickHouse-only productions, never on
+/// paths or a value allowlist:
+/// - a table-`ENGINE =` clause (Postgres `CREATE TABLE` has no engine) and the
+///   `MergeTree` engine family
+/// - the `ON CLUSTER` replication clause
+/// - `MODIFY COLUMN` (Postgres spells column changes `ALTER COLUMN`)
+/// - ClickHouse type wrappers / functions: `Nullable(`, `LowCardinality(`,
+///   `DateTime64`, `now64()`
+///
+/// Matching is case-insensitive and whitespace-tolerant, mirroring the other
+/// SQL predicates in this module.
+pub fn is_clickhouse_ddl(sql: &str) -> bool {
+    let lower = sql.to_ascii_lowercase();
+    lower.contains("mergetree")
+        || word_followed_by_byte(&lower, "engine", b'=')
+        || words_adjacent(&lower, "on", "cluster")
+        || words_adjacent(&lower, "modify", "column")
+        || word_followed_by_open_paren(&lower, "nullable")
+        || word_followed_by_open_paren(&lower, "lowcardinality")
+        || word_followed_by_open_paren(&lower, "now64")
+        || contains_word(&lower, "datetime64")
 }
 
 /// Postgres system-catalog relations that appear in schema-introspection
@@ -564,6 +623,56 @@ mod tests {
         assert!(is_migration_path(Path::new("src/migration/0001.ts")));
         assert!(is_migration_path(Path::new("db/migrate/0001_init.rb")));
         assert!(is_migration_path(Path::new("MIGRATIONS/v1.sql"))); // case-insensitive
+    }
+
+    #[test]
+    fn is_clickhouse_ddl_detects_engine_and_type_wrappers() {
+        // ENGINE = clause (whitespace-tolerant) and the MergeTree family.
+        assert!(is_clickhouse_ddl(
+            "CREATE TABLE t (id UInt64) ENGINE = MergeTree ORDER BY (id)"
+        ));
+        assert!(is_clickhouse_ddl(
+            "CREATE TABLE t (id UInt64) ENGINE=ReplacingMergeTree ORDER BY id"
+        ));
+        assert!(is_clickhouse_ddl("CREATE TABLE t (x Int64) ENGINE = TinyLog"));
+        // ClickHouse type wrappers / functions.
+        assert!(is_clickhouse_ddl(
+            "ALTER TABLE X ADD COLUMN IF NOT EXISTS staled_at Nullable(DateTime64(6, 'UTC'))"
+        ));
+        assert!(is_clickhouse_ddl(
+            "ALTER TABLE X ADD COLUMN c LowCardinality(String)"
+        ));
+        assert!(is_clickhouse_ddl(
+            "ALTER TABLE X ADD COLUMN ts DateTime64(3)"
+        ));
+        assert!(is_clickhouse_ddl("ALTER TABLE X UPDATE ts = now64() WHERE 1"));
+        // ON CLUSTER and MODIFY COLUMN productions.
+        assert!(is_clickhouse_ddl(
+            "CREATE TABLE t ON CLUSTER my_cluster (id UInt64) ENGINE = Log"
+        ));
+        assert!(is_clickhouse_ddl(
+            "ALTER TABLE X MODIFY COLUMN c String"
+        ));
+    }
+
+    #[test]
+    fn is_clickhouse_ddl_rejects_postgres_ddl() {
+        // Plain Postgres migrations carry no ClickHouse grammar marker.
+        assert!(!is_clickhouse_ddl("CREATE TABLE users (id serial primary key)"));
+        assert!(!is_clickhouse_ddl(
+            "ALTER TABLE users ALTER COLUMN name SET NOT NULL"
+        ));
+        assert!(!is_clickhouse_ddl(
+            "CREATE INDEX idx_users_age ON users(age)"
+        ));
+        // A column named `engine` is not an ENGINE = clause; `is_nullable(...)`
+        // is a function call, not the `Nullable(` type wrapper.
+        assert!(!is_clickhouse_ddl(
+            "ALTER TABLE cars ADD COLUMN engine TEXT"
+        ));
+        assert!(!is_clickhouse_ddl(
+            "SELECT * FROM t WHERE is_nullable(col)"
+        ));
     }
 
     #[test]

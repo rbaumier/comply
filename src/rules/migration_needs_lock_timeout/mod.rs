@@ -8,6 +8,9 @@
 //! requires a `verb object target` shape so query-builder fragments
 //! (`push_sql("ALTER TABLE ")`) — which have nowhere to attach a lock
 //! timeout — are not flagged.
+//!
+//! `SET lock_timeout` is a PostgreSQL setting, so a file whose SQL is
+//! ClickHouse DDL (`is_clickhouse_ddl`) is skipped entirely.
 
 mod oxc_typescript;
 mod rust;

@@ -1,26 +1,91 @@
 //! migration-needs-lock-timeout — Rust backend.
 //!
-//! Scoped to migration files. Walks Rust string literals, uses
-//! `contains_ddl` to confirm the string is a complete DDL statement
-//! before checking for `lock_timeout`.
+//! Scoped to migration files. Walks Rust string literals; a string holding a
+//! complete DDL statement without `SET lock_timeout` is flagged. The whole
+//! file is skipped when any of its SQL strings is ClickHouse DDL — ClickHouse
+//! has no `lock_timeout` setting — so a marker-less DDL string in a ClickHouse
+//! migration is not flagged alongside its marked siblings.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::sql_helpers::RUST_STRING_KINDS;
 
-crate::ast_check! { on ["string_literal", "raw_string_literal"] => |node, source, ctx, diagnostics|
-    if !crate::rules::sql_helpers::is_migration_path(ctx.path) { return; }
-    let Ok(text) = node.utf8_text(source) else { return; };
-    if !super::contains_ddl(text) { return; }
-    if super::declares_lock_timeout(text) { return; }
-    let pos = node.start_position();
-    diagnostics.push(Diagnostic {
-        path: std::sync::Arc::clone(&ctx.path_arc),
-        line: pos.row + 1,
-        column: pos.column + 1,
-        rule_id: "migration-needs-lock-timeout".into(),
-        message: "DDL without `SET lock_timeout` — add `SET lock_timeout = '5s';` at the top to prevent write queue pileups.".into(),
-        severity: Severity::Warning,
-        span: Some((node.byte_range().start, node.byte_range().len())),
-    });
+#[derive(Default)]
+struct State {
+    /// Some SQL string in this file is ClickHouse DDL, so a Postgres-only
+    /// `SET lock_timeout` must not be recommended for any string in it.
+    any_clickhouse: bool,
+    /// DDL strings lacking a lock timeout, emitted in `finish` once the whole
+    /// file is known not to be ClickHouse.
+    candidates: Vec<(usize, usize, usize, usize)>, // line, col, byte_start, byte_len
+}
+
+#[derive(Debug)]
+pub struct Check;
+
+impl AstCheck for Check {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(RUST_STRING_KINDS)
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::<State>::default())
+    }
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if !crate::rules::sql_helpers::is_migration_path(ctx.path) {
+            return;
+        }
+        let Ok(text) = node.utf8_text(ctx.source.as_bytes()) else {
+            return;
+        };
+        let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
+            return;
+        };
+        if crate::rules::sql_helpers::is_clickhouse_ddl(text) {
+            state.any_clickhouse = true;
+            return;
+        }
+        if !super::contains_ddl(text) || super::declares_lock_timeout(text) {
+            return;
+        }
+        let pos = node.start_position();
+        let range = node.byte_range();
+        state
+            .candidates
+            .push((pos.row + 1, pos.column + 1, range.start, range.len()));
+    }
+
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(state) = state.and_then(|s| s.downcast::<State>().ok()) else {
+            return;
+        };
+        if state.any_clickhouse {
+            return;
+        }
+        for (line, column, byte_start, byte_len) in state.candidates {
+            diagnostics.push(Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line,
+                column,
+                rule_id: super::META.id.into(),
+                message: "DDL without `SET lock_timeout` — add `SET lock_timeout = '5s';` at the top to prevent write queue pileups.".into(),
+                severity: Severity::Warning,
+                span: Some((byte_start, byte_len)),
+            });
+        }
+    }
 }
 
 
@@ -98,5 +163,33 @@ mod tests {
         // lock_timeout must STILL fire.
         let src = r#"fn f() { let m = "ALTER TABLE orders ADD COLUMN total NUMERIC"; }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_clickhouse_alter_with_type_wrapper_issue_7765() {
+        // ClickHouse ALTER TABLE with a Nullable(DateTime64(...)) column type:
+        // `SET lock_timeout` is not a valid ClickHouse setting.
+        let src = r#"fn f() { let m = "ALTER TABLE ChatInferenceDatapoint ADD COLUMN IF NOT EXISTS staled_at Nullable(DateTime64(6, 'UTC'))"; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_clickhouse_modify_column_and_on_cluster_issue_7765() {
+        let src = r#"fn f() {
+            let a = "ALTER TABLE X ON CLUSTER c MODIFY COLUMN c LowCardinality(String)";
+        }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_marker_less_clickhouse_string_via_file_level_gate_issue_7765() {
+        // A marker-less `ALTER TABLE X ADD COLUMN y String` in a ClickHouse
+        // migration file must NOT be flagged: a sibling string carries the
+        // MergeTree engine marker, classifying the whole file as ClickHouse.
+        let src = r#"fn f() {
+            let create = "CREATE TABLE Events (id UInt64) ENGINE = MergeTree ORDER BY id";
+            let alter = "ALTER TABLE Events ADD COLUMN name String";
+        }"#;
+        assert!(run(src).is_empty());
     }
 }
