@@ -23,17 +23,30 @@ fn is_nuxt_source(src: &str) -> bool {
         || source_contains(src, "useRuntimeConfig")
 }
 
-/// True if the project's `package.json` declares a browser-like runtime target.
-fn project_allows_window(
-    project: &crate::project::ProjectCtx,
-    path: &std::path::Path,
-) -> bool {
-    let Some(pkg) = project.nearest_package_json(path) else {
-        return false;
-    };
-    pkg.has_browserslist
-        || pkg.engines.contains_key("vscode")
-        || pkg.engines.contains_key("electron")
+/// True when the project targets a browser realm, so a bare `window` is correct
+/// by construction rather than a portability oversight. Two signals:
+///
+/// - the nearest `package.json` declares a browser-like runtime target
+///   (`browserslist`, or an `engines.vscode`/`engines.electron` host), or
+/// - the file belongs to a bundler-built browser *application* — a bundler
+///   (Vite/webpack/…, via the shared [`project_uses_bundler`] lever) plus a
+///   root `index.html` app-entry document. Both are required: the bundler alone
+///   also describes library-mode packages, which may legitimately target
+///   `globalThis`; the `index.html` entry is what marks a browser app whose only
+///   realm is the DOM.
+///
+/// [`project_uses_bundler`]: crate::rules::file_extension_in_import::project_uses_bundler
+fn project_allows_window(ctx: &CheckCtx) -> bool {
+    if let Some(pkg) = ctx.project.nearest_package_json(ctx.path)
+        && (pkg.has_browserslist
+            || pkg.engines.contains_key("vscode")
+            || pkg.engines.contains_key("electron"))
+    {
+        return true;
+    }
+
+    crate::rules::file_extension_in_import::project_uses_bundler(ctx)
+        && ctx.project.package_root_has_index_html(ctx.path)
 }
 
 /// Window-specific APIs that should remain as `window.X`.
@@ -152,7 +165,7 @@ impl OxcCheck for Check {
         // The project allowlist requires a `package.json` lookup (locked,
         // per-directory memoised) — gate it behind the rare identifier match
         // above so the vast majority of `a.b` accesses skip it entirely.
-        if project_allows_window(ctx.project, ctx.path) {
+        if project_allows_window(ctx) {
             return;
         }
 
@@ -612,5 +625,96 @@ mod tests {
             "`window.*` in a non-Nuxt `.client.ts` file must still be flagged: {d:?}"
         );
         assert!(d[0].message.contains("globalThis"));
+    }
+
+    /// Write a `package.json` (plus any `extra_root_files`, e.g. `index.html`) at
+    /// a temporary project root, place `src` at `src/copy.ts` under it, and run
+    /// the rule against a real `ProjectCtx` that resolves the manifest and root
+    /// files from disk. The `TempDir` is held for the duration of the run.
+    fn run_in_project(pkg_json: &str, extra_root_files: &[&str], src: &str) -> Vec<Diagnostic> {
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("package.json"), pkg_json).expect("write package.json");
+        for name in extra_root_files {
+            fs::write(dir.path().join(name), "").expect("write root file");
+        }
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).expect("create src dir");
+        let src_path = src_dir.join("copy.ts");
+        fs::write(&src_path, src).expect("write source");
+        let project = crate::project::ProjectCtx::default();
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            &src_path,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn ignores_window_in_vite_spa_with_index_html() {
+        // Regression for #7766 (chansee97/nova-admin): a Vite/Vue browser SPA has
+        // a `vite` dependency and a root `index.html` app-entry, so `window.*` is
+        // the correct global by construction — there is no Node realm.
+        let d = run_in_project(
+            r#"{"name":"nova-admin","dependencies":{"vite":"^5.0.0"}}"#,
+            &["index.html"],
+            "window.$message.error('boom');",
+        );
+        assert!(d.is_empty(), "`window.*` in a Vite SPA must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn ignores_window_in_webpack_app_with_index_html() {
+        // A webpack browser app is recognised the same way: bundler dependency
+        // plus a root `index.html` app-entry.
+        let d = run_in_project(
+            r#"{"name":"app","dependencies":{"webpack":"^5.0.0"}}"#,
+            &["index.html"],
+            "const x = window.foo;",
+        );
+        assert!(d.is_empty(), "`window.*` in a webpack browser app must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn flags_window_in_bundler_library_without_index_html() {
+        // A bundler dependency alone also describes library-mode packages, which
+        // may legitimately target `globalThis`. Without a root `index.html`
+        // app-entry the project is not proven browser-only, so `window.*` stays
+        // flagged — the app-entry guard is what distinguishes app from library.
+        let d = run_in_project(
+            r#"{"name":"lib","dependencies":{"vite":"^5.0.0"}}"#,
+            &[],
+            "const x = window.foo;",
+        );
+        assert_eq!(d.len(), 1, "library-mode bundler project must still flag `window.*`: {d:?}");
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn flags_window_in_plain_node_project() {
+        // Negative control: a plain Node project (no bundler, no browserslist/
+        // electron/vscode) has a server realm, so `window.*` must still fire.
+        let d = run_in_project(
+            r#"{"name":"svc","dependencies":{"express":"^4.0.0"}}"#,
+            &[],
+            "const x = window.foo;",
+        );
+        assert_eq!(d.len(), 1, "plain Node project must still flag `window.*`: {d:?}");
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn ignores_window_in_browserslist_project() {
+        // The pre-existing browser-target exemption keys off `browserslist`
+        // alone, independently of the bundler + `index.html` app-entry signal.
+        let d = run_in_project(
+            r#"{"name":"web","browserslist":["last 2 versions"]}"#,
+            &[],
+            "const x = window.foo;",
+        );
+        assert!(d.is_empty(), "`window.*` in a browserslist project must not be flagged: {d:?}");
     }
 }
