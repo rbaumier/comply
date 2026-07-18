@@ -2864,6 +2864,12 @@ pub struct ProjectCtx {
     // without this memo a deep monorepo pays the full walk once per file.
     bundler_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
+    // "Does the package owning this file ship a root `index.html`?" keyed by the
+    // resolved package-root directory. The answer is identical for every file in
+    // the package and the probe is a single stat, so a deep tree pays it once
+    // per package instead of once per file.
+    index_html_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
+
     // Workspace member package names, read+parsed from each workspace root's
     // package.json. Project-wide and constant, but queried once per import by
     // `no-implicit-deps` / `unlisted-dependency` — memoized so the disk read +
@@ -4520,6 +4526,26 @@ impl ProjectCtx {
         }
         let v = compute();
         self.bundler_dir_cache.lock().unwrap().insert(key, v);
+        v
+    }
+
+    /// True when the package owning `path` — its nearest substantive
+    /// `package.json` directory, or the file's own directory when there is none —
+    /// contains a root `index.html`. This is the app-entry signal of a
+    /// bundler-built browser application (a Vite/webpack SPA): the HTML document
+    /// the bundler injects the entry script into. Library-mode bundler packages
+    /// typically ship no such entry document, so this distinguishes an app from a
+    /// library. Memoized by package-root directory.
+    pub fn package_root_has_index_html(&self, path: &Path) -> bool {
+        let dir = self
+            .nearest_package_json_dir(path)
+            .or_else(|| path.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        if let Some(&v) = self.index_html_dir_cache.lock().unwrap().get(&dir) {
+            return v;
+        }
+        let v = dir.join("index.html").is_file();
+        self.index_html_dir_cache.lock().unwrap().insert(dir, v);
         v
     }
 
