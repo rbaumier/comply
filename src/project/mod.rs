@@ -4692,8 +4692,7 @@ impl ProjectCtx {
 
     /// True when the project governing `path` resolves relative imports as
     /// CommonJS, where the resolver supplies extensions and extensionless
-    /// relative imports are therefore correct. Two signals from the nearest
-    /// tsconfig make this true:
+    /// relative imports are therefore correct. Three signals make this true:
     ///
     /// - **Classic emit/resolution**: `compilerOptions.module` is `commonjs`, or
     ///   `compilerOptions.module` / `moduleResolution` is one of
@@ -4710,8 +4709,17 @@ impl ProjectCtx {
     ///   `"type":"module"` the file is CommonJS; with it, ESM — so this returns
     ///   true exactly when that manifest does not opt into ESM.
     ///
-    /// Any other config returns false — callers keep their default (ESM)
-    /// behavior rather than silently assuming CommonJS.
+    /// - **Silent tsconfig**: the nearest tsconfig sets neither `module` nor
+    ///   `moduleResolution` — typically because both are inherited from a base
+    ///   config that is unresolvable without installed deps (`extends` into
+    ///   `node_modules`). Node then decides the format from the same nearest
+    ///   `package.json` `type`, so this falls back to it identically to the
+    ///   `node16`/`nodenext` case — CommonJS unless the manifest opts into ESM.
+    ///
+    /// Any positive ESM tsconfig signal (e.g. `module:esnext`,
+    /// `moduleResolution:bundler`) returns false — callers keep their default
+    /// (ESM) behavior rather than silently assuming CommonJS. Also false when no
+    /// tsconfig governs `path`.
     ///
     /// [`nearest_package_type`]: ProjectCtx::nearest_package_type
     pub fn is_commonjs_project(&self, path: &Path) -> bool {
@@ -4731,14 +4739,21 @@ impl ProjectCtx {
             .is_some_and(|m| CLASSIC.iter().any(|c| m.eq_ignore_ascii_case(c)));
         if !(module_is_cjs || resolution_is_classic) {
             // No classic/commonjs-emit signal. Under `node16`/`nodenext`
-            // resolution TypeScript/Node derive each file's module format from
-            // the nearest `package.json` `type`: without `"type":"module"` the
-            // file is CommonJS (require-based, so extensionless relative imports
-            // resolve); with it the file is ESM. Any other module setting keeps
-            // the ESM default.
+            // resolution — or when the tsconfig is entirely silent on module
+            // format (neither `module` nor `moduleResolution` set, e.g. both
+            // inherited from a base config that is unresolvable without installed
+            // deps) — TypeScript/Node derive each file's module format from the
+            // nearest `package.json` `type`: without `"type":"module"` the file is
+            // CommonJS (require-based, so extensionless relative imports resolve);
+            // with it the file is ESM. Any other positive module signal
+            // (e.g. `esnext`, `bundler`) keeps the ESM default.
             let module_is_node_next = tsc.module.as_deref().is_some_and(is_node_next)
                 || tsc.module_resolution.as_deref().is_some_and(is_node_next);
-            return module_is_node_next && self.nearest_package_type(path) != ModuleType::Module;
+            let tsconfig_is_silent = tsc.module.is_none() && tsc.module_resolution.is_none();
+            if module_is_node_next || tsconfig_is_silent {
+                return self.nearest_package_type(path) != ModuleType::Module;
+            }
+            return false;
         }
 
         // The tsconfig positively selects CommonJS/classic resolution. An ESM
