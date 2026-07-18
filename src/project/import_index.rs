@@ -107,9 +107,12 @@ pub struct ExportedSymbol {
     pub is_type_only: bool,
     /// Source binding for `export { local as exported }` (and the re-export
     /// form `export { local as exported } from './m'`): the `local` side, when
-    /// it differs from `name`. `None` for declaration exports and plain
-    /// `export { x }`. Lets callers tell that the `default` export is an alias
-    /// of a named binding (`export { Foo as default }`) rather than an
+    /// it differs from `name`. Also the referenced binding of a bare-identifier
+    /// default export (`export default i18n` → `Some("i18n")`). `None` for
+    /// declaration exports, plain `export { x }`, and any non-identifier default
+    /// (`export default 42` / `function` / `class` / `{}` / a call). Lets callers
+    /// tell that the `default` export is an alias of a named binding
+    /// (`export { Foo as default }` or `export default Foo`) rather than an
     /// unrelated default that merely coexists with a named `Foo`.
     pub local_name: Option<String>,
     /// `true` when this is a single `const`/`let`/`var` binding initialized
@@ -2575,7 +2578,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             reexport_source: None,
             params: Vec::new(),
             is_type_only: false,
-            local_name: None,
+            local_name: default_export_local_name(node, source),
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             binds_at_most_one_param: default_export_binds_low_arity(node, source),
@@ -2995,6 +2998,23 @@ fn declarator_binds_low_arity_callable(decl: Node) -> bool {
         && fn_binds_at_most_one_param(value)
 }
 
+/// The local binding name of a bare-identifier default export — the `X` in
+/// `export default X`, where `X` is a plain identifier naming an existing module
+/// binding (`export const i18n = …; export default i18n;` → `Some("i18n")`). The
+/// bare-identifier spelling of `export { X as default }`: both make the default
+/// export the same value as the named binding `X`, so a consumer's
+/// `import X from '…'` is equivalent to `import { X }`. `None` for every other
+/// default value — a function/class declaration, a literal, an object, a call, a
+/// member expression — which introduces a fresh default distinct from any named
+/// binding. The tree-sitter analogue of [`oxc_default_export_local_name`].
+fn default_export_local_name(export_node: Node, source: &[u8]) -> Option<String> {
+    let mut cursor = export_node.walk();
+    export_node
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "identifier")
+        .map(|ident| text_of(ident, source))
+}
+
 /// True when a `export default …` statement's exported value binds at most the
 /// first argument passed to it — the default-export analogue of the named-export
 /// arity signals ([`fn_binds_at_most_one_param`] /
@@ -3226,7 +3246,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     reexport_source: None,
                     params: Vec::new(),
                     is_type_only: false,
-                    local_name: None,
+                    local_name: oxc_default_export_local_name(&export.declaration),
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     binds_at_most_one_param: oxc_default_export_binds_low_arity(
@@ -4156,6 +4176,21 @@ fn oxc_init_binds_low_arity_callable(init: &oxc_ast::ast::Expression) -> bool {
         Expression::ArrowFunctionExpression(f) => oxc_binds_at_most_one_param(&f.params),
         Expression::FunctionExpression(f) => oxc_binds_at_most_one_param(&f.params),
         _ => false,
+    }
+}
+
+/// oxc analogue of tree-sitter [`default_export_local_name`]: the local binding
+/// name of a bare-identifier default export (`export default i18n` →
+/// `Some("i18n")`). `None` for every other default value — a function/class
+/// declaration, a literal, an object, a call, a member expression — which
+/// introduces a fresh default distinct from any named binding.
+fn oxc_default_export_local_name(
+    decl: &oxc_ast::ast::ExportDefaultDeclarationKind,
+) -> Option<String> {
+    use oxc_ast::ast::ExportDefaultDeclarationKind;
+    match decl {
+        ExportDefaultDeclarationKind::Identifier(ident) => Some(ident.name.as_str().to_string()),
+        _ => None,
     }
 }
 
@@ -6421,6 +6456,52 @@ mod tests {
         assert!(names.contains(&"Baz"));
     }
 
+    // #7841: a bare-identifier default export (`export default i18n`, where
+    // `i18n` is an existing named binding) records the referenced binding as the
+    // default export's `local_name` — the bare-identifier analogue of
+    // `export { i18n as default }`. A non-identifier default (a literal, a
+    // function/class declaration, an object, a call) keeps `local_name: None`.
+    #[test]
+    fn bare_identifier_default_export_records_local_name() {
+        let (_dir, index, paths) = build_index(&[(
+            "locales.ts",
+            "export const i18n = createI18n();\nexport default i18n;",
+        )]);
+        let default = index
+            .get_exports(&paths[0])
+            .iter()
+            .find(|e| e.name == "default")
+            .expect("default export must be indexed")
+            .clone();
+        assert_eq!(
+            default.local_name.as_deref(),
+            Some("i18n"),
+            "`export default i18n` must record `i18n` as the default's local binding"
+        );
+
+        // Non-identifier defaults introduce a fresh default distinct from any
+        // named binding, so they carry no local binding name.
+        for src in [
+            "export default 42;",
+            "export default function foo() {}",
+            "export default class Widget {}",
+            "export default {};",
+            "export default createI18n();",
+        ] {
+            let (_d, idx, p) = build_index(&[("m.ts", src)]);
+            let default = idx
+                .get_exports(&p[0])
+                .iter()
+                .find(|e| e.name == "default")
+                .unwrap_or_else(|| panic!("default export must be indexed for `{src}`"))
+                .clone();
+            assert_eq!(
+                default.local_name, None,
+                "non-identifier default `{src}` must keep local_name None"
+            );
+        }
+    }
+
     #[test]
     fn indexes_ambient_declare_exports_issue_2030() {
         // Regression for rbaumier/comply#2030 — ambient `export declare …`
@@ -8456,6 +8537,14 @@ mod tests {
         "const single = (v) => !!v;\nexport default single;",
         "const dual = (a, b) => a + b;\nexport default dual;",
         "function guard(v) { return !!v; }\nexport default guard;",
+        // `export default <ident>`: a bare identifier re-exporting an existing
+        // named binding makes the default the same value as that binding, so both
+        // extractors capture the identifier as `local_name` — the bare-identifier
+        // spelling of `export { X as default }` (#7841). A non-identifier default
+        // (here a call expression) introduces a fresh default and keeps
+        // `local_name: None`. Both paths must agree.
+        "export const i18n = createI18n();\nexport default i18n;",
+        "export default createI18n();",
         "export function fn(a, b, c) { return a; }",
         "export function* gen(x) { yield x; }",
         "export async function afn(p, q) { return p; }",

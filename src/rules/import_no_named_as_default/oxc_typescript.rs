@@ -219,4 +219,38 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("Foo"));
     }
+
+    #[test]
+    fn allows_default_import_of_bare_identifier_default_export() {
+        // Issue #7841: `export default i18n` re-exports the named `i18n` binding,
+        // so `import i18n from '…'` resolves to the same value as
+        // `import { i18n }` — not the named-as-default mistake. The
+        // bare-identifier analogue of `export { X as default }`.
+        let (_dir, project, paths) = setup_project(&[
+            (
+                "locales.ts",
+                "export const i18n = createI18n();\nexport default i18n;",
+            ),
+            ("main.ts", "import i18n from './locales';"),
+        ]);
+        let diags = run(&project, &paths[1], "import i18n from './locales';");
+        assert!(diags.is_empty(), "expected no diagnostic, got {diags:?}");
+    }
+
+    #[test]
+    fn flags_named_as_default_when_default_aliases_a_different_binding() {
+        // True positive preserved: the default is a bare identifier aliasing
+        // `bar`, not `foo`, so importing the named `foo` as the default is still
+        // the classic mistake.
+        let (_dir, project, paths) = setup_project(&[
+            (
+                "m.ts",
+                "export const foo = 1;\nexport const bar = 2;\nexport default bar;",
+            ),
+            ("app.ts", "import foo from './m';"),
+        ]);
+        let diags = run(&project, &paths[1], "import foo from './m';");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("foo"));
+    }
 }
