@@ -268,6 +268,30 @@ fn is_imperative_host_write(obj_text: &str, prop_text: &str) -> bool {
     false
 }
 
+/// Identifiers that name the ECMAScript global object across browser, worker, and
+/// Node scopes.
+const GLOBAL_OBJECT_NAMES: &[&str] = &["window", "self", "globalThis"];
+
+/// True when `object` is *directly* the ECMAScript global object — the identifier
+/// `window`/`self`/`globalThis` resolving to no local binding. A write to a direct
+/// property of the global object (`window.$x = v`, `window['$x'] = v`,
+/// `globalThis.x = v`) declares a global and has no immutable/spread form (the
+/// global object cannot be reconstructed), the same host-write class as the
+/// Location/History writes in [`is_imperative_host_write`].
+///
+/// The resolution guard keeps it precise: a shadowing `const window = {}` or a
+/// `window` parameter resolves to a symbol, so its property writes stay flagged.
+/// Only the direct object is matched — a nested target such as `window.app.cfg = v`
+/// has `window.app` (not the global identifier) as its object and stays flagged, as
+/// it mutates an ordinary object.
+fn is_global_object(object: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+    let Expression::Identifier(id) = object else {
+        return false;
+    };
+    GLOBAL_OBJECT_NAMES.contains(&id.name.as_str())
+        && crate::oxc_helpers::reference_resolves_to_no_local_binding(id, semantic)
+}
+
 /// True when the assignment registers a DOM-style event handler: the property
 /// name has the `on<event>` shape (`onerror`, `onsuccess`, `onupgradeneeded`,
 /// `onclick`, …) and the assigned value is a function (or `null` to deregister).
@@ -479,6 +503,10 @@ impl OxcCheck for Check {
                         if prop_text == "current" { return; }
                         if obj_text == "document" && prop_text == "cookie" { return; }
                         if is_imperative_host_write(obj_text, prop_text) { return; }
+                        // `window.$x = v`, `globalThis.x = v` — a property written
+                        // directly on the global object declares a global; no
+                        // immutable form (cf. the Location/History writes above).
+                        if is_global_object(&m.object, semantic) { return; }
                         // `request.onerror = () => …`, `el.onclick = fn` — DOM-style
                         // event-handler registration, not object-state mutation.
                         if is_event_handler_registration(prop_text, &assign.right) { return; }
@@ -540,6 +568,10 @@ impl OxcCheck for Check {
                         if is_dispatch_table_element_write(m, semantic) { return; }
                         if let Expression::StringLiteral(key) = &m.expression
                             && is_imperative_host_write(obj_text, key.value.as_str()) { return; }
+                        // `window['$x'] = v`, `globalThis[k] = v` — a property
+                        // written directly on the global object declares a global;
+                        // no immutable form (cf. the static-member arm).
+                        if is_global_object(&m.object, semantic) { return; }
                         // Own instance state: `this.cache[id] = v` — see the static-member arm.
                         if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
@@ -1336,12 +1368,62 @@ mod tests {
         assert!(run(src).is_empty());
     }
 
+    // Direct global-object property writes — issue #7758
+
     #[test]
-    fn still_flags_arbitrary_window_property_write_3874() {
-        // Negative space: an arbitrary `window.<x>` write is not a documented
-        // imperative host API — stashing app state on the global stays flagged.
+    fn skips_direct_global_object_property_writes_issue_7758() {
+        // Assigning a property directly on the global object declares a global;
+        // the global object cannot be reconstructed, so there is no immutable/
+        // spread alternative — the same host-write class as Location/History.
         let src = r#"
-            window.myAppState = { ready: true };
+            window['$message'] = message;
+            window.$dialog = dialog;
+            globalThis.x = 1;
+            self.foo = bar;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_write_on_shadowed_global_issue_7758() {
+        // A shadowing local `window` resolves to a binding, not the real global —
+        // the write is an ordinary object mutation and stays flagged. (A fresh
+        // `{}` initializer is exempt via the unrelated object-builder rule, so the
+        // shadow binds a non-fresh value to isolate the resolution guard.)
+        let src = r#"
+            const window = getWindow();
+            window.foo = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_property_write_on_global_named_param_issue_7758() {
+        // A `window` parameter resolves to a binding, not the real global.
+        let src = r#"
+            function f(window) {
+                window.foo = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_global_property_write_issue_7758() {
+        // `window.app.config = v` mutates `window.app` (an ordinary object), not a
+        // direct property of the global object — stays flagged.
+        let src = r#"
+            window.app.config = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ordinary_object_property_write_issue_7758() {
+        // Negative space: an ordinary local object (non-global name) stays flagged.
+        let src = r#"
+            const o = getConfig();
+            o.foo = 1;
         "#;
         assert_eq!(run(src).len(), 1);
     }

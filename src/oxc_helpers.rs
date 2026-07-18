@@ -3667,19 +3667,19 @@ fn callee_is_vue_factory(
     factories.contains(&name)
         && (is_imported_from_vue(name, semantic)
             || (project.uses_unplugin_auto_import(path)
-                && callee_resolves_to_no_local_binding(callee, semantic)))
+                && reference_resolves_to_no_local_binding(callee, semantic)))
 }
 
-/// True when `callee` is a free/global identifier — its reference resolves to no
-/// declared symbol in any lexical scope. In an `unplugin-auto-import` project this
-/// distinguishes an auto-injected Vue global (`shallowRef`, with no import
-/// statement) from a user-defined local of the same name, which resolves to a
-/// binding.
-fn callee_resolves_to_no_local_binding(
-    callee: &oxc_ast::ast::IdentifierReference,
+/// True when `ident` is a free/global identifier — its reference resolves to no
+/// declared symbol in any lexical scope. Distinguishes a real global (an
+/// auto-injected Vue global like `shallowRef`, or the ECMAScript global object
+/// `window`/`self`/`globalThis`) from a user-defined local of the same name, which
+/// resolves to a binding.
+pub fn reference_resolves_to_no_local_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let Some(ref_id) = callee.reference_id.get() else {
+    let Some(ref_id) = ident.reference_id.get() else {
         return true;
     };
     semantic.scoping().get_reference(ref_id).symbol_id().is_none()
