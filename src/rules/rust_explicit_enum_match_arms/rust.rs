@@ -370,11 +370,12 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     }
     // Slice patterns (`[a, b]`, `[Struct { .. }]`) match a slice or array by
-    // length, never an enum variant. A `match` on a `&[T]`/`[T; N]` has an
-    // unbounded set of lengths, so its `_` arm is compiler-mandated — there is
-    // no variant set to enumerate. Bail out before the textual PascalCase
-    // fallback, which would otherwise skip the opening `[` and misread a
-    // PascalCase first element (`[ProductTypeElement { .. }]`) as a variant.
+    // shape, never an enum variant — so a slice-pattern arm names no variant to
+    // enumerate. A `match` on a `&[T]` slice covers an unbounded set of lengths,
+    // making its `_` arm compiler-mandated; a `[T; N]` array is matched by shape
+    // either way. Bail out before the textual PascalCase fallback, which would
+    // otherwise skip the opening `[` and misread a PascalCase first element
+    // (`[ProductTypeElement { .. }]`) as a variant.
     if pattern.kind() == "slice_pattern" {
         return false;
     }
