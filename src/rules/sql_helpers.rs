@@ -270,14 +270,6 @@ pub fn contains_complete_ddl_statement(text: &str) -> bool {
 /// like `VARCHAR(255)`, `DECIMAL(10, 2)`, etc., without matching
 /// identifiers like `same_char(` or `bpchar_value`.
 pub fn word_followed_by_open_paren(lower_text: &str, word: &str) -> bool {
-    word_followed_by_byte(lower_text, word, b'(')
-}
-
-/// Returns true if `lower_text` (already lowercase) contains `word`
-/// (lowercase) at a word boundary AND the next non-whitespace byte is
-/// `target`. Word-boundary matching means an identifier that merely
-/// contains `word` (`same_char`, `varchar_value`) doesn't trigger.
-fn word_followed_by_byte(lower_text: &str, word: &str, target: u8) -> bool {
     let bytes = lower_text.as_bytes();
     let needle = word.as_bytes();
     if needle.is_empty() || bytes.len() < needle.len() {
@@ -292,8 +284,42 @@ fn word_followed_by_byte(lower_text: &str, word: &str, target: u8) -> bool {
                 while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                     j += 1;
                 }
-                if j < bytes.len() && bytes[j] == target {
+                if j < bytes.len() && bytes[j] == b'(' {
                     return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True if `lower_text` (lowercase) contains a ClickHouse table-engine clause:
+/// whole-word `engine`, then `=` (whitespace-tolerant), then an engine-name
+/// identifier (an ASCII letter). Requiring the identifier right-hand side
+/// rejects a Postgres comparison against a column named `engine`
+/// (`SET engine = 'x'`, `WHERE engine = 5`), whose RHS is a quoted string,
+/// number, or placeholder — never a bare identifier engine name.
+fn engine_clause(lower_text: &str) -> bool {
+    let bytes = lower_text.as_bytes();
+    let needle = b"engine";
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+            if before_ok {
+                let mut j = i + needle.len();
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'=' {
+                    j += 1;
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if j < bytes.len() && bytes[j].is_ascii_alphabetic() {
+                        return true;
+                    }
                 }
             }
         }
@@ -344,7 +370,7 @@ fn words_adjacent(lower_text: &str, first: &str, second: &str) -> bool {
 pub fn is_clickhouse_ddl(sql: &str) -> bool {
     let lower = sql.to_ascii_lowercase();
     lower.contains("mergetree")
-        || word_followed_by_byte(&lower, "engine", b'=')
+        || engine_clause(&lower)
         || words_adjacent(&lower, "on", "cluster")
         || words_adjacent(&lower, "modify", "column")
         || word_followed_by_open_paren(&lower, "nullable")
@@ -673,6 +699,10 @@ mod tests {
         assert!(!is_clickhouse_ddl(
             "SELECT * FROM t WHERE is_nullable(col)"
         ));
+        // A Postgres comparison against a column named `engine` — the RHS is a
+        // quoted string / number, not an engine-name identifier.
+        assert!(!is_clickhouse_ddl("UPDATE cars SET engine = 'v8' WHERE id = 1"));
+        assert!(!is_clickhouse_ddl("SELECT * FROM cars WHERE engine = 5"));
     }
 
     #[test]
