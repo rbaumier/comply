@@ -315,9 +315,11 @@ fn is_push_call(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
     false
 }
 
-/// Whether `node` is a `<var>.extend(...)` or `<var>.append(...)` call. Both add
-/// a statically-unknown number of elements, so the Vec's final length stops
-/// equalling the iteration count and `with_capacity(n)` would under-allocate.
+/// Whether `node` is a variable-length bulk-insert call on the tracked var:
+/// `<var>.extend(...)`, `<var>.append(...)`, `<var>.extend_from_slice(...)`, or
+/// `<var>.extend_from_within(...)`. Each adds a statically-unknown number of
+/// elements, so the Vec's final length stops equalling the iteration count and
+/// `with_capacity(n)` would under-allocate.
 fn is_extend_or_append_call(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
     if node.kind() == "call_expression"
         && let Some(fn_node) = node.child_by_field_name("function")
@@ -331,7 +333,11 @@ fn is_extend_or_append_call(node: tree_sitter::Node, var: &str, source: &[u8]) -
             .child_by_field_name("field")
             .and_then(|n| n.utf8_text(source).ok())
             .unwrap_or("");
-        return val == var && (field == "extend" || field == "append");
+        return val == var
+            && matches!(
+                field,
+                "extend" | "append" | "extend_from_slice" | "extend_from_within"
+            );
     }
     false
 }
@@ -376,9 +382,10 @@ fn body_has_break(node: tree_sitter::Node) -> bool {
     node.children(&mut cursor).any(body_has_break)
 }
 
-/// Whether the loop body contains any `<var>.extend(...)`/`<var>.append(...)`
-/// anywhere — including nested inside an `if`/`if let` — using the same
-/// whole-subtree walk as `body_has_continue` so a conditional extend is caught.
+/// Whether the loop body contains any variable-length bulk insert on `<var>`
+/// (`extend`/`append`/`extend_from_slice`/`extend_from_within`) anywhere —
+/// including nested inside an `if`/`if let` — using the same whole-subtree walk
+/// as `body_has_continue` so a conditional extend is caught.
 fn body_extends_or_appends(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
     if is_extend_or_append_call(node, var, source) {
         return true;
@@ -520,6 +527,30 @@ mod tests {
     #[test]
     fn flags_extend_on_different_var_issue_3947() {
         let src = "fn f(xs: Vec<i32>, z: Vec<i32>) {\n    let mut v = Vec::new();\n    let mut other = Vec::new();\n    for x in xs {\n        v.push(x);\n        other.extend(z.clone());\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_push_with_extend_from_slice_same_vec_issue_7821() {
+        let src = "fn f(texts: Vec<Vec<u8>>) {\n    let mut concat = Vec::new();\n    for text in texts {\n        concat.extend_from_slice(&text);\n        concat.push(0x00);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_with_extend_from_slice_bytes_same_vec_issue_7821() {
+        let src = "fn f(codes: Vec<u32>) {\n    let mut buf = Vec::new();\n    for code in codes {\n        buf.extend_from_slice(&code.to_le_bytes());\n        buf.push(1u8);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_with_extend_from_within_same_vec_issue_7821() {
+        let src = "fn f(xs: Vec<i32>) {\n    let mut v = Vec::new();\n    for x in xs {\n        v.push(x);\n        v.extend_from_within(0..1);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_extend_from_slice_on_different_var_issue_7821() {
+        let src = "fn f(xs: Vec<i32>, z: Vec<i32>) {\n    let mut v = Vec::new();\n    let mut other = Vec::new();\n    for x in xs {\n        v.push(x);\n        other.extend_from_slice(&z);\n    }\n}";
         assert_eq!(run(src).len(), 1);
     }
 
