@@ -323,6 +323,15 @@ impl OxcCheck for Check {
         if !ctx.source_contains("prisma") {
             return;
         }
+        // A Prisma delegate query is `<client>.<model>.findX(...)`. A wrapper
+        // self-call (`this.findMany()`, `repo.findFirst()`) is not a delegate:
+        // its receiver is `this`/a bare identifier, not a `.<model>` accessor.
+        // Bail before the schema-less `deletedAt` default can fire on it — the
+        // soft-delete filter belongs to the underlying delegate call inside the
+        // wrapper, not to the wrapper site.
+        if !crate::oxc_helpers::is_prisma_delegate_call(member) {
+            return;
+        }
         // The soft-delete column to enforce. Defaults to `deletedAt` for the
         // schema-less fallback; when a schema governs this query it becomes the
         // exact field the model declares, so a project whose column is
@@ -679,6 +688,59 @@ mod tests {
     fn ignores_non_prisma_callers() {
         let src = r#"const r = obj.findMany({ where: { active: true } });"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #7807: `this.findMany(...)` is an inherited base-service
+    // wrapper method, not a `<client>.<model>.findX` delegate call — its
+    // receiver is `this`, not a model accessor — so it must never reach the
+    // schema-less `deletedAt` default and fire.
+    #[test]
+    fn ignores_wrapper_self_call_this_findmany() {
+        let src = r#"
+            import { PrismaClient } from '@prisma/client';
+            export class Repo {
+                async load() {
+                    return this.findMany({ where: { active: true } });
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // A bare-identifier receiver (`repo.findFirst(...)`) is likewise not a
+    // delegate call.
+    #[test]
+    fn ignores_wrapper_self_call_repo_findfirst() {
+        let src = r#"
+            import { PrismaClient } from '@prisma/client';
+            const record = await repo.findFirst({ where: { id: "1" } });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // `svc.findUnique(...)` — bare-identifier receiver, not a delegate call.
+    #[test]
+    fn ignores_wrapper_self_call_svc_findunique() {
+        let src = r#"
+            import { PrismaClient } from '@prisma/client';
+            const record = await svc.findUnique({ where: { id: "1" } });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // A genuine delegate call through an injected client
+    // (`this.prisma.<model>.findMany`) still fires on the schema-less default.
+    #[test]
+    fn flags_this_prisma_delegate_findmany() {
+        let src = r#"
+            import { PrismaClient } from '@prisma/client';
+            export class Repo {
+                async load() {
+                    return this.prisma.user.findMany({ where: { active: true } });
+                }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // Regression tests for issue #836: FP on models without deletedAt field.
