@@ -23,7 +23,7 @@ impl AstCheck for Check {
         let Ok(text) = node.utf8_text(source_bytes) else {
             return;
         };
-        if !super::has_leading_wildcard_like(text) {
+        if !super::has_filter_leading_wildcard_like(text) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -71,5 +71,59 @@ mod tests {
     fn allows_suffix() {
         let src = r###"fn f() { let q = r#"SELECT * FROM t WHERE name LIKE 'x%'"#; }"###;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_projection_like_as_alias() {
+        // FP #7778: `LIKE '%...' as alias` in the SELECT projection list is a
+        // per-row computed boolean column, not a row-pruning filter.
+        let src = r###"fn f() { let q = r#"SELECT content, codebase LIKE '%.tar' as use_tar, codebase LIKE '%.esm%' as is_esm FROM script WHERE hash = $1 LIMIT 1"#; }"###;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_unaliased_projection_like() {
+        let src = r###"fn f() { let q = r#"SELECT x LIKE '%y' FROM t"#; }"###;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_where_filter() {
+        let src = r###"fn f() { let q = r#"SELECT * FROM t WHERE asset_path LIKE '%/%'"#; }"###;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_and_chain_filter() {
+        let src = r###"fn f() { let q = r#"SELECT * FROM t WHERE a = 1 AND col LIKE '%x%'"#; }"###;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_join_on_filter() {
+        let src = r###"fn f() { let q = r#"SELECT * FROM a JOIN b ON b.name LIKE '%x%'"#; }"###;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_having_filter() {
+        let src = r###"fn f() { let q = r#"SELECT n FROM t GROUP BY n HAVING max(n) LIKE '%x%'"#; }"###;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_filter_after_subquery() {
+        // A subquery's `FROM` sits between the governing `WHERE` and the LIKE;
+        // parenthesis-depth tracking keeps the outer `WHERE` in scope.
+        let src = r###"fn f() { let q = r#"SELECT * FROM t WHERE id IN (SELECT id FROM u) AND name LIKE '%x%'"#; }"###;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_filter_even_when_projection_like_present() {
+        // The projection `LIKE ... AS f` is exempt, but the WHERE filter `LIKE`
+        // in the same query must still fire.
+        let src = r###"fn f() { let q = r#"SELECT c LIKE '%.tar' AS f FROM t WHERE name LIKE '%z%'"#; }"###;
+        assert_eq!(run(src).len(), 1);
     }
 }
