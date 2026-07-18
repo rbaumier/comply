@@ -20,9 +20,11 @@
 //!   by the trait contract, the implementor can't return `Result`.
 //! - Functions whose body tail expression *computes* the bool from a
 //!   real value — a comparison (parser progress: `pos() != start`), a
-//!   forwarded call return (`HashSet::insert`'s "was it new?"), or a
+//!   forwarded call return (`HashSet::insert`'s "was it new?"), a
 //!   bool-producing macro tail (`cfg!(...)`, an env-helper macro that
-//!   forwards a computed value) — rather than hardcoding a literal. A
+//!   forwards a computed value), or a stored-field read (`self.enabled` —
+//!   a getter forwarding a stored flag) — rather than hardcoding a
+//!   literal. A
 //!   `match`/`if` tail counts as computed
 //!   when at least one branch body forwards a computed value (e.g.
 //!   `match { Some(f) => (f)(x), None => true }`); a `match`/`if` whose
@@ -391,16 +393,21 @@ fn block_tail_expression(block: tree_sitter::Node) -> Option<tree_sitter::Node> 
 /// carries the operation's actual outcome. A `macro_invocation` tail
 /// (`cfg!(...)`, `matches!(x, ..)`, an env-helper macro) forwards its
 /// result the same way a call does, so it counts as computed too. A
-/// `match`/`if` is computed iff at least one branch body is itself
-/// computed — an all-literal `match`/`if` (`if ok { true } else { false }`)
-/// is the genuine literal-smuggling smell and is not treated as computed.
+/// `field_expression` tail (`self.enabled`, `self.state.ready`) reads a
+/// stored value and forwards it — a member read is never a `true`/`false`
+/// literal nor a `?`/call, so a bare field getter collapses no operation's
+/// failure into its bool. A `match`/`if` is computed iff at least one
+/// branch body is itself computed — an all-literal `match`/`if`
+/// (`if ok { true } else { false }`) is the genuine literal-smuggling smell
+/// and is not treated as computed.
 fn expression_is_computed(expr: tree_sitter::Node) -> bool {
     match expr.kind() {
         "binary_expression"
         | "call_expression"
         | "await_expression"
         | "try_expression"
-        | "macro_invocation" => true,
+        | "macro_invocation"
+        | "field_expression" => true,
         "match_expression" => match_has_computed_arm(expr),
         "if_expression" => if_has_computed_branch(expr),
         _ => false,
@@ -1753,6 +1760,39 @@ mod tests {
         // A parameter has no `let` in the body to resolve against, so the tail
         // stays unresolved and the function keeps its behaviour.
         let src = "fn save_flag(flag: bool) -> bool { do_thing(); flag }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #7810: a body tail that is a `field_expression` (`self.field`) forwards
+    // a stored value, so a bare field getter collapses no operation's failure ---
+
+    #[test]
+    fn allows_field_getter_tail() {
+        // apache/iggy `quic_connection_string_options.rs` `validate_certificate`
+        // — a pure getter whose body is a single field read of a stored `bool`
+        // config flag. The `validate_` prefix names the setting, not an action;
+        // there is no failure mode to surface as a `Result`.
+        let src = "fn validate_certificate(&self) -> bool { self.validate_certificate }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nested_field_getter_tail() {
+        // A nested field read (`self.cfg.flag`) is still a `field_expression`
+        // tail forwarding a stored value.
+        let src = "fn load_flag(&self) -> bool { self.cfg.flag }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #7810: negative space — a field read in the *condition* does not make
+    // the `if { true } else { false }` collapse computed, so it keeps flagging ---
+
+    #[test]
+    fn flags_field_read_in_condition_still_collapses() {
+        // The tail is the `if <cond> { true } else { false }` literal collapse;
+        // a `field_expression` in the *condition* (`self.n > 0`) is not the
+        // branch body, so the outcome is still hardcoded literals.
+        let src = "fn validate_gate(&self) -> bool { if self.n > 0 { true } else { false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
