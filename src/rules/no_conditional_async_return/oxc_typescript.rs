@@ -21,6 +21,11 @@ enum ReturnKind {
     /// neither the sync nor the promise side of the mix, exactly like a `throw`
     /// statement that produces no return value at all.
     Error,
+    /// A bare-identifier return whose binding does not resolve to a determinable
+    /// sync or promise initializer (an opaque parameter, import, or unresolvable
+    /// value). Like [`ReturnKind::Error`] it is evidence of neither side of the
+    /// mix, so it never contributes a spurious sync branch.
+    Unknown,
 }
 
 impl OxcCheck for Check {
@@ -47,13 +52,14 @@ impl OxcCheck for Check {
                     if annotation_permits_promise_branches(func.return_type.as_deref(), semantic) {
                         continue;
                     }
-                    let kinds = collect_return_kinds(&body.statements, ctx.source);
+                    let kinds = collect_return_kinds(&body.statements, ctx.source, semantic);
                     if kinds.contains(&ReturnKind::Sync)
                         && kinds.contains(&ReturnKind::Promise)
                         && !is_callback_promise_dual_mode(
                             &func.params,
                             &body.statements,
                             ctx.source,
+                            semantic,
                         )
                         && !is_promise_passthrough_dual_mode(&body.statements)
                     {
@@ -80,13 +86,14 @@ impl OxcCheck for Check {
                     if annotation_permits_promise_branches(arrow.return_type.as_deref(), semantic) {
                         continue;
                     }
-                    let kinds = collect_return_kinds(&arrow.body.statements, ctx.source);
+                    let kinds = collect_return_kinds(&arrow.body.statements, ctx.source, semantic);
                     if kinds.contains(&ReturnKind::Sync)
                         && kinds.contains(&ReturnKind::Promise)
                         && !is_callback_promise_dual_mode(
                             &arrow.params,
                             &arrow.body.statements,
                             ctx.source,
+                            semantic,
                         )
                         && !is_promise_passthrough_dual_mode(&arrow.body.statements)
                     {
@@ -176,13 +183,17 @@ fn is_returntype_of_type_parameter(ty: &TSType, semantic: &oxc_semantic::Semanti
 }
 
 /// Classify a return-value expression as promise-returning or sync.
-fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
+fn classify_value(
+    expr: &Expression,
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> ReturnKind {
     // `a ?? Promise.resolve()` / `a || Promise.resolve()`: a single
     // Promise-typed operand makes the whole expression resolve to a Promise.
     if let Expression::LogicalExpression(logical) = expr
         && matches!(logical.operator, LogicalOperator::Coalesce | LogicalOperator::Or)
-        && (classify_value(&logical.left, source) == ReturnKind::Promise
-            || classify_value(&logical.right, source) == ReturnKind::Promise)
+        && (classify_value(&logical.left, source, semantic) == ReturnKind::Promise
+            || classify_value(&logical.right, source, semantic) == ReturnKind::Promise)
     {
         return ReturnKind::Promise;
     }
@@ -194,6 +205,17 @@ fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
         && id.name.as_str() == "Promise"
     {
         return ReturnKind::Promise;
+    }
+
+    // A bare identifier is not assumed sync: resolve its binding and classify by
+    // the initializer, so `const p = load(); return p;` (where `load` returns a
+    // `Promise`) is a promise branch, not a spurious sync one.
+    if let Expression::Identifier(id) = expr {
+        return match crate::oxc_helpers::classify_identifier_binding_return(id, semantic) {
+            crate::oxc_helpers::BindingReturnKind::Async => ReturnKind::Promise,
+            crate::oxc_helpers::BindingReturnKind::Sync => ReturnKind::Sync,
+            crate::oxc_helpers::BindingReturnKind::Unknown => ReturnKind::Unknown,
+        };
     }
 
     let Expression::CallExpression(call) = expr else {
@@ -228,10 +250,14 @@ fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
 }
 
 /// Walk statements collecting return kinds. Skip nested function bodies.
-fn collect_return_kinds(stmts: &[Statement], source: &str) -> Vec<ReturnKind> {
+fn collect_return_kinds(
+    stmts: &[Statement],
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> Vec<ReturnKind> {
     let mut out = Vec::new();
     for stmt in stmts {
-        collect_from_stmt(stmt, source, None, &mut out);
+        collect_from_stmt(stmt, source, semantic, None, &mut out);
     }
     out
 }
@@ -242,6 +268,7 @@ fn collect_return_kinds(stmts: &[Statement], source: &str) -> Vec<ReturnKind> {
 fn collect_from_stmt(
     stmt: &Statement,
     source: &str,
+    semantic: &oxc_semantic::Semantic,
     exclude: Option<Span>,
     out: &mut Vec<ReturnKind>,
 ) {
@@ -250,7 +277,7 @@ fn collect_from_stmt(
             if let Some(arg) = &ret.argument {
                 let skipped = exclude.is_some_and(|ex| span_contains(ex, ret.span));
                 if !skipped {
-                    out.push(classify_value(arg, source));
+                    out.push(classify_value(arg, source, semantic));
                 }
             }
         }
@@ -258,54 +285,54 @@ fn collect_from_stmt(
         Statement::FunctionDeclaration(_) => {}
         Statement::BlockStatement(block) => {
             for s in &block.body {
-                collect_from_stmt(s, source, exclude, out);
+                collect_from_stmt(s, source, semantic, exclude, out);
             }
         }
         Statement::IfStatement(if_stmt) => {
-            collect_from_stmt(&if_stmt.consequent, source, exclude, out);
+            collect_from_stmt(&if_stmt.consequent, source, semantic, exclude, out);
             if let Some(alt) = &if_stmt.alternate {
-                collect_from_stmt(alt, source, exclude, out);
+                collect_from_stmt(alt, source, semantic, exclude, out);
             }
         }
         Statement::SwitchStatement(switch) => {
             for case in &switch.cases {
                 for s in &case.consequent {
-                    collect_from_stmt(s, source, exclude, out);
+                    collect_from_stmt(s, source, semantic, exclude, out);
                 }
             }
         }
         Statement::TryStatement(try_stmt) => {
             for s in &try_stmt.block.body {
-                collect_from_stmt(s, source, exclude, out);
+                collect_from_stmt(s, source, semantic, exclude, out);
             }
             if let Some(handler) = &try_stmt.handler {
                 for s in &handler.body.body {
-                    collect_from_stmt(s, source, exclude, out);
+                    collect_from_stmt(s, source, semantic, exclude, out);
                 }
             }
             if let Some(finalizer) = &try_stmt.finalizer {
                 for s in &finalizer.body {
-                    collect_from_stmt(s, source, exclude, out);
+                    collect_from_stmt(s, source, semantic, exclude, out);
                 }
             }
         }
         Statement::ForStatement(for_stmt) => {
-            collect_from_stmt(&for_stmt.body, source, exclude, out);
+            collect_from_stmt(&for_stmt.body, source, semantic, exclude, out);
         }
         Statement::ForInStatement(for_in) => {
-            collect_from_stmt(&for_in.body, source, exclude, out);
+            collect_from_stmt(&for_in.body, source, semantic, exclude, out);
         }
         Statement::ForOfStatement(for_of) => {
-            collect_from_stmt(&for_of.body, source, exclude, out);
+            collect_from_stmt(&for_of.body, source, semantic, exclude, out);
         }
         Statement::WhileStatement(while_stmt) => {
-            collect_from_stmt(&while_stmt.body, source, exclude, out);
+            collect_from_stmt(&while_stmt.body, source, semantic, exclude, out);
         }
         Statement::DoWhileStatement(do_while) => {
-            collect_from_stmt(&do_while.body, source, exclude, out);
+            collect_from_stmt(&do_while.body, source, semantic, exclude, out);
         }
         Statement::LabeledStatement(labeled) => {
-            collect_from_stmt(&labeled.body, source, exclude, out);
+            collect_from_stmt(&labeled.body, source, semantic, exclude, out);
         }
         // ExpressionStatement containing arrow/function — skip (nested fn)
         Statement::ExpressionStatement(es) => {
@@ -333,12 +360,13 @@ fn is_callback_promise_dual_mode(
     params: &FormalParameters,
     body: &[Statement],
     source: &str,
+    semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let param_names = collect_simple_param_names(params);
     if param_names.is_empty() {
         return false;
     }
-    any_dual_mode_guard(body, body, &param_names, source)
+    any_dual_mode_guard(body, body, &param_names, source, semantic)
 }
 
 /// Names of the function's plain identifier parameters (including a defaulted
@@ -368,10 +396,11 @@ fn any_dual_mode_guard(
     stmts: &[Statement],
     params: &[&str],
     source: &str,
+    semantic: &oxc_semantic::Semantic,
 ) -> bool {
     stmts
         .iter()
-        .any(|stmt| stmt_has_dual_mode_guard(root, stmt, params, source))
+        .any(|stmt| stmt_has_dual_mode_guard(root, stmt, params, source, semantic))
 }
 
 fn stmt_has_dual_mode_guard(
@@ -379,38 +408,51 @@ fn stmt_has_dual_mode_guard(
     stmt: &Statement,
     params: &[&str],
     source: &str,
+    semantic: &oxc_semantic::Semantic,
 ) -> bool {
     match stmt {
         Statement::IfStatement(if_stmt) => {
-            if_is_dual_mode_guard(if_stmt, root, params, source)
-                || stmt_has_dual_mode_guard(root, &if_stmt.consequent, params, source)
-                || if_stmt
-                    .alternate
-                    .as_ref()
-                    .is_some_and(|alt| stmt_has_dual_mode_guard(root, alt, params, source))
-        }
-        Statement::BlockStatement(block) => any_dual_mode_guard(root, &block.body, params, source),
-        Statement::TryStatement(try_stmt) => {
-            any_dual_mode_guard(root, &try_stmt.block.body, params, source)
-                || try_stmt.handler.as_ref().is_some_and(|h| {
-                    any_dual_mode_guard(root, &h.body.body, params, source)
+            if_is_dual_mode_guard(if_stmt, root, params, source, semantic)
+                || stmt_has_dual_mode_guard(root, &if_stmt.consequent, params, source, semantic)
+                || if_stmt.alternate.as_ref().is_some_and(|alt| {
+                    stmt_has_dual_mode_guard(root, alt, params, source, semantic)
                 })
-                || try_stmt
-                    .finalizer
-                    .as_ref()
-                    .is_some_and(|f| any_dual_mode_guard(root, &f.body, params, source))
         }
-        Statement::ForStatement(f) => stmt_has_dual_mode_guard(root, &f.body, params, source),
-        Statement::ForInStatement(f) => stmt_has_dual_mode_guard(root, &f.body, params, source),
-        Statement::ForOfStatement(f) => stmt_has_dual_mode_guard(root, &f.body, params, source),
-        Statement::WhileStatement(w) => stmt_has_dual_mode_guard(root, &w.body, params, source),
-        Statement::DoWhileStatement(d) => stmt_has_dual_mode_guard(root, &d.body, params, source),
+        Statement::BlockStatement(block) => {
+            any_dual_mode_guard(root, &block.body, params, source, semantic)
+        }
+        Statement::TryStatement(try_stmt) => {
+            any_dual_mode_guard(root, &try_stmt.block.body, params, source, semantic)
+                || try_stmt.handler.as_ref().is_some_and(|h| {
+                    any_dual_mode_guard(root, &h.body.body, params, source, semantic)
+                })
+                || try_stmt.finalizer.as_ref().is_some_and(|f| {
+                    any_dual_mode_guard(root, &f.body, params, source, semantic)
+                })
+        }
+        Statement::ForStatement(f) => {
+            stmt_has_dual_mode_guard(root, &f.body, params, source, semantic)
+        }
+        Statement::ForInStatement(f) => {
+            stmt_has_dual_mode_guard(root, &f.body, params, source, semantic)
+        }
+        Statement::ForOfStatement(f) => {
+            stmt_has_dual_mode_guard(root, &f.body, params, source, semantic)
+        }
+        Statement::WhileStatement(w) => {
+            stmt_has_dual_mode_guard(root, &w.body, params, source, semantic)
+        }
+        Statement::DoWhileStatement(d) => {
+            stmt_has_dual_mode_guard(root, &d.body, params, source, semantic)
+        }
         Statement::SwitchStatement(switch) => switch.cases.iter().any(|case| {
             case.consequent
                 .iter()
-                .any(|s| stmt_has_dual_mode_guard(root, s, params, source))
+                .any(|s| stmt_has_dual_mode_guard(root, s, params, source, semantic))
         }),
-        Statement::LabeledStatement(l) => stmt_has_dual_mode_guard(root, &l.body, params, source),
+        Statement::LabeledStatement(l) => {
+            stmt_has_dual_mode_guard(root, &l.body, params, source, semantic)
+        }
         _ => false,
     }
 }
@@ -421,6 +463,7 @@ fn if_is_dual_mode_guard(
     root: &[Statement],
     params: &[&str],
     source: &str,
+    semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let Some((param, present_in_consequent)) = classify_callback_guard(&if_stmt.test, params)
     else {
@@ -434,7 +477,8 @@ fn if_is_dual_mode_guard(
     let Some(present) = present else {
         return false;
     };
-    branch_invokes_param(present, param) && returns_promise_outside(root, source, present.span())
+    branch_invokes_param(present, param)
+        && returns_promise_outside(root, source, semantic, present.span())
 }
 
 /// Classify an `if` test as a callback presence/absence check on one of `params`.
@@ -600,10 +644,15 @@ fn callee_is_param(callee: &Expression, param: &str) -> bool {
 
 /// Is a Promise returned anywhere in `stmts` outside the `exclude` span (the
 /// dual-mode present/callback branch)?
-fn returns_promise_outside(stmts: &[Statement], source: &str, exclude: Span) -> bool {
+fn returns_promise_outside(
+    stmts: &[Statement],
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+    exclude: Span,
+) -> bool {
     let mut kinds = Vec::new();
     for stmt in stmts {
-        collect_from_stmt(stmt, source, Some(exclude), &mut kinds);
+        collect_from_stmt(stmt, source, semantic, Some(exclude), &mut kinds);
     }
     kinds.contains(&ReturnKind::Promise)
 }
@@ -910,10 +959,13 @@ mod tests {
         // Regression for #6826: fastify's `listen(listenOptions, cb)` checks the
         // callback with `typeof cb === 'function'` (present branch invokes `cb`)
         // and returns a Promise in the `cb === undefined` branch.
+        // The present branch returns a plain sync value so its return classifies
+        // as Sync and the callback-presence guard is actually exercised (a bare
+        // unresolvable identifier would be Unknown and skip the guard entirely).
         let src = "function listen(listenOptions, cb = undefined) {
             if (typeof cb === 'function') {
                 cb(null, server);
-                return server;
+                return 0;
             }
             if (cb === undefined) {
                 return listenPromise.then(address => address);
@@ -926,10 +978,12 @@ mod tests {
     fn allows_callback_dual_mode_with_inequality_guard_and_call_method() {
         // The discriminator generalises across guard forms (`cb !== undefined`)
         // and invocation forms (`cb.call(...)`), not just `if (cb)` and `cb(...)`.
+        // The present branch returns a plain sync value so its return classifies
+        // as Sync and the callback-presence guard is actually exercised.
         let src = "function once(cb) {
             if (cb !== undefined) {
                 cb.call(this, value);
-                return value;
+                return 0;
             }
             return Promise.resolve(value);
         }";
@@ -1023,9 +1077,9 @@ mod tests {
     fn flags_instanceof_promise_when_branches_forward_different_bindings() {
         // Negative control for #7456: the guard keys on the *shared* returned
         // binding. Here the chain is on `b` while the test discriminates `a` and
-        // the sync branch returns `c`, so the branches do not passthrough a single
-        // value and the mixed return still fires.
-        let src = "function h(a: any, b: any) { if (a instanceof Promise) { return b.finally(cleanup); } else { return c; } }";
+        // the sync branch returns a plain value `2`, so the branches do not
+        // passthrough a single value and the mixed return still fires.
+        let src = "function h(a: any, b: any) { if (a instanceof Promise) { return b.finally(cleanup); } else { return 2; } }";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -1095,5 +1149,51 @@ mod tests {
         // `Promise.resolve(2)` still fires even when a reject branch is present.
         let src = "function f(a: number) { if (a === 0) return Promise.reject('x'); if (a === 1) return 1; return Promise.resolve(2); }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_unannotated_method_returning_promise_bound_identifier() {
+        // Regression for #7490 — toeverything/AFFiNE `context-loader.ts`. A
+        // non-annotated method returns `Promise.resolve(cached)` in one branch and
+        // a bare `promise` in another, where `const promise = load()` and
+        // `load: () => Promise<T>`. Resolving the binding classifies `promise` as a
+        // promise branch, so both branches are Promises and nothing fires.
+        let src = "class C { memo<T>(map: Map<string, Promise<T> | T>, key: string, load: () => Promise<T>) { const cached = map.get(key); if (cached) { return Promise.resolve(cached); } const promise = load(); map.set(key, promise); return promise; } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_then_chain_bound_identifier_alongside_promise() {
+        // A `const p = foo().then(...)` binding is a promise branch (a `.then`
+        // chain), so returning `p` alongside `Promise.resolve(1)` is all-promise.
+        let src = "function g(c: boolean) { if (c) { return Promise.resolve(1); } const p = foo().then((x) => x); return p; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_promise_bound_identifier_mixed_with_literal() {
+        // Binding resolution does not launder a genuine mix: a promise-bound
+        // identifier (`const p = Promise.resolve(1)`) in one branch and a literal
+        // `2` in another is still a real sync/promise mix.
+        let src = "function h(c: boolean) { if (c) { const p = Promise.resolve(1); return p; } return 2; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_literal_bound_identifier_mixed_with_promise() {
+        // A genuine sync identifier is preserved: `const x = 5` is sync, so
+        // returning `x` alongside a `Promise.resolve` branch is still a real mix.
+        let src = "function j(c: boolean) { const x = 5; if (c) return Promise.resolve(1); return x; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_opaque_param_identifier_return() {
+        // A bare parameter does not resolve to a local initializer, so it is
+        // Unknown — evidence of neither a sync nor a promise branch. Mixed only
+        // with a Promise branch there is no sync side, so this deliberately does
+        // not fire (precision over recall for opaque returns).
+        let src = "function k(p: any, c: boolean) { if (c) return Promise.resolve(1); return p; }";
+        assert!(run(src).is_empty());
     }
 }

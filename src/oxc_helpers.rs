@@ -1463,6 +1463,164 @@ pub fn is_locally_owned_array_binding(
     locally_owned_binding_init(ident, semantic).is_some_and(is_array_initializer)
 }
 
+/// How a bare-identifier `return <ident>;` resolves once its binding is
+/// inspected, for the sync/async-return-mixing rules. Classifying by the
+/// binding's initializer — rather than assuming any bare identifier is a
+/// synchronous value — is what keeps `const p = load(); return p;` (where `load`
+/// returns a `Promise`) from being misread as a sync return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingReturnKind {
+    /// The initializer is a Promise: an `await`, `new Promise(...)`, a
+    /// `.then`/`.catch`/`.finally` chain, a `Promise.resolve/all/allSettled/race/any(...)`
+    /// combinator, or a call to a function/arrow/parameter whose declared return
+    /// type is `Promise<…>` (or `PromiseLike<…>`).
+    Async,
+    /// The initializer is a literal, template literal, array, or object — a plain
+    /// synchronous value.
+    Sync,
+    /// The identifier does not resolve to an inner-scope `const`/`let` initializer
+    /// (a parameter, import, root-scope binding, or a declarator with no
+    /// initializer), or the resolved initializer's nature cannot be determined
+    /// syntactically. Callers must treat this as evidence of neither a sync nor an
+    /// async return.
+    Unknown,
+}
+
+/// Classify a bare-identifier return by resolving the identifier to its
+/// inner-scope `const`/`let` initializer and inspecting that initializer. Shared
+/// by `ts-no-mixed-sync-async-returns` and `no-conditional-async-return` so a
+/// Promise-bound identifier is not mistaken for a synchronous return.
+#[must_use]
+pub fn classify_identifier_binding_return(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> BindingReturnKind {
+    match locally_owned_binding_init(ident, semantic) {
+        Some(init) => classify_binding_initializer(init, semantic),
+        None => BindingReturnKind::Unknown,
+    }
+}
+
+/// Classify a resolved binding initializer by its syntactic shape (and, for a
+/// call, the declared return type of its callee).
+fn classify_binding_initializer(
+    init: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> BindingReturnKind {
+    use oxc_ast::ast::Expression;
+    match init {
+        Expression::AwaitExpression(_) => BindingReturnKind::Async,
+        Expression::NewExpression(new_expr) => {
+            // `new Promise(...)` is async; any other construction is a plain
+            // synchronous value, matching the direct-return classifiers.
+            if matches!(&new_expr.callee, Expression::Identifier(id) if id.name.as_str() == "Promise")
+            {
+                BindingReturnKind::Async
+            } else {
+                BindingReturnKind::Sync
+            }
+        }
+        Expression::CallExpression(call) => classify_call_initializer(call, semantic),
+        Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::TemplateLiteral(_)
+        | Expression::ArrayExpression(_)
+        | Expression::ObjectExpression(_) => BindingReturnKind::Sync,
+        _ => BindingReturnKind::Unknown,
+    }
+}
+
+/// Classify a call-expression initializer. A `.then`/`.catch`/`.finally` chain or
+/// a `Promise.<combinator>(...)` (bar the `reject` error channel) is a Promise; a
+/// plain call `load(...)` is a Promise only when its callee's declared return type
+/// is `Promise<…>`. Anything else is unknown.
+fn classify_call_initializer(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> BindingReturnKind {
+    use oxc_ast::ast::Expression;
+    if let Expression::StaticMemberExpression(member) = &call.callee {
+        let method = member.property.name.as_str();
+        if matches!(method, "then" | "catch" | "finally") {
+            return BindingReturnKind::Async;
+        }
+        if matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == "Promise")
+            && matches!(method, "resolve" | "all" | "allSettled" | "race" | "any")
+        {
+            return BindingReturnKind::Async;
+        }
+    }
+    if callee_declared_returns_promise(&call.callee, semantic) {
+        return BindingReturnKind::Async;
+    }
+    BindingReturnKind::Unknown
+}
+
+/// True when `callee`, resolved through the symbol table, is a
+/// function/arrow/parameter whose *declared* return type is `Promise<…>` (or
+/// `PromiseLike<…>`), or an `async` function/arrow (whose return is always a
+/// Promise). Handles a value of function type (`load: () => Promise<T>` parameter
+/// or `const load: () => Promise<T>`) and a function/arrow/function-expression
+/// declaration carrying the annotation. A callee with no resolvable Promise
+/// return type yields `false`.
+fn callee_declared_returns_promise(
+    callee: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, TSType};
+    let Expression::Identifier(id) = callee else {
+        return false;
+    };
+    if let Some(TSType::TSFunctionType(func_ty)) = binding_declared_ts_type(id, semantic)
+        && ts_type_is_promise_ref(&func_ty.return_type.type_annotation)
+    {
+        return true;
+    }
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_id))
+        .chain(nodes.ancestor_kinds(decl_id))
+        .find_map(|kind| match kind {
+            AstKind::Function(func) => {
+                Some(func.r#async || return_type_is_promise_ref(func.return_type.as_deref()))
+            }
+            AstKind::ArrowFunctionExpression(arrow) => {
+                Some(arrow.r#async || return_type_is_promise_ref(arrow.return_type.as_deref()))
+            }
+            AstKind::VariableDeclarator(decl) => decl.init.as_ref().and_then(|init| match init {
+                Expression::ArrowFunctionExpression(a) => {
+                    Some(a.r#async || return_type_is_promise_ref(a.return_type.as_deref()))
+                }
+                Expression::FunctionExpression(f) => {
+                    Some(f.r#async || return_type_is_promise_ref(f.return_type.as_deref()))
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// True when a TS type is a `Promise<…>` / `PromiseLike<…>` type reference.
+fn ts_type_is_promise_ref<'a>(ty: &'a oxc_ast::ast::TSType<'a>) -> bool {
+    matches!(type_reference_name(ty), Some("Promise" | "PromiseLike"))
+}
+
+/// True when a return-type annotation, if present, is `Promise<…>` / `PromiseLike<…>`.
+fn return_type_is_promise_ref(ann: Option<&oxc_ast::ast::TSTypeAnnotation>) -> bool {
+    ann.is_some_and(|a| ts_type_is_promise_ref(&a.type_annotation))
+}
+
 /// True when `call` is `JSON.<method>(...)` — a `StaticMemberExpression` callee
 /// whose object is the identifier `JSON` and whose property is `method`.
 pub fn is_json_method_call(call: &oxc_ast::ast::CallExpression, method: &str) -> bool {

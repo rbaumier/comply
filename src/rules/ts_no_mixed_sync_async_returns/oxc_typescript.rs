@@ -23,15 +23,15 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
             AstKind::Function(func) => {
-                check_function_body_fn(func, ctx, diagnostics);
+                check_function_body_fn(func, ctx, semantic, diagnostics);
             }
             AstKind::ArrowFunctionExpression(arrow) => {
-                check_arrow_body(arrow, ctx, diagnostics);
+                check_arrow_body(arrow, ctx, semantic, diagnostics);
             }
             _ => {}
         }
@@ -43,6 +43,7 @@ impl OxcCheck for Check {
 fn check_function_body_fn(
     func: &Function,
     ctx: &CheckCtx,
+    semantic: &oxc_semantic::Semantic,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if func.r#async {
@@ -55,7 +56,13 @@ fn check_function_body_fn(
 
     let mut has_sync = false;
     let mut has_async = false;
-    collect_returns_from_stmts(&body.statements, ctx.source, &mut has_sync, &mut has_async);
+    collect_returns_from_stmts(
+        &body.statements,
+        ctx.source,
+        semantic,
+        &mut has_sync,
+        &mut has_async,
+    );
 
     if has_sync && has_async {
         let (line, column) = byte_offset_to_line_col(ctx.source, func.span.start as usize);
@@ -74,6 +81,7 @@ fn check_function_body_fn(
 fn check_arrow_body(
     arrow: &ArrowFunctionExpression,
     ctx: &CheckCtx,
+    semantic: &oxc_semantic::Semantic,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if arrow.r#async {
@@ -89,7 +97,13 @@ fn check_arrow_body(
 
     let mut has_sync = false;
     let mut has_async = false;
-    collect_returns_from_stmts(&arrow.body.statements, ctx.source, &mut has_sync, &mut has_async);
+    collect_returns_from_stmts(
+        &arrow.body.statements,
+        ctx.source,
+        semantic,
+        &mut has_sync,
+        &mut has_async,
+    );
 
     if has_sync && has_async {
         let (line, column) = byte_offset_to_line_col(ctx.source, arrow.span.start as usize);
@@ -130,17 +144,19 @@ fn returns_single_promise_type(
 fn collect_returns_from_stmts(
     stmts: &[Statement],
     source: &str,
+    semantic: &oxc_semantic::Semantic,
     has_sync: &mut bool,
     has_async: &mut bool,
 ) {
     for stmt in stmts {
-        collect_returns_stmt(stmt, source, has_sync, has_async);
+        collect_returns_stmt(stmt, source, semantic, has_sync, has_async);
     }
 }
 
 fn collect_returns_stmt(
     stmt: &Statement,
     source: &str,
+    semantic: &oxc_semantic::Semantic,
     has_sync: &mut bool,
     has_async: &mut bool,
 ) {
@@ -149,7 +165,7 @@ fn collect_returns_stmt(
         Statement::FunctionDeclaration(_) => {}
         Statement::ReturnStatement(ret) => {
             if let Some(arg) = &ret.argument {
-                match classify_return_expr(arg, source) {
+                match classify_return_expr(arg, source, semantic) {
                     ReturnKind::Sync => *has_sync = true,
                     ReturnKind::Async => *has_async = true,
                     // Error channel and unclassifiable returns count as neither.
@@ -158,45 +174,51 @@ fn collect_returns_stmt(
             }
         }
         Statement::BlockStatement(block) => {
-            collect_returns_from_stmts(&block.body, source, has_sync, has_async);
+            collect_returns_from_stmts(&block.body, source, semantic, has_sync, has_async);
         }
         Statement::IfStatement(if_stmt) => {
-            collect_returns_stmt(&if_stmt.consequent, source, has_sync, has_async);
+            collect_returns_stmt(&if_stmt.consequent, source, semantic, has_sync, has_async);
             if let Some(alt) = &if_stmt.alternate {
-                collect_returns_stmt(alt, source, has_sync, has_async);
+                collect_returns_stmt(alt, source, semantic, has_sync, has_async);
             }
         }
         Statement::ForStatement(f) => {
-            collect_returns_stmt(&f.body, source, has_sync, has_async);
+            collect_returns_stmt(&f.body, source, semantic, has_sync, has_async);
         }
         Statement::ForInStatement(f) => {
-            collect_returns_stmt(&f.body, source, has_sync, has_async);
+            collect_returns_stmt(&f.body, source, semantic, has_sync, has_async);
         }
         Statement::ForOfStatement(f) => {
-            collect_returns_stmt(&f.body, source, has_sync, has_async);
+            collect_returns_stmt(&f.body, source, semantic, has_sync, has_async);
         }
         Statement::WhileStatement(w) => {
-            collect_returns_stmt(&w.body, source, has_sync, has_async);
+            collect_returns_stmt(&w.body, source, semantic, has_sync, has_async);
         }
         Statement::DoWhileStatement(d) => {
-            collect_returns_stmt(&d.body, source, has_sync, has_async);
+            collect_returns_stmt(&d.body, source, semantic, has_sync, has_async);
         }
         Statement::SwitchStatement(s) => {
             for case in &s.cases {
-                collect_returns_from_stmts(&case.consequent, source, has_sync, has_async);
+                collect_returns_from_stmts(&case.consequent, source, semantic, has_sync, has_async);
             }
         }
         Statement::TryStatement(t) => {
-            collect_returns_from_stmts(&t.block.body, source, has_sync, has_async);
+            collect_returns_from_stmts(&t.block.body, source, semantic, has_sync, has_async);
             if let Some(handler) = &t.handler {
-                collect_returns_from_stmts(&handler.body.body, source, has_sync, has_async);
+                collect_returns_from_stmts(
+                    &handler.body.body,
+                    source,
+                    semantic,
+                    has_sync,
+                    has_async,
+                );
             }
             if let Some(finalizer) = &t.finalizer {
-                collect_returns_from_stmts(&finalizer.body, source, has_sync, has_async);
+                collect_returns_from_stmts(&finalizer.body, source, semantic, has_sync, has_async);
             }
         }
         Statement::LabeledStatement(l) => {
-            collect_returns_stmt(&l.body, source, has_sync, has_async);
+            collect_returns_stmt(&l.body, source, semantic, has_sync, has_async);
         }
         Statement::ExpressionStatement(_) => {}
         _ => {}
@@ -213,7 +235,11 @@ enum ReturnKind {
     Unknown,
 }
 
-fn classify_return_expr(expr: &Expression, source: &str) -> ReturnKind {
+fn classify_return_expr(
+    expr: &Expression,
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> ReturnKind {
     match expr {
         Expression::AwaitExpression(_) => ReturnKind::Async,
         Expression::NewExpression(new) => {
@@ -243,7 +269,16 @@ fn classify_return_expr(expr: &Expression, source: &str) -> ReturnKind {
         | Expression::TemplateLiteral(_)
         | Expression::ArrayExpression(_)
         | Expression::ObjectExpression(_) => ReturnKind::Sync,
-        Expression::Identifier(_) => ReturnKind::Sync,
+        // A bare identifier is not assumed synchronous: resolve its binding and
+        // classify by the initializer, so `const p = load(); return p;` (where
+        // `load` returns a `Promise`) is async, not a spurious sync branch.
+        Expression::Identifier(ident) => {
+            match crate::oxc_helpers::classify_identifier_binding_return(ident, semantic) {
+                crate::oxc_helpers::BindingReturnKind::Async => ReturnKind::Async,
+                crate::oxc_helpers::BindingReturnKind::Sync => ReturnKind::Sync,
+                crate::oxc_helpers::BindingReturnKind::Unknown => ReturnKind::Unknown,
+            }
+        }
         _ => ReturnKind::Unknown,
     }
 }
@@ -450,5 +485,50 @@ mod tests {
         // still flags even when a reject branch is also present.
         let src = "function f(a: number) { if (a === 0) return Promise.reject('x'); if (a === 1) return 1; return Promise.resolve(2); }";
         assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unannotated_method_returning_promise_bound_identifier() {
+        // Regression for #7490 — toeverything/AFFiNE `context-loader.ts`. A
+        // non-annotated method returns `Promise.resolve(cached)` in one branch and
+        // a bare `promise` in another, where `const promise = load()` and
+        // `load: () => Promise<T>`. Both returns are Promises; resolving the
+        // binding classifies `promise` as async, so there is no sync/async mix.
+        let src = "class C { memo<T>(map: Map<string, Promise<T> | T>, key: string, load: () => Promise<T>) { const cached = map.get(key); if (cached) { return Promise.resolve(cached); } const promise = load(); map.set(key, promise); return promise; } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_promise_resolve_bound_identifier_alongside_promise() {
+        // A `const p = Promise.resolve(1)` binding is async, so returning `p`
+        // alongside another Promise branch is all-async, not a mix.
+        let src = "function f(c: boolean) { if (c) { return Promise.resolve(2); } const p = Promise.resolve(1); return p; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_then_chain_bound_identifier_alongside_promise() {
+        // A `const p = foo().then(...)` binding is async (a `.then` chain), so
+        // returning `p` alongside another Promise branch is all-async.
+        let src = "function g(c: boolean) { if (c) { return Promise.resolve(1); } const p = foo().then((x) => x); return p; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_literal_bound_identifier_mixed_with_promise() {
+        // A genuine sync identifier is preserved: `const x = 5` is sync, so
+        // returning `x` alongside a `Promise.resolve` branch is still a real mix.
+        let src = "function h(c: boolean) { if (c) return Promise.resolve(1); const x = 5; return x; }";
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_opaque_param_identifier_return() {
+        // A bare parameter does not resolve to a local initializer, so it is
+        // Unknown — counted as neither sync nor async. Mixed only with a Promise
+        // branch there is no evidence of a sync return, so this deliberately does
+        // not flag (precision over recall for opaque returns).
+        let src = "function k(p: any, c: boolean) { if (c) return Promise.resolve(1); return p; }";
+        assert!(run(src).is_empty());
     }
 }
