@@ -1007,8 +1007,8 @@ mod tests {
 
     #[test]
     fn still_flags_non_string_display_name_assignment() {
-        // Only string-literal `displayName` writes are exempt; assigning a
-        // computed value to a const's property is still a mutation.
+        // A call-expression RHS is a computed value, not the React DevTools
+        // naming convention, so mutating a const's property stays flagged.
         let src = r#"
             const RadioGroup = React.forwardRef((props, ref) => null);
             RadioGroup.displayName = getName();
@@ -1021,6 +1021,40 @@ mod tests {
         let src = r#"
             const RadioGroup = React.forwardRef((props, ref) => null);
             RadioGroup.label = "RadioGroup";
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_display_name_inherited_from_wrapped_primitive() {
+        // Regression for rbaumier/comply#7844 — the Radix/shadcn wrapper pattern
+        // inherits `displayName` from the wrapped primitive
+        // (`Foo.displayName = Primitive.Foo.displayName`). Property-name identity
+        // on both sides is the React DevTools naming convention, not a mutation.
+        let src = r#"
+            const DropdownMenuGroup = React.forwardRef((props, ref) => null);
+            DropdownMenuGroup.displayName = DropdownMenuPrimitive.Group.displayName;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_display_name_from_template_literal() {
+        // The HOC naming pattern assigns a template literal.
+        let src = r#"
+            const Component = React.forwardRef((props, ref) => null);
+            Component.displayName = `Wrapped(${inner})`;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_display_name_from_non_display_name_member() {
+        // A member-access RHS whose property is not `displayName` is not the
+        // inherit convention and stays flagged.
+        let src = r#"
+            const RadioGroup = React.forwardRef((props, ref) => null);
+            RadioGroup.displayName = Bar.someOtherProp;
         "#;
         assert_eq!(run(src).len(), 1);
     }
