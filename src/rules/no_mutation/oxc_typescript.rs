@@ -239,6 +239,21 @@ impl OxcCheck for Check {
                     return;
                 }
 
+                // Vue 3 reactive ref: `list.value.push(x)` / `list.value.splice(…)`
+                // mutates the deeply-reactive array a `ref([])` holds — the
+                // idiomatic, referentially-stable update, with no immutable
+                // alternative (`list.value = [...list.value, x]` reallocates and
+                // drops the array's reactive identity). The receiver `<ref>.value`
+                // is itself a `.value` member access whose base is the ref
+                // identifier, so `member.object` is the `<ref>.value` node passed to
+                // `is_vue_ref_value_target`. Parity with the `ref.value = x`
+                // assignment and `ref.value++` update branches above.
+                if let Expression::StaticMemberExpression(inner) = &member.object
+                    && is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
+                {
+                    return;
+                }
+
                 let root = match &member.object {
                     Expression::Identifier(ident) => Some(ident.name.as_str()),
                     expr => root_name_of_expr(expr),
@@ -1734,6 +1749,53 @@ mod tests {
             xs.unshift(0);
         "#;
         assert_eq!(run(array_from_producer).len(), 1);
+    }
+
+    // Vue 3 reactive ref `.value` array mutation — issue #7777
+
+    #[test]
+    fn allows_mutating_array_method_on_vue_ref_value_issue_7777() {
+        // Regression for rbaumier/comply#7777 — `const list = ref([])` holds a
+        // deeply-reactive array; `list.value.push(x)` / `list.value.splice(…)` is
+        // the idiomatic in-place update. Reassigning `list.value` (also exempt)
+        // reallocates and drops the array's reactive identity.
+        let src = r#"
+            import { ref } from 'vue'
+            const tabsList = ref([]);
+            function update(route, index, targetIndex) {
+                tabsList.value.push(route);
+                tabsList.value.splice(0, index);
+                const current = tabsList.value.splice(targetIndex, 1);
+                tabsList.value = current;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutating_array_method_on_shallow_ref_value_issue_7777() {
+        // `shallowRef` is a writable Vue ref factory too; a mutating array method
+        // on its `.value` array takes the same exemption.
+        let src = r#"
+            import { shallowRef } from 'vue'
+            const items = shallowRef([]);
+            function drop() {
+                items.value.pop();
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mutating_array_method_on_non_ref_value_object_issue_7777() {
+        // Negative space: the exemption is gated on `is_vue_ref_value_target`, so a
+        // plain object with a `value` array field (not a Vue ref) stays flagged —
+        // `.value` alone is not the reactive signal.
+        let src = r#"
+            const o = { value: [] };
+            o.value.push(1);
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
 
