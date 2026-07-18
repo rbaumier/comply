@@ -589,6 +589,79 @@ mod tests {
         );
     }
 
+    // Regression for #7781: a CommonJS package whose tsconfig delegates
+    // `module`/`moduleResolution` via `extends` into a rig config inside
+    // node_modules (absent without `npm install`) is left with a tsconfig silent
+    // on module format. Node's default for a package.json without `"type"` is
+    // CommonJS, whose require() resolver supplies extensions — so extensionless
+    // relative imports are correct and the rule must stay silent.
+    #[test]
+    fn skips_commonjs_package_with_module_inherited_via_unresolvable_extends_issue_7781() {
+        let pkg = r#"{"name":"@hcengineering/core","main":"lib/index.js"}"#;
+        let tsconfig = r#"{"extends":"./node_modules/@scope/rig/tsconfig.json","compilerOptions":{"rootDir":"src","outDir":"lib"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { Status, StatusValue } from './classes';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "CommonJS package (no type field) with module config inherited via unresolvable extends resolves via require(): {diags:?}"
+        );
+    }
+
+    // Negative space for #7781: an explicit `"type":"commonjs"` with a tsconfig
+    // silent on module format is likewise CommonJS — extensionless imports stay
+    // silent.
+    #[test]
+    fn skips_explicit_commonjs_type_with_silent_tsconfig_issue_7781() {
+        let pkg = r#"{"name":"pkg","type":"commonjs","main":"lib/index.js"}"#;
+        let tsconfig = r#"{"compilerOptions":{"rootDir":"src","outDir":"lib"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { x } from './util';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "explicit type:commonjs with silent tsconfig is CommonJS: {diags:?}"
+        );
+    }
+
+    // Negative space for #7781: a `"type":"module"` package with a tsconfig silent
+    // on module format is ESM (Node's default keys on the manifest `type`), where
+    // extensions are required — so the rule must keep firing.
+    #[test]
+    fn still_flags_type_module_with_silent_tsconfig_issue_7781() {
+        let pkg = r#"{"name":"pkg","type":"module"}"#;
+        let tsconfig = r#"{"compilerOptions":{"rootDir":"src","outDir":"lib"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { x } from './util';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "type:module with silent tsconfig is ESM — extensions still required: {diags:?}"
+        );
+    }
+
+    // Negative space for #7781: an explicit `module:esnext` tsconfig is a positive
+    // ESM signal that the package.json-`type` fallback must NOT override, even
+    // when the package.json omits `"type"`. Extensions stay required.
+    #[test]
+    fn still_flags_esnext_tsconfig_even_without_type_field_issue_7781() {
+        let pkg = r#"{"name":"pkg","main":"dist/index.js"}"#;
+        let tsconfig = r#"{"compilerOptions":{"module":"esnext"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { x } from './util';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "module:esnext is a positive ESM signal not overridden by package.json type fallback: {diags:?}"
+        );
+    }
+
     // Negative space: a plain Node ESM project (no bundler, no Angular) still
     // needs explicit extensions, so the rule must keep firing.
     #[test]
