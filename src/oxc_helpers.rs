@@ -3943,16 +3943,19 @@ fn type_ident_import_source<'a>(
 /// The effective declared TypeScript type of the binding `ident` resolves to,
 /// across the shapes whose declaration carries a type: a directly-annotated
 /// function parameter (`x: Ref<T>`), an annotated variable (`const x: Ref<T> = …`),
-/// and a binding destructured from a typed object pattern (`{ x }: Ctx`, whose
-/// object pattern's named type is a same-file `interface`/`type` supplying member
-/// `x`'s type). Returns `None` when the binding has no resolvable declared type
-/// (an inferred binding, an un-annotated pattern, or an unresolvable member).
-fn binding_declared_ts_type<'a>(
+/// and a binding destructured from a typed object pattern — either an inline type
+/// literal (`{ x }: { x: T }`) whose member supplies `x`'s type, or a named type
+/// (`{ x }: Ctx`) whose same-file `interface`/`type` `Ctx` supplies member `x`'s
+/// type. A named-type receiver is resolved by NAME regardless of its type arguments
+/// (`{ x }: Ctx<T>`), since the member's type does not depend on them. Returns
+/// `None` when the binding has no resolvable declared type (an inferred binding, an
+/// un-annotated pattern, or an unresolvable member).
+pub fn binding_declared_ts_type<'a>(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic<'a>,
 ) -> Option<&'a oxc_ast::ast::TSType<'a>> {
     use oxc_ast::AstKind;
-    use oxc_ast::ast::BindingPattern;
+    use oxc_ast::ast::{BindingPattern, TSType};
     let ref_id = ident.reference_id.get()?;
     let scoping = semantic.scoping();
     let sym_id = scoping.get_reference(ref_id).symbol_id()?;
@@ -3973,12 +3976,16 @@ fn binding_declared_ts_type<'a>(
     match pattern {
         // Simple `x: T` — the annotation is the binding's own type.
         BindingPattern::BindingIdentifier(_) => annotation.map(|ann| &ann.type_annotation),
-        // Destructured `{ x }: Ctx` (or renamed `{ k: x }: Ctx`) — resolve member
-        // `x` (resp. `k`) on the same-file `interface`/`type` `Ctx`.
+        // Destructured `{ x }: T` (or renamed `{ k: x }: T`) — the member `x`
+        // (resp. `k`), read from an inline type literal or a same-file named
+        // `interface`/`type`.
         BindingPattern::ObjectPattern(obj) => {
-            let type_name = type_reference_name(&annotation?.type_annotation)?;
+            let annotation = &annotation?.type_annotation;
             let key = object_pattern_key_for_symbol(obj, sym_id)?;
-            named_type_member_type(type_name, key, semantic, 0)
+            match annotation {
+                TSType::TSTypeLiteral(lit) => signature_member_type(&lit.members, key),
+                _ => named_type_member_type(type_reference_name(annotation)?, key, semantic, 0),
+            }
         }
         _ => None,
     }

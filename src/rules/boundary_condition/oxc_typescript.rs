@@ -9,7 +9,7 @@
 //! acknowledges that `arr[0]` may be `undefined`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, resolves_to_import_from};
+use crate::oxc_helpers::{binding_declared_ts_type, byte_offset_to_line_col, resolves_to_import_from};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
@@ -1817,20 +1817,31 @@ fn is_nonempty_fixed_array_construction(new_expr: &NewExpression) -> bool {
     }
 }
 
-/// Returns true when `ident`'s binding has a type annotation denoting a
-/// non-empty tuple — making `ident[0]` provably in-bounds. Resolves the
-/// reference to its declaration and reads the `type_annotation` on the enclosing
-/// `FormalParameter` (`p: [A, B]`) or `VariableDeclarator` (`const p: [A, B]`).
-/// The annotation qualifies when it is a literal tuple (`[A, B]`, with a
-/// `readonly [...]` wrapper unwrapped) or a bare named alias that resolves to one
-/// (`type Semver = [number, number, number]`; see
-/// [`ts_type_resolves_to_nonempty_tuple`]). A generic reference (`LineSegment<T>`)
-/// stays unresolved — its tuple shape needs type information this native backend
-/// doesn't have.
+/// Returns true when `ident`'s binding has a type denoting a non-empty tuple —
+/// making `ident[0]` provably in-bounds. A directly-annotated binding reads the
+/// `type_annotation` on the enclosing `FormalParameter` (`p: [A, B]`) or
+/// `VariableDeclarator` (`const p: [A, B]`). A binding destructured from a typed
+/// object pattern reads the matching MEMBER's type instead — from an inline type
+/// literal (`{ nouns }: { nouns?: [string, string] }`) or a same-file
+/// `interface`/`type` member (`{ nouns }: PaginationControlProps<T>` with
+/// `interface PaginationControlProps<T> { nouns?: [string, string] }`), resolved by
+/// the destructuring KEY so a renamed prop (`{ nouns: n }`) is handled; a generic
+/// receiver is resolved by name since the member's tuple type is independent of its
+/// type arguments (see [`binding_declared_ts_type`]). The resolved type qualifies
+/// when it is a literal tuple (`[A, B]`, with a `readonly [...]` wrapper unwrapped)
+/// or a bare named alias that resolves to one (`type Semver = [number, number,
+/// number]`; see [`ts_type_resolves_to_nonempty_tuple`]). A generic reference
+/// standing alone (`LineSegment<T>`) stays unresolved — its tuple shape needs type
+/// information this native backend doesn't have.
 fn resolves_to_nonempty_tuple_type<'a>(
     ident: &IdentifierReference,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
+    if binding_declared_ts_type(ident, semantic)
+        .is_some_and(|ty| ts_type_resolves_to_nonempty_tuple(ty, semantic))
+    {
+        return true;
+    }
     let Some(ref_id) = ident.reference_id.get() else {
         return false;
     };
@@ -4941,6 +4952,55 @@ mod tests {
         // A self-referential alias (`type A = A`) is not a tuple; the cycle guard
         // must terminate the resolution (no hang) and leave the read flagged.
         let src = "type A = A; const f = (p: A) => p[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_destructured_prop_generic_interface_tuple_member_issue_7845() {
+        // The issue's repro: `nouns` is destructured from a generic interface whose
+        // member is a fixed 2-tuple. The tuple lives on the interface member, not on
+        // the pattern annotation, and its type is independent of `T`, so the member
+        // is resolved by name and `nouns[0]` is in-bounds.
+        let src = "interface P<T> { nouns?: [string, string] } function f<T>({ nouns }: P<T>) { return nouns[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_destructured_prop_inline_type_literal_tuple_member_issue_7845() {
+        // The member's tuple type is read straight off an inline type literal.
+        let src = "function f({ nouns }: { nouns?: [string, string] }) { return nouns[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_destructured_renamed_prop_tuple_member_issue_7845() {
+        // A renamed prop (`{ nouns: n }`) is resolved by the source KEY `nouns`, so
+        // the local `n` still sees the tuple member and `n[0]` is in-bounds.
+        let src = "function f({ nouns: n }: { nouns?: [string, string] }) { return n[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_destructured_prop_plain_array_member_issue_7845() {
+        // Negative space: a plain array member (`arr?: string[]`) is variable-length,
+        // not a tuple, so `arr[0]` may be `undefined` and stays flagged.
+        let src = "function f({ arr }: { arr?: string[] }) { return arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_destructured_prop_empty_tuple_member_issue_7845() {
+        // Negative space: an empty tuple member (`x: []`) has no element at index 0,
+        // so the read is genuinely out of bounds and stays flagged.
+        let src = "function f({ x }: { x: [] }) { return x[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_destructured_prop_missing_member_issue_7845() {
+        // Negative space: the destructured binding has no matching member on the
+        // annotated type, so its type is unresolved and the read stays flagged.
+        let src = "function f({ nouns }: { other?: [string, string] }) { return nouns[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
