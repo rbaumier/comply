@@ -171,6 +171,27 @@ mod tests {
     }
 
     #[test]
+    fn allows_thread_spawn_building_runtime_via_builder() {
+        // Builder form of runtime construction — the only exempting signal here
+        // (no lexical `block_on`, no `Runtime::new`).
+        let source = "async fn f() { std::thread::spawn(|| { \
+                      let rt = tokio::runtime::Builder::new_current_thread()\
+                      .enable_all().build().unwrap(); run(rt); }); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_thread_spawn_when_only_a_nested_inner_thread_hosts_a_runtime() {
+        // The outer thread does stray sync work; a nested inner thread hosts
+        // the runtime. The inner host must not exempt the outer stray spawn.
+        let source = "async fn f() { std::thread::spawn(|| { do_sync_cpu_work(); \
+                      std::thread::spawn(|| { \
+                      let rt = tokio::runtime::Runtime::new().unwrap(); \
+                      rt.block_on(async {}); }); }); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
     fn flags_stray_fire_and_forget_thread_in_async() {
         // No runtime hosting — a plain background thread doing sync CPU work
         // from an async fn is the footgun the rule targets.
