@@ -7,7 +7,18 @@
 //! schema (response/output shapes like `*Response*Schema` / `*Select*Schema`,
 //! or config/env shapes like `*Config*Schema` / `*Env*Schema` parsed from
 //! `process.env`), and the field is not under a known output-contract key
-//! (`response:`, `output:`, `returns:`, `result:`), emit a diagnostic.
+//! (`response:`, `output:`, `returns:`, `result:`) — either lexically inline or
+//! via a schema const whose only within-file usage is under such a key — emit a
+//! diagnostic.
+//!
+//! Output-usage provenance: a file-level pre-pass ([`collect_output_only_consts`])
+//! classifies every top-level schema const by where it is referenced. A const
+//! referenced under an output-contract position (directly, or transitively
+//! through another output-only const's definition) and never under a
+//! request-input position (`body:`, `query:`, `params:`, …) is a server-emitted
+//! output schema; its `z.string()` / `z.number()` / `z.array()` fields are not
+//! request inputs and are skipped. A const referenced under both an input and an
+//! output position is still treated as input and flagged.
 //!
 //! "Server request-input boundary" is gated by [`looks_like_api_path`], which
 //! matches exact path components (`api`, `routes`, `controllers`, …) or
@@ -20,6 +31,7 @@
 //! `createFileRoute(...)` (parses the URL query, not a request body).
 
 use crate::diagnostic::{Diagnostic, Severity};
+use std::collections::{HashMap, HashSet};
 
 /// Exact path-component names (directories, case-insensitive) that mark a
 /// server endpoint location: Next.js `app/api/`, an Express/`src/routes/` tree,
@@ -115,6 +127,13 @@ const NON_INPUT_NAME_MARKERS: &[&str] = &[
 /// request input. Fields under any of these keys must not be capped — server-emitted
 /// response shapes in Elysia route descriptors or custom middleware.
 const OUTPUT_CONTRACT_KEYS: &[&str] = &["response", "output", "returns", "result"];
+
+/// Descriptor-level property keys whose value validates untrusted client input
+/// (Fastify/Elysia request-schema slots). A schema const referenced under any
+/// of these is a request input, never an output-only shape — even if it is also
+/// referenced under an output-contract key.
+const INPUT_CONTRACT_KEYS: &[&str] =
+    &["body", "query", "querystring", "params", "headers", "cookie"];
 
 /// True when `pair_node`'s parent object is itself an argument to a Zod schema
 /// call (`z.*`). Distinguishes route-descriptor keys from same-named schema fields
@@ -219,53 +238,272 @@ fn chain_has_max(call_node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-crate::ast_check! { on ["call_expression"] prefilter = ["z.string", "z.number", "z.array"] =>
-    |node, source, ctx, diagnostics|
+/// Strip surrounding quote characters from an object-property key's text.
+fn unquote(key: &str) -> &str {
+    key.trim_matches(|c| matches!(c, '"' | '\'' | '`'))
+}
 
-    if !looks_like_api_path(ctx.path) {
-        return;
+/// True when `decl` is a `const`/`let`/`var` declarator at module top level:
+/// its declaration statement's parent is the `program`, optionally through a
+/// single `export_statement`. Nested/local declarators are not tracked so a
+/// function-local variable can't shadow a top-level schema const's name.
+fn is_top_level_declarator(decl: tree_sitter::Node) -> bool {
+    let Some(list) = decl.parent() else { return false };
+    if !matches!(list.kind(), "lexical_declaration" | "variable_declaration") {
+        return false;
     }
-    if is_test_file(ctx.path) {
-        return;
+    let Some(stmt) = list.parent() else { return false };
+    match stmt.kind() {
+        "program" => true,
+        "export_statement" => stmt.parent().is_some_and(|p| p.kind() == "program"),
+        _ => false,
     }
-    // A `"use client"` file validates a browser form, not a server request body.
-    if is_client_component(ctx.source) {
-        return;
+}
+
+/// Visit `root` and every descendant exactly once, iteratively (no recursion,
+/// so a deep schema value can't blow the stack) and without escaping the
+/// subtree. Used to collect schema-const references inside one property value.
+fn walk_subtree<F: FnMut(tree_sitter::Node)>(root: tree_sitter::Node, mut visit: F) {
+    let mut cursor = root.walk();
+    loop {
+        visit(cursor.node());
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.node().id() == root.id() {
+                return;
+            }
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return;
+            }
+        }
     }
-    // A TanStack Router page route parses the URL query, not a request body.
-    if ctx.source.contains("createFileRoute") {
-        return;
+}
+
+/// Collect, into `out`, the name of every top-level schema const (a key of
+/// `const_defs`) referenced anywhere in `node`'s subtree. Member chains
+/// (`X.array()`, `X.extend({...})`, `X.pick(...)`) and wrappers
+/// (`z.object({...})`, `z.union([...])`) need no special handling: the
+/// referenced identifier is a descendant regardless of the surrounding chain.
+fn collect_const_refs<'a>(
+    node: tree_sitter::Node,
+    source: &'a [u8],
+    const_defs: &HashMap<&'a str, tree_sitter::Node>,
+    out: &mut HashSet<&'a str>,
+) {
+    walk_subtree(node, |n| {
+        if n.kind() == "identifier"
+            && let Ok(txt) = n.utf8_text(source)
+            && const_defs.contains_key(txt)
+        {
+            out.insert(txt);
+        }
+    });
+}
+
+/// Transitive closure of `seed` over `const_defs`: every const reachable from a
+/// seed const by following references in its definition. The `result` set acts
+/// as the visited-set so reference cycles (e.g. `z.lazy` recursive schemas)
+/// terminate.
+fn reachable_consts<'a>(
+    seed: &HashSet<&'a str>,
+    const_defs: &HashMap<&'a str, tree_sitter::Node>,
+    source: &'a [u8],
+) -> HashSet<&'a str> {
+    let mut result: HashSet<&'a str> = HashSet::new();
+    let mut stack: Vec<&'a str> = seed.iter().copied().collect();
+    while let Some(name) = stack.pop() {
+        if !result.insert(name) {
+            continue;
+        }
+        if let Some(def) = const_defs.get(name) {
+            let mut refs: HashSet<&'a str> = HashSet::new();
+            collect_const_refs(*def, source, const_defs, &mut refs);
+            for r in refs {
+                if !result.contains(r) {
+                    stack.push(r);
+                }
+            }
+        }
+    }
+    result
+}
+
+/// File-level pre-pass: the set of top-level schema-const names that are
+/// output-only — referenced under an output-contract position (directly or
+/// transitively) and never under a request-input position. Their fields are
+/// server-emitted, not client inputs, so must not be flagged.
+fn collect_output_only_consts(tree: &tree_sitter::Tree, source: &[u8]) -> HashSet<String> {
+    let nodes =
+        crate::rules::walker::collect_nodes_of_kinds(tree, &["variable_declarator", "pair"]);
+
+    // Every top-level schema const → its initializer value node.
+    let mut const_defs: HashMap<&str, tree_sitter::Node> = HashMap::new();
+    for node in &nodes {
+        if node.kind() != "variable_declarator" || !is_top_level_declarator(*node) {
+            continue;
+        }
+        let (Some(name_node), Some(value)) = (
+            node.child_by_field_name("name"),
+            node.child_by_field_name("value"),
+        ) else {
+            continue;
+        };
+        if name_node.kind() != "identifier" {
+            continue;
+        }
+        if let Ok(name) = name_node.utf8_text(source) {
+            const_defs.insert(name, value);
+        }
+    }
+    if const_defs.is_empty() {
+        return HashSet::new();
     }
 
-    let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
-        return;
-    };
-    let kind = match name {
-        "z.string" => "z.string",
-        "z.number" => "z.number",
-        "z.array" => "z.array",
-        _ => return,
-    };
+    // Consts referenced directly under output- vs input-contract keys.
+    let mut direct_out: HashSet<&str> = HashSet::new();
+    let mut direct_in: HashSet<&str> = HashSet::new();
+    for node in &nodes {
+        if node.kind() != "pair" {
+            continue;
+        }
+        let Some(key) = node.child_by_field_name("key") else {
+            continue;
+        };
+        let Ok(key_text) = key.utf8_text(source) else {
+            continue;
+        };
+        let key_text = unquote(key_text);
+        let target = if OUTPUT_CONTRACT_KEYS.contains(&key_text) {
+            &mut direct_out
+        } else if INPUT_CONTRACT_KEYS.contains(&key_text) {
+            &mut direct_in
+        } else {
+            continue;
+        };
+        // Only a route-descriptor-level key counts, not a same-named schema
+        // field (`z.object({ body: ... })`).
+        if pair_inside_schema_call(*node, source) {
+            continue;
+        }
+        let Some(value) = node.child_by_field_name("value") else {
+            continue;
+        };
+        collect_const_refs(value, source, &const_defs, target);
+    }
 
-    if chain_has_max(node, source) {
-        return;
+    // Reachable-from-output MINUS reachable-from-input: a const used as input
+    // anywhere (directly or via an input const's definition) stays flagged.
+    let out_reach = reachable_consts(&direct_out, &const_defs, source);
+    let in_reach = reachable_consts(&direct_in, &const_defs, source);
+    out_reach
+        .difference(&in_reach)
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+/// Walk up from `node` to the nearest enclosing top-level `variable_declarator`;
+/// return true if its name is an output-only schema const. Non-top-level
+/// declarators are ignored (not matched, and walked past) so a function-local
+/// variable can't shadow a top-level output-only const's name — mirroring
+/// [`collect_output_only_consts`], which only tracks top-level consts.
+fn enclosed_in_output_only_const(
+    node: tree_sitter::Node,
+    source: &[u8],
+    output_only: &HashSet<String>,
+) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "variable_declarator"
+            && is_top_level_declarator(parent)
+            && let Some(name_node) = parent.child_by_field_name("name")
+            && let Ok(name) = name_node.utf8_text(source)
+            && output_only.contains(name)
+        {
+            return true;
+        }
+        cur = parent;
     }
-    if enclosed_in_non_input_schema(node, source) {
-        return;
-    }
-    if enclosed_in_response_field(node, source) {
-        return;
+    false
+}
+
+#[derive(Debug)]
+pub struct Check;
+
+impl crate::rules::backend::AstCheck for Check {
+    fn prefilter(&self) -> Option<&'static [&'static str]> {
+        Some(&["z.string", "z.number", "z.array"])
     }
 
-    diagnostics.push(Diagnostic::at_node(
-        ctx.path,
-        &node,
-        super::META.id,
-        format!(
-            "`{kind}` has no `.max(N)` — unbounded API input is a resource-exhaustion vector."
-        ),
-        Severity::Warning,
-    ));
+    fn check(
+        &self,
+        ctx: &crate::rules::backend::CheckCtx,
+        tree: &tree_sitter::Tree,
+    ) -> Vec<Diagnostic> {
+        let source = ctx.source.as_bytes();
+        let mut diagnostics = Vec::new();
+
+        if !looks_like_api_path(ctx.path) {
+            return diagnostics;
+        }
+        if is_test_file(ctx.path) {
+            return diagnostics;
+        }
+        // A `"use client"` file validates a browser form, not a server request body.
+        if is_client_component(ctx.source) {
+            return diagnostics;
+        }
+        // A TanStack Router page route parses the URL query, not a request body.
+        if ctx.source.contains("createFileRoute") {
+            return diagnostics;
+        }
+
+        let output_only = collect_output_only_consts(tree, source);
+
+        crate::rules::walker::walk_tree(tree, |node| {
+            if node.kind() != "call_expression" {
+                return;
+            }
+            let Some(name) = crate::rules::call_expression::call_function_name(node, source) else {
+                return;
+            };
+            let kind = match name {
+                "z.string" => "z.string",
+                "z.number" => "z.number",
+                "z.array" => "z.array",
+                _ => return,
+            };
+
+            if chain_has_max(node, source) {
+                return;
+            }
+            if enclosed_in_non_input_schema(node, source) {
+                return;
+            }
+            if enclosed_in_response_field(node, source) {
+                return;
+            }
+            if enclosed_in_output_only_const(node, source, &output_only) {
+                return;
+            }
+
+            diagnostics.push(Diagnostic::at_node(
+                ctx.path,
+                &node,
+                super::META.id,
+                format!(
+                    "`{kind}` has no `.max(N)` — unbounded API input is a resource-exhaustion vector."
+                ),
+                Severity::Warning,
+            ));
+        });
+
+        diagnostics
+    }
 }
 
 
@@ -495,5 +733,41 @@ mod tests {
         // real server endpoint; an unbounded request-body field is still flagged.
         let src = "const Body = z.object({ name: z.string() });";
         assert_eq!(run_at(src, "app/api/users/route.ts").len(), 1);
+    }
+
+    #[test]
+    fn ignores_response_schema_const_referenced_under_response() {
+        // Regression for #7771 — an extracted schema const referenced only under
+        // a `response:` position is a server-emitted output shape, not a request
+        // input, even though its name carries no non-input marker.
+        let src = "const sanitizedExternalSchema = KmsKeysSchema.extend({\n  credentialsHash: z.string(),\n});\napp.get('/x', handler, {\n  schema: { response: { 200: sanitizedExternalSchema } },\n});";
+        assert!(run_at(src, "src/routes/external-kms.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_transitively_referenced_response_schema_const() {
+        // Regression for #7771 — a schema const reached only transitively from a
+        // response position (via another const's `.array()`) is still output-only.
+        let src = "const Dim = z.object({ label: z.string() });\nconst Plan = z.object({ dims: Dim.array() });\napp.get('/x', handler, {\n  schema: { response: { 200: z.object({ products: Plan.array() }) } },\n});";
+        assert!(run_at(src, "src/routes/license.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_input_schema_const_referenced_under_body() {
+        // Regression for #7771 precision — a const referenced under `body:` is a
+        // request input and must still be flagged even alongside response schemas.
+        let src = "const CreateBody = z.object({ name: z.string() });\napp.post('/x', handler, {\n  schema: { body: CreateBody, response: { 200: z.object({ ok: z.boolean() }) } },\n});";
+        let diags = run_at(src, "src/routes/create.ts");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("z.string"));
+    }
+
+    #[test]
+    fn still_flags_schema_const_used_as_both_input_and_response() {
+        // Regression for #7771 precision — a schema shared between request body
+        // and response is genuine input somewhere, so it must still be flagged.
+        let src = "const Shared = z.object({ name: z.string() });\napp.post('/x', handler, {\n  schema: { body: Shared, response: { 200: Shared } },\n});";
+        let diags = run_at(src, "src/routes/shared.ts");
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }
