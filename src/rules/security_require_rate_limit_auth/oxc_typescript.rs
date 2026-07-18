@@ -1,10 +1,14 @@
 //! security-require-rate-limit-auth OxcCheck backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens, resolves_to_import_from};
+use crate::project::ProjectCtx;
+use crate::project::import_index::ImportKind;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{Argument, Expression, IdentifierReference};
+use oxc_semantic::Semantic;
 use oxc_span::GetSpan;
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct Check;
@@ -59,6 +63,122 @@ pub(crate) fn has_global_rate_limit(source: &str) -> bool {
     false
 }
 
+/// npm packages whose default/namespace export issues OUTBOUND HTTP requests (a
+/// browser/Node client) rather than registering server routes. `msw`'s `http`
+/// builder installs in-process request mocks — likewise not a real network
+/// surface. A `.post`/`.get`/… whose callee object resolves to one of these is a
+/// client request: its path argument is a request URL and its later argument a
+/// request body, so there is no server route to rate-limit.
+const HTTP_CLIENT_MODULES: &[&str] = &["axios", "ky", "got", "superagent", "msw"];
+
+/// True when the member-call callee `object` is provably an HTTP client, so the
+/// `.post`/`.get`/… is an outbound request, not a server route registration.
+/// Established from import-graph provenance, never the identifier's spelling:
+///
+/// - a (default/namespace/named) import from a [`HTTP_CLIENT_MODULES`] package;
+/// - a default/namespace import of a local module that re-exports such a client
+///   one hop away (`import axios from '../utils/axios'` wrapping
+///   `import axios from 'axios'; export default axios`);
+/// - a binding produced by an HTTP-client factory (`const api = axios.create()`).
+///
+/// Any other callee — a server framework `app`/`router` instance, or one whose
+/// provenance cannot be resolved — is not a client, so a genuine (or
+/// unresolvable) server auth route still flags.
+fn is_http_client_callee(
+    object: &Expression,
+    semantic: &Semantic,
+    project: &ProjectCtx,
+    path: &Path,
+) -> bool {
+    if object_is_imported_http_client(object, semantic, project, path) {
+        return true;
+    }
+    let Expression::Identifier(obj) = object else {
+        return false;
+    };
+    binding_is_http_client_factory(obj, semantic, project, path)
+}
+
+/// Client provenance reachable without inspecting a local binding's initializer:
+/// a direct import from a client package, or one re-export hop through a local
+/// wrapper module.
+fn object_is_imported_http_client(
+    object: &Expression,
+    semantic: &Semantic,
+    project: &ProjectCtx,
+    path: &Path,
+) -> bool {
+    let Expression::Identifier(obj) = object else {
+        return false;
+    };
+    if resolves_to_import_from(obj, semantic, HTTP_CLIENT_MODULES) {
+        return true;
+    }
+    import_hops_to_http_client(obj.name.as_str(), project, path)
+}
+
+/// True when `local_name` binds a default/namespace import of a LOCAL module that
+/// itself default/namespace-imports from a [`HTTP_CLIENT_MODULES`] package — the
+/// single re-export hop `import axios from '../utils/axios'` where
+/// `../utils/axios` does `import axios from 'axios'; export default axios`.
+fn import_hops_to_http_client(local_name: &str, project: &ProjectCtx, path: &Path) -> bool {
+    let index = project.import_index();
+    let Some(local) = index.get_imports(path).iter().find(|s| {
+        s.local_name == local_name && matches!(s.kind, ImportKind::Default | ImportKind::Namespace)
+    }) else {
+        return false;
+    };
+    // A bare specifier is already handled by the direct-import check; only a
+    // resolved local wrapper module can carry the hop.
+    let Some(source) = &local.source_path else {
+        return false;
+    };
+    index.get_imports(source).iter().any(|s| {
+        matches!(s.kind, ImportKind::Default | ImportKind::Namespace)
+            && HTTP_CLIENT_MODULES.contains(&s.specifier.as_str())
+    })
+}
+
+/// True when `obj` resolves to a `const x = <client>.create(...)` binding whose
+/// `.create` receiver is itself an HTTP client (`const api = axios.create()`):
+/// the factory result is a configured client instance.
+fn binding_is_http_client_factory(
+    obj: &IdentifierReference,
+    semantic: &Semantic,
+    project: &ProjectCtx,
+    path: &Path,
+) -> bool {
+    let Some(ref_id) = obj.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    let init = std::iter::once(nodes.kind(decl_id))
+        .chain(nodes.ancestor_kinds(decl_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(decl) => Some(decl.init.as_ref()),
+            _ => None,
+        })
+        .flatten();
+    let Some(init) = init else {
+        return false;
+    };
+    let Expression::CallExpression(call) = peel_parens(init) else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "create" {
+        return false;
+    }
+    object_is_imported_http_client(&member.object, semantic, project, path)
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -68,7 +188,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -81,15 +201,6 @@ impl OxcCheck for Check {
         };
         let method = member.property.name.as_str();
         if !matches!(method, "post" | "get" | "put" | "patch" | "all") {
-            return;
-        }
-
-        // MSW request mocks (`http.post("*/api/...", handler)`) are in-process
-        // test doubles, not a real network surface — there is nothing to
-        // rate-limit. MSW's callee object is `http`.
-        if let Expression::Identifier(obj) = &member.object
-            && obj.name.as_str() == "http"
-        {
             return;
         }
 
@@ -106,6 +217,15 @@ impl OxcCheck for Check {
             return;
         }
         if !is_auth_path(path_text) {
+            return;
+        }
+
+        // Skip OUTBOUND HTTP-client calls (`axios.post`, `ky.post`, an
+        // `axios.create()` instance, MSW's `http`): the path is a request URL and
+        // the later argument a request body, so there is no server route to
+        // rate-limit. A server route registrar (`app`/`router`) or an
+        // unresolvable callee still flags.
+        if is_http_client_callee(&member.object, semantic, ctx.project, ctx.path) {
             return;
         }
 
@@ -374,5 +494,98 @@ mod tests {
     fn non_ascii_near_use_does_not_panic() {
         let src = "app.use(cors()); // configuração de middleware aqui ✓";
         assert!(!has_global_rate_limit(src));
+    }
+
+    // Regression for #7828: `axios.post('/login', body)` is an outbound client
+    // request, not a server route registration — the second argument is a request
+    // body, and there is no route to rate-limit.
+    #[test]
+    fn allows_axios_post_direct_import() {
+        let src = r#"import axios from 'axios'; axios.post('/login', body);"#;
+        assert!(run_tsx(src).is_empty(), "{:?}", run_tsx(src));
+    }
+
+    // `ky` / `got` are HTTP clients too; a `.post` on their default import is an
+    // outbound request.
+    #[test]
+    fn allows_ky_and_got_post_imports() {
+        let ky = r#"import ky from 'ky'; ky.post('/login', body);"#;
+        assert!(run_tsx(ky).is_empty(), "{:?}", run_tsx(ky));
+        let got = r#"import got from 'got'; got.post('/login', body);"#;
+        assert!(run_tsx(got).is_empty(), "{:?}", run_tsx(got));
+    }
+
+    // A configured client from the `axios.create()` factory is still a client.
+    #[test]
+    fn allows_axios_create_instance_post() {
+        let src = r#"import axios from 'axios'; const api = axios.create(); api.post('/login', body);"#;
+        assert!(run_tsx(src).is_empty(), "{:?}", run_tsx(src));
+    }
+
+    // MSW's `http` builder resolves to the `msw` package — an in-process request
+    // mock, not a server route. Preserves the #236 exemption on provenance footing
+    // (the callee is imported from `msw`, not matched by bare name).
+    #[test]
+    fn allows_msw_http_post_from_msw_import() {
+        let src = r#"import { http } from 'msw'; http.post('/login', resolver);"#;
+        assert!(run_tsx(src).is_empty(), "{:?}", run_tsx(src));
+    }
+
+    // The global `fetch` / Nuxt `$fetch` are direct calls (Identifier callee),
+    // never a `.post`/`.get` member, so they fall outside the member-call gate —
+    // an outbound client request is never flagged.
+    #[test]
+    fn allows_global_fetch_and_dollar_fetch() {
+        let fetch = r#"fetch('/login', { method: 'POST', body });"#;
+        assert!(run_tsx(fetch).is_empty(), "{:?}", run_tsx(fetch));
+        let dollar = r#"$fetch('/login', { method: 'POST', body });"#;
+        assert!(run_tsx(dollar).is_empty(), "{:?}", run_tsx(dollar));
+    }
+
+    // Security coverage preserved: a genuine server framework route registrar
+    // (`express()` app) with no rate limiting must still flag.
+    #[test]
+    fn still_flags_express_app_post() {
+        let src = r#"import express from 'express'; const app = express(); app.post('/login', handler);"#;
+        let d = run_tsx(src);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("/login"));
+    }
+
+    // A server `Router()` binding (not an HTTP client) must still flag.
+    #[test]
+    fn still_flags_server_router_post() {
+        let src = r#"import { Router } from 'express'; const router = Router(); router.post('/login', handler);"#;
+        let d = run_tsx(src);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("/login"));
+    }
+
+    // An unresolvable callee object on an auth path must still flag — coverage is
+    // preserved when provenance cannot prove the callee is a client.
+    #[test]
+    fn still_flags_unresolvable_callee_post() {
+        let src = r#"router.post('/login', handler);"#;
+        let d = run_tsx(src);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("/login"));
+    }
+
+    // Regression for #7828 (newbee-mall-vue3-app): `axios` is imported from a
+    // local wrapper `../utils/axios` that re-exports the `axios` package's default.
+    // One import-graph hop reaches the client package, so `axios.post('/login', …)`
+    // is a client call and is not flagged.
+    #[test]
+    fn allows_axios_post_through_local_reexport_hop() {
+        let wrapper = r#"import axios from 'axios'; export default axios;"#;
+        let service = r#"
+            import axios from '../utils/axios';
+            export function login(params) { return axios.post('/login', params); }
+        "#;
+        let d = run_in_project(
+            &[("src/utils/axios.js", wrapper), ("src/service/user.js", service)],
+            "src/service/user.js",
+        );
+        assert!(d.is_empty(), "{d:?}");
     }
 }
