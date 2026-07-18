@@ -1,14 +1,20 @@
 //! rust-thread-spawn-in-async backend.
 //!
-//! Walks `call_expression` nodes whose function path ends in
-//! `thread::spawn` and verifies the call is inside an `async fn`.
-//! Mirrors `rust-block-on-in-async` but for the thread::spawn
-//! footgun.
+//! Flags `call_expression` nodes whose function path ends in
+//! `thread::spawn` when the call is inside an `async fn` — spawning an OS
+//! thread from async work usually means a future should have been
+//! `tokio::spawn`ed instead. A `thread::spawn` whose closure hosts its own
+//! Tokio runtime (drives `block_on` or constructs a runtime) is exempt: it
+//! owns a dedicated runtime on its own OS thread and cannot be replaced by
+//! `tokio::spawn`/`spawn_blocking`. Mirrors `rust-block-on-in-async`, which
+//! recognises the inverse.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::call_expression::call_function_name;
-use crate::rules::rust_helpers::{is_inside_async_fn, is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{
+    is_in_test_context, is_inside_async_fn, is_under_tests_dir, spawn_closure_hosts_runtime,
+};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -38,6 +44,9 @@ impl AstCheck for Check {
             return;
         }
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+            return;
+        }
+        if spawn_closure_hosts_runtime(node, source_bytes) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -131,6 +140,41 @@ mod tests {
     #[test]
     fn flags_thread_spawn_in_genuine_async_fn() {
         let source = "async fn run() { std::thread::spawn(|| work()); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_thread_spawn_hosting_runtime_via_block_on() {
+        // Dedicated-runtime-on-its-own-OS-thread: the closure builds a
+        // separate runtime (via a helper) and drives it with `block_on`, so
+        // `std::thread::spawn` is required and must not be flagged.
+        let source = "async fn main() { std::thread::spawn(move || { \
+                      let rt = make_rt(); rt.block_on(async move { work().await; }); }); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_thread_spawn_hosting_inline_runtime() {
+        let source = "async fn f() { thread::spawn(|| { \
+                      let rt = tokio::runtime::Runtime::new().unwrap(); \
+                      rt.block_on(async {}); }); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_thread_spawn_building_runtime_without_lexical_block_on() {
+        // Constructing a dedicated runtime is enough to mark the thread as a
+        // runtime host, even with no `block_on` lexically in view.
+        let source = "async fn f() { std::thread::spawn(|| { \
+                      let rt = tokio::runtime::Runtime::new().unwrap(); run(rt); }); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_stray_fire_and_forget_thread_in_async() {
+        // No runtime hosting — a plain background thread doing sync CPU work
+        // from an async fn is the footgun the rule targets.
+        let source = "async fn f() { std::thread::spawn(|| { do_sync_cpu_work(); }); }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
