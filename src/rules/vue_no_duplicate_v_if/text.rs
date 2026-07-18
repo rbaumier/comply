@@ -98,10 +98,59 @@ fn leading_whitespace_width(line: &str) -> usize {
     line.chars().take_while(|c| c.is_whitespace()).count()
 }
 
-/// Whether `cond` is exactly the boolean negation of `base` (one is the other
-/// with a single leading `!`).
+/// Whether `cond` is exactly the boolean negation of `base` — one is the other
+/// prefixed with a single `!` that negates the *entire* expression. A leading
+/// `!` binds tighter than `&&`/`||`, so `!X && Y` parses as `(!X) && Y` and is
+/// not the negation of `X && Y`; such pairs are rejected.
 fn is_negation_of(cond: &str, base: &str) -> bool {
-    cond.strip_prefix('!') == Some(base) || base.strip_prefix('!') == Some(cond)
+    is_full_negation(cond, base) || is_full_negation(base, cond)
+}
+
+/// Whether `negated` is `base` with a single leading `!` that negates the whole
+/// expression. The `!` negates only the first operand when a top-level `&&`/`||`
+/// follows (`!X && Y` = `(!X) && Y`), so the stripped remainder is required to
+/// hold no top-level logical operator. A fully-parenthesized `!(X && Y)` keeps
+/// its `&&` inside the parens (depth 1), so it still matches.
+fn is_full_negation(negated: &str, base: &str) -> bool {
+    match negated.strip_prefix('!') {
+        Some(rest) => rest == base && !has_top_level_logical_operator(rest),
+        None => false,
+    }
+}
+
+/// Whether `s` contains a `&&` or `||` at bracket depth 0 — outside every
+/// `()`/`[]`/`{}` group and outside string/template literals. Scanning is
+/// quote-aware (`"`, `'`, `` ` ``, with `\` escapes) so an operator inside a
+/// string value (`x === 'a && b'`) or a call argument (`fn(a && b)`) is not
+/// counted as top-level.
+fn has_top_level_logical_operator(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_str: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(quote) = in_str {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == quote {
+                in_str = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => in_str = Some(c),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'&' | b'|' if depth == 0 && bytes.get(i + 1) == Some(&c) => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Extract the condition from `v-if="..."`. Returns `None` if the line
@@ -307,6 +356,54 @@ mod tests {
         let source = "  <AlertBox v-if=\"sso\">info</AlertBox>\n\
             \x20 <template v-if=\"!sso\" #footer>x</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_leading_not_with_shared_and_operand() {
+        // Regression #7693 (jeecgboot BasicSubMenuItem): `!A && B` and `A && B`
+        // are mutually exclusive but not exhaustive — both are false when `B` is
+        // false. The leading `!` binds only to `A`, so the pair is not a
+        // `v-if`/`v-else` negation.
+        let source = "  <BasicMenuItem v-if=\"!menuHasChildren(item) && getShowMenu\" />\n\
+            \x20 <SubMenu v-if=\"menuHasChildren(item) && getShowMenu\" />";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_leading_not_with_shared_or_operand() {
+        // A top-level `||` after the leading `!` is likewise not negated by it.
+        let source = "  <X v-if=\"!a || b\" />\n  <Y v-if=\"a || b\" />";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_negation_of_whole_call_with_inner_and() {
+        // The `&&` sits inside the call's parens (depth 1), so the leading `!`
+        // negates the whole `fn(...)` atom — a genuine negation that must flag.
+        let source = "  <X v-if=\"fn(a && b)\" />\n  <Y v-if=\"!fn(a && b)\" />";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 2);
+    }
+
+    #[test]
+    fn flags_negation_of_parenthesized_expr_with_string_and() {
+        // The `&&` lives inside a string literal, so it is not a top-level
+        // operator; `!(...)` is the true negation of `(...)` and must flag.
+        let source = "  <X v-if=\"(x === 'a && b')\" />\n  <Y v-if=\"!(x === 'a && b')\" />";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 2);
+    }
+
+    #[test]
+    fn flags_plain_atom_negation() {
+        // A genuine atom negation (`!isActive` vs `isActive`) must still flag —
+        // the top-level-operator guard must not neuter the rule.
+        let source = "  <X v-if=\"!isActive\" />\n  <Y v-if=\"isActive\" />";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 2);
     }
 
     #[test]
