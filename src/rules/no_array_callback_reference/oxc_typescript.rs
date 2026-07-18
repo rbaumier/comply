@@ -1064,6 +1064,40 @@ mod tests {
         crate::rules::test_helpers::run_oxc_check(&Check, &source, &canon, &project, file)
     }
 
+    /// Like [`run_on_project`] but runs the rule on the *raw* (un-canonicalized)
+    /// target path, mirroring `comply <relative-dir>` where discovered file paths
+    /// are not canonicalized. The `ImportIndex` still keys files by their
+    /// canonical path, so the cross-file lookup succeeds only when the accessor
+    /// resolves the raw spelling to the canonical key (#7745).
+    fn run_on_project_raw_path(
+        files: &[(&str, &str)],
+        target_rel: &str,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        let target_path = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_oxc_check(&Check, &source, &target_path, &project, file)
+    }
+
     // #7618 repro (excalidraw/excalidraw `HintViewer.tsx`): `getShortcutKey` is a
     // single-parameter arrow exported from a sibling module; passing it bare to
     // `.map` drops the injected `index`/`array`, so it is identical to wrapping
@@ -1078,6 +1112,22 @@ mod tests {
             ),
         ];
         assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #7745: cross-file arity resolution must survive a non-canonical `ctx.path`
+    // (the common `comply <relative-dir>` invocation). Same case as
+    // `allows_imported_single_arity_const_arrow`, but the importer is looked up by
+    // its raw path — the import-index accessor resolves it to the canonical key.
+    #[test]
+    fn allows_imported_single_arity_under_noncanonical_path() {
+        let files = &[
+            ("shortcut.ts", "export const getShortcutKey = (shortcut: string): string => shortcut;"),
+            (
+                "consumer.ts",
+                "import { getShortcutKey } from './shortcut';\nconst keys: string[] = [];\nexport const out = keys.map(getShortcutKey);",
+            ),
+        ];
+        assert!(run_on_project_raw_path(files, "consumer.ts").is_empty());
     }
 
     // #7618: single-parameter imported type-guards passed to `.some` / `.filter`

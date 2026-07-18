@@ -654,7 +654,7 @@ impl ImportIndex {
     /// Exports declared in `path`, or empty slice if the file isn't indexed.
     #[must_use]
     pub fn get_exports(&self, path: &Path) -> &[ExportedSymbol] {
-        self.exports.get(path).map_or(&[], Vec::as_slice)
+        self.exports.get(self.canonical_key(path)).map_or(&[], Vec::as_slice)
     }
 
     /// Member names added to `path`'s module namespace by every project
@@ -664,13 +664,13 @@ impl ImportIndex {
     /// `path`'s own source never declares it.
     #[must_use]
     pub fn augmented_exports(&self, path: &Path) -> Option<&FxHashSet<String>> {
-        self.augmented_exports.get(path)
+        self.augmented_exports.get(self.canonical_key(path))
     }
 
     /// Imports declared in `path`, or empty slice if the file isn't indexed.
     #[must_use]
     pub fn get_imports(&self, path: &Path) -> &[ImportedSymbol] {
-        self.imports.get(path).map_or(&[], Vec::as_slice)
+        self.imports.get(self.canonical_key(path)).map_or(&[], Vec::as_slice)
     }
 
     /// `true` when `target` is the only indexed source file living directly in
@@ -679,6 +679,7 @@ impl ImportIndex {
     /// a hub aggregating sibling modules.
     #[must_use]
     pub fn is_sole_file_in_dir(&self, target: &Path) -> bool {
+        let target = self.canonical_key(target);
         let Some(dir) = target.parent() else {
             return false;
         };
@@ -693,7 +694,7 @@ impl ImportIndex {
     #[must_use]
     pub fn get_usages(&self, path: &Path, symbol: &str) -> &[Usage] {
         self.symbol_usages
-            .get(&(path.to_path_buf(), symbol.to_string()))
+            .get(&(self.canonical_key(path).to_path_buf(), symbol.to_string()))
             .map_or(&[], Vec::as_slice)
     }
 
@@ -703,7 +704,7 @@ impl ImportIndex {
     #[must_use]
     pub fn get_call_sites(&self, path: &Path, symbol: &str) -> &[CallSite] {
         self.call_sites
-            .get(&(path.to_path_buf(), symbol.to_string()))
+            .get(&(self.canonical_key(path).to_path_buf(), symbol.to_string()))
             .map_or(&[], Vec::as_slice)
     }
 
@@ -711,7 +712,7 @@ impl ImportIndex {
     #[must_use]
     pub fn get_importers(&self, path: &Path) -> Vec<&Path> {
         self.importers
-            .get(path)
+            .get(self.canonical_key(path))
             .map(|v| v.iter().map(PathBuf::as_path).collect())
             .unwrap_or_default()
     }
@@ -720,7 +721,7 @@ impl ImportIndex {
     /// precomputed reverse-edge map.
     #[must_use]
     pub fn importer_count(&self, path: &Path) -> usize {
-        self.importers.get(path).map_or(0, Vec::len)
+        self.importers.get(self.canonical_key(path)).map_or(0, Vec::len)
     }
 
     /// Canonical absolute path for a discovered file path. Uses the raw →
@@ -733,6 +734,20 @@ impl ImportIndex {
             return c.clone();
         }
         std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// Resolve `path` to the canonical spelling every entry in this index is
+    /// keyed by, so a path-keyed accessor finds its entry no matter how the
+    /// caller spells the file. Each indexed file's raw discovered path is
+    /// recorded in `self.canonical` during extraction (zero syscalls), so a
+    /// rule looking a file up by the raw `ctx.path` — relative under
+    /// `comply <relative-dir>` — lands on the same absolute key the index
+    /// stored. A path absent from the map is returned unchanged: an
+    /// already-canonical path is itself the correct key, and a non-indexed path
+    /// matches no entry either way. Unlike [`ImportIndex::canonical`] this never
+    /// hits the filesystem, so it is safe on the per-node accessor hot path.
+    fn canonical_key<'a>(&'a self, path: &'a Path) -> &'a Path {
+        self.canonical.get(path).map_or(path, PathBuf::as_path)
     }
 
     /// Total number of indexed files — the denominator for ratio-based rules.
@@ -752,7 +767,7 @@ impl ImportIndex {
     /// (`import * as ns from …`). O(1) set lookup.
     #[must_use]
     pub fn is_namespace_imported(&self, path: &Path) -> bool {
-        self.namespace_imported.contains(path)
+        self.namespace_imported.contains(self.canonical_key(path))
     }
 
     /// Every import site across the project that resolves to `path`.
@@ -764,6 +779,7 @@ impl ImportIndex {
     /// for `import * as ns`).
     #[must_use]
     pub fn get_imports_to(&self, path: &Path) -> Vec<&ImportedSymbol> {
+        let path = self.canonical_key(path);
         let mut out = Vec::new();
         for imps in self.imports.values() {
             for imp in imps {
@@ -810,7 +826,7 @@ impl ImportIndex {
     #[must_use]
     pub fn reexport_target(&self, path: &Path, name: &str) -> Option<&Path> {
         self.reexport_targets
-            .get(&(path.to_path_buf(), name.to_string()))
+            .get(&(self.canonical_key(path).to_path_buf(), name.to_string()))
             .map(PathBuf::as_path)
     }
 
@@ -868,6 +884,7 @@ impl ImportIndex {
     /// export of it is live — `unused-file` and `dead-export` must not flag it.
     #[must_use]
     pub fn is_under_dynamic_import_dir(&self, path: &Path) -> bool {
+        let path = self.canonical_key(path);
         self.dynamic_import_dirs
             .iter()
             .any(|dir| path.starts_with(dir))
@@ -882,6 +899,7 @@ impl ImportIndex {
     /// Cycle containing `path`, if any.
     #[must_use]
     pub fn cycle_for(&self, path: &Path) -> Option<&[PathBuf]> {
+        let path = self.canonical_key(path);
         self.cycles
             .iter()
             .find(|scc| scc.iter().any(|p| p == path))
@@ -6208,6 +6226,49 @@ mod tests {
             missing.source_path.is_none(),
             "genuinely missing import must stay unresolved"
         );
+    }
+
+    // #7745: the index keys every file by its canonical absolute path, but a rule
+    // looks a file up by the raw `ctx.path`, which is relative under
+    // `comply <relative-dir>`. A path-keyed accessor must resolve the relative
+    // spelling to the stored canonical key through the raw→canonical map, or the
+    // whole cross-file feature (arity resolution, usages, importers) silently
+    // returns empty under the common relative invocation.
+    #[test]
+    fn accessors_resolve_relative_lookup_to_canonical_key() {
+        let relative = PathBuf::from("app/utils/consumer.ts");
+        let canonical = PathBuf::from("/abs/app/utils/consumer.ts");
+
+        let mut imports = FxHashMap::default();
+        imports.insert(
+            canonical.clone(),
+            vec![ImportedSymbol {
+                local_name: "getShortcutKey".to_string(),
+                imported_name: "getShortcutKey".to_string(),
+                kind: ImportKind::Named,
+                specifier: "./shortcut".to_string(),
+                source_path: Some(PathBuf::from("/abs/app/utils/shortcut.ts")),
+                line: 1,
+                is_type_only: false,
+                is_runtime_value: true,
+                is_dynamic: false,
+            }],
+        );
+        let mut canonical_map = FxHashMap::default();
+        canonical_map.insert(relative.clone(), canonical.clone());
+
+        let index = ImportIndex {
+            imports,
+            canonical: canonical_map,
+            ..Default::default()
+        };
+
+        // Raw relative spelling (the `ctx.path` a rule passes) resolves.
+        assert_eq!(index.get_imports(&relative).len(), 1);
+        // The canonical spelling itself still resolves — the fallback is identity.
+        assert_eq!(index.get_imports(&canonical).len(), 1);
+        // An unrelated, unindexed path stays empty.
+        assert!(index.get_imports(Path::new("/abs/other.ts")).is_empty());
     }
 
     #[test]
