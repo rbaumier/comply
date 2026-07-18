@@ -3128,7 +3128,18 @@ impl ProjectCtx {
         self.anchor_path_cache
             .get_or_init(|| {
                 if let Some(linted) = self.linted_paths.get() {
-                    linted.iter().min().cloned()
+                    // Exclude import-index-only languages (Markdown / Astro /
+                    // HTML): they are dispatched to no lint engine, so a
+                    // once-per-project rule anchored on one would never run. The
+                    // full-scan branch's `min_indexed_path` already filters these.
+                    linted
+                        .iter()
+                        .filter(|p| {
+                            !crate::files::Language::from_path(p.as_path())
+                                .is_some_and(crate::files::Language::is_import_index_only)
+                        })
+                        .min()
+                        .cloned()
                 } else {
                     self.import_index().min_indexed_path().map(Path::to_path_buf)
                 }

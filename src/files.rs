@@ -129,6 +129,15 @@ impl Language {
         }
     }
 
+    /// True for a language indexed only for the cross-file imports it declares
+    /// and dispatched to no lint engine (Markdown / Astro / HTML). A file in such
+    /// a language is never visited by a rule, so it must never be chosen as a
+    /// once-per-project anchor: a cross-file rule keyed to that anchor would find
+    /// no dispatched file matching it and silently emit nothing.
+    pub fn is_import_index_only(self) -> bool {
+        matches!(self, Language::Markdown | Language::Astro | Language::Html)
+    }
+
     /// True if the language is a TypeScript/JavaScript variant — used by the
     /// orchestrator to dispatch to oxlint.
     pub fn is_typescript_family(self) -> bool {

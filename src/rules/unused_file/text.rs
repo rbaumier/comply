@@ -592,12 +592,10 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
 
-        let target_path: PathBuf = project
-            .import_index()
-            .indexed_paths()
-            .min()
-            .expect("at least one indexed file")
-            .to_path_buf();
+        // Dispatch on the once-per-project anchor the rule actually keys on (a
+        // dispatched-language file), not the smallest path across all indexed
+        // languages — an index-only HTML/Markdown/Astro file is never linted.
+        let target_path: PathBuf = project.anchor_path().expect("at least one anchorable file");
         let source = fs::read_to_string(&target_path).unwrap();
         let language = Language::from_path(&target_path).unwrap();
         let file_ctx = FileCtx::build(&target_path, &source, language, &project);
@@ -610,6 +608,53 @@ mod tests {
             file: &file_ctx, lang: crate::files::Language::TypeScript,
         };
         let diags = Check.check(&ctx);
+        (dir, diags)
+    }
+
+    /// Faithfully mirror the engine: build the project, then dispatch the Check on
+    /// every TS-family indexed file (the languages `unused-file` registers), as
+    /// `partition_by_language` does — never on an index-only HTML/Markdown/Astro
+    /// file. This exercises the real `ctx.path == anchor` gate instead of forcing
+    /// `ctx.path` to the anchor, so it catches an anchor that no dispatched file
+    /// can ever match (which would silently disable the rule).
+    fn run_dispatched(files: &[(&str, &str)]) -> (TempDir, Vec<Diagnostic>) {
+        let dir = TempDir::new().unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            let lang = Language::from_path(&p).unwrap();
+            source_files.push(SourceFile { path: p, language: lang });
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let ts_paths: Vec<PathBuf> = project
+            .import_index()
+            .indexed_paths()
+            .filter(|p| Language::from_path(p).is_some_and(|l| l.is_typescript_family()))
+            .map(Path::to_path_buf)
+            .collect();
+        let mut diags = Vec::new();
+        for path in &ts_paths {
+            let source = fs::read_to_string(path).unwrap();
+            let language = Language::from_path(path).unwrap();
+            let file_ctx = FileCtx::build(path, &source, language, &project);
+            let ctx = CheckCtx {
+                path,
+                path_arc: Arc::from(path.as_path()),
+                source: &source,
+                config: &config,
+                project: &project,
+                file: &file_ctx,
+                lang: language,
+            };
+            diags.extend(Check.check(&ctx));
+        }
         (dir, diags)
     }
 
@@ -777,6 +822,40 @@ mod tests {
         );
     }
 
+    // Regression for #7858: an HTML file is indexed only for its `<script src>`
+    // edges and is dispatched to no rule, so it must never become the
+    // once-per-project anchor. `unused-file` runs only on TS/JS/TSX files; if a
+    // root `index.html` (sorting before the `.tsx` sources) were the anchor, no
+    // dispatched file would match it and the rule would silently emit nothing.
+    // Dispatched faithfully on the TS files, the rule must still run: the
+    // HTML-seeded app graph stays alive and a genuine orphan is still flagged.
+    #[test]
+    fn html_anchor_does_not_disable_rule_issue_7858() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.html", "<script type=\"module\" src=\"./main.tsx\"></script>\n"),
+            (
+                "main.tsx",
+                "import { view } from './view';\nexport const boot = view;\n",
+            ),
+            ("view.tsx", "export const view = 1;\n"),
+            ("orphan.tsx", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_dispatched(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            flagged.iter().any(|p| p.contains("orphan")),
+            "a root index.html anchor must not silently disable unused-file: {flagged:?}"
+        );
+        assert!(
+            !flagged.iter().any(|p| p.contains("main.tsx") || p.contains("view")),
+            "the HTML-seeded app graph must stay reachable: {flagged:?}"
+        );
+        assert!(
+            !flagged.iter().any(|p| p.ends_with(".html")),
+            "the HTML entry itself is never a lint target: {flagged:?}"
+        );
+    }
+
     // Regression for #7858: an HTML file that references only external/CDN and
     // bare specifiers seeds nothing — those are not project modules — so a
     // genuinely unreachable module is still flagged (the rule is not neutered by
@@ -823,12 +902,7 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
 
-        let target_path: PathBuf = project
-            .import_index()
-            .indexed_paths()
-            .min()
-            .expect("at least one indexed file")
-            .to_path_buf();
+        let target_path: PathBuf = project.anchor_path().expect("at least one anchorable file");
         let source = fs::read_to_string(&target_path).unwrap();
         let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
         let ctx = CheckCtx {
