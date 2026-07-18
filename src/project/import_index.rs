@@ -637,7 +637,14 @@ impl ImportIndex {
         // Object.keys(x).forEach(...)` global-registration pattern.
         propagate_namespace_imports_through_star_edges(&mut namespace_imported, &star_edges);
 
-        let min_indexed = exports.keys().min().cloned();
+        // Anchor candidates exclude import-index-only languages (Markdown /
+        // Astro / HTML): they are indexed for their imports but dispatched to no
+        // lint engine, so a once-per-project rule anchored on one would never run.
+        let min_indexed = exports
+            .keys()
+            .filter(|p| !Language::from_path(p.as_path()).is_some_and(Language::is_import_index_only))
+            .min()
+            .cloned();
 
         // Grow the client graph from the `"use client"` seeds over the forward
         // import / re-export edges, once, before rule dispatch.
@@ -778,8 +785,11 @@ impl ImportIndex {
         self.exports.len()
     }
 
-    /// Lexicographically smallest indexed (canonical) path. Precomputed once;
-    /// cross-file rules use it as a deterministic per-run anchor.
+    /// Lexicographically smallest indexed (canonical) path among languages that
+    /// are dispatched to a lint engine — import-index-only Markdown/Astro/HTML are
+    /// excluded (see [`Language::is_import_index_only`]). Precomputed once;
+    /// cross-file rules use it as a deterministic per-run anchor, so it must be a
+    /// file some engine actually visits.
     #[must_use]
     pub fn min_indexed_path(&self) -> Option<&Path> {
         self.min_indexed.as_deref()
