@@ -142,7 +142,8 @@ impl FileCtx {
     pub fn build(path: &Path, source: &str, language: Language, project: &ProjectCtx) -> Self {
         let directives = scan_directives(source);
         let path_segments = scan_path(path);
-        let rsc_context = classify_rsc(project.framework, directives, &path_segments);
+        let rsc_context =
+            classify_rsc(project.framework, directives, &path_segments, path, project);
         let is_generated = is_generated_content(source)
             || is_generated_filename(path)
             || is_in_generated_dir(path)
@@ -214,7 +215,7 @@ fn matches_hook_after_prefix(source: &str, prefix: &str, name: &str) -> bool {
 /// Scan the start of the source for one or two top-level string expression
 /// statements. `"use strict"`, `"use client"`, `"use server"` are all valid
 /// JS directives in the TC39 sense.
-fn scan_directives(source: &str) -> FileDirectives {
+pub(crate) fn scan_directives(source: &str) -> FileDirectives {
     let mut out = FileDirectives::default();
     let bytes = source.as_bytes();
     let mut cursor = skip_ws_comments(bytes, 0);
@@ -764,6 +765,8 @@ fn classify_rsc(
     framework: Framework,
     directives: FileDirectives,
     segments: &PathSegments,
+    path: &Path,
+    project: &ProjectCtx,
 ) -> RscContext {
     if directives.use_server {
         return RscContext::ServerFunction;
@@ -772,6 +775,19 @@ fn classify_rsc(
         return RscContext::ClientComponent;
     }
     if framework == Framework::NextJs && segments.in_app_router {
+        // In the App Router `"use client"` marks a boundary, not a per-file
+        // requirement: a directive-less module reached transitively from a
+        // client module is part of the client graph and runs on the client. It
+        // is therefore not a server component even though it sits under `app/`.
+        // Only a file no client module imports — a true server entrypoint like
+        // `page.tsx`/`layout.tsx` and its server-only imports — is classified
+        // `ServerComponent`. A file with any client importer is left `Unknown`
+        // so neither the server-component nor the client-component rules assert
+        // their invariants on it (a dual-use module reachable from both a client
+        // and a server path is deliberately treated as not-server).
+        if project.import_index().is_reachable_from_client(path) {
+            return RscContext::Unknown;
+        }
         return RscContext::ServerComponent;
     }
     RscContext::Unknown
@@ -1879,5 +1895,134 @@ mod tests {
             &project,
         );
         assert_eq!(ctx.rsc_context, RscContext::ClientComponent);
+    }
+
+    /// Build a real Next.js app-router project on disk (so `ProjectCtx::load`
+    /// detects the framework and populates the import index), then return the
+    /// `FileCtx` for `target_rel`. `package.json` carries a `next` dependency so
+    /// the framework resolves to `NextJs`.
+    fn rsc_ctx_in_next_app(files: &[(&str, &str)], target_rel: &str) -> RscContext {
+        use crate::config::Config;
+        use crate::files::SourceFile;
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"t","dependencies":{"next":"14.0.0"}}"#,
+        )
+        .unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&p, content).unwrap();
+            let language = Language::from_path(&p).unwrap();
+            source_files.push(SourceFile { path: p, language });
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::load(&refs, &Config::default());
+        assert_eq!(project.framework, Framework::NextJs, "fixture must detect Next.js");
+        let target = dir.path().join(target_rel);
+        let source = std::fs::read_to_string(&target).unwrap();
+        let language = Language::from_path(&target).unwrap();
+        FileCtx::build(&target, &source, language, &project).rsc_context
+    }
+
+    #[test]
+    fn rsc_not_server_for_hook_directly_imported_by_client_component() {
+        // `hooks/use-x.ts` has no directive but is imported by a `"use client"`
+        // component — it runs on the client, so it is not a server component.
+        let rsc = rsc_ctx_in_next_app(
+            &[
+                (
+                    "app/hooks/use-x.ts",
+                    "import { useState } from \"react\";\n\
+                     export function useX() { const [s] = useState(0); return s; }\n",
+                ),
+                (
+                    "app/comp.tsx",
+                    "\"use client\";\nimport { useX } from \"./hooks/use-x\";\n\
+                     export function Comp() { return null; }\n",
+                ),
+            ],
+            "app/hooks/use-x.ts",
+        );
+        assert_ne!(rsc, RscContext::ServerComponent);
+    }
+
+    #[test]
+    fn rsc_not_server_for_module_transitively_below_client_boundary() {
+        // client.tsx ("use client") -> mid.tsx -> hooks/use-x.ts: the hook is
+        // two hops below the boundary yet still part of the client graph.
+        let rsc = rsc_ctx_in_next_app(
+            &[
+                (
+                    "app/hooks/use-x.ts",
+                    "import { useState } from \"react\";\n\
+                     export function useX() { const [s] = useState(0); return s; }\n",
+                ),
+                (
+                    "app/mid.tsx",
+                    "import { useX } from \"./hooks/use-x\";\n\
+                     export function Mid() { useX(); return null; }\n",
+                ),
+                (
+                    "app/client.tsx",
+                    "\"use client\";\nimport { Mid } from \"./mid\";\n\
+                     export function Client() { return null; }\n",
+                ),
+            ],
+            "app/hooks/use-x.ts",
+        );
+        assert_ne!(rsc, RscContext::ServerComponent);
+    }
+
+    #[test]
+    fn rsc_server_for_true_server_entrypoint_with_no_client_importer() {
+        // page.tsx has no client importer, so despite a sibling client
+        // component existing in the project it stays a server component and
+        // keeps firing the server-component rules.
+        let rsc = rsc_ctx_in_next_app(
+            &[
+                (
+                    "app/page.tsx",
+                    "import { useState } from \"react\";\n\
+                     export default function Page() { const [s] = useState(0); return null; }\n",
+                ),
+                (
+                    "app/widget.tsx",
+                    "\"use client\";\nexport function Widget() { return null; }\n",
+                ),
+            ],
+            "app/page.tsx",
+        );
+        assert_eq!(rsc, RscContext::ServerComponent);
+    }
+
+    #[test]
+    fn rsc_walk_terminates_on_importer_cycle() {
+        // a.tsx <-> b.tsx form an import cycle, both reached from a client
+        // boundary. The traversal must terminate (cycle guard) and classify the
+        // cycle members as client-graph, not server.
+        let rsc = rsc_ctx_in_next_app(
+            &[
+                (
+                    "app/client.tsx",
+                    "\"use client\";\nimport { A } from \"./a\";\n\
+                     export function C() { return null; }\n",
+                ),
+                (
+                    "app/a.tsx",
+                    "import { B } from \"./b\";\nexport function A() { return null; }\n",
+                ),
+                (
+                    "app/b.tsx",
+                    "import { A } from \"./a\";\nexport function B() { return null; }\n",
+                ),
+            ],
+            "app/a.tsx",
+        );
+        assert_ne!(rsc, RscContext::ServerComponent);
     }
 }

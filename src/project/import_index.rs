@@ -330,6 +330,13 @@ pub struct ImportIndex {
     /// DOM-only `parent.append()` / `child.remove()` anywhere in the project (the
     /// call site and the class definition routinely live in different files).
     dom_tree_methods: DomTreeMethods,
+    /// Canonical paths that are part of the Next.js client graph: every file a
+    /// `"use client"` module reaches transitively through import / re-export
+    /// edges, plus the client modules themselves. Precomputed once (a single
+    /// forward traversal seeded from the directive-bearing files) so RSC
+    /// classification is an O(1) set lookup rather than a per-file graph walk.
+    /// Empty when no indexed file carries the directive.
+    client_reachable: FxHashSet<PathBuf>,
 }
 
 impl ImportIndex {
@@ -463,8 +470,14 @@ impl ImportIndex {
         let mut dynamic_import_dirs: Vec<PathBuf> = Vec::new();
         let mut dom_tree_methods = DomTreeMethods::default();
         let mut augmented_exports: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
+        // Seeds for the Next.js client-graph traversal: files opening with a
+        // `"use client"` directive.
+        let mut client_seeds: FxHashSet<PathBuf> = FxHashSet::default();
         for (path, extract, dyn_dirs, augmentations) in resolved {
             dom_tree_methods.merge(extract.dom_tree_methods);
+            if extract.has_use_client {
+                client_seeds.insert(path.clone());
+            }
             exports.insert(path.clone(), extract.exports);
             imports.insert(path.clone(), extract.imports);
             file_calls.insert(path, extract.calls);
@@ -623,6 +636,11 @@ impl ImportIndex {
 
         let min_indexed = exports.keys().min().cloned();
 
+        // Grow the client graph from the `"use client"` seeds over the forward
+        // import / re-export edges, once, before rule dispatch.
+        let client_reachable =
+            compute_client_reachable(&client_seeds, &imports, &reexport_edges);
+
         Self {
             exports,
             imports,
@@ -640,6 +658,7 @@ impl ImportIndex {
             mod_edges,
             augmented_exports,
             dom_tree_methods,
+            client_reachable,
         }
     }
 
@@ -768,6 +787,17 @@ impl ImportIndex {
     #[must_use]
     pub fn is_namespace_imported(&self, path: &Path) -> bool {
         self.namespace_imported.contains(self.canonical_key(path))
+    }
+
+    /// True when `path` is part of the Next.js client graph: it carries a
+    /// `"use client"` directive itself, or some `"use client"` module reaches it
+    /// transitively through import / re-export edges. App-router RSC
+    /// classification consults this so a directive-less module below a client
+    /// boundary is not mistaken for a server component. O(1) set lookup against
+    /// the set precomputed in [`ImportIndex::build`].
+    #[must_use]
+    pub fn is_reachable_from_client(&self, path: &Path) -> bool {
+        self.client_reachable.contains(self.canonical_key(path))
     }
 
     /// Every import site across the project that resolves to `path`.
@@ -1444,6 +1474,10 @@ struct FileExtract {
     /// The DOM tree-mutation method names this file declares as class methods.
     /// See [`DomTreeMethods`].
     dom_tree_methods: DomTreeMethods,
+    /// `true` when this file opens with a `"use client"` directive. Seeds the
+    /// Next.js client-graph traversal in [`ImportIndex::build`]: every module a
+    /// client file reaches through import / re-export edges runs on the client.
+    has_use_client: bool,
 }
 
 /// A `declare module '<specifier>' { … }` augmentation declared in a file.
@@ -1470,6 +1504,48 @@ struct LocalCall {
     args: Vec<Option<String>>,
 }
 
+/// Grow the Next.js client graph from the `"use client"` `seeds` over the
+/// forward import (`imports` — each `source_path`) and re-export (`reexport_edges`)
+/// edges. In the App Router, `"use client"` marks a boundary: every module a
+/// client file reaches runs on the client without repeating the directive, so
+/// the whole forward closure of the seeds is client code. Returns that closure,
+/// including the seeds themselves. The `reachable` set doubles as the visited
+/// set, so each file is expanded at most once and import cycles terminate. When
+/// `seeds` is empty the traversal returns immediately with an empty set — the
+/// common case for projects with no client components.
+fn compute_client_reachable(
+    seeds: &FxHashSet<PathBuf>,
+    imports: &FxHashMap<PathBuf, Vec<ImportedSymbol>>,
+    reexport_edges: &FxHashMap<PathBuf, Vec<PathBuf>>,
+) -> FxHashSet<PathBuf> {
+    let mut reachable: FxHashSet<PathBuf> = FxHashSet::default();
+    let mut stack: Vec<PathBuf> = Vec::new();
+    for seed in seeds {
+        if reachable.insert(seed.clone()) {
+            stack.push(seed.clone());
+        }
+    }
+    while let Some(file) = stack.pop() {
+        if let Some(imps) = imports.get(&file) {
+            for imp in imps {
+                if let Some(src) = &imp.source_path {
+                    if reachable.insert(src.clone()) {
+                        stack.push(src.clone());
+                    }
+                }
+            }
+        }
+        if let Some(targets) = reexport_edges.get(&file) {
+            for target in targets {
+                if reachable.insert(target.clone()) {
+                    stack.push(target.clone());
+                }
+            }
+        }
+    }
+    reachable
+}
+
 fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileExtract)> {
     let source = std::fs::read_to_string(&file.path).ok()?;
     if matches!(file.language, Language::Rust) {
@@ -1490,6 +1566,7 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
                 mod_decls,
                 module_augmentations: Vec::new(),
                 dom_tree_methods: DomTreeMethods::default(),
+                has_use_client: false,
             },
         ));
     }
@@ -1514,11 +1591,17 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
     // Wrapped in `catch_unwind` because the oxc parser can panic on
     // pathological input; a failed parse drops the file from the index, the
     // same outcome a tree-sitter parse failure produced.
-    let extract = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let mut extract = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         extract_ts_oxc(&source, &file.path)
     }))
     .ok()
     .flatten()?;
+
+    // Cheap byte-scan of the leading directives on the source already in hand —
+    // no extra read, no extra parse. Marks this file as a Next.js client-graph
+    // seed so `ImportIndex::build` can propagate the `"use client"` boundary to
+    // the modules it imports.
+    extract.has_use_client = crate::rules::file_ctx::scan_directives(&source).use_client;
 
     // Absolute-path canonicalization: rules compare paths by value, so two
     // different spellings of the same file (relative vs absolute) would miss
@@ -1628,6 +1711,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             mod_decls: Vec::new(),
             module_augmentations: Vec::new(),
             dom_tree_methods: DomTreeMethods::default(),
+            has_use_client: false,
         },
     ))
 }
@@ -3250,6 +3334,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         mod_decls: Vec::new(),
         module_augmentations,
         dom_tree_methods,
+        has_use_client: false,
     })
 }
 
@@ -7882,6 +7967,7 @@ mod tests {
             mod_decls: Vec::new(),
             module_augmentations: Vec::new(),
             dom_tree_methods,
+            has_use_client: false,
         }
     }
 

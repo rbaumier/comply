@@ -153,4 +153,75 @@ export default function Page() {
 "#;
         assert!(run(src, &FileCtx::default()).is_empty());
     }
+
+    /// End-to-end: build a real Next.js app-router project on disk, let
+    /// `ProjectCtx::load` + `classify_rsc` decide the RSC context from the
+    /// import graph, then run the rule against `target_rel`.
+    fn run_in_next_app(files: &[(&str, &str)], target_rel: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"t","dependencies":{"next":"14.0.0"}}"#,
+        )
+        .unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&p, content).unwrap();
+            let language = Language::from_path(&p).unwrap();
+            source_files.push(SourceFile { path: p, language });
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::load(&refs, &Config::default());
+        let target = dir.path().join(target_rel);
+        let source = std::fs::read_to_string(&target).unwrap();
+        let language = Language::from_path(&target).unwrap();
+        let file_ctx = FileCtx::build(&target, &source, language, &project);
+        crate::rules::test_helpers::run_ast_check(&Check, &source, &target, &project, &file_ctx)
+    }
+
+    #[test]
+    fn no_flag_use_state_in_hook_imported_by_client_component() {
+        let diags = run_in_next_app(
+            &[
+                (
+                    "app/hooks/use-x.ts",
+                    "import { useState } from \"react\";\n\
+                     export function useX() { const [s, setS] = useState(0); return s; }\n",
+                ),
+                (
+                    "app/comp.tsx",
+                    "\"use client\";\nimport { useX } from \"./hooks/use-x\";\n\
+                     export function Comp() { return null; }\n",
+                ),
+            ],
+            "app/hooks/use-x.ts",
+        );
+        assert!(diags.is_empty(), "hook below a client boundary must not be flagged: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_use_state_in_true_server_component() {
+        let diags = run_in_next_app(
+            &[
+                (
+                    "app/page.tsx",
+                    "import { useState } from \"react\";\n\
+                     export default function Page() { const [s, setS] = useState(0); return <div>{s}</div>; }\n",
+                ),
+                (
+                    "app/widget.tsx",
+                    "\"use client\";\nexport function Widget() { return null; }\n",
+                ),
+            ],
+            "app/page.tsx",
+        );
+        assert_eq!(diags.len(), 1, "true server entrypoint must still be flagged: {diags:?}");
+    }
 }
