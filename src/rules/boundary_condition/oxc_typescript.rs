@@ -4966,6 +4966,16 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_destructured_defaulted_prop_extends_interface_tuple_member_issue_7845() {
+        // The issue's exact repro shape: a defaulted destructuring (`{ nouns = [...] }`)
+        // from an interface that reaches the tuple member through `extends`. The
+        // assignment-pattern default is peeled to the leaf binding and `extends`
+        // heritage is followed, so `nouns[0]` is in-bounds.
+        let src = "interface Base { nouns?: [string, string] } interface P<T> extends Base { bordered?: boolean } function f<T>({ nouns = ['entry', 'entries'], bordered = false }: P<T>) { return nouns[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn no_fp_destructured_prop_inline_type_literal_tuple_member_issue_7845() {
         // The member's tuple type is read straight off an inline type literal.
         let src = "function f({ nouns }: { nouns?: [string, string] }) { return nouns[0]; }";
