@@ -80,7 +80,7 @@ fn is_relative(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
 }
 
-fn project_uses_bundler(ctx: &CheckCtx) -> bool {
+pub(crate) fn project_uses_bundler(ctx: &CheckCtx) -> bool {
     if let Some(pkg) = ctx.project.nearest_package_json(ctx.path)
         && (BUNDLER_DEPS.iter().any(|dep| pkg.has_dep_or_engine(dep))
             || pkg.all_deps().any(|dep| dep.starts_with("@vitejs/")))

@@ -8,6 +8,12 @@
 
 mod oxc_typescript;
 
+/// Shared bundler-detection lever (dependency in `BUNDLER_DEPS` / `@vitejs/*`,
+/// or a bundler config file in an ancestor directory). Reused by
+/// `use_json_import_attributes` so JSON imports in a bundler-built project are
+/// not required to carry `with { type: "json" }`.
+pub(crate) use oxc_typescript::project_uses_bundler;
+
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::RuleDef;
