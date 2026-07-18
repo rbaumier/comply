@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, expression_is_array, is_array_initializer,
     is_node_module_system_target, is_reduce_accumulator_param, is_vue_ref_value_target,
-    locally_owned_binding_init,
+    locally_owned_binding_init, resolves_to_import_from,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
@@ -73,6 +73,18 @@ impl OxcCheck for Check {
         if let Expression::StaticMemberExpression(inner) = &member.object
             && is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
         {
+            return;
+        }
+
+        // Pinia option-store action: `this.<state>.push(x)` /
+        // `this.<state>.splice(...)` mutates the Vue reactive proxy that Pinia
+        // builds from the store's `state`. Inside an `actions` method of a
+        // `defineStore(id, { ... })` call (with `defineStore` imported from
+        // `pinia`), mutating a `this.<state>` array in place is the idiomatic,
+        // referentially-stable Pinia update — the same reactivity mechanism as
+        // the `<ref>.value` case above (`reactive()` under the hood), with no
+        // immutable alternative that preserves the proxy's identity.
+        if is_pinia_store_action_this_mutation(member, node, semantic) {
             return;
         }
 
@@ -332,6 +344,96 @@ fn is_navigation_factory_call(expr: &Expression) -> bool {
             | "createHashHistory"
             | "createMemoryHistory"
     )
+}
+
+/// True when the mutating call is a `this.<state>` array mutation inside the
+/// `actions` object of a Pinia `defineStore(id, { ... })` option store.
+///
+/// Recognised by structural call-site/ancestor provenance, not a receiver name:
+/// 1. the call's receiver is `this.<member>` — a `StaticMemberExpression` whose
+///    base is a `ThisExpression` (`this.list`, single level);
+/// 2. the nearest enclosing function is the value of an object property that
+///    belongs to the object literal held by an `actions` property;
+/// 3. that `actions` property's object literal is the second (options) argument
+///    of a `defineStore(...)` call whose `defineStore` callee resolves to an
+///    import from `pinia`.
+///
+/// In a Pinia option store `this.<state>` is a `reactive()` proxy, so mutating
+/// the array it holds in place is the prescribed reactive update — the same
+/// mechanism the `<ref>.value` / `reactive(...)` exemptions already cover. A
+/// plain `class Store { m() { this.items.push(x) } }`, a `getters` method, or a
+/// `defineStore` not imported from `pinia` fails one of the three gates and
+/// stays flagged.
+fn is_pinia_store_action_this_mutation(
+    member: &oxc_ast::ast::StaticMemberExpression,
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::{Expression, PropertyKey};
+    use oxc_span::GetSpan;
+
+    // (1) receiver is `this.<member>`.
+    let Expression::StaticMemberExpression(receiver) = &member.object else {
+        return false;
+    };
+    if !matches!(&receiver.object, Expression::ThisExpression(_)) {
+        return false;
+    }
+
+    let nodes = semantic.nodes();
+
+    // (2) nearest enclosing function = the action method's function.
+    let Some(func) = nodes.ancestors(node.id()).find(|ancestor| {
+        matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        )
+    }) else {
+        return false;
+    };
+    // …held as the value of an object property (the action entry)…
+    let action_prop = nodes.parent_node(func.id());
+    if !matches!(action_prop.kind(), AstKind::ObjectProperty(_)) {
+        return false;
+    }
+    // …in an object literal (the `actions` object)…
+    let actions_obj = nodes.parent_node(action_prop.id());
+    if !matches!(actions_obj.kind(), AstKind::ObjectExpression(_)) {
+        return false;
+    }
+    // …that is the value of a property keyed `actions`.
+    let actions_container = nodes.parent_node(actions_obj.id());
+    let AstKind::ObjectProperty(container) = actions_container.kind() else {
+        return false;
+    };
+    let keyed_actions = match &container.key {
+        PropertyKey::StaticIdentifier(id) => id.name == "actions",
+        PropertyKey::StringLiteral(s) => s.value == "actions",
+        _ => false,
+    };
+    if !keyed_actions {
+        return false;
+    }
+
+    // (3) the options object literal is the second argument of a
+    // `defineStore(...)` call whose callee is imported from `pinia`.
+    let options_node = nodes.parent_node(actions_container.id());
+    let AstKind::ObjectExpression(options) = options_node.kind() else {
+        return false;
+    };
+    let AstKind::CallExpression(call) = nodes.parent_node(options_node.id()).kind() else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    if callee.name != "defineStore" || !resolves_to_import_from(callee, semantic, &["pinia"]) {
+        return false;
+    }
+    call.arguments
+        .get(1)
+        .and_then(oxc_ast::ast::Argument::as_expression)
+        .is_some_and(|arg| arg.span() == options.span)
 }
 
 fn is_inside_loop_body(
@@ -1173,6 +1275,83 @@ mod tests {
         let src = r#"
             function add(obj, x) {
                 obj.items.push(x);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_this_state_mutation_in_pinia_option_store_action_issue_7864() {
+        // Regression for rbaumier/comply#7864 — vue-manage-system: in a Pinia
+        // option store, `this.<state>` is a reactive proxy; mutating the array
+        // it holds inside an `actions` method (`this.list.push(...)` /
+        // `this.list.splice(...)`) is the idiomatic, referentially-stable
+        // reactive update.
+        let src = r#"
+            import { defineStore } from 'pinia';
+            export const useTabsStore = defineStore('tabs', {
+                state: () => ({ list: [] }),
+                actions: {
+                    setTabsItem(data) {
+                        this.list.push(data);
+                    },
+                    delTabsItem(index) {
+                        this.list.splice(index, 1);
+                    }
+                }
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_this_state_mutation_when_define_store_not_from_pinia_issue_7864() {
+        // Negative space for #7864 — a `defineStore` imported from a non-pinia
+        // module carries no reactive-proxy provenance, so `this.list.push(x)`
+        // inside its `actions` stays flagged.
+        let src = r#"
+            import { defineStore } from './not-pinia';
+            export const useX = defineStore('x', {
+                actions: {
+                    add() {
+                        this.list.push(1);
+                    }
+                }
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_this_state_mutation_outside_actions_object_issue_7864() {
+        // Negative space for #7864 — the exemption is scoped to the `actions`
+        // object; a `this.list.push(x)` inside a `getters` method is not a
+        // Pinia action mutation and stays flagged.
+        let src = r#"
+            import { defineStore } from 'pinia';
+            export const useX = defineStore('x', {
+                getters: {
+                    firstItem() {
+                        this.list.push(1);
+                        return this.list[0];
+                    }
+                }
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_this_mutation_in_plain_class_method_issue_7864() {
+        // Negative space for #7864 — a plain `class Store` method mutating
+        // `this.items` has no `defineStore` provenance, so it stays flagged
+        // (parity with `still_flags_push_on_member_property`).
+        let src = r#"
+            class Store {
+                items: number[] = [];
+                add(x: number) {
+                    this.items.push(x);
+                }
             }
         "#;
         assert_eq!(run(src).len(), 1);
