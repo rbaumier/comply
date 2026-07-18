@@ -27,7 +27,7 @@ impl OxcCheck for Check {
             }
             _ => return,
         };
-        if !super::has_leading_wildcard_like(&text) {
+        if !super::has_filter_leading_wildcard_like(&text) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, offset);
