@@ -1375,6 +1375,26 @@ fn is_object_create_null(call: &oxc_ast::ast::CallExpression) -> bool {
         )
 }
 
+/// True when the method call whose callee is the member expression `member`
+/// hangs off a Prisma model-delegate accessor — its receiver (`member.object`)
+/// is itself a member access (`<client>.<model>` or `<client>["<model>"]`).
+///
+/// Prisma delegate queries and writes are always shaped
+/// `<client>.<model>.<method>(...)`, so the receiver must be a member
+/// expression. This rejects a wrapper/base-service self-call whose receiver is
+/// `this` or a bare identifier (`this.findMany()`, `repo.findMany()`) and a
+/// factory/DI call that passes the client as an argument
+/// (`loader.create(prisma)`) — in both the receiver is not a `.<model>`
+/// accessor, so the call is not a delegate call.
+#[must_use]
+pub fn is_prisma_delegate_call(member: &oxc_ast::ast::StaticMemberExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    matches!(
+        &member.object,
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
+    )
+}
+
 /// `true` when `expr` is an array literal (`[...]`, `[]`) or a `new Array(...)`
 /// construction.
 #[must_use]

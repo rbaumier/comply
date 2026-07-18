@@ -102,6 +102,12 @@ impl OxcCheck for Check {
         if member.property.name.as_str() != "findMany" {
             return;
         }
+        // Only a Prisma model delegate (`<client>.<model>.findMany(...)`) is a
+        // real query; a wrapper self-call like `this.findMany(...)` inherits its
+        // `take` bound from the underlying delegate call and must not be flagged.
+        if !crate::oxc_helpers::is_prisma_delegate_call(member) {
+            return;
+        }
 
         // Bounded when any object argument carries `take:` or `first:`.
         let bounded = call
@@ -179,6 +185,46 @@ mod tests {
     fn ignores_non_prisma_files() {
         let src = "const rows = client.user.findMany();";
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #7807: `this.findMany(...)` is an inherited base-service
+    // wrapper method, not a `<client>.<model>.findMany` delegate call — its
+    // receiver is `this`, not a model accessor — so it must not be flagged.
+    #[test]
+    fn ignores_wrapper_self_call_this_findmany() {
+        let src = "import { PrismaClient } from '@prisma/client';\nexport class Repo { async load() { return this.findMany({ where: { active: true } }); } }";
+        assert!(run(src).is_empty());
+    }
+
+    // A bare-identifier receiver (`repo.findMany(...)`) is likewise not a
+    // delegate call.
+    #[test]
+    fn ignores_wrapper_self_call_repo_findmany() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst rows = await repo.findMany({ where: { active: true } });";
+        assert!(run(src).is_empty());
+    }
+
+    // A genuine delegate call through an injected client
+    // (`this.prisma.<model>.findMany`) is still flagged when unbounded.
+    #[test]
+    fn flags_this_prisma_delegate_findmany() {
+        let src = "import { PrismaClient } from '@prisma/client';\nexport class Repo { async load() { return this.prisma.user.findMany({ where: { active: true } }); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // `tx.user.findMany(...)` (transaction-client delegate) is still flagged.
+    #[test]
+    fn flags_transaction_delegate_findmany() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nawait prisma.$transaction(async (tx) => { await tx.user.findMany({ where: { active: true } }); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // `prisma["user"].findMany(...)` is a delegate call (computed model
+    // accessor) and still flagged when unbounded.
+    #[test]
+    fn flags_computed_delegate_findmany() {
+        let src = "import { PrismaClient } from '@prisma/client';\nconst prisma = new PrismaClient();\nconst rows = await prisma[\"user\"].findMany({ where: { active: true } });";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]

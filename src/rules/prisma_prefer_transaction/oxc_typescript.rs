@@ -19,11 +19,9 @@ fn is_prisma_file(source: &str) -> bool {
 }
 
 /// True when `call` is a Prisma model write: `prisma.<model>.create(...)` /
-/// `prisma["<model>"].update(...)` etc. The discriminator is the receiver
-/// shape — the write method must hang off a *member access* (the `.<model>`
-/// accessor), so the callee object is itself a member expression. This rejects
-/// `loader.create(prisma)` factory/DI calls, where the receiver is a bare
-/// identifier and the Prisma client is the argument, not the model accessor.
+/// `prisma["<model>"].update(...)` etc. The method must be a write method and
+/// the call must hang off a model-delegate receiver — see
+/// [`crate::oxc_helpers::is_prisma_delegate_call`] for the receiver-shape check.
 fn is_prisma_model_write(call: &oxc_ast::ast::CallExpression) -> bool {
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
@@ -31,10 +29,7 @@ fn is_prisma_model_write(call: &oxc_ast::ast::CallExpression) -> bool {
     if !WRITE_METHODS.contains(&member.property.name.as_str()) {
         return false;
     }
-    matches!(
-        &member.object,
-        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
-    )
+    crate::oxc_helpers::is_prisma_delegate_call(member)
 }
 
 pub struct Check;
