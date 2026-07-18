@@ -87,11 +87,14 @@
 //!   (e.g. `let _ = values.remove("inherits")` drops the previous `Option<V>`).
 //!   Scoped to the method-call shape on a receiver, so the free function
 //!   `let _ = std::fs::remove_file(p)` (returns `io::Result`) still fires.
-//! - `let _ = fallible()` inside the `fn drop` of an `impl Drop for ...` block:
-//!   `Drop::drop` returns `()`, so an error has no way to be propagated to the
-//!   caller (no `?`, no `Result` return). `let _ =` is the idiomatic best-effort
-//!   cleanup for an RAII destructor. Scoped to a `fn drop` directly inside a
-//!   `Drop` trait impl, so a `let _ =` in any other method still fires.
+//! - `let _ = fallible()` inside a destructor body — `fn drop` of an
+//!   `impl Drop for ...` block, or `async fn async_drop` of an
+//!   `impl AsyncDrop for ...` block (the `async_dropper` / nightly
+//!   `std::future::AsyncDrop` async-destructor convention): both return `()`, so
+//!   an error has no way to be propagated to the caller (no `?`, no `Result`
+//!   return). `let _ =` is the idiomatic best-effort cleanup for an RAII
+//!   destructor. Scoped to the destructor method paired with its trait, so a
+//!   `let _ =` in any other method still fires.
 //! - `let _ = fallible()` in an exit-imminent scope: the discard's enclosing
 //!   block also contains a `process::exit(..)` call (e.g. best-effort terminal
 //!   cleanup in a `ctrlc::set_handler` closure that exits with code 130). After
@@ -140,7 +143,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
     find_identifier_type, is_in_kani_proof, is_in_never_fn, is_in_test_context,
-    is_under_tests_dir, local_let_binds_buffer,
+    is_under_tests_dir, local_let_binds_buffer, trait_base_name,
 };
 use tree_sitter::Node;
 
@@ -264,8 +267,9 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Skip best-effort cleanup in a `Drop::drop` body: `drop` returns `()`, so
-    // the error has no way to be propagated — `let _ =` is the idiomatic form.
+    // Skip best-effort cleanup in a destructor body (`Drop::drop` /
+    // `AsyncDrop::async_drop`): both return `()`, so the error has no way to be
+    // propagated — `let _ =` is the idiomatic form.
     if is_in_drop_impl(node, source) {
         return;
     }
@@ -316,15 +320,22 @@ fn is_compile_fail_fixture(path: &std::path::Path) -> bool {
     false
 }
 
-/// True if `node` sits inside the `fn drop` of an `impl Drop for ...` block.
+/// True if `node` sits inside a destructor body: `fn drop` of an
+/// `impl Drop for ...` block, or `async fn async_drop` of an
+/// `impl AsyncDrop for ...` block.
 ///
-/// Walks ancestors to the nearest enclosing `function_item`; it must be named
-/// `drop`, and its nearest enclosing `impl_item` must have a `trait` field whose
-/// final path segment is `Drop` (so `impl std::ops::Drop for T` also matches).
-/// Both conditions are required: a method named `drop` in an inherent impl, or
-/// any other method in a `Drop` impl, does not qualify. In `Drop::drop` the
-/// return type is `()`, so a fallible result discarded with `let _ =` is the
-/// idiomatic best-effort cleanup — there is no channel to propagate the error.
+/// Walks ancestors to the nearest enclosing `function_item`, then requires a
+/// destructor method paired with its trait: a method named `drop` whose nearest
+/// enclosing `impl_item` implements `Drop`, or a method named `async_drop` whose
+/// nearest enclosing `impl_item` implements `AsyncDrop` (the async-destructor
+/// convention of the `async_dropper` crate and nightly `std::future::AsyncDrop`).
+/// The pairing keeps method name and trait matched: `async_drop` under `Drop` (or
+/// a non-`AsyncDrop` trait), `drop` under `AsyncDrop`, either name in an inherent
+/// impl, or any other method in a destructor impl does not qualify. The trait's
+/// final path segment is compared, so `impl std::ops::Drop for T` also matches.
+/// In both `Drop::drop` and `AsyncDrop::async_drop` the return type is `()`, so a
+/// fallible result discarded with `let _ =` is the idiomatic best-effort cleanup
+/// — there is no channel to propagate the error.
 fn is_in_drop_impl(node: Node, source: &[u8]) -> bool {
     let mut current = node.parent();
     while let Some(ancestor) = current {
@@ -332,28 +343,28 @@ fn is_in_drop_impl(node: Node, source: &[u8]) -> bool {
             let Some(name) = ancestor.child_by_field_name("name") else {
                 return false;
             };
-            if name.utf8_text(source) != Ok("drop") {
-                return false;
-            }
-            return enclosing_impl_is_drop(ancestor, source);
+            let expected_trait = match name.utf8_text(source) {
+                Ok("drop") => "Drop",
+                Ok("async_drop") => "AsyncDrop",
+                _ => return false,
+            };
+            return enclosing_impl_is_trait(ancestor, source, expected_trait);
         }
         current = ancestor.parent();
     }
     false
 }
 
-/// True if the nearest `impl_item` enclosing `func` is a `Drop` trait impl.
-fn enclosing_impl_is_drop(func: Node, source: &[u8]) -> bool {
+/// True if the nearest `impl_item` enclosing `func` is a trait impl whose
+/// trait's final path segment equals `expected_trait`.
+fn enclosing_impl_is_trait(func: Node, source: &[u8], expected_trait: &str) -> bool {
     let mut current = func.parent();
     while let Some(ancestor) = current {
         if ancestor.kind() == "impl_item" {
-            let Some(trait_node) = ancestor.child_by_field_name("trait") else {
-                return false;
-            };
-            let Ok(text) = trait_node.utf8_text(source) else {
-                return false;
-            };
-            return text.rsplit("::").next().unwrap_or(text).trim() == "Drop";
+            return ancestor
+                .child_by_field_name("trait")
+                .and_then(|t| trait_base_name(t, source))
+                .is_some_and(|name| name == expected_trait);
         }
         current = ancestor.parent();
     }
@@ -1368,6 +1379,30 @@ mod tests {
     }
 
     #[test]
+    fn allows_let_underscore_in_async_drop_impl() {
+        // Regression for #7805: `AsyncDrop::async_drop` returns `()`, so like
+        // `Drop::drop` a fallible result can only be discarded best-effort —
+        // there is no `?` or `Result` channel to propagate a cleanup error to.
+        // The issue's exact `apache/iggy` example.
+        let src = r#"
+            #[async_trait]
+            impl AsyncDrop for ClientWrapper {
+                async fn async_drop(&mut self) {
+                    match self {
+                        ClientWrapper::Iggy(client) => {
+                            let _ = client.logout_user().await;
+                        }
+                        ClientWrapper::Http(client) => {
+                            let _ = client.logout_user().await;
+                        }
+                    }
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn flags_let_underscore_outside_drop_impl() {
         // Negative space for #1459: the exemption is scoped to `fn drop` of a
         // `Drop` impl. A `drop`-named method in an inherent impl, and any other
@@ -1385,6 +1420,33 @@ mod tests {
         "#;
         assert_eq!(run_on(inherent_drop).len(), 1);
         assert_eq!(run_on(other_method_in_drop_impl).len(), 1);
+    }
+
+    #[test]
+    fn flags_let_underscore_async_drop_outside_async_drop_impl() {
+        // Negative space for #7805: the async-destructor exemption stays paired
+        // with `AsyncDrop`. A method named `async_drop` in an inherent impl or
+        // under a different trait can still propagate errors, and a method named
+        // `drop` under a non-`Drop` trait is unchanged — all still fire.
+        let inherent_async_drop = r#"
+            impl Cleaner {
+                async fn async_drop(&mut self) { let _ = self.flush().await; }
+            }
+        "#;
+        let async_drop_other_trait = r#"
+            #[async_trait]
+            impl SomethingElse for Cleaner {
+                async fn async_drop(&mut self) { let _ = self.flush().await; }
+            }
+        "#;
+        let drop_other_trait = r#"
+            impl SomethingElse for Cleaner {
+                fn drop(&mut self) { let _ = self.flush(); }
+            }
+        "#;
+        assert_eq!(run_on(inherent_async_drop).len(), 1);
+        assert_eq!(run_on(async_drop_other_trait).len(), 1);
+        assert_eq!(run_on(drop_other_trait).len(), 1);
     }
 
     #[test]
