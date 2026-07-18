@@ -369,6 +369,15 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
     if pattern.kind() == "range_pattern" {
         return false;
     }
+    // Slice patterns (`[a, b]`, `[Struct { .. }]`) match a slice or array by
+    // length, never an enum variant. A `match` on a `&[T]`/`[T; N]` has an
+    // unbounded set of lengths, so its `_` arm is compiler-mandated — there is
+    // no variant set to enumerate. Bail out before the textual PascalCase
+    // fallback, which would otherwise skip the opening `[` and misread a
+    // PascalCase first element (`[ProductTypeElement { .. }]`) as a variant.
+    if pattern.kind() == "slice_pattern" {
+        return false;
+    }
     // Or-pattern: recurse into each disjunct.
     if pattern.kind() == "or_pattern" {
         let mut cursor = pattern.walk();
@@ -2286,6 +2295,40 @@ mod tests {
         _ => false,
     }
 }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_on_slice_pattern_struct_element() {
+        // Issue #7830: the scrutinee is a slice (`&[ProductTypeElement]`), not an
+        // enum. `[ProductTypeElement { .. }]` is a slice pattern matching length-1
+        // slices; the `_` arm covers every other length and is compiler-mandated.
+        // The PascalCase first element must not be read as an enum variant.
+        let src = "fn f(&self) -> bool { match &*self.elements { \
+                   [ProductTypeElement { name: Some(name), algebraic_type }] => \
+                   inner(name, algebraic_type), _ => false } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_slice_pattern_bare_struct() {
+        // Issue #7830: a single-element slice pattern of a PascalCase struct name.
+        let src = "fn f(xs: &[Foo]) -> i32 { match xs { [Foo { .. }] => 1, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_slice_pattern_bindings() {
+        // Issue #7830: a two-element slice pattern binds by length, never an enum.
+        let src = "fn f(xs: &[i32]) -> i32 { match xs { [a, b] => a + b, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_pascal_variant_not_neutered_by_slice_fix() {
+        // Issue #7830 guard: the slice-pattern bail-out must not neuter a genuine
+        // enum-with-wildcard match. A bare PascalCase variant arm still flags.
+        let src = "fn f(e: E) -> i32 { match e { Variant1 => 1, _ => 0 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
