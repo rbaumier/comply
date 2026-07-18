@@ -33,8 +33,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    enclosing_fn, is_in_test_context, is_in_trait_impl, is_under_tests_dir, macro_body,
-    split_top_level_args, string_literal_content,
+    enclosing_fn, is_gated_by_cfg, is_in_test_context, is_in_trait_impl, is_under_tests_dir,
+    macro_body, split_top_level_args, string_literal_content,
 };
 
 const KINDS: &[&str] = &["macro_invocation"];
@@ -76,6 +76,20 @@ impl AstCheck for Check {
             || is_under_tests_dir(ctx.path)
             || ctx.project.in_fuzz_crate(ctx.path)
         {
+            return;
+        }
+        // A panic-family macro gated by `#[cfg(debug_assertions)]` is compiled
+        // out of release builds — Cargo's `release` profile defaults
+        // `debug-assertions = false` — so it is structurally absent from the
+        // shipped binary and cannot abort production. The idiom pairs it with a
+        // `#[cfg(not(debug_assertions))]` sibling (commonly
+        // `core::hint::unreachable_unchecked()`) that ships instead, checking an
+        // `unsafe` invariant loudly in debug while keeping release codegen
+        // zero-cost. Exempt it, mirroring the `#[cfg(test)]` exemption: both gate
+        // code out of the artifact by a cfg predicate. A `#[cfg(not(debug_
+        // assertions))]` gate (which ships in release) or a non-debug
+        // `#[cfg(feature = "…")]` gate does not qualify.
+        if is_gated_by_cfg(node, source_bytes, "debug_assertions") {
             return;
         }
         // A `proc-macro = true` crate runs at compile time during macro
@@ -582,6 +596,52 @@ libfuzzer-sys = "0.4"
     fn allows_panic_in_cfg_test_module() {
         let source = "#[cfg(test)]\nmod tests { fn helper() { panic!(); } }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unreachable_gated_by_debug_assertions() {
+        // bevyengine/bevy crates/bevy_ecs/src/query/fetch.rs (#7742): the
+        // `unreachable!()` is compiled out of release builds; the shipped path is
+        // the `#[cfg(not(debug_assertions))]` `unreachable_unchecked()` sibling.
+        let source = r#"
+            fn f<C>() {
+                match C::STORAGE_TYPE {
+                    StorageType::Table => {}
+                    _ => {
+                        #[cfg(debug_assertions)]
+                        unreachable!();
+                        #[cfg(not(debug_assertions))]
+                        core::hint::unreachable_unchecked()
+                    }
+                }
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_gated_by_debug_assertions_statement() {
+        // A statement-level `#[cfg(debug_assertions)] panic!(…);` is absent from
+        // the release artifact, so the runtime-abort premise does not hold.
+        let source = "fn f() {\n    #[cfg(debug_assertions)]\n    panic!(\"invariant broken\");\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_panic_gated_by_not_debug_assertions() {
+        // `#[cfg(not(debug_assertions))]` ships in release — the panic can abort
+        // production, so it must still flag.
+        let source =
+            "fn f() {\n    #[cfg(not(debug_assertions))]\n    panic!(\"ships in release\");\n}";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_panic_gated_by_feature_cfg() {
+        // A non-debug `#[cfg(feature = "…")]` gate is not the debug/release
+        // divergence idiom — the feature may be enabled in release, so it flags.
+        let source = "fn f() {\n    #[cfg(feature = \"foo\")]\n    panic!(\"feature-gated\");\n}";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
