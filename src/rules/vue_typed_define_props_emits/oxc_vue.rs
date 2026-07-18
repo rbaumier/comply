@@ -5,7 +5,7 @@
 //! re-parses the block with oxc and runs the shared `oxc_typescript::Check`.
 //! Only `setup` blocks with `lang="ts"` are considered: the compiler macros
 //! exist only in `<script setup>`, and the type form is required only in a
-//! TypeScript SFC (a non-`ts` setup block is handled by `vue-define-emits-typed`).
+//! TypeScript SFC.
 
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::{AstCheck, CheckCtx};
