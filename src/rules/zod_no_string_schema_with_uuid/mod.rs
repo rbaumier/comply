@@ -1,4 +1,9 @@
 //! zod-no-string-schema-with-uuid — prefer `z.uuid()` over `z.string().uuid()`.
+//!
+//! Top-level `z.uuid()` exists only in Zod v4, so the rule fires only when the
+//! nearest `package.json` proves zod resolves to v4+; on zod v3 (or an
+//! unresolvable version) `z.string().uuid()` is the correct API and is left
+//! untouched.
 
 mod oxc_typescript;
 
