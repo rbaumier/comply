@@ -274,30 +274,44 @@ pub fn spawn_closure_hosts_runtime(spawn_call: Node, source: &[u8]) -> bool {
     let mut cursor = args.walk();
     args.named_children(&mut cursor)
         .filter(|child| child.kind() == "closure_expression")
-        .any(|closure| subtree_drives_runtime(closure, source))
+        .any(|closure| closure_body_drives_runtime(closure, source))
 }
 
-/// True if any `call_expression` in `node`'s subtree drives a Tokio runtime.
-/// Recurses the whole subtree so the signal is found through nested blocks,
-/// `let`-`else`, and match arms.
+/// True if `closure`'s body drives a Tokio runtime. Descends through blocks,
+/// `let`-`else`, `match` arms and call arguments, but stops at any nested
+/// `closure_expression`/`function_item`: an inner spawned closure owns its own
+/// runtime and must not exempt the outer thread.
+fn closure_body_drives_runtime(closure: Node, source: &[u8]) -> bool {
+    let mut cursor = closure.walk();
+    closure
+        .children(&mut cursor)
+        .any(|child| subtree_drives_runtime(child, source))
+}
+
+/// True if any `call_expression` in `node`'s subtree drives a Tokio runtime,
+/// without crossing into a nested closure or function item.
 fn subtree_drives_runtime(node: Node, source: &[u8]) -> bool {
-    if node.kind() == "call_expression" && call_drives_runtime(node, source) {
-        return true;
+    match node.kind() {
+        "closure_expression" | "function_item" => return false,
+        "call_expression" if call_drives_runtime(node, source) => return true,
+        _ => {}
     }
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .any(|child| subtree_drives_runtime(child, source))
 }
 
-/// True if `call`'s function path ends in `block_on` or `Runtime::new`, or is a
-/// `runtime::Builder::…build()` chain — the shapes that drive or construct a
-/// Tokio runtime.
+/// True if `call`'s function path ends in `block_on`, resolves to
+/// `Runtime::new`, or is a `runtime::Builder::…build()` chain — the shapes that
+/// drive or construct a Tokio runtime. `Runtime::new` is matched on a `::`
+/// boundary so unrelated `*Runtime::new` (e.g. `JsRuntime::new`) is excluded.
 fn call_drives_runtime(call: Node, source: &[u8]) -> bool {
     let Some(name) = crate::rules::call_expression::call_function_name(call, source) else {
         return false;
     };
     name.ends_with("block_on")
-        || name.ends_with("Runtime::new")
+        || name == "Runtime::new"
+        || name.ends_with("::Runtime::new")
         || (name.contains("runtime::Builder") && name.ends_with("build"))
 }
 
