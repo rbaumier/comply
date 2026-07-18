@@ -34,6 +34,7 @@ const SQL_EXTENSIONS: &[&str] = &["sql"];
 const GRAPHQL_EXTENSIONS: &[&str] = &["graphql", "gql"];
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "mdx"];
 const ASTRO_EXTENSIONS: &[&str] = &["astro"];
+const HTML_EXTENSIONS: &[&str] = &["html", "htm"];
 
 /// A discovered file tagged with its detected language.
 #[derive(Debug)]
@@ -95,6 +96,12 @@ pub enum Language {
     /// cross-file usage. No tree-sitter grammar is bundled; no lint rule targets
     /// it.
     Astro,
+    /// HTML document `.html` / `.htm`. Indexed only for the local
+    /// `<script src="…">` bundler entries it declares (Parcel/Vite/plain-ESM load
+    /// the app from an HTML file), so the entry module a `<script>` points at —
+    /// and everything it transitively imports — is recorded as reachable. No
+    /// tree-sitter grammar is bundled; no lint rule targets it.
+    Html,
 }
 
 impl Language {
@@ -118,6 +125,7 @@ impl Language {
             Language::Svelte => "svelte",
             Language::Markdown => "md",
             Language::Astro => "astro",
+            Language::Html => "html",
         }
     }
 
@@ -177,6 +185,8 @@ impl Language {
             Some(Language::Markdown)
         } else if ASTRO_EXTENSIONS.contains(&ext) {
             Some(Language::Astro)
+        } else if HTML_EXTENSIONS.contains(&ext) {
+            Some(Language::Html)
         } else if DOCKERFILE_EXTENSIONS.contains(&ext)
             || path
                 .file_name()
@@ -436,6 +446,8 @@ fn classify(path: &Path) -> Option<SourceFile> {
             Language::Markdown
         } else if ASTRO_EXTENSIONS.contains(&ext) {
             Language::Astro
+        } else if HTML_EXTENSIONS.contains(&ext) {
+            Language::Html
         } else if DOCKERFILE_EXTENSIONS.contains(&ext) {
             Language::Dockerfile
         } else {

@@ -1245,6 +1245,7 @@ fn is_indexable(lang: Language) -> bool {
             | Language::Vue
             | Language::Markdown
             | Language::Astro
+            | Language::Html
     )
 }
 
@@ -1581,6 +1582,9 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
     }
     if matches!(file.language, Language::Astro) {
         return extract_astro(&source, &file.path);
+    }
+    if matches!(file.language, Language::Html) {
+        return extract_html(&source, &file.path);
     }
     if !matches!(
         file.language,
@@ -1948,6 +1952,124 @@ fn extract_astro(source: &str, path: &Path) -> Option<(PathBuf, FileExtract)> {
             ..FileExtract::default()
         },
     ))
+}
+
+/// Extract the local bundler entries an HTML document declares through its
+/// `<script src="…">` tags.
+///
+/// Parcel and Vite (and plain-ESM pages) treat an HTML file as the application
+/// entry (`parcel app/index.html`, Vite's `index.html`): the bundler follows the
+/// document's `<script src="…">` tags into the module graph. The entry module is
+/// (correctly) never `import`ed by any other module, so the import-graph BFS
+/// cannot reach it — and cascades the whole app into "unreachable" — unless the
+/// HTML `<script src>` edge is recorded. Each local `src` becomes a
+/// `Namespace` import edge (the whole module is consumed, so every export is
+/// live), resolved against the document's directory in `ImportIndex::build` like
+/// any other import; seeding the HTML file as a `unused-file` entry point then
+/// makes the entry module and its transitive imports reachable.
+///
+/// Only local script targets are recorded. A `src` is local when it starts with
+/// `./` / `../` (document-relative) or a single `/` (bundler-root-absolute, e.g.
+/// Vite's `/src/main.tsx`, resolved relative to the document's directory — the
+/// conventional bundler root). External references (`http:`/`https:` URLs,
+/// protocol-relative `//cdn…`, `data:` URIs) and bare npm specifiers (`react`)
+/// are not project modules and are skipped. Non-script asset targets
+/// (`./styles.css`) resolve to no indexed module and drop out during resolution.
+///
+/// Only import edges are produced; an HTML file declares no exports.
+fn extract_html(source: &str, path: &Path) -> Option<(PathBuf, FileExtract)> {
+    let imports: Vec<ImportedSymbol> = html_script_specifiers(source)
+        .into_iter()
+        .enumerate()
+        .map(|(idx, specifier)| ImportedSymbol {
+            local_name: String::new(),
+            imported_name: String::new(),
+            kind: ImportKind::Namespace,
+            specifier,
+            source_path: None,
+            line: idx + 1,
+            is_type_only: false,
+            is_runtime_value: true,
+            is_dynamic: false,
+        })
+        .collect();
+
+    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some((
+        canon,
+        FileExtract {
+            imports,
+            ..FileExtract::default()
+        },
+    ))
+}
+
+/// Collect the local `src` of every `<script src="…">` tag in an HTML document,
+/// normalized to a relative specifier the path resolver understands. External
+/// and bare targets are dropped (see [`local_script_specifier`]).
+fn html_script_specifiers(source: &str) -> Vec<String> {
+    let mut specs = Vec::new();
+    let mut rest = source;
+    while let Some(tag_at) = next_script_tag(rest) {
+        let after_tag = &rest[tag_at..];
+        if let Some(raw_src) = first_src_attr(after_tag)
+            && let Some(spec) = local_script_specifier(&raw_src)
+        {
+            specs.push(spec);
+        }
+        // Advance past this tag's `<` so the scan continues at any later tag and a
+        // tag without a usable `src` does not loop forever.
+        rest = &after_tag[1..];
+    }
+    specs
+}
+
+/// Byte offset in `s` of the next `<script` opening tag, if any. The tag name
+/// must be followed by whitespace, `>`, or `/` so `<scripting>` does not match.
+fn next_script_tag(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            let after = &s[i + 1..];
+            if let Some(tail) = after.strip_prefix("script")
+                && tail
+                    .chars()
+                    .next()
+                    .is_none_or(|c| c.is_whitespace() || c == '>' || c == '/')
+            {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Normalize an HTML `<script src>` value to a relative specifier the path
+/// resolver understands, or `None` when the target is not a local project
+/// module.
+///
+/// - `./x` / `../x` — document-relative — kept verbatim.
+/// - `/x` — bundler-root-absolute (Vite's `/src/main.tsx`) — rewritten to
+///   `./x`, i.e. relative to the document's directory, which is the conventional
+///   bundler root. When the document is not at the bundler root the rewrite
+///   resolves to no indexed file and drops out harmlessly during resolution.
+/// - Everything else — protocol-relative `//cdn…`, `http:`/`https:`/`data:`
+///   URLs, and bare npm specifiers (`react`) — is external, not a project
+///   module, and returns `None`.
+fn local_script_specifier(src: &str) -> Option<String> {
+    let src = src.trim();
+    if src.is_empty() || src.starts_with("//") {
+        return None;
+    }
+    if src.starts_with("./") || src.starts_with("../") {
+        return Some(src.to_string());
+    }
+    if let Some(rooted) = src.strip_prefix('/') {
+        return Some(format!("./{rooted}"));
+    }
+    None
 }
 
 /// Return the frontmatter script block of an Astro component — the lines between
@@ -6009,6 +6131,90 @@ mod tests {
         let refs: Vec<&SourceFile> = source_files.iter().collect();
         let index = ImportIndex::build(&refs);
         (dir, index, paths)
+    }
+
+    // Regression for #7858: only a local `<script src>` (document-relative `./` /
+    // `../` or bundler-root-absolute `/`) is a project module; external URLs,
+    // protocol-relative refs, `data:` URIs, and bare npm specifiers are not.
+    #[test]
+    fn local_script_specifier_accepts_local_rejects_external_issue_7858() {
+        assert_eq!(
+            local_script_specifier("./initialize.tsx"),
+            Some("./initialize.tsx".to_string())
+        );
+        assert_eq!(local_script_specifier("../shared/a.ts"), Some("../shared/a.ts".to_string()));
+        // Vite's bundler-root-absolute form resolves relative to the document dir.
+        assert_eq!(local_script_specifier("/src/main.tsx"), Some("./src/main.tsx".to_string()));
+        for external in [
+            "https://cdn.example.com/x.js",
+            "http://cdn.example.com/x.js",
+            "//cdn.example.com/x.js",
+            "data:text/javascript,console.log(1)",
+            "react",
+            "@scope/pkg",
+            "",
+        ] {
+            assert_eq!(
+                local_script_specifier(external),
+                None,
+                "`{external}` is not a local project module"
+            );
+        }
+    }
+
+    // Regression for #7858: `html_script_specifiers` picks the local `src` out of
+    // each `<script>` tag regardless of attribute order / `type="module"`, and
+    // drops external and bare targets. `<scripting>` is not a `<script>` tag.
+    #[test]
+    fn html_script_specifiers_extracts_local_only_issue_7858() {
+        let html = "<!doctype html>\n<html><head>\n\
+             <script src=\"https://cdn.example.com/react.js\"></script>\n\
+             <script src=\"react\"></script>\n\
+             <script type=\"module\" src=\"./initialize.tsx\"></script>\n\
+             <script src=\"/src/main.tsx\" defer></script>\n\
+             <scripting src=\"./not-a-script.ts\"></scripting>\n\
+             </head></html>\n";
+        assert_eq!(
+            html_script_specifiers(html),
+            vec!["./initialize.tsx".to_string(), "./src/main.tsx".to_string()],
+        );
+    }
+
+    // Regression for #7858: an HTML `<script src="./x">` edge resolves to the
+    // indexed module and makes it reachable when the HTML file is a BFS root —
+    // the mechanism `unused-file` relies on to keep a Parcel/Vite app graph alive.
+    #[test]
+    fn html_script_src_resolves_and_reaches_indexed_module_issue_7858() {
+        let (_dir, index, paths) = build_index(&[
+            (
+                "app/index.html",
+                "<script type=\"module\" src=\"./initialize.tsx\"></script>\n",
+            ),
+            (
+                "app/initialize.tsx",
+                "import { Router } from './Router';\nexport const boot = Router;\n",
+            ),
+            ("app/Router.tsx", "export const Router = 1;\n"),
+        ]);
+        let html = &paths[0];
+        let initialize = &paths[1];
+        let router = &paths[2];
+
+        let edge = index
+            .get_imports(html)
+            .iter()
+            .find(|i| i.specifier == "./initialize.tsx")
+            .expect("the HTML `<script src>` must be indexed as an import edge");
+        assert_eq!(
+            edge.source_path.as_ref(),
+            Some(initialize),
+            "the `<script src>` must resolve to the indexed entry module"
+        );
+
+        // Seeding the HTML file as a BFS root reaches the entry module and, transitively, its imports.
+        let reachable = index.reachable_from(&[html.as_path()]);
+        assert!(reachable.contains(initialize), "entry module must be reachable from the HTML entry");
+        assert!(reachable.contains(router), "modules imported by the entry must be reachable too");
     }
 
     // Regression for #7436: a dynamic `import()` is a deferred, code-split load

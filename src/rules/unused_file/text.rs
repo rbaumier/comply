@@ -314,6 +314,10 @@ fn is_entry_point(
         return true;
     }
 
+    if is_html_bundler_entry(path) {
+        return true;
+    }
+
     if is_config_file(path) {
         return true;
     }
@@ -457,6 +461,18 @@ fn is_rust_entry_point(path: &Path) -> bool {
         path.file_name().and_then(|n| n.to_str()),
         Some("lib.rs") | Some("main.rs") | Some("build.rs")
     )
+}
+
+/// True for an HTML document (`.html` / `.htm`) — a bundler entry point the
+/// import-graph BFS cannot otherwise reach. Parcel and Vite start the build from
+/// an HTML file (`parcel app/index.html`, Vite's `index.html`) and follow its
+/// `<script src="…">` tags into the module graph; the import index records those
+/// local script targets as edges from the HTML file. Nothing `import`s an HTML
+/// file, so seeding it is the only way its entry module — and everything that
+/// module transitively imports — is marked reachable. An HTML file is never a
+/// lint target, so seeding it also keeps it from being flagged as unused.
+fn is_html_bundler_entry(path: &Path) -> bool {
+    matches!(Language::from_path(path), Some(Language::Html))
 }
 
 fn is_declaration_file(path: &Path) -> bool {
@@ -684,6 +700,104 @@ mod tests {
         assert!(
             diags.iter().any(|d| d.path.to_str().is_some_and(|p| p.ends_with(".mdx"))),
             "an unreachable .mdx module must still be flagged (not blanket-exempt): {diags:?}"
+        );
+    }
+
+    // Regression for #7858 (openreplay/openreplay): a Parcel/Vite app is launched
+    // from an HTML bundler entry whose `<script src="…">` points at the true entry
+    // module (`parcel app/index.html`, Vite's `index.html`). That module is never
+    // `import`ed by any other module, so the import-graph BFS cannot reach it —
+    // cascading the whole app into "unreachable" — unless the HTML `<script src>`
+    // edge is seeded. The HTML entry and every module reachable through it must
+    // not be flagged; a genuinely unreachable module (referenced by no entry,
+    // including no HTML script) still is.
+    #[test]
+    fn html_bundler_entry_seeds_app_graph_issue_7858() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/index.html",
+                "<!doctype html>\n<html><body>\n\
+                 <script type=\"module\" src=\"./initialize.tsx\"></script>\n\
+                 </body></html>\n",
+            ),
+            (
+                "app/initialize.tsx",
+                "import { Router } from './Router';\nexport const boot = Router;\n",
+            ),
+            ("app/Router.tsx", "export const Router = 1;\n"),
+            ("app/orphan.tsx", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            !flagged.iter().any(|p| p.contains("initialize")),
+            "the HTML `<script src>` entry module must be reachable: {flagged:?}"
+        );
+        assert!(
+            !flagged.iter().any(|p| p.contains("Router")),
+            "a module reachable only through the HTML entry must not be flagged: {flagged:?}"
+        );
+        assert!(
+            !flagged.iter().any(|p| p.ends_with(".html")),
+            "the HTML bundler entry itself is never a lint target: {flagged:?}"
+        );
+        assert!(
+            flagged.iter().any(|p| p.contains("orphan")),
+            "a module referenced by no entry must still be flagged: {flagged:?}"
+        );
+    }
+
+    // Regression for #7858: Parcel/Vite accept a `<script src>` without
+    // `type="module"`; the tag is still the bundler entry, so its module (and its
+    // transitive imports) is reachable.
+    #[test]
+    fn html_non_module_script_still_seeds_issue_7858() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.html", "<script src=\"./boot.ts\"></script>\n"),
+            (
+                "boot.ts",
+                "import { helper } from './helper';\nexport const started = helper;\n",
+            ),
+            ("helper.ts", "export const helper = 1;\n"),
+            ("orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            !flagged.iter().any(|p| p.contains("boot")),
+            "a non-module `<script src>` entry must still seed its module: {flagged:?}"
+        );
+        assert!(
+            !flagged.iter().any(|p| p.contains("helper")),
+            "a module imported by the entry must be reachable: {flagged:?}"
+        );
+        assert!(
+            flagged.iter().any(|p| p.contains("orphan")),
+            "a genuinely unreachable module must still be flagged: {flagged:?}"
+        );
+    }
+
+    // Regression for #7858: an HTML file that references only external/CDN and
+    // bare specifiers seeds nothing — those are not project modules — so a
+    // genuinely unreachable module is still flagged (the rule is not neutered by
+    // the mere presence of an HTML file).
+    #[test]
+    fn html_external_and_bare_scripts_do_not_seed_issue_7858() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "index.html",
+                "<script src=\"https://cdn.example.com/react.js\"></script>\n\
+                 <script src=\"react\"></script>\n",
+            ),
+            ("orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            flagged.iter().any(|p| p.contains("orphan")),
+            "external/CDN and bare `<script src>` must not seed anything, so an \
+             unreachable module stays flagged: {flagged:?}"
         );
     }
 
