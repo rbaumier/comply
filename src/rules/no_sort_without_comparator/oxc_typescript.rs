@@ -46,6 +46,16 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // `<expr>.searchParams` is the spec-defined `URL.prototype.searchParams`
+        // getter, returning a `URLSearchParams`, whose `.sort()` is a distinct
+        // built-in that takes no comparator — it sorts key/value pairs in place by
+        // key. It is not `Array.prototype.sort`, so the numeric-coercion footgun
+        // cannot occur and passing a comparator would be a type error.
+        if let Expression::StaticMemberExpression(inner) = &member.object
+            && inner.property.name.as_str() == "searchParams"
+        {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -124,5 +134,23 @@ mod tests {
         // `Object.values(x)` is not spec-guaranteed `string[]` (values may be
         // numbers) — the footgun applies, so it must still flag.
         assert_eq!(run_on("Object.values(x).sort();").len(), 1);
+    }
+
+    #[test]
+    fn allows_url_search_params_sort() {
+        // `URLSearchParams.prototype.sort()` is a distinct no-comparator built-in.
+        assert!(run_on("url.searchParams.sort();").is_empty());
+    }
+
+    #[test]
+    fn allows_search_params_sort_any_base_expr() {
+        assert!(run_on("this.foo.searchParams.sort();").is_empty());
+    }
+
+    #[test]
+    fn flags_non_search_params_member_sort() {
+        // A `.<prop>.sort()` receiver whose property isn't `searchParams` is still
+        // an unknown (likely array) receiver — the footgun applies.
+        assert_eq!(run_on("foo.bar.sort();").len(), 1);
     }
 }
