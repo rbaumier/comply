@@ -419,6 +419,60 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `node` is gated by a `#[cfg(<flag>)]` outer attribute on any
+/// enclosing statement, block, or item — i.e. an ancestor (or `node` itself)
+/// carries a preceding `attribute_item` sibling whose `cfg`/`cfg_attr`
+/// predicate activates `flag` positively (outside any `not(…)`).
+///
+/// Walks every ancestor from `node` up to the crate root and, for each, scans
+/// its own preceding `attribute_item` siblings — the shape a statement- or
+/// item-level `#[cfg(<flag>)]` takes in tree-sitter-rust, where the attribute
+/// is a sibling of the item it decorates (`#[cfg(<flag>)] unreachable!();`,
+/// `#[cfg(<flag>)] { … }`, `#[cfg(<flag>)] fn f() { … }`). Interleaving
+/// `line_comment`/`block_comment` siblings are skipped. Shares the cfg-predicate
+/// reader with [`is_in_test_context`]: `#[cfg(all(<flag>, …))]` /
+/// `#[cfg(any(<flag>, …))]` count, while `#[cfg(not(<flag>))]` does not.
+///
+/// Rules that relax their discipline for code compiled out of a build
+/// configuration — e.g. a `#[cfg(debug_assertions)]`-gated `panic!` absent from
+/// the release artifact — call this to decide whether a candidate is exempt.
+pub fn is_gated_by_cfg(node: Node, source: &[u8], flag: &str) -> bool {
+    let flag = flag.as_bytes();
+    let mut cur = node;
+    loop {
+        if item_has_cfg_flag(cur, source, flag) {
+            return true;
+        }
+        match cur.parent() {
+            Some(parent) => cur = parent,
+            None => return false,
+        }
+    }
+}
+
+/// True if any `attribute_item` immediately preceding `item` (skipping
+/// interleaved doc comments) is a `#[cfg(…)]` / `#[cfg_attr(…)]` whose predicate
+/// activates `flag`. Mirrors [`has_test_attribute`]'s preceding-sibling scan.
+fn item_has_cfg_flag(item: Node, source: &[u8], flag: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && cfg_predicate_activates(text, flag)
+                {
+                    return true;
+                }
+            }
+            // Doc comments may interleave the attribute and its item; skip them.
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
 /// True if `node` is inside a [Kani](https://model-checking.github.io/kani/)
 /// formal-verification harness — an enclosing function carrying a `kani`
 /// proof attribute:
@@ -920,12 +974,21 @@ fn rust_path_segments_into(node: Node, source: &[u8], out: &mut Vec<String>) {
 /// `all(test, …)` / `any(test, …)` (any depth) count, while `not(test)` and
 /// `all(not(test), …)` do not.
 fn cfg_predicate_activates_test(text: &str) -> bool {
+    cfg_predicate_activates(text, b"test")
+}
+
+/// True if `text` contains a `cfg(…)` / `cfg_attr(…)` predicate in which the
+/// configuration option `flag` (e.g. `b"test"`, `b"debug_assertions"`) appears
+/// as a positive standalone predicate — not lexically inside a `not(…)` group.
+/// `all(flag, …)` / `any(flag, …)` (any depth) activate it, while `not(flag)`
+/// and `all(not(flag), …)` do not.
+fn cfg_predicate_activates(text: &str, flag: &[u8]) -> bool {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         // Find the start of a `cfg(` or `cfg_attr(` predicate.
         if let Some(open) = cfg_arg_open(text, &mut i) {
-            if test_active_in_group(bytes, open) {
+            if flag_active_in_group(bytes, open, flag) {
                 return true;
             }
         } else {
@@ -958,8 +1021,8 @@ fn cfg_arg_open(text: &str, i: &mut usize) -> Option<usize> {
 
 /// Scan a parenthesized cfg predicate group starting at byte `start` (the first
 /// byte inside the opening paren) up to its matching close paren, returning true
-/// if a positive `test` identifier appears outside any `not(…)`.
-fn test_active_in_group(bytes: &[u8], start: usize) -> bool {
+/// if a positive `flag` identifier appears outside any `not(…)`.
+fn flag_active_in_group(bytes: &[u8], start: usize, flag: &[u8]) -> bool {
     // One entry per currently-open paren: true if that group is a `not(…)`.
     // Pushed for the implicit `cfg(`/`cfg_attr(` paren we are already inside.
     let mut negation_stack = vec![false];
@@ -976,7 +1039,7 @@ fn test_active_in_group(bytes: &[u8], start: usize) -> bool {
             if word == b"not" {
                 pending_not = true;
             } else {
-                if word == b"test" && !negation_stack.iter().any(|negated| *negated) {
+                if word == flag && !negation_stack.iter().any(|negated| *negated) {
                     return true;
                 }
                 pending_not = false;
@@ -7891,6 +7954,46 @@ mod tests {
                 is_in_test_context(node, src.as_bytes()),
                 expected,
                 "is_in_test_context mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_gated_by_cfg_detects_debug_assertions_gate() {
+        // Anchored on the `macro_invocation`, as the panic-family rule is.
+        let test_cases = [
+            // Statement-level gate (the #7742 repro shape, in a match arm block).
+            (
+                "fn f() { match x { _ => { #[cfg(debug_assertions)]\nunreachable!(); } } }",
+                true,
+            ),
+            // Bare statement-level gate.
+            ("fn f() {\n    #[cfg(debug_assertions)]\n    panic!(\"x\");\n}", true),
+            // Compound gate that still requires debug_assertions positively.
+            (
+                "fn f() {\n    #[cfg(all(debug_assertions, unix))]\n    panic!(\"x\");\n}",
+                true,
+            ),
+            // Item-level gate on the enclosing function.
+            ("#[cfg(debug_assertions)]\nfn f() { panic!(\"x\"); }", true),
+            // Negative space: `not(debug_assertions)` ships in release.
+            (
+                "fn f() {\n    #[cfg(not(debug_assertions))]\n    panic!(\"x\");\n}",
+                false,
+            ),
+            // Negative space: a feature gate is not a debug gate.
+            ("fn f() {\n    #[cfg(feature = \"foo\")]\n    panic!(\"x\");\n}", false),
+            // Negative space: no gate at all.
+            ("fn f() { panic!(\"x\"); }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "macro_invocation")
+                .expect("snippet should contain a macro_invocation");
+            assert_eq!(
+                is_gated_by_cfg(node, src.as_bytes(), "debug_assertions"),
+                expected,
+                "is_gated_by_cfg mismatch for `{src}`"
             );
         }
     }
