@@ -71,6 +71,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Allow `Object.assign(target, ...)` where `target` is an identifier
+        // bound to a `const` whose initializer is an object literal — the
+        // identifier-target analog of the inline `{ ... }` case above. Such a
+        // binding is a freshly-constructed, unaliased object built up locally
+        // (the "accumulate into a local object" idiom), so mutating it is not
+        // an in-place mutation of a pre-existing shared object.
+        if is_assign_to_fresh_const_object(call, semantic) {
+            return;
+        }
+
         // Allow `Object.assign(Object.create(proto), ...)` — `Object.create`
         // returns a freshly constructed object with no pre-existing reference
         // to mutate. A spread rewrite would also drop the prototype that
@@ -200,6 +210,46 @@ fn is_assign_static_to_function(
     false
 }
 
+/// True when `call` is `Object.assign(target, ...)` where `target` is an
+/// identifier bound to a `const` whose initializer is an object literal. Such a
+/// binding is a freshly-constructed, unaliased object, so the assignment
+/// accumulates into a local object rather than mutating a pre-existing shared
+/// one. A `let`/`var` target (reassignable) or a `const` initialized from a
+/// call, another identifier, or a parameter (may alias an existing object) does
+/// not qualify and still fires.
+fn is_assign_to_fresh_const_object(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(first) = call.arguments.first() else { return false };
+
+    // Target must be an identifier resolving to a `const` object-literal binding.
+    let oxc_ast::ast::Argument::Identifier(ident) = first else { return false };
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    // Walk up from the declaration name to its own VariableDeclarator and
+    // inspect the kind + initializer. Stop at the nearest function/program
+    // boundary so a parameter nested inside a `const obj = { method() {…} }`
+    // never resolves past its own (parameter) declaration to the enclosing
+    // object-literal declarator.
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        match kind {
+            AstKind::VariableDeclarator(decl) => {
+                return decl.kind == oxc_ast::ast::VariableDeclarationKind::Const
+                    && matches!(decl.init, Some(oxc_ast::ast::Expression::ObjectExpression(_)));
+            }
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -255,8 +305,10 @@ mod oxc_tests {
 
     #[test]
     fn still_flags_assign_on_non_function_const() {
+        // A const whose initializer is a call may alias a shared object, so it
+        // is neither a fresh object literal nor a function — still flagged.
         let src = r#"
-            const target = { a: 1 };
+            const target = makeThing();
             Object.assign(target, { b: 2 });
         "#;
         assert_eq!(run(src).len(), 1);
@@ -425,9 +477,124 @@ mod oxc_tests {
 
     #[test]
     fn still_flags_identifier_target_in_non_test_file() {
+        // A const-from-call identifier target in a non-test file still fires
+        // (contrast with the test-file exemption above).
         let src = r#"
-            const target = { a: 1 };
+            const target = getTarget();
             Object.assign(target, { b: 2 });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // === const object-literal accumulator target (issue #7779) ===
+
+    #[test]
+    fn allows_const_empty_object_literal_accumulator() {
+        // Regression for #7779 — `const query = {}; Object.assign(query, src)`
+        // accumulates into a fresh, unaliased local object, semantically
+        // identical to the inline `Object.assign({}, src)` form.
+        let src = r#"
+            function build(a: number) {
+                const query = {};
+                Object.assign(query, { a });
+                return query;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_object_accumulator_in_loop() {
+        // The exact repro shape from #7779 — accumulate into a fresh const
+        // object inside a loop, then return it.
+        let src = r#"
+            function mergeQueries(keys1: string[], keys2: string[], query1: Record<string, unknown>) {
+                const query = {};
+                for (const key of keys1) {
+                    if (!keys2.includes(key)) {
+                        Object.assign(query, { [key]: query1[key] });
+                    }
+                }
+                return query;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_non_empty_object_literal_target() {
+        // A non-empty object literal initializer is equally fresh/unaliased.
+        let src = r#"
+            function build() {
+                const q = { a: 1 };
+                Object.assign(q, { b: 2 });
+                return q;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_parameter_alias_target() {
+        // A parameter aliases a caller-owned object (the memdb.ts:113 shape from
+        // #7779) — not a fresh local; with an identifier source it still fires.
+        let src = r#"
+            function f(parent: Record<string, unknown>, updates: Record<string, unknown>) {
+                Object.assign(parent, updates);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_parameter_inside_object_literal_const() {
+        // A method parameter nested inside a `const obj = { … }` must not
+        // resolve past its own declaration to the enclosing object-literal
+        // declarator — it aliases a caller-owned object and still fires.
+        let src = r#"
+            const svc = {
+                apply(target: Record<string, unknown>, updates: Record<string, unknown>) {
+                    Object.assign(target, updates);
+                    return target;
+                }
+            };
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_const_from_call_target() {
+        // A const initialized from a call may reference a shared object.
+        let src = r#"
+            function f() {
+                const o = getObj();
+                Object.assign(o, { a: 1 });
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_const_aliasing_identifier_target() {
+        // A const initialized from another identifier aliases that binding.
+        let src = r#"
+            function f(existing: Record<string, unknown>) {
+                const o = existing;
+                Object.assign(o, { a: 1 });
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_let_object_literal_target() {
+        // A `let` target is reassignable — conservatively still flagged.
+        let src = r#"
+            function f() {
+                let o = {};
+                Object.assign(o, { a: 1 });
+                return o;
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
