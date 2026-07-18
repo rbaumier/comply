@@ -4682,6 +4682,29 @@ fn is_nuxt_dir(dir: &Path) -> bool {
         .any(|f| dir.join(f).is_file())
 }
 
+/// True when `dir` is the root of a Vite project, signalled by a
+/// `vite.config.*` or `vitest.config.*` file in `dir`. Gating the synthetic
+/// `@/*` → `<dir>/src/*` alias on this keeps an `@/...` import in a non-Vite
+/// project unresolved, so it cannot mis-map to an unrelated project file.
+fn is_vite_dir(dir: &Path) -> bool {
+    [
+        "vite.config.ts",
+        "vite.config.js",
+        "vite.config.mts",
+        "vite.config.mjs",
+        "vite.config.cts",
+        "vite.config.cjs",
+        "vitest.config.ts",
+        "vitest.config.js",
+        "vitest.config.mts",
+        "vitest.config.mjs",
+        "vitest.config.cts",
+        "vitest.config.cjs",
+    ]
+    .iter()
+    .any(|f| dir.join(f).is_file())
+}
+
 /// Parse a `package.json`, or `None` when the file is absent or unparseable.
 fn read_package_json(manifest: &Path) -> Option<crate::project::PackageJson> {
     let raw = std::fs::read_to_string(manifest).ok()?;
@@ -4925,6 +4948,10 @@ impl OxcPathResolver {
         // aliases are synthesized below, independent of a checked-in
         // `tsconfig.json`.
         let mut nuxt_dirs: FxHashSet<PathBuf> = FxHashSet::default();
+        // Directories that are the root of a Vite project. Their `@/*` →
+        // `<dir>/src/*` alias is synthesized below, independent of a checked-in
+        // `tsconfig.json`.
+        let mut vite_dirs: FxHashSet<PathBuf> = FxHashSet::default();
         // Workspace member name → its manifest directory. Built from every
         // named `package.json` reachable above an indexed file.
         let mut workspace_packages: FxHashMap<String, PathBuf> = FxHashMap::default();
@@ -4967,6 +4994,9 @@ impl OxcPathResolver {
                 if is_nuxt_dir(dir) {
                     nuxt_dirs.insert(dir.to_path_buf());
                 }
+                if is_vite_dir(dir) {
+                    vite_dirs.insert(dir.to_path_buf());
+                }
                 let Some(parent) = dir.parent() else { break };
                 dir = parent;
             }
@@ -4987,6 +5017,7 @@ impl OxcPathResolver {
                     &sveltekit_dirs,
                     &cypress_dirs,
                     &nuxt_dirs,
+                    &vite_dirs,
                     &subpath_import_dirs,
                 );
                 let oxc = Self::make_oxc(Some(tsconfig_path));
@@ -4996,16 +5027,19 @@ impl OxcPathResolver {
 
         // Project roots that carry an in-process synthetic alias but no
         // checked-in `tsconfig.json` still need a resolver entry: `$lib` for
-        // SvelteKit, `cypress/*` for Cypress, `~/*` and `@/*` for Nuxt, and
-        // `#`-subpath imports from `package.json`. A Cypress base dir, in
-        // particular, typically ships only `cypress.config.*` and no
-        // `tsconfig.json`; a Nuxt root's `~/`/`@/` aliases live in the
-        // gitignored `.nuxt/tsconfig.json`; and a `package.json` with an
-        // `imports` field need not have a sibling `tsconfig.json` at all.
+        // SvelteKit, `cypress/*` for Cypress, `~/*` and `@/*` for Nuxt, `@/*` →
+        // `src/*` for Vite, and `#`-subpath imports from `package.json`. A
+        // Cypress base dir, in particular, typically ships only
+        // `cypress.config.*` and no `tsconfig.json`; a Nuxt root's `~/`/`@/`
+        // aliases live in the gitignored `.nuxt/tsconfig.json`; a plain Vite
+        // Vue/React app commonly declares `@` only in `vite.config.*` with no
+        // `tsconfig` `paths` mirror; and a `package.json` with an `imports`
+        // field need not have a sibling `tsconfig.json` at all.
         let synthetic_dirs: FxHashSet<&PathBuf> = sveltekit_dirs
             .iter()
             .chain(cypress_dirs.iter())
             .chain(nuxt_dirs.iter())
+            .chain(vite_dirs.iter())
             .chain(subpath_import_dirs.keys())
             .collect();
         for dir in synthetic_dirs {
@@ -5018,6 +5052,7 @@ impl OxcPathResolver {
                 &sveltekit_dirs,
                 &cypress_dirs,
                 &nuxt_dirs,
+                &vite_dirs,
                 &subpath_import_dirs,
             );
             let oxc = Self::make_oxc(None);
@@ -5059,6 +5094,15 @@ impl OxcPathResolver {
     ///   appended after the tsconfig `paths`, so an explicit `~/*`/`@/*` entry
     ///   in the checked-in `tsconfig.json` is matched first and these stay a
     ///   fallback.
+    /// - Vite root: `@/*` → `<dir>/src/*`. The create-vue scaffold maps `@` to
+    ///   `<dir>/src` in `vite.config.*`, a convention Vite Vue/React apps use
+    ///   pervasively without mirroring it in a `tsconfig`/`jsconfig` `paths`
+    ///   entry. Synthesized only when no `@/*` alias is already registered, so
+    ///   an explicit tsconfig `@/*` and the Nuxt `@/*` → `<dir>/*` mapping
+    ///   (pushed just above for a Nuxt root) both take precedence. The alias
+    ///   wins only when its expansion names an indexed source file, so a
+    ///   project that maps `@` elsewhere just loses resolution for those
+    ///   imports (no wrong edge).
     /// - `package.json` `imports`: each `#`-prefixed key maps to its
     ///   manifest-relative target, e.g. `"#app/*": "./app/*"` →
     ///   `#app/*` → `<dir>/app/*`. A `#`-specifier with no matching key stays
@@ -5070,6 +5114,7 @@ impl OxcPathResolver {
         sveltekit_dirs: &FxHashSet<PathBuf>,
         cypress_dirs: &FxHashSet<PathBuf>,
         nuxt_dirs: &FxHashSet<PathBuf>,
+        vite_dirs: &FxHashSet<PathBuf>,
         subpath_import_dirs: &FxHashMap<PathBuf, Vec<(String, String)>>,
     ) -> Vec<(String, Vec<PathBuf>)> {
         let mut aliases = tsconfig_path
@@ -5085,6 +5130,13 @@ impl OxcPathResolver {
         if nuxt_dirs.contains(dir) {
             aliases.push(("~/*".to_string(), vec![dir.join("*")]));
             aliases.push(("@/*".to_string(), vec![dir.join("*")]));
+        }
+        // Vite `@/*` → `<dir>/src/*`, but only when nothing has already
+        // registered `@/*`: an explicit tsconfig `@/*` (read above) and the
+        // Nuxt `@/*` → `<dir>/*` mapping (pushed just above) both take
+        // precedence, so this never redirects them.
+        if vite_dirs.contains(dir) && !aliases.iter().any(|(pattern, _)| pattern == "@/*") {
+            aliases.push(("@/*".to_string(), vec![dir.join("src").join("*")]));
         }
         if let Some(targets) = subpath_import_dirs.get(dir) {
             for (key, target) in targets {
@@ -7654,6 +7706,282 @@ mod tests {
         assert!(
             imp.source_path.is_none(),
             "~/* must not alias-resolve in a non-Nuxt project"
+        );
+    }
+
+    /// Build a plain Vite Vue/React-shaped project: a `vite.config.js` at the
+    /// root, **no** `tsconfig.json`, an export under `src/service/`, and a
+    /// plain `.js` consumer under `src/utils/` reaching it exclusively via the
+    /// create-vue `@/…` alias. Mirrors the `newbee-mall-vue3-app` repro.
+    #[cfg(test)]
+    fn build_vite_index() -> (TempDir, ImportIndex, PathBuf, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("vite.config.js"), "export default {};\n").unwrap();
+        fs::create_dir_all(dir.path().join("src/service")).unwrap();
+        fs::create_dir_all(dir.path().join("src/utils")).unwrap();
+        let service = dir.path().join("src/service/order.js");
+        fs::write(
+            &service,
+            "export const createOrder = () => {};\nexport const dead_export = () => {};\n",
+        )
+        .unwrap();
+        // A plain `.js` consumer (not `.vue`): the FP is pure alias resolution,
+        // not a Vue-SFC parse gap.
+        let consumer = dir.path().join("src/utils/axios.js");
+        fs::write(
+            &consumer,
+            "import { createOrder } from '@/service/order';\nexport const used = createOrder;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: service.clone(), language: Language::JavaScript },
+            SourceFile { path: consumer.clone(), language: Language::JavaScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let service_canon = fs::canonicalize(&service).unwrap();
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+        (dir, index, service_canon, consumer_canon)
+    }
+
+    // Regression for #7827: a plain Vite project (a `vite.config.*`, no
+    // `tsconfig`) maps `@` to `<root>/src` by the create-vue convention, so
+    // `@/service/order` resolves to `src/service/order.js`. The synthesized
+    // alias must link the importer and keep `createOrder` cross-file used
+    // (not dead), while `dead_export` — imported by nobody — stays dead.
+    #[test]
+    fn vite_at_alias_resolves_to_src_when_vite_detected() {
+        let (_dir, index, service_canon, consumer_canon) = build_vite_index();
+
+        let at = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "@/service/order")
+            .expect("@/service/order import must be indexed")
+            .source_path
+            .clone();
+        assert_eq!(
+            at.as_ref(),
+            Some(&service_canon),
+            "@/* must resolve to <root>/src/* in a Vite project"
+        );
+        assert!(
+            !index.get_usages(&service_canon, "createOrder").is_empty(),
+            "createOrder must record a cross-file usage via the @/ alias"
+        );
+        assert!(
+            index.get_usages(&service_canon, "dead_export").is_empty(),
+            "an export imported by nobody must stay dead under the Vite alias"
+        );
+    }
+
+    // #7827: a `vitest.config.*` is also a Vite signal (a Vitest setup reuses
+    // Vite's `resolve.alias`), so `@/*` → `<root>/src/*` is synthesized there
+    // too, even with no `vite.config.*` and no `tsconfig`.
+    #[test]
+    fn vite_at_alias_resolves_under_vitest_config_signal() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("vitest.config.ts"), "export default {};\n").unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let helper = dir.path().join("src/helper.ts");
+        fs::write(&helper, "export const helper = () => {};\n").unwrap();
+        let consumer = dir.path().join("src/consumer.ts");
+        fs::write(
+            &consumer,
+            "import { helper } from '@/helper';\nexport const used = helper;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: helper.clone(), language: Language::TypeScript },
+            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let helper_canon = fs::canonicalize(&helper).unwrap();
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let at = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "@/helper")
+            .expect("@/helper import must be indexed")
+            .source_path
+            .clone();
+        assert_eq!(
+            at.as_ref(),
+            Some(&helper_canon),
+            "@/* must resolve to <root>/src/* under a vitest.config signal"
+        );
+    }
+
+    // Negative-space guard for #7827: the `@/*` → `src/*` synthesis is gated on
+    // the Vite signal (a `vite.config.*`/`vitest.config.*` file). Without it a
+    // project is not treated as Vite, so an `@/...` specifier stays unresolved.
+    #[test]
+    fn vite_at_alias_not_resolved_without_vite_signal() {
+        let dir = TempDir::new().unwrap();
+        // No vite.config.*: not a Vite project.
+        fs::create_dir_all(dir.path().join("src/service")).unwrap();
+        let service = dir.path().join("src/service/order.js");
+        fs::write(&service, "export const createOrder = () => {};\n").unwrap();
+        let consumer = dir.path().join("src/utils/axios.js");
+        fs::create_dir_all(dir.path().join("src/utils")).unwrap();
+        fs::write(
+            &consumer,
+            "import { createOrder } from '@/service/order';\nexport const used = createOrder;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: service.clone(), language: Language::JavaScript },
+            SourceFile { path: consumer.clone(), language: Language::JavaScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let imp = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "@/service/order")
+            .expect("@/service/order import must be indexed");
+        assert!(
+            imp.source_path.is_none(),
+            "@/* must not alias-resolve in a non-Vite project"
+        );
+    }
+
+    // Negative-space guard for #7827: the synthetic `@/*` → `src/*` wins only
+    // when its expansion names an indexed file. An `@/…` specifier with no such
+    // file (a project that maps `@` elsewhere) stays unresolved — no wrong edge.
+    #[test]
+    fn vite_at_alias_nonexistent_target_creates_no_edge() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("vite.config.js"), "export default {};\n").unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let consumer = dir.path().join("src/main.js");
+        fs::write(
+            &consumer,
+            "import { thing } from '@/does/not/exist';\nexport const used = thing;\n",
+        )
+        .unwrap();
+        let sources = [SourceFile { path: consumer.clone(), language: Language::JavaScript }];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let imp = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "@/does/not/exist")
+            .expect("the @/ import must be indexed");
+        assert!(
+            imp.source_path.is_none(),
+            "@/* to a non-existent target must create no edge"
+        );
+    }
+
+    // Precedence guard for #7827: an explicit `tsconfig` `paths` `@/*` mapping
+    // takes precedence over the Vite synthetic. Here `@/*` → `./app/*`, so
+    // `@/real` resolves under `app/`; `@/decoy` (present only under `src/`)
+    // stays unresolved because the synthetic never overrides the explicit
+    // mapping — it would otherwise wrongly resolve to `src/decoy`.
+    #[test]
+    fn vite_synthesis_yields_to_explicit_tsconfig_at_alias() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("vite.config.js"), "export default {};\n").unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{ "compilerOptions": { "paths": { "@/*": ["./app/*"] } } }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("app")).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let real = dir.path().join("app/real.ts");
+        fs::write(&real, "export const realThing = 1;\n").unwrap();
+        let decoy = dir.path().join("src/decoy.ts");
+        fs::write(&decoy, "export const decoyThing = 1;\n").unwrap();
+        let consumer = dir.path().join("app/main.ts");
+        fs::write(
+            &consumer,
+            "import { realThing } from '@/real';\nimport { decoyThing } from '@/decoy';\nexport const used = [realThing, decoyThing];\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: real.clone(), language: Language::TypeScript },
+            SourceFile { path: decoy.clone(), language: Language::TypeScript },
+            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let real_canon = fs::canonicalize(&real).unwrap();
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let real_at = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "@/real")
+            .expect("@/real import must be indexed")
+            .source_path
+            .clone();
+        assert_eq!(
+            real_at.as_ref(),
+            Some(&real_canon),
+            "explicit tsconfig @/* → app/* must resolve @/real under app/"
+        );
+        let decoy_at = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "@/decoy")
+            .expect("@/decoy import must be indexed");
+        assert!(
+            decoy_at.source_path.is_none(),
+            "the Vite synthetic must not override tsconfig @ to resolve @/decoy under src/"
+        );
+    }
+
+    // Precedence guard for #7827: a Nuxt root maps `@/*` to the project root,
+    // not `src/`. Even when a `vite.config.*` is also present (Nuxt runs on
+    // Vite), the Nuxt `@/*` → `<root>/*` mapping wins, so `@/service/thing`
+    // resolves to `<root>/service/thing.ts`, never the `src/` decoy.
+    #[test]
+    fn nuxt_at_alias_beats_vite_synthesis_when_both_signals_present() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("nuxt.config.ts"), "export default {};\n").unwrap();
+        fs::write(dir.path().join("vite.config.ts"), "export default {};\n").unwrap();
+        fs::create_dir_all(dir.path().join("service")).unwrap();
+        fs::create_dir_all(dir.path().join("src/service")).unwrap();
+        let root_service = dir.path().join("service/thing.ts");
+        fs::write(&root_service, "export const fromRoot = 1;\n").unwrap();
+        let src_decoy = dir.path().join("src/service/thing.ts");
+        fs::write(&src_decoy, "export const fromSrc = 1;\n").unwrap();
+        let consumer = dir.path().join("plugins/app.ts");
+        fs::create_dir_all(dir.path().join("plugins")).unwrap();
+        fs::write(
+            &consumer,
+            "import { fromRoot } from '@/service/thing';\nexport const used = fromRoot;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: root_service.clone(), language: Language::TypeScript },
+            SourceFile { path: src_decoy.clone(), language: Language::TypeScript },
+            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let root_service_canon = fs::canonicalize(&root_service).unwrap();
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let at = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "@/service/thing")
+            .expect("@/service/thing import must be indexed")
+            .source_path
+            .clone();
+        assert_eq!(
+            at.as_ref(),
+            Some(&root_service_canon),
+            "Nuxt @/* → <root>/* must win over the Vite @/* → src/* synthesis"
         );
     }
 

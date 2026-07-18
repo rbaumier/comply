@@ -157,6 +157,39 @@ mod tests {
         );
     }
 
+    // Regression for #7827 — a plain Vite Vue/React app (a `vite.config.*`, no
+    // `tsconfig`) maps `@` to `<root>/src` by the create-vue convention, so a
+    // consumer importing `@/service/order` reaches `src/service/order.js`. The
+    // import index now synthesizes that alias, so `createOrder` has a real
+    // importer and must not be flagged dead — even though the consumer is a
+    // plain `.js` file, not a `.vue` SFC. A genuinely-unused sibling export in
+    // the same file (`trulyDead`) is still flagged.
+    #[test]
+    fn no_fp_for_export_imported_via_vite_at_alias_issue_7827() {
+        let files: Vec<(&str, &str)> = vec![
+            ("vite.config.js", "export default {};\n"),
+            (
+                "src/service/order.js",
+                "export const createOrder = () => {};\n\
+                 export const trulyDead = () => {};\n",
+            ),
+            (
+                "src/utils/axios.js",
+                "import { createOrder } from '@/service/order';\n\
+                 export const request = () => createOrder();\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/service/order.js");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("createOrder")),
+            "export imported via the Vite @/ alias must not be flagged dead, got: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("trulyDead")),
+            "a genuinely-unused sibling export must still be flagged, got: {diags:?}"
+        );
+    }
+
     // Regression for #2302 — TSLint custom rule files follow the plugin
     // convention: export a class named `Rule` that extends `AbstractRule` (or
     // `Rules.AbstractRule`). TSLint discovers them by loading the file and
