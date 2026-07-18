@@ -278,6 +278,13 @@ fn is_imperative_host_write(obj_text: &str, prop_text: &str) -> bool {
 ///
 /// Gating on a function value keeps the exemption tight: a plain state write
 /// like `config.onTimeout = 5000` assigns a non-function and stays flagged.
+///
+/// A chained assignment `a.onX = b.onY = null` parses right-associatively as
+/// `a.onX = (b.onY = null)`, so the outer write's RHS is itself an
+/// `AssignmentExpression`. The terminal assigned value is resolved by walking the
+/// `.right` chain before the shape check, so both writes in a chained handler
+/// (de)registration are recognised; the on-event property gate still applies to
+/// each write's own left-hand property.
 fn is_event_handler_registration(prop_text: &str, value: &Expression) -> bool {
     let is_on_event = prop_text.len() > 2
         && prop_text.starts_with("on")
@@ -285,8 +292,12 @@ fn is_event_handler_registration(prop_text: &str, value: &Expression) -> bool {
     if !is_on_event {
         return false;
     }
+    let mut terminal = value;
+    while let Expression::AssignmentExpression(inner) = terminal {
+        terminal = &inner.right;
+    }
     matches!(
-        value,
+        terminal,
         Expression::ArrowFunctionExpression(_)
             | Expression::FunctionExpression(_)
             | Expression::NullLiteral(_)
@@ -1415,6 +1426,70 @@ mod tests {
         let src = r#"
             function set(obj, fn) {
                 obj.onState = fn;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Chained event-handler (de)registration — issue #7756
+
+    #[test]
+    fn skips_chained_event_handler_deregistration_issue_7756() {
+        // Regression for rbaumier/comply#7756 — tearing down drag listeners with a
+        // single chained write. `document.onmousemove = document.onmouseup = null`
+        // parses as `document.onmousemove = (document.onmouseup = null)`, so the
+        // outer write's RHS is the inner assignment; both resolve to a `null`
+        // terminal, so neither write is flagged.
+        let src = r#"
+            function stopDrag() {
+                document.onmousemove = document.onmouseup = null;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_chained_event_handler_function_registration_7756() {
+        // A chained function-handler registration is exempt on both writes.
+        let src = r#"
+            function wire(el) {
+                el.onclick = el.onmouseup = function () {};
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_single_event_handler_deregistration_7756() {
+        // Existing behaviour preserved: a single `on<event> = null` deregistration.
+        let src = r#"
+            function stop() {
+                document.onmouseup = null;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_chained_non_handler_mutation_7756() {
+        // Negative space: a chained assignment whose terminal value is not a
+        // function/null and whose target properties are not `on<event>` handlers is
+        // a plain state mutation on both writes. The RHS unwrap is scoped to the
+        // value-shape check and does not relax the handler-property requirement.
+        let src = r#"
+            function build(obj) {
+                obj.foo = obj.bar = 5;
+            }
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn still_flags_plain_non_handler_mutation_7756() {
+        // Negative space: a plain non-handler property write stays flagged.
+        let src = r#"
+            function build(obj) {
+                obj.foo = 5;
             }
         "#;
         assert_eq!(run(src).len(), 1);
