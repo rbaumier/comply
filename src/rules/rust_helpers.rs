@@ -874,6 +874,36 @@ pub fn is_async_mutex_type(name_node: Node, source: &[u8]) -> bool {
     use_graph_binds_async_mutex(root, source, local)
 }
 
+/// The bounded set of JWT-library crates. The `no-insecure-jwt` Rust check only
+/// runs in a file that imports one of these, so a compression/hashing/crypto
+/// `*Algorithm` enum stringifying a `"none"`/`"HS256"` variant in a file with no
+/// JWT dependency is never misread as a JWT `alg` header. `jwt-simple`'s crate
+/// name is spelled `jwt_simple` in Rust paths.
+pub const JWT_CRATES: &[&str] = &["jsonwebtoken", "jwt", "jwt_simple", "josekit", "biscuit"];
+
+/// True if the file containing `node` imports a known JWT crate (one of
+/// [`JWT_CRATES`]) through a `use` declaration.
+///
+/// Resolution goes through the same [`collect_use_leaves`] scanner as the
+/// async-mutex provenance check, so grouped (`use jsonwebtoken::{Algorithm,
+/// Header}`), glob (`use jwt_simple::prelude::*`), aliased (`use
+/// jsonwebtoken::Algorithm as Alg`), and bare-crate (`use jsonwebtoken;`) forms
+/// all resolve to the leaf's first path segment — the crate name — never to a
+/// user-chosen identifier. A local module named `jwt` reached via
+/// `use crate::jwt::…` is not matched: its first segment is `crate`.
+pub fn file_imports_jwt_crate(node: Node, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut leaves = Vec::new();
+    collect_use_leaves(root, source, &mut leaves);
+    leaves.iter().any(|leaf| {
+        let crate_name = leaf.module.first().unwrap_or(&leaf.local);
+        JWT_CRATES.contains(&crate_name.as_str())
+    })
+}
+
 /// A single leaf symbol of a `use` declaration: the module segments preceding
 /// the bound name, and the local binding name (`*` for a glob import).
 struct UsePathLeaf {
