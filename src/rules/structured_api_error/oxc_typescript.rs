@@ -1,9 +1,9 @@
-//! structured-api-error oxc backend — flag `new Error()` in route handler files.
+//! structured-api-error oxc backend — flag `new Error()` inside a route-handler callback.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{CallExpression, Expression};
 use std::sync::Arc;
 
 const ROUTE_METHODS: &[&str] = &["get", "post", "put", "delete", "patch"];
@@ -17,51 +17,26 @@ const ROUTER_RECEIVERS: &[&str] = &[
     "app", "router", "server", "route", "api", "fastify", "koa", "hono", "srv", "r",
 ];
 
-/// Import sources for decorator-based frameworks that register routes without a
-/// `<router>.<method>(` call, so importing them marks a route module on its own
-/// (NestJS controllers). Method-call frameworks (fastify/express/koa/hono/elysia)
-/// are deliberately excluded: their routes are registered via a
-/// `<router>.<method>('/path', …)` call that `has_route_registration` detects,
-/// so an import alone — frequently a type-only import such as `FastifyBaseLogger`
-/// — must not classify a service or helper file as a route module.
-const FRAMEWORK_IMPORTS: &[&str] = &["@nestjs"];
-
-/// Whether `line` imports from one of the known route frameworks, i.e. contains
-/// `from 'pkg'`, `from "pkg"`, or (for scoped packages) the `@scope/` prefix.
-fn imports_route_framework(line: &str) -> bool {
-    FRAMEWORK_IMPORTS.iter().any(|pkg| {
-        line.contains(&format!("from '{pkg}'"))
-            || line.contains(&format!("from \"{pkg}\""))
-            || (pkg.starts_with('@') && line.contains(&format!("{pkg}/")))
-    })
-}
-
-/// Whether the file registers a route, i.e. contains a `<router>.<method>(...)`
-/// call on a conventional receiver whose first argument is a path-like string
-/// literal (starting with `/`). Walking the AST ignores comments and excludes
-/// settings accessors such as `app.get('etag fn')` whose argument is a settings
-/// key, not a route path.
-fn has_route_registration(semantic: &oxc_semantic::Semantic, source: &str) -> bool {
-    semantic.nodes().iter().any(|node| {
-        let AstKind::CallExpression(call) = node.kind() else {
-            return false;
-        };
-        let Expression::StaticMemberExpression(member) = &call.callee else {
-            return false;
-        };
-        if !ROUTE_METHODS.contains(&member.property.name.as_str()) {
-            return false;
-        }
-        let Expression::Identifier(recv) = &member.object else {
-            return false;
-        };
-        if !ROUTER_RECEIVERS.contains(&recv.name.as_str()) {
-            return false;
-        }
-        call.arguments
-            .first()
-            .is_some_and(|arg| first_arg_is_route_path(arg, source))
-    })
+/// Whether a call is a route registration — a `<router>.<method>(...)` call on a
+/// conventional receiver whose first argument is a path-like string literal
+/// (starting with `/`). Excludes settings accessors such as `app.get('etag fn')`
+/// whose argument is a settings key, not a route path.
+fn call_is_route_registration(call: &CallExpression, source: &str) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !ROUTE_METHODS.contains(&member.property.name.as_str()) {
+        return false;
+    }
+    let Expression::Identifier(recv) = &member.object else {
+        return false;
+    };
+    if !ROUTER_RECEIVERS.contains(&recv.name.as_str()) {
+        return false;
+    }
+    call.arguments
+        .first()
+        .is_some_and(|arg| first_arg_is_route_path(arg, source))
 }
 
 /// Whether a call's first argument is a path-like string — a string or template
@@ -80,9 +55,32 @@ fn first_arg_is_route_path(arg: &oxc_ast::ast::Argument, source: &str) -> bool {
     }
 }
 
-fn is_route_file(semantic: &oxc_semantic::Semantic, source: &str) -> bool {
-    has_route_registration(semantic, source)
-        || source.lines().any(|line| imports_route_framework(line.trim()))
+/// Whether `node` sits lexically inside a route-handler callback — a function or
+/// arrow passed as an argument to a `<router>.<method>('/path', …)` registration.
+/// Walks every enclosing function, so a `new Error` nested in blocks / `if` / `try`
+/// inside the handler still resolves to it, and a handler in any argument position
+/// (after middleware) is recognized. A handler passed as a named function
+/// reference (`app.get('/x', handleX)`) is not reached by this lexical walk.
+fn is_inside_route_handler(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        if !matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) {
+            continue;
+        }
+        if let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
+            && call_is_route_registration(call, source)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub struct Check;
@@ -110,7 +108,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if !is_route_file(semantic, ctx.source) {
+        if !is_inside_route_handler(node, semantic, ctx.source) {
             return;
         }
 
@@ -165,10 +163,9 @@ app.get("/foo", (c) => {
     #[test]
     fn flags_bare_error_with_router_post() {
         let src = r#"
-router.post("/y", handler);
-function handler() {
+router.post("/y", (req, res) => {
     throw new Error("bad");
-}
+});
 "#;
         assert_eq!(run_on(src).len(), 1);
     }
@@ -198,10 +195,10 @@ fastify.get('/users', async (req, reply) => {
     }
 
     #[test]
-    fn flags_bare_error_in_nestjs_decorator_controller() {
-        // NestJS registers routes via decorators, not a `<router>.<method>(` call,
-        // so the import-only fallback is what classifies the controller as a route
-        // module.
+    fn allows_error_in_nestjs_decorator_controller() {
+        // NestJS registers routes via decorators, not a `<router>.<method>('/path', …)`
+        // call, so its handler methods are not reached by the callback-argument
+        // ancestor walk. Known false-negative, tracked in #7902.
         let src = r#"
 import { Controller, Get } from '@nestjs/common'
 @Controller('users')
@@ -212,7 +209,7 @@ export class UsersController {
     }
 }
 "#;
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
     }
 
     #[test]
@@ -400,6 +397,93 @@ function engine(ext, fn) {
 const etagFn = app.get('etag fn');
 app.get('/users', (req, res) => {
     throw new Error('boom');
+});
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_error_in_buildapp_factory_with_fastify_value_import() {
+        // Issue #7832: `buildApp` is a server-construction factory (value-imports
+        // `fastify`, only `.register(` calls, no route registration). Its boot-time
+        // config check is not inside a route handler.
+        let src = r#"
+import fastify from "fastify";
+function buildApp() {
+    const server = fastify();
+    server.register(somePlugin);
+    if (!secretKey) {
+        throw new Error("SECRET_KEY must be set in single-tenant mode.");
+    }
+    return server;
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_error_in_workspace_helper_with_fastify_request_type_import() {
+        // Issue #7832: a `Result`-returning helper that type-imports `FastifyRequest`;
+        // its bootstrap-state check is not inside a route handler.
+        let src = r#"
+import { FastifyRequest } from "fastify";
+async function getWorkspace(req: FastifyRequest) {
+    const workspace = await db().query.workspace.findFirst();
+    if (!workspace) {
+        throw new Error("No workspace found, ensure application is bootstrapped");
+    }
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_module_top_level_error_in_route_file() {
+        // A `new Error` at module scope in a file that also registers a route is
+        // not inside the handler callback.
+        let src = r#"
+app.get("/users", (req, res) => {
+    res.send("ok");
+});
+const startupError = new Error("configuration missing");
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_bare_error_nested_in_handler() {
+        // A `new Error` nested in `if` inside the handler still resolves to the
+        // handler callback.
+        let src = r#"
+app.post("/y", async (req, reply) => {
+    if (bad) {
+        throw new Error("boom");
+    }
+});
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_error_in_named_reference_handler() {
+        // A handler passed as a named function reference is not lexically enclosed
+        // by the route registration, so the ancestor walk does not reach it. Known
+        // false-negative, tracked in #7902.
+        let src = r#"
+app.get("/x", handleX);
+function handleX(req, res) {
+    throw new Error("boom");
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_bare_error_in_handler_after_middleware() {
+        // The handler is a later argument (after middleware); it is still recognized.
+        let src = r#"
+app.get("/z", mw, (req, reply) => {
+    throw new Error("boom");
 });
 "#;
         assert_eq!(run_on(src).len(), 1);
