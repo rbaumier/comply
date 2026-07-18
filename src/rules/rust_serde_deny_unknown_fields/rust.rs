@@ -9,6 +9,13 @@
 //! rkyv's, not serde's (`Archive` is rkyv-exclusive; rkyv re-exports a
 //! `Deserialize` derive under the same bare name), so it is not flagged.
 //!
+//! A struct carrying a `#[sats(...)]` helper attribute is a SpacetimeDB SATS
+//! type: its `Deserialize` derive is the SATS algebraic-type-system
+//! deserializer (`spacetimedb_sats::de::Deserialize`), not serde's, so
+//! `deny_unknown_fields` is inert and it is not flagged. This mirrors the rkyv
+//! `Archive` exclusion — a co-located marker identifying the `Deserialize` as a
+//! non-serde framework's.
+//!
 //! Only named-field structs (`field_declaration_list` body) are checked.
 //! Tuple / newtype structs (`ordered_field_declaration_list`) and unit
 //! structs (no body) deserialize via the inner type's deserializer with
@@ -106,6 +113,15 @@ impl AstCheck for Check {
         }
         let attrs = collect_preceding_attrs(node, source_bytes);
         if !attrs.iter().any(|a| derives_deserialize(a)) {
+            return;
+        }
+        // A struct carrying a `#[sats(...)]` helper attribute is a SpacetimeDB
+        // SATS type: its `Deserialize` derive is the SATS algebraic-type
+        // deserializer (`spacetimedb_sats::de::Deserialize`), not serde's, so
+        // `deny_unknown_fields` is meaningless there. Symmetric to the rkyv
+        // `Archive` co-derive exclusion in `derives_deserialize` — a co-located
+        // marker identifying the `Deserialize` as a non-serde framework's.
+        if attrs.iter().any(|a| has_sats_attr(a)) {
             return;
         }
         if attrs.iter().any(|a| has_deny_unknown_fields(a)) {
@@ -283,6 +299,27 @@ fn has_non_exhaustive_attr(attr_text: &str) -> bool {
         .strip_prefix("#[")
         .and_then(|rest| rest.strip_suffix(']'))
         .is_some_and(|meta| meta.trim() == "non_exhaustive")
+}
+
+/// True for a struct-level `#[sats(...)]` (or bare `#[sats]`) helper attribute —
+/// the marker the SpacetimeDB SATS derive macros (`spacetimedb_sats::de::Deserialize`
+/// / `ser::Serialize`) attach. Matches on the attribute's leading path segment
+/// being exactly `sats` (after stripping the `#[ … ]` framing and reading the
+/// path before any `( … )` arguments), so an unrelated attribute whose argument
+/// list merely contains the word — e.g. `#[serde(rename = "sats")]` — does not
+/// match.
+fn has_sats_attr(attr_text: &str) -> bool {
+    let inner = attr_text
+        .trim()
+        .strip_prefix("#[")
+        .and_then(|s| s.strip_suffix(']'))
+        .map(str::trim)
+        .unwrap_or("");
+    let path = inner
+        .split(|c: char| c == '=' || c == '(' || c.is_whitespace())
+        .next()
+        .unwrap_or("");
+    path == "sats"
 }
 
 fn has_orm_derive(attrs: &[String]) -> bool {
@@ -970,6 +1007,51 @@ mod tests {
         assert!(
             run_on(source).is_empty(),
             "accepted trade-off: Archive co-derive suppresses the serde warning in one list"
+        );
+    }
+
+    #[test]
+    fn allows_sats_deserialize_struct() {
+        // SpacetimeDB SATS type (crates/sats/src/timestamp.rs): the `Deserialize`
+        // derive is `crate::de::Deserialize` (SATS's algebraic-type deserializer),
+        // not serde's — the file has no serde at all. The `#[sats(crate = crate)]`
+        // helper attribute marks it as a SATS type, so `deny_unknown_fields` is
+        // inert. (Closes #7829)
+        let source = "use crate::de::Deserialize;\n\
+                      #[derive(Eq, PartialEq, Copy, Clone, Hash, Serialize, Deserialize, Debug)]\n\
+                      #[sats(crate = crate)]\n\
+                      pub struct Timestamp { micros: i64 }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: SATS `#[sats(...)]` Deserialize (non-serde) flagged"
+        );
+    }
+
+    #[test]
+    fn allows_sats_deserialize_bare_attr() {
+        // The `#[sats]` helper attribute (no arguments) still marks a SATS type.
+        let source = "#[derive(Serialize, Deserialize)]\n\
+                      #[sats]\n\
+                      struct TimeDuration { micros: i64 }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: SATS `#[sats]` Deserialize (non-serde) flagged"
+        );
+    }
+
+    #[test]
+    fn flags_despite_unrelated_sats_mention() {
+        // `sats` appearing inside a struct-level `#[serde(...)]` argument list is
+        // NOT the `#[sats(...)]` helper attribute (its path is `serde`, not
+        // `sats`) and must not trigger the SATS exemption. The mention is a
+        // struct-level attribute so `has_sats_attr` is actually exercised on it.
+        let source = "#[derive(Deserialize)]\n\
+                      #[serde(rename_all = \"sats\")]\n\
+                      struct Config { rate: u32 }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "should still flag: `sats` in a serde arg list is not the #[sats] attribute"
         );
     }
 }
