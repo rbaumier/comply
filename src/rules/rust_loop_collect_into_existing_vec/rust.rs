@@ -24,6 +24,11 @@
 //! and a try-flavored macro can expand to an early `return`/`?`, so any macro in
 //! the push argument is conservatively assumed to affect control flow.
 //!
+//! A push argument containing an `.await` (an `await_expression`) is skipped:
+//! `.await` is only permitted in an `async` context and cannot appear inside
+//! the synchronous `Fn` closure passed to `extend`, so `extend(...map(...))`
+//! would not compile.
+//!
 //! A push argument whose value flows through a block, `if`, or `match` arm that
 //! runs a `;`-terminated statement (an `expression_statement`, e.g. a nested
 //! `other.push(...);`) drives external side effects per element — a
@@ -120,6 +125,18 @@ impl AstCheck for Check {
         {
             return;
         }
+        // A push argument containing an `.await` (an `await_expression`) is
+        // awaited per element; `.await` is only permitted in an `async` context
+        // and cannot appear inside the synchronous `Fn` closure passed to
+        // `extend`, so the `extend(...map(...))` rewrite would not compile. Skip
+        // it. The walk is scoped to the argument list, so awaiting the source
+        // iterable (`for x in fetch().await { .. }`) — where the `map` rewrite
+        // still compiles — keeps flagging.
+        if let Some(arguments) = call.child_by_field_name("arguments")
+            && arg_contains_await(arguments)
+        {
+            return;
+        }
         // A push argument whose value is produced by a block / `if` / `match` arm
         // that runs a `;`-terminated statement (an `expression_statement`, e.g. a
         // nested `other.push(...);`) drives external side effects per element — a
@@ -188,6 +205,18 @@ fn arg_contains_early_exit(node: tree_sitter::Node) -> bool {
     }
     let mut cursor = node.walk();
     node.children(&mut cursor).any(arg_contains_early_exit)
+}
+
+/// Whether the subtree rooted at `node` contains an `await_expression`. Used on
+/// the `push` argument: `.await` is only permitted in an `async` context and
+/// cannot appear inside the synchronous `Fn` closure passed to `extend`, so an
+/// awaited push value cannot be lifted into `extend(...map(...))`.
+fn arg_contains_await(node: tree_sitter::Node) -> bool {
+    if node.kind() == "await_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(arg_contains_await)
 }
 
 /// Whether the subtree rooted at `node` contains an `expression_statement` — a
@@ -463,6 +492,30 @@ mod tests {
     #[test]
     fn flags_let_then_tail_block_push_issue_7225() {
         let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push({ let y = f(x); y }); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // The push argument `p.read().await.clone()` contains an `.await`; `.await`
+    // can't live inside a synchronous `map` closure, so `extend(...map(...))`
+    // would not compile. The awaited-accumulation loop is left untouched.
+    #[test]
+    fn allows_awaited_push_argument_issue_7843() {
+        let src = "async fn f(xs: &[T]) -> Vec<U> { let mut v = Vec::with_capacity(xs.len()); for p in xs { v.push(p.read().await.clone()); } v }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // A bare awaited push value (no trailing transform) is still awaited.
+    #[test]
+    fn allows_simple_awaited_push_argument_issue_7843() {
+        let src = "async fn f(xs: &[T]) -> Vec<U> { let mut v = Vec::new(); for p in xs { v.push(p.read().await); } v }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative control: a synchronous `.clone()` transform has no `.await`, so
+    // the `extend(...map(...))` rewrite is valid and the loop still flags.
+    #[test]
+    fn flags_sync_clone_transform_issue_7843() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(x.clone()); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
