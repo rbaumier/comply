@@ -1696,8 +1696,8 @@ mod tests {
 
     #[test]
     fn still_flags_non_string_display_name_assignment() {
-        // Only string-literal `displayName` writes are exempt; assigning a
-        // computed value is still a property mutation.
+        // A call-expression RHS is a computed value, not the React DevTools
+        // naming convention, so it stays a flagged property mutation.
         let src = r#"
             RadioGroup.displayName = getName();
         "#;
@@ -1708,6 +1708,37 @@ mod tests {
     fn still_flags_other_string_property_assignment() {
         let src = r#"
             RadioGroup.label = "RadioGroup";
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_display_name_inherited_from_wrapped_primitive() {
+        // Regression for rbaumier/comply#7844 — the Radix/shadcn wrapper pattern
+        // inherits `displayName` from the wrapped primitive
+        // (`Foo.displayName = Primitive.Foo.displayName`). Property-name identity
+        // on both sides is the React DevTools naming convention, not a mutation.
+        let src = r#"
+            DropdownMenuGroup.displayName = DropdownMenuPrimitive.Group.displayName;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_display_name_from_template_literal() {
+        // The HOC naming pattern assigns a template literal.
+        let src = r#"
+            Component.displayName = `Wrapped(${inner})`;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_display_name_from_non_display_name_member() {
+        // A member-access RHS whose property is not `displayName` is not the
+        // inherit convention and stays flagged.
+        let src = r#"
+            RadioGroup.displayName = Bar.someOtherProp;
         "#;
         assert_eq!(run(src).len(), 1);
     }
