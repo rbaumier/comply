@@ -25,7 +25,6 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 use crate::rules::path_utils::is_nuxt_server_route_file;
-use crate::rules::path_utils::is_sveltekit_route_file;
 
 /// Returns `true` when any ancestor directory of `path` is named `routes`, the
 /// gate shared by every TanStack / SolidStart file-router exemption: it scopes

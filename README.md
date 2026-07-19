@@ -117,7 +117,7 @@ Run `comply explain <rule-id>` for the full rationale behind any of these.
 - **Interactive TUI** — browse and triage diagnostics in your terminal.
 - **Editor integration** — built-in Language Server (LSP) for inline diagnostics as you type.
 - **Inline suppressions with mandatory justification** — `// comply-ignore:` requires a reason, so silenced rules stay accountable.
-- **Type-aware analysis (on by default)** — rules that query a real TypeScript checker for deeper correctness checks; pass `--no-type-aware` to skip them.
+- **Type-aware analysis** — rules that query a real TypeScript checker for deeper correctness checks; always on and requires a TypeScript toolchain (Node + `@typescript/native-preview`).
 
 ## Getting started
 
@@ -175,7 +175,6 @@ comply --working-tree --diff-only   # restrict findings to changed lines only
 | `--json` | Emit diagnostics as JSON (for editors and CI) |
 | `--tui` | Launch the interactive terminal UI |
 | `--comply-only` | Run only the in-process tree-sitter rules (skip oxlint/clippy subprocesses) |
-| `--no-type-aware` | Skip type-aware rules (on by default; they're slower and need a TypeScript checker) |
 | `--timings` | Print a per-phase timing breakdown to stderr |
 
 ### Subcommands

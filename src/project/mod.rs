@@ -55,8 +55,6 @@ pub enum Framework {
     TanStackStart,
     Vue,
     Nuxt,
-    Remix,
-    SvelteKit,
     #[default]
     Plain,
 }
@@ -3128,8 +3126,8 @@ impl ProjectCtx {
         self.anchor_path_cache
             .get_or_init(|| {
                 if let Some(linted) = self.linted_paths.get() {
-                    // Exclude import-index-only languages (Markdown / Astro /
-                    // HTML): they are dispatched to no lint engine, so a
+                    // Exclude import-index-only languages (Markdown / HTML):
+                    // they are dispatched to no lint engine, so a
                     // once-per-project rule anchored on one would never run. The
                     // full-scan branch's `min_indexed_path` already filters these.
                     linted
@@ -3280,31 +3278,16 @@ impl ProjectCtx {
     }
 
     /// True when the project exposes HTTP API server boundaries — i.e. a
-    /// dedicated HTTP server framework (Express, Hono, Elysia, NestJS) or a
-    /// full-stack framework with server route handlers (Next.js, Remix, Nuxt,
-    /// SvelteKit) is detected. Used by boundary-validation rules whose "parse
-    /// once at the HTTP boundary, trust internally" principle only holds for
-    /// API servers; CLI tools and pure libraries have no such boundary.
+    /// dedicated HTTP server framework (Express, Hono, Elysia) or a full-stack
+    /// framework with server route handlers (Next.js, Nuxt) is detected. Used by
+    /// boundary-validation rules whose "parse once at the HTTP boundary, trust
+    /// internally" principle only holds for API servers; CLI tools and pure
+    /// libraries have no such boundary.
     pub fn is_http_api_server(&self) -> bool {
-        const HTTP_SERVER_FRAMEWORKS: &[&str] = &[
-            "express", "hono", "elysia", "nestjs", "nextjs", "remix", "nuxt",
-        ];
-        if self
-            .detected_frameworks
+        const HTTP_SERVER_FRAMEWORKS: &[&str] = &["express", "hono", "elysia", "nextjs", "nuxt"];
+        self.detected_frameworks
             .iter()
             .any(|f| HTTP_SERVER_FRAMEWORKS.contains(&f.name.as_str()))
-        {
-            return true;
-        }
-        // The `svelte` framework def is detected on both the bare `svelte`
-        // compiler package and a SvelteKit app. Only SvelteKit serves HTTP
-        // routes, and those come from `@sveltejs/kit`; the bare `svelte`
-        // compiler is a build tool with no HTTP boundary. Gate the SvelteKit
-        // classification on that package directly rather than on the shared
-        // `svelte` framework name.
-        self.package_json
-            .as_ref()
-            .is_some_and(|pkg| pkg.has_dep_or_engine("@sveltejs/kit"))
     }
 
     /// True when the project does Vue server-side rendering — Nuxt is detected,
@@ -3552,12 +3535,6 @@ impl ProjectCtx {
         if self.is_vitest_global_setup_file(path) {
             names.extend(VITEST_GLOBAL_SETUP_EXPORTS.iter().copied());
         }
-        if self.is_docusaurus_for_path(path)
-            && (crate::rules::path_utils::is_docusaurus_theme_swizzle(path)
-                || crate::rules::path_utils::is_docusaurus_plugin_entry(path))
-        {
-            names.insert("default");
-        }
         // `vite-plugin-fake-server` glob-discovers every module under `mock/`/
         // `mocks/` and consumes its `export default defineFakeRoute(...)` as mock
         // API endpoints by directory convention, never through a static import.
@@ -3570,17 +3547,6 @@ impl ProjectCtx {
             names.insert("default");
         }
         names
-    }
-
-    /// True when Docusaurus owns `path` — detected either at the project root or
-    /// via the nearest `package.json` (a docs site nested in a monorepo package,
-    /// e.g. `packages/website/`, is invisible to root-anchored detection).
-    fn is_docusaurus_for_path(&self, path: &Path) -> bool {
-        self.has_framework("docusaurus")
-            || self
-                .frameworks_for_path(path)
-                .iter()
-                .any(|f| f.name == "docusaurus")
     }
 
     /// True when Nuxt owns `path` — detected either at the project root or via
@@ -3647,34 +3613,20 @@ impl ProjectCtx {
     }
 
     /// Add a framework's route-scoped magic exports when `path` matches the file
-    /// convention that consumes them. SvelteKit reserves `load`/`ssr`/`csr`/… in
-    /// `+page`/`+layout`/`+server` route files and `match` in `src/params/*`;
-    /// Vue Router reserves `parser` in `src/params/*`; Remix reserves
-    /// `loader`/`action`/`meta`/… in `app/routes/*` modules; Nuxt reserves
-    /// `default` in `server/api/*`/`server/routes/*`/`server/middleware/*` Nitro
-    /// route modules, in `plugins/*` plugin modules, and in `middleware/*` app
-    /// route-middleware modules. The
-    /// router calls each by exact name, so they have no importer but are live.
-    /// Each framework's `route_files` apply only when `path` matches that
-    /// framework's own route-file convention, keeping a same-named export in an
-    /// ordinary module flaggable.
+    /// convention that consumes them. Vue Router reserves `parser` in
+    /// `src/params/*`; Nuxt reserves `default` in
+    /// `server/api/*`/`server/routes/*`/`server/middleware/*` Nitro route
+    /// modules, in `plugins/*` plugin modules, and in `middleware/*` app
+    /// route-middleware modules. The router calls each by exact name, so they
+    /// have no importer but are live. Each framework's `route_files` apply only
+    /// when `path` matches that framework's own route-file convention, keeping a
+    /// same-named export in an ordinary module flaggable.
     fn extend_route_magic_exports<'a>(&'a self, path: &Path, names: &mut FxHashSet<&'a str>) {
-        let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let is_sveltekit_route = crate::rules::path_utils::is_sveltekit_route_file(basename);
         let is_param_matcher = crate::rules::path_utils::is_param_dir_file(path);
-        let is_remix_route = crate::rules::path_utils::is_remix_route_file(path);
-        let is_rr_root = crate::rules::path_utils::is_react_router_root_module(path);
-        let is_rr_config = crate::rules::path_utils::is_react_router_routes_config(path);
-        let is_astro_page = crate::rules::path_utils::is_astro_routed_page(path);
         let is_nuxt_server_route = crate::rules::path_utils::is_nuxt_server_route_file(path);
         let is_nuxt_plugin = crate::rules::path_utils::is_nuxt_plugin_file(path);
         let is_nuxt_app_middleware = crate::rules::path_utils::is_nuxt_app_middleware_file(path);
-        if !is_sveltekit_route
-            && !is_param_matcher
-            && !is_remix_route
-            && !is_rr_root
-            && !is_rr_config
-            && !is_astro_page
+        if !is_param_matcher
             && !is_nuxt_server_route
             && !is_nuxt_plugin
             && !is_nuxt_app_middleware
@@ -3682,20 +3634,14 @@ impl ProjectCtx {
             return;
         }
         // Only frameworks detected for this path (root manifest + nearest
-        // package.json) contribute, so a non-SvelteKit `+page.ts` or a Remix-less
-        // `app/routes/` file stays unaffected.
+        // package.json) contribute, so a non-Nuxt route file stays unaffected.
         let owning = self
             .detected_frameworks
             .iter()
             .copied()
             .chain(self.frameworks_for_path(path));
         for fw in owning {
-            // `root.tsx`/`root.jsx` shares the route module export contract, so
-            // it draws on the same `route_files` set (plus `Layout`).
             let route_file_match = match fw.name.as_str() {
-                "svelte" => is_sveltekit_route,
-                "remix" => is_remix_route || is_rr_root,
-                "astro" => is_astro_page,
                 "nuxt" => is_nuxt_server_route || is_nuxt_plugin || is_nuxt_app_middleware,
                 _ => false,
             };
@@ -3704,9 +3650,6 @@ impl ProjectCtx {
             }
             if is_param_matcher {
                 names.extend(fw.route_magic_exports.param_matchers.iter().map(String::as_str));
-            }
-            if fw.name == "remix" && is_rr_config {
-                names.extend(fw.route_magic_exports.config_files.iter().map(String::as_str));
             }
         }
     }
@@ -6364,10 +6307,6 @@ fn detect_framework(pkg: &PackageJson) -> Framework {
         Framework::NextJs
     } else if has("@tanstack/start") || has("@tanstack/react-start") {
         Framework::TanStackStart
-    } else if has("@remix-run/react") {
-        Framework::Remix
-    } else if has("@sveltejs/kit") {
-        Framework::SvelteKit
     } else if has("vue") {
         Framework::Vue
     } else {
@@ -7002,38 +6941,6 @@ mod tests {
         assert!(pkg.has_dep_or_engine("fsevents"));
         assert!(pkg.has_dep_or_engine("vscode"));
         assert!(!pkg.has_dep_or_engine("react"));
-    }
-
-    /// Build a `ProjectCtx` carrying the `svelte` framework def (which is
-    /// detected on both the bare `svelte` compiler and a SvelteKit app) plus
-    /// the given `package.json` body.
-    #[cfg(test)]
-    fn svelte_ctx_with_pkg(pkg_body: &str) -> ProjectCtx {
-        let mut ctx = ProjectCtx::default();
-        if let Some(fw) = crate::frameworks::get_framework("svelte") {
-            ctx.detected_frameworks = vec![fw];
-        }
-        ctx.package_json = Some(Arc::new(PackageJson::parse(pkg_body).unwrap()));
-        ctx
-    }
-
-    #[test]
-    fn svelte_compiler_is_not_http_api_server() {
-        // Issue #3275: the bare `svelte` compiler package is a build tool with
-        // no HTTP boundary. It triggers the `svelte` framework def but is not a
-        // SvelteKit app, so it must not be classified as an HTTP API server.
-        let ctx = svelte_ctx_with_pkg(r#"{"name":"svelte","dependencies":{"acorn":"^8"}}"#);
-        assert!(!ctx.is_http_api_server());
-    }
-
-    #[test]
-    fn sveltekit_app_is_http_api_server() {
-        // A genuine SvelteKit app (depends on `@sveltejs/kit`) serves HTTP
-        // routes and must be classified as an HTTP API server.
-        let ctx = svelte_ctx_with_pkg(
-            r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2","svelte":"^5"}}"#,
-        );
-        assert!(ctx.is_http_api_server());
     }
 
     #[test]

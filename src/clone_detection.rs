@@ -1286,10 +1286,7 @@ fn grammar_family(lang: Language) -> Option<u8> {
         | Language::Toml
         | Language::Json
         | Language::Sql
-        | Language::GraphQl
-        | Language::Svelte
         | Language::Markdown
-        | Language::Astro
         | Language::Html => None,
     }
 }

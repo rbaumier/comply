@@ -98,12 +98,6 @@ impl TextCheck for Check {
             if is_virtual_module(spec) {
                 continue;
             }
-            // Docusaurus maps `@site/` to the site root at build time (webpack),
-            // so `@site/src/...` resolves to local project source, not an npm
-            // package. `@site` is not a publishable npm name.
-            if is_docusaurus_site_alias(spec) {
-                continue;
-            }
             // Bun runtime built-in: the bare `bun` specifier is the Bun
             // runtime's own module (`Bun.Server`, `BunFile`, `Serve`, …),
             // injected by the runtime and not installable from npm — analogous
@@ -207,13 +201,6 @@ impl TextCheck for Check {
         }
         diagnostics
     }
-}
-
-/// True if `spec` is a Docusaurus `@site/` alias, which the bundler maps to
-/// the project source root at build time. Such specifiers resolve to local
-/// files, never to an npm package (`@site` is not a publishable name).
-fn is_docusaurus_site_alias(spec: &str) -> bool {
-    spec == "@site" || spec.starts_with("@site/")
 }
 
 #[cfg(test)]

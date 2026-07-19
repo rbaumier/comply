@@ -36,8 +36,8 @@
 //!   - Fixture / test-data directories (`__fixtures__/`, `fixtures/`,
 //!     `test-data/`, `testdata/`, …) — these hold factories and fixtures
 //!     consumed only from test files, often through tooling-generated path
-//!     aliases (e.g. SvelteKit's `@test-data`) that the index can't resolve,
-//!     so their exports look unimported even though tests use them.
+//!     aliases that the index can't resolve, so their exports look unimported
+//!     even though tests use them.
 //!   - Co-occurrence conventions (`CO_OCCURRENCE_EXEMPTIONS`) — a fixed set of
 //!     named exports consumed by directory/filename convention at runtime,
 //!     never through a static import. Each convention fires only when its two
@@ -55,15 +55,8 @@
 //!     filename convention at build time, so it never has a static importer.
 //!     The whole file is treated as a framework entry point. The leading
 //!     underscore is required: an ordinary `meta.ts` stays subject to the rule.
-//!   - Docusaurus theme swizzle and plugin `default` exports — when Docusaurus
-//!     is detected for the file (root or nearest package.json), a component
-//!     under a `src/theme/` directory and a plugin `index.{ts,js}` directly
-//!     inside a `plugins/<name>/` directory have their `default` export
-//!     consumed by Docusaurus's theme system / config-driven plugin loader by
-//!     path convention, never through a static import. Only `default` is magic
-//!     and only when Docusaurus is detected, so named exports and non-Docusaurus
-//!     projects stay subject to the rule. (`knip.ts`/`knip.js` are handled by
-//!     the shared `is_config_file` predicate alongside `knip.config.*`.)
+//!   - `knip.ts`/`knip.js` config files are handled by the shared
+//!     `is_config_file` predicate alongside `knip.config.*`.
 //!   - Serverless `handler` exports under a `functions/` directory — a file in
 //!     the per-function layout AWS Lambda / SST / Cloudflare Workers / Vercel
 //!     Edge use exports `handler`, which the cloud runtime invokes through the
@@ -135,17 +128,14 @@
 //!     import. Recognized conventions: Next.js Pages Router (`pages/**`, incl.
 //!     `pages/api/**`), Next.js App Router special files (`page`/`layout`/`route`/
 //!     `loading`/`error`/`not-found`/`template`/`default`/`global-error` under an
-//!     `app/` directory), Remix / React Router v7 route modules (`routes/**`) and
-//!     the app root (`root.{tsx,jsx}`), SvelteKit route files (`+page`/
-//!     `+layout`/`+server` and their `.server` variants), and the `@next/mdx`
-//!     provider module (a `mdx-components.{tsx,jsx,js,mjs}` file's
-//!     `useMDXComponents` export, which `@next/mdx` discovers by filename at
-//!     build time). This check is
+//!     `app/` directory), and the `@next/mdx` provider module (a
+//!     `mdx-components.{tsx,jsx,js,mjs}` file's `useMDXComponents` export, which
+//!     `@next/mdx` discovers by filename at build time). This check is
 //!     path-convention-based and does NOT require the framework dependency to be
-//!     detected, so it covers monorepo
-//!     route files whose framework dep is invisible to nearest-manifest
-//!     detection. Only the convention's reserved export names are exempt, so a
-//!     genuinely-dead helper in a route file still fires.
+//!     detected, so it covers monorepo route files whose framework dep is
+//!     invisible to nearest-manifest detection. Only the convention's reserved
+//!     export names are exempt, so a genuinely-dead helper in a route file still
+//!     fires.
 //!
 //! False-positive guards:
 //!   - If any file imports the current module via a namespace import
@@ -162,11 +152,6 @@
 //!     `BaseSchema.extend(...)`, `z.infer<typeof BaseSchema>`, composition
 //!     into another exported value) are kept. The base name is consumed
 //!     in-file; its derived form is what callers import.
-//!   - Files referenced through a Docusaurus `@site/` alias import are kept.
-//!     Docusaurus maps `@site/` to the site root via webpack, so
-//!     `import X from "@site/src/components/foo"` never resolves in the index
-//!     and the imported component looks dead. When an unresolved `@site/`
-//!     specifier's path suffix matches a file, every export of it is live.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::is_custom_element_decorator_name;
@@ -319,63 +304,19 @@ const NEXT_PAGES_ROUTER_EXPORTS: &[&str] = &[
     "config",
 ];
 
-/// Reserved exports a Remix / React Router v7 route module (`routes/**`) or the
-/// app root module (`root.{tsx,jsx}`) exposes for the framework's render
-/// pipeline, consumed by exact name and never imported.
-const REMIX_ROUTE_EXPORTS: &[&str] = &[
-    "default",
-    "loader",
-    "action",
-    "meta",
-    "links",
-    "headers",
-    "ErrorBoundary",
-    "CatchBoundary",
-    "handle",
-    "shouldRevalidate",
-    "clientLoader",
-    "clientAction",
-    "HydrateFallback",
-    "Layout",
-];
-
-/// Reserved exports a SvelteKit route module (`+page`/`+layout`/`+server`,
-/// incl. the `.server` variants) exposes for its file-system router, plus
-/// `default` for the `.svelte` component module.
-const SVELTEKIT_ROUTE_EXPORTS: &[&str] = &[
-    "default",
-    "load",
-    "ssr",
-    "csr",
-    "prerender",
-    "trailingSlash",
-    "config",
-    "actions",
-    "entries",
-    "GET",
-    "POST",
-    "PUT",
-    "PATCH",
-    "DELETE",
-    "OPTIONS",
-    "HEAD",
-    "fallback",
-];
-
 /// True when `export_name` is consumed by a framework file-system router for a
 /// file matching a well-known routing convention, so it has no static importer
 /// yet is live. Detection is purely path-convention-based — independent of
 /// whether the framework dependency is visible in the nearest `package.json`,
 /// which is the gap that surfaced the false positive (a monorepo route file
-/// whose `next`/`@remix-run` dep is declared out of reach of nearest-manifest
-/// detection). Matching is anchored on exact path SEGMENTS and filenames, so an
-/// ordinary module never qualifies, and only the convention's reserved export
-/// names are exempt, so a genuinely-dead helper in a route file still fires.
+/// whose `next` dep is declared out of reach of nearest-manifest detection).
+/// Matching is anchored on exact path SEGMENTS and filenames, so an ordinary
+/// module never qualifies, and only the convention's reserved export names are
+/// exempt, so a genuinely-dead helper in a route file still fires.
 fn is_framework_route_export(path: &Path, export_name: &str) -> bool {
     if !has_route_module_extension(path) {
         return false;
     }
-    let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
     // Next.js App Router special files under an `app/` directory.
@@ -388,22 +329,6 @@ fn is_framework_route_export(path: &Path, export_name: &str) -> bool {
 
     // Next.js Pages Router (`pages/**`, including `pages/api/**`).
     if has_path_segment(path, "pages") && NEXT_PAGES_ROUTER_EXPORTS.contains(&export_name) {
-        return true;
-    }
-
-    // Remix / React Router v7: route modules under a `routes/` directory, and the
-    // app root module `root.{tsx,jsx}`.
-    if (has_path_segment(path, "routes")
-        || crate::rules::path_utils::is_react_router_root_module(path))
-        && REMIX_ROUTE_EXPORTS.contains(&export_name)
-    {
-        return true;
-    }
-
-    // SvelteKit route files (`+page`, `+layout`, `+server`, and `.server` variants).
-    if crate::rules::path_utils::is_sveltekit_route_file(basename)
-        && SVELTEKIT_ROUTE_EXPORTS.contains(&export_name)
-    {
         return true;
     }
 
@@ -583,56 +508,17 @@ fn is_co_occurrence_exempt(export_name: &str, export_names: &FxHashSet<&str>) ->
     })
 }
 
-/// True when the project contains a Docusaurus `@site/`-aliased import whose
-/// path plausibly references `exporting_file`. Docusaurus maps the `@site/`
-/// alias to the site root via its webpack config, so `import X from
-/// "@site/src/components/foo"` never resolves in the import index (it is not a
-/// `compilerOptions.paths` entry) and the imported component looks dead.
-///
-/// The alias suffix (the part after `@site/`) is matched against the exporting
-/// file's path: the file is considered live when its path, with any TS/JS
-/// extension stripped, ends with the suffix — directly or through an `index`
-/// segment (`@site/src/components/foo` ↔ `…/src/components/foo/index.tsx`).
-/// Anchoring on the `@site/` prefix and a path-suffix match keeps the
-/// exemption tight: a genuinely dead export with no such importer still fires.
-fn has_unresolved_site_alias_importer(
-    index: &crate::project::import_index::ImportIndex,
-    exporting_file: &Path,
-) -> bool {
-    const SITE_ALIAS: &str = "@site/";
-
-    let file_norm = exporting_file.to_string_lossy().replace('\\', "/");
-    let file_stem = strip_ts_extension(&file_norm);
-
-    index.iter_imports().any(|imp| {
-        if imp.source_path.is_some() {
-            return false;
-        }
-        let Some(suffix) = imp.specifier.strip_prefix(SITE_ALIAS) else {
-            return false;
-        };
-        let suffix = suffix.trim_end_matches('/');
-        if suffix.is_empty() {
-            return false;
-        }
-        file_stem == suffix
-            || file_stem.ends_with(&format!("/{suffix}"))
-            || file_stem == format!("{suffix}/index")
-            || file_stem.ends_with(&format!("/{suffix}/index"))
-    })
-}
-
 /// Names exported by `exporting_file` that an ng-packagr public-API entry barrel
-/// re-exports — i.e. the file's contribution to an Angular library's published
-/// surface. ng-packagr libraries publish through the build output's
-/// `package.json`, so the entry barrel's `export { X } from './m'` is the only
-/// consumer of `m`'s `X` and no source file imports it; such a symbol is live.
+/// re-exports — i.e. the file's contribution to a library's published surface.
+/// ng-packagr libraries publish through the build output's `package.json`, so
+/// the entry barrel's `export { X } from './m'` is the only consumer of `m`'s
+/// `X` and no source file imports it; such a symbol is live.
 ///
 /// Walks each indexed file that is an ng-package entry file and, for every
 /// re-export whose origin resolves to `exporting_file`, records the origin name
 /// (the `local` side of `export { local as exported } from …`, else the
 /// exported name). Returns the empty set when the project ships no ng-packagr
-/// entry, so a non-Angular project pays only the entry-file probe.
+/// entry, so a project without one pays only the entry-file probe.
 fn collect_ng_package_reexported_names(
     index: &crate::project::import_index::ImportIndex,
     project: &crate::project::ProjectCtx,
@@ -655,16 +541,6 @@ fn collect_ng_package_reexported_names(
         }
     }
     out
-}
-
-/// Strip a single trailing TS/JS extension from a forward-slashed path.
-fn strip_ts_extension(path: &str) -> &str {
-    for ext in [".tsx", ".ts", ".jsx", ".js", ".mts", ".cts", ".mjs", ".cjs"] {
-        if let Some(stem) = path.strip_suffix(ext) {
-            return stem;
-        }
-    }
-    path
 }
 
 /// True if the source carries a `@generated` marker in its leading comments.
@@ -752,21 +628,14 @@ impl TextCheck for Check {
         if ctx.project.entrypoints_contains(&canon) {
             return Vec::new();
         }
-        // Framework entry FILE/SUFFIX/ROOT_FILE match — always bail out, except
-        // React Router v7 convention modules (`root.tsx`, `routes.ts`). Those
-        // are entry points for file-level rules (unused-file, side-effects) but
-        // here only their reserved exports are framework-consumed; an ordinary
-        // dead export in the same file is still genuinely dead. The per-export
-        // magic-exports check below exempts just the reserved names.
-        let is_rr_convention_module =
-            crate::rules::path_utils::is_react_router_root_module(&canon)
-                || crate::rules::path_utils::is_react_router_routes_config(&canon);
-        if !is_rr_convention_module && is_framework_specific_entry_point(&canon, ctx.project) {
+        // Framework entry FILE/SUFFIX/ROOT_FILE match — always bail out.
+        if is_framework_specific_entry_point(&canon, ctx.project) {
             return Vec::new();
         }
         // ng-packagr public-API entry file (`lib.entryFile` of an
-        // `ng-package.json`) — the package entry point for an Angular library;
-        // never imported by another source file, so never flagged.
+        // `ng-package.json`) — a library's package entry point published through
+        // the build output's `package.json`, never imported by another source
+        // file, so never flagged.
         if ctx.project.is_ng_package_entry_file(&canon) {
             return Vec::new();
         }
@@ -908,19 +777,12 @@ impl TextCheck for Check {
         // having no importer. Computed lazily, like the scans above.
         let mut custom_element_classes: Option<FxHashSet<String>> = None;
 
-        // Docusaurus `@site/` alias importers. The alias maps to the site root
-        // via webpack and never resolves in the import index, so a component
-        // consumed exclusively through `@site/src/...` would look dead. When an
-        // unresolved `@site/`-aliased import plausibly references this file,
-        // every export of it is live — the whole module is reachable.
-        let mut site_alias_importer: Option<bool> = None;
-
         // Names of this file's symbols re-exported by an ng-packagr public-API
         // entry barrel (`lib.entryFile` of an `ng-package.json`). Such a symbol
-        // is part of the Angular library's published surface, consumed
-        // externally — the entry barrel re-exports it but no source file
-        // imports it. Computed lazily: only an export that survived every cheap
-        // check pays for the per-barrel scan.
+        // is part of the library's published surface, consumed externally — the
+        // entry barrel re-exports it but no source file imports it. Computed
+        // lazily: only an export that survived every cheap check pays for the
+        // per-barrel scan.
         let mut ng_reexported: Option<FxHashSet<String>> = None;
 
         // Whether this module is a Cloudflare Worker module-format entry point —
@@ -989,12 +851,11 @@ impl TextCheck for Check {
             if is_co_occurrence_exempt(&export.name, &export_names) {
                 continue;
             }
-            // Framework file-system-routing entry point (Next.js pages/App
-            // Router, Remix/React Router routes, SvelteKit routes): the
-            // convention's reserved exports are consumed by the router by name,
-            // never through a static import. Path-convention-based, so it covers
-            // monorepo route files whose framework dependency is invisible to
-            // nearest-manifest detection.
+            // Framework file-system-routing entry point (Next.js Pages/App
+            // Router): the convention's reserved exports are consumed by the
+            // router by name, never through a static import. Path-convention-
+            // based, so it covers monorepo route files whose framework
+            // dependency is invisible to nearest-manifest detection.
             if is_framework_route_export(&canon, &export.name) {
                 continue;
             }
@@ -1097,11 +958,6 @@ impl TextCheck for Check {
             let custom_element_classes = custom_element_classes
                 .get_or_insert_with(|| collect_custom_element_class_names(ctx.source, ctx.lang));
             if custom_element_classes.contains(export.name.as_str()) {
-                continue;
-            }
-            let site_alias_importer = *site_alias_importer
-                .get_or_insert_with(|| has_unresolved_site_alias_importer(index, &canon));
-            if site_alias_importer {
                 continue;
             }
             let ng_reexported = ng_reexported
@@ -1622,48 +1478,6 @@ mod tests {
     }
 
     #[test]
-    fn no_fp_for_sveltekit_lib_alias_consumer_issue_2112() {
-        // Regression for #2112 — a SvelteKit `src/lib` export consumed only via
-        // the `$lib/*` alias (declared in the gitignored, absent
-        // `.svelte-kit/tsconfig.json`). The index synthesizes `$lib` → `src/lib`
-        // on the SvelteKit signal, so the importer links to the exporter and the
-        // export is not dead.
-        let (_dir, diags) = run_on_project_with_pkg(
-            Some(r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2.0.0"}}"#),
-            &[
-                ("src/lib/stores.svelte.ts", "export const staleTime = 5000;\n"),
-                (
-                    "src/routes/App.ts",
-                    "import { staleTime } from '$lib/stores.svelte';\nexport const used = staleTime;\n",
-                ),
-            ],
-            "src/lib/stores.svelte.ts",
-        );
-        assert!(
-            diags.is_empty(),
-            "staleTime consumed via $lib/* must not be dead: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn dead_export_in_sveltekit_lib_unimported_still_flagged_issue_2112() {
-        // Negative-space guard for #2112 — the `$lib` resolution does not blanket-
-        // exempt `src/lib`. A `src/lib` export that no file imports stays dead.
-        let (_dir, diags) = run_on_project_with_pkg(
-            Some(r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2.0.0"}}"#),
-            &[
-                ("src/lib/unused.ts", "export const orphan = 1;\n"),
-                ("src/routes/App.ts", "export const x = 1;\n"),
-            ],
-            "src/lib/unused.ts",
-        );
-        assert!(
-            diags.iter().any(|d| d.message.contains("orphan")),
-            "an unimported src/lib export must still be flagged dead: {diags:?}"
-        );
-    }
-
-    #[test]
     fn no_fp_for_bazel_ng_package_reexported_symbol_issue_2299() {
         // Regression for #2299 (angular/angular) — in the monorepo a `@angular/*`
         // source package under `packages/<pkg>/` is built by Bazel's `ng_package`
@@ -2060,32 +1874,6 @@ mod tests {
     }
 
     #[test]
-    fn ignores_gatsby_ssr_lifecycle_exports_issue_1700() {
-        // Regression for #1700 — Gatsby's `gatsby-ssr.js` at the project root is
-        // a lifecycle entry: its named exports (`onRenderBody`, re-exported
-        // `wrapPageElement`) are consumed by Gatsby's build pipeline, never by a
-        // static import. The root-file match must bail out the whole file.
-        let pkg = r#"{ "dependencies": { "gatsby": "5.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "gatsby-ssr.js",
-                "export { wrapRootElement, wrapPageElement } from './gatsby-shared.js';\n\
-                 export const onRenderBody = ({ setHtmlAttributes }) => { setHtmlAttributes({ lang: 'en' }); };\n",
-            ),
-            (
-                "gatsby-shared.js",
-                "export const wrapRootElement = ({ element }) => element;\n\
-                 export const wrapPageElement = ({ element }) => element;\n",
-            ),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "gatsby-ssr.js");
-        assert!(
-            diags.is_empty(),
-            "gatsby-ssr.js is a framework lifecycle entry; dead-export must not fire, got: {diags:?}"
-        );
-    }
-
-    #[test]
     fn ignores_nextjs_app_router_route_handler_exports_issue_1627() {
         // Regression for #1627 (shadcn-ui/ui) — a Next.js App Router `route.ts`
         // is a file-system-routed entry: its HTTP-method handlers (`GET`/`POST`/…)
@@ -2216,132 +2004,6 @@ mod tests {
             "non-route default export in src/lib/helper.ts is dead: {diags:?}"
         );
         assert!(diags[0].message.contains("default"));
-    }
-
-    #[test]
-    fn ignores_remix_and_sveltekit_route_exports_without_detection_issue_1320() {
-        // Regression for #1320 — Remix `routes/**` modules, the `root.tsx` app
-        // root, and SvelteKit `+page`/`+server` route files expose reserved
-        // exports the router consumes by name. The path-convention exemption
-        // fires without a detected framework.
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "app/routes/dashboard.tsx",
-                "export async function loader() { return {}; }\n\
-                 export default function Dashboard() { return null; }\n",
-            ),
-            (
-                "app/root.tsx",
-                "export default function Root() { return null; }\n\
-                 export function Layout() { return null; }\n",
-            ),
-            (
-                "src/routes/+page.ts",
-                "export const ssr = false;\nexport async function load() { return {}; }\n",
-            ),
-            (
-                "src/routes/+server.ts",
-                "export async function GET() { return new Response('ok'); }\n",
-            ),
-            ("src/other.ts", "export const z = 1;\nz;\n"),
-        ];
-        for target in [
-            "app/routes/dashboard.tsx",
-            "app/root.tsx",
-            "src/routes/+page.ts",
-            "src/routes/+server.ts",
-        ] {
-            let (_dir, diags) = run_on_project(&files, target);
-            assert!(
-                diags.is_empty(),
-                "route file {target} must not be flagged dead, got: {diags:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn ignores_sveltekit_route_magic_exports_issue_1540() {
-        // Regression for #1540 (immich-app/immich) — SvelteKit's reserved route
-        // exports (`load`, `ssr`, `csr`) in a `+page.ts`/`+layout.ts` are consumed
-        // by the file-system router by exact name, never through a static import,
-        // so they have no importer yet are live framework entry points.
-        let pkg = r#"{ "dependencies": { "@sveltejs/kit": "2.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/routes/+layout.ts",
-                "export const ssr = false;\n\
-                 export const csr = false;\n\
-                 export async function load({ data }) { return data; }\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/routes/+layout.ts");
-        assert!(
-            diags.is_empty(),
-            "SvelteKit route magic exports are framework-consumed: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_sveltekit_param_matcher_export_issue_1540() {
-        // Regression for #1540 — `match` in `src/params/*.ts` is the route
-        // parameter matcher invoked by SvelteKit's router by convention.
-        let pkg = r#"{ "dependencies": { "@sveltejs/kit": "2.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/params/integer.ts",
-                "export function match(value) { return /^\\d+$/.test(value); }\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/params/integer.ts");
-        assert!(
-            diags.is_empty(),
-            "SvelteKit param matcher `match` is framework-consumed: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn still_flags_ordinary_export_in_sveltekit_route_file_issue_1540() {
-        // Negative-space guard for #1540 — the exemption is scoped to SvelteKit's
-        // reserved names. An ordinary `helper` export in the same route file, with
-        // no importer, is genuinely dead and must still be flagged.
-        let pkg = r#"{ "dependencies": { "@sveltejs/kit": "2.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/routes/+page.ts",
-                "export async function load() { return {}; }\n\
-                 export const helper = () => 1;\n",
-            ),
-            ("src/util.ts", "export const z = 1;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/routes/+page.ts");
-        assert_eq!(
-            diags.len(),
-            1,
-            "an ordinary unused export in a route file must still be flagged: {diags:?}"
-        );
-        assert!(diags[0].message.contains("helper"));
-    }
-
-    #[test]
-    fn still_flags_load_export_in_non_route_module_issue_1540() {
-        // Negative-space guard for #1540 — `load` is a common generic name. A
-        // `load` export from an ordinary module (not a `+page`/`+layout`/`+server`
-        // route file), with no importer, is genuinely dead and must still fire:
-        // the SvelteKit exemption is scoped to route files, not project-wide.
-        let pkg = r#"{ "dependencies": { "@sveltejs/kit": "2.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            ("src/lib/data.ts", "export function load() { return {}; }\n"),
-            ("src/lib/other.ts", "export const z = 1;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/lib/data.ts");
-        assert_eq!(
-            diags.len(),
-            1,
-            "a `load` export in a non-route module must still be flagged: {diags:?}"
-        );
-        assert!(diags[0].message.contains("load"));
     }
 
     #[test]
@@ -3437,124 +3099,6 @@ mod tests {
     }
 
     #[test]
-    fn ignores_remix_route_magic_exports_issue_1547() {
-        // Regression for #1547 (triggerdotdev/trigger.dev) — Remix's reserved
-        // route exports (`loader`, `action`, `meta`) in an `app/routes/*` module
-        // are consumed by the file-system router by exact name, never through a
-        // static import. With entrypoint globs configured (as trigger.dev has),
-        // the framework-entry-dir bailout is skipped, so these would look dead.
-        let pkg = r#"{ "dependencies": { "@remix-run/node": "2.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "app/routes/api.v1.projects.$projectRef.ts",
-                "export async function loader() { return {}; }\n\
-                 export async function action() { return {}; }\n\
-                 export function meta() { return [{ title: \"x\" }]; }\n",
-            ),
-            ("app/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
-            pkg,
-            vec!["app/util.ts".to_string()],
-            &files,
-            "app/routes/api.v1.projects.$projectRef.ts",
-        );
-        assert!(
-            diags.is_empty(),
-            "Remix route magic exports are framework-consumed: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn still_flags_ordinary_export_in_remix_route_file_issue_1547() {
-        // Negative-space guard for #1547 — the exemption is scoped to Remix's
-        // reserved names. An ordinary `helper` export in the same route module,
-        // with no importer, is genuinely dead and must still be flagged.
-        let pkg = r#"{ "dependencies": { "@remix-run/node": "2.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "app/routes/dashboard.tsx",
-                "export async function loader() { return {}; }\n\
-                 export const helper = () => 1;\n",
-            ),
-            ("app/util.ts", "export const z = 1;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
-            pkg,
-            vec!["app/util.ts".to_string()],
-            &files,
-            "app/routes/dashboard.tsx",
-        );
-        assert_eq!(
-            diags.len(),
-            1,
-            "an ordinary unused export in a route module must still be flagged: {diags:?}"
-        );
-        assert!(diags[0].message.contains("helper"));
-    }
-
-    #[test]
-    fn still_flags_loader_export_in_non_route_remix_module_issue_1547() {
-        // Negative-space guard for #1547 — `loader`/`meta`/`action` are common
-        // generic names. A `loader` export from an ordinary module (not under
-        // `app/routes/`), with no importer, is genuinely dead and must still
-        // fire: the Remix exemption is scoped to route modules, not project-wide.
-        let pkg = r#"{ "dependencies": { "@remix-run/node": "2.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            ("app/lib/data.ts", "export function loader() { return {}; }\n"),
-            ("app/lib/other.ts", "export const z = 1;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/lib/data.ts");
-        assert_eq!(
-            diags.len(),
-            1,
-            "a `loader` export in a non-route module must still be flagged: {diags:?}"
-        );
-        assert!(diags[0].message.contains("loader"));
-    }
-
-    #[test]
-    fn ignores_gatsby_node_api_exports_issue_1700() {
-        // Regression for #1700 — `gatsby-node.js` named exports (`createPages`,
-        // `onCreateNode`) are Gatsby Node APIs invoked by the build, not imported.
-        let pkg = r#"{ "dependencies": { "gatsby": "5.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "gatsby-node.js",
-                "export const createPages = async ({ actions }) => { actions.createPage({}); };\n\
-                 export const onCreateNode = ({ node }) => node;\n",
-            ),
-            ("src/util.js", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "gatsby-node.js");
-        assert!(
-            diags.is_empty(),
-            "gatsby-node.js Node-API exports are framework-consumed: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_gatsby_page_default_and_head_exports_issue_1700() {
-        // Regression for #1700 — files under `src/pages/` are consumed by
-        // Gatsby's file-system router: the default export is the page component
-        // and `Head` is the Gatsby v5 Head API. Neither is imported by user code.
-        let pkg = r#"{ "dependencies": { "gatsby": "5.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/pages/index.js",
-                "export default function IndexPage() { return null; }\n\
-                 export function Head() { return null; }\n",
-            ),
-            ("src/util.js", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/pages/index.js");
-        assert!(
-            diags.is_empty(),
-            "Gatsby src/pages/* exports are router-consumed entry points: {diags:?}"
-        );
-    }
-
-    #[test]
     fn flags_ordinary_dead_export_in_gatsby_project_issue_1700() {
         // Negative-space guard for #1700 — a genuinely unused export in an
         // ordinary source file (not a Gatsby entry/page) is still flagged even
@@ -3571,75 +3115,6 @@ mod tests {
             "an ordinary unused export must still be flagged in a Gatsby project: {diags:?}"
         );
         assert!(diags[0].message.contains("computeTax"));
-    }
-
-    #[test]
-    fn ignores_astro_middleware_on_request_issue_1807() {
-        // Regression for #1807 (clerk/javascript) — Astro's `src/middleware.ts`
-        // must export `onRequest`, invoked by the request pipeline by convention,
-        // never through a static import, so it has no importer yet is live.
-        let pkg = r#"{ "dependencies": { "astro": "4.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/middleware.ts",
-                "export const onRequest = (context, next) => next();\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/middleware.ts");
-        assert!(
-            diags.is_empty(),
-            "Astro middleware `onRequest` is a framework entry: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_astro_page_exports_issue_1807() {
-        // Regression for #1807 — files under `src/pages/` are consumed by Astro's
-        // file-system router: the default component export, HTTP method handlers
-        // in API routes, and `getStaticPaths`/`prerender` directives are never
-        // imported by user code.
-        let pkg = r#"{ "dependencies": { "astro": "4.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/pages/api/me.ts",
-                "export const GET = async ({ locals }) => new Response(null);\n\
-                 export const prerender = false;\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/pages/api/me.ts");
-        assert!(
-            diags.is_empty(),
-            "Astro src/pages/* exports are router-consumed entry points: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_astro_page_route_magic_exports_with_entrypoints_issue_1807() {
-        // Regression for #1807 — when entrypoint globs are configured the
-        // framework-entry-dir bailout is skipped, so a page's reserved exports
-        // (`getStaticPaths`, HTTP method handlers) would look dead. They are
-        // route-scoped magic exports and stay live in `/pages/` files.
-        let pkg = r#"{ "dependencies": { "astro": "4.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/pages/blog/[slug].ts",
-                "export async function getStaticPaths() { return []; }\n\
-                 export const GET = async () => new Response(null);\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
-            pkg,
-            vec!["src/util.ts".to_string()],
-            &files,
-            "src/pages/blog/[slug].ts",
-        );
-        assert!(
-            diags.is_empty(),
-            "Astro page route magic exports are framework-consumed: {diags:?}"
-        );
     }
 
     #[test]
@@ -4669,56 +4144,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_fp_for_docusaurus_site_alias_importer() {
-        // Regression for #2014 — Docusaurus maps the `@site/` alias to the site
-        // root via webpack, so `import HeroLerna from "@site/src/components/..."`
-        // never resolves in the import index. The imported component's `default`
-        // export looks dead even though the page consumes it; dead-export must
-        // not flag it.
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "website/src/components/hero-lerna.tsx",
-                "export default function HeroLerna() { return null; }",
-            ),
-            (
-                "website/src/pages/index.tsx",
-                "import HeroLerna from \"@site/src/components/hero-lerna\";\n\
-                 export default function Home() { return HeroLerna; }",
-            ),
-        ];
-        let (_dir, diags) = run_on_project(&files, "website/src/components/hero-lerna.tsx");
-        assert!(
-            diags.is_empty(),
-            "component imported via @site/ alias must not be flagged, got: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn still_flags_export_with_no_site_alias_importer() {
-        // Sibling guard for #2014 — a genuinely dead component (no importer at
-        // all, including no matching `@site/` alias) must still be flagged. A
-        // non-matching `@site/` import elsewhere must not suppress it.
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "website/src/components/orphan.tsx",
-                "export default function Orphan() { return null; }",
-            ),
-            (
-                "website/src/pages/index.tsx",
-                "import HeroLerna from \"@site/src/components/hero-lerna\";\n\
-                 export default function Home() { return HeroLerna; }",
-            ),
-        ];
-        let (_dir, diags) = run_on_project(&files, "website/src/components/orphan.tsx");
-        assert_eq!(
-            diags.len(),
-            1,
-            "dead component with no matching @site/ importer must still be flagged, got: {diags:?}"
-        );
-        assert!(diags[0].message.contains("default"));
-    }
-
     /// Run dead-export after also writing non-source sidecar files (e.g.
     /// `ng-package.json`) that must NOT be added to the import index.
     fn run_on_project_with_extra(
@@ -5224,147 +4649,6 @@ mod tests {
         );
     }
 
-    // --- Issue #1833: React Router v7 `root.tsx` / `routes.ts` conventions ---
-
-    #[test]
-    fn ignores_react_router_v7_root_module_exports_issue_1833() {
-        // Regression for #1833 (pmndrs/react-spring) — React Router v7's app root
-        // module (`app/root.tsx`) exports `Layout`, `links`, `meta`, and a default
-        // component that its server/client render pipeline consumes by exact name,
-        // never through a static import. The project depends on `react-router`
-        // (v7, the framework formerly Remix), not `@remix-run/*`.
-        let pkg = r#"{ "dependencies": { "react-router": "7.0.0" }, "devDependencies": { "@react-router/dev": "7.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "app/root.tsx",
-                "export const meta = () => [{ title: \"x\" }];\n\
-                 export const links = () => [];\n\
-                 export function Layout({ children }) { return children; }\n\
-                 export default function App() { return null; }\n",
-            ),
-            ("app/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/root.tsx");
-        assert!(
-            diags.is_empty(),
-            "React Router v7 root.tsx convention exports are framework-consumed: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_react_router_v7_routes_config_default_export_issue_1833() {
-        // Regression for #1833 — the route-config entry (`app/routes.ts`) default
-        // export is consumed by `@react-router/dev`, never statically imported.
-        let pkg = r#"{ "dependencies": { "react-router": "7.0.0" }, "devDependencies": { "@react-router/dev": "7.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "app/routes.ts",
-                "export default [{ path: \"/\", file: \"home.tsx\" }];\n",
-            ),
-            ("app/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/routes.ts");
-        assert!(
-            diags.is_empty(),
-            "React Router v7 routes.ts default export is framework-consumed: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn still_flags_ordinary_export_in_react_router_root_module_issue_1833() {
-        // Negative-space guard for #1833 — the exemption covers only React Router's
-        // reserved root names. An ordinary `helper` export in `root.tsx`, with no
-        // importer, is genuinely dead and must still be flagged.
-        let pkg = r#"{ "dependencies": { "react-router": "7.0.0" }, "devDependencies": { "@react-router/dev": "7.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "app/root.tsx",
-                "export function Layout({ children }) { return children; }\n\
-                 export const helper = () => 1;\n",
-            ),
-            ("app/util.ts", "export const z = 1;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/root.tsx");
-        assert_eq!(
-            diags.len(),
-            1,
-            "an ordinary unused export in root.tsx must still be flagged: {diags:?}"
-        );
-        assert!(diags[0].message.contains("helper"));
-    }
-
-    #[test]
-    fn still_flags_layout_export_in_non_root_module_issue_1833() {
-        // Negative-space guard for #1833 — `Layout`/`links`/`meta` are common
-        // generic names. A `Layout` export from an ordinary module (not the app
-        // root or a route file), with no importer, is genuinely dead and must
-        // still fire: the React Router exemption is scoped to convention files.
-        let pkg = r#"{ "dependencies": { "react-router": "7.0.0" }, "devDependencies": { "@react-router/dev": "7.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "app/components/Shell.tsx",
-                "export function Layout({ children }) { return children; }\n",
-            ),
-            ("app/components/other.ts", "export const z = 1;\n"),
-        ];
-        let (_dir, diags) =
-            run_on_project_with_pkg(Some(pkg), &files, "app/components/Shell.tsx");
-        assert_eq!(
-            diags.len(),
-            1,
-            "a `Layout` export in a non-convention module must still be flagged: {diags:?}"
-        );
-        assert!(diags[0].message.contains("Layout"));
-    }
-
-    #[test]
-    fn ignores_docusaurus_theme_swizzle_default_export_issue_1558() {
-        // Regression for #1558 — a Docusaurus theme override under `src/theme/`
-        // is discovered by the theme system through its path and webpack theme
-        // aliases, never a static import, so its `default` export looks dead.
-        // Entrypoints are configured to disable the framework-dir bail-out, so
-        // only the per-export magic-export path can protect it.
-        let pkg = r#"{ "dependencies": { "@docusaurus/core": "3.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/theme/MDXComponents/index.tsx",
-                "export default function MDXComponents() { return null; }\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
-            pkg,
-            vec!["src/server.ts".to_string()],
-            &files,
-            "src/theme/MDXComponents/index.tsx",
-        );
-        assert!(
-            diags.is_empty(),
-            "Docusaurus theme swizzle default export must not be flagged, got: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn ignores_docusaurus_plugin_default_export_issue_1558() {
-        // Regression for #1558 — a Docusaurus local plugin (`plugins/*/index.ts`)
-        // is loaded by the path string in `docusaurus.config`, calling its
-        // `default` export, never a static import.
-        let pkg = r#"{ "dependencies": { "@docusaurus/core": "3.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "plugins/recent-blog-posts/index.ts",
-                "export default function recentBlogPostsPlugin() { return {}; }\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) =
-            run_on_project_with_pkg(Some(pkg), &files, "plugins/recent-blog-posts/index.ts");
-        assert!(
-            diags.is_empty(),
-            "Docusaurus plugin default export must not be flagged, got: {diags:?}"
-        );
-    }
-
     #[test]
     fn ignores_knip_config_default_export_issue_1558() {
         // Regression for #1558 — `knip.ts` exports its config as `export default`;
@@ -5378,58 +4662,6 @@ mod tests {
             diags.is_empty(),
             "knip.ts config default export must not be flagged, got: {diags:?}"
         );
-    }
-
-    #[test]
-    fn still_flags_theme_default_export_in_non_docusaurus_project_issue_1558() {
-        // Negative-space guard for #1558 — the theme exemption is gated on
-        // Docusaurus detection. A `src/theme/` default export in a project with
-        // no Docusaurus dependency is genuinely dead and must still be flagged.
-        let pkg = r#"{ "dependencies": { "react": "18.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/theme/Foo.tsx",
-                "export default function Foo() { return null; }\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/theme/Foo.tsx");
-        assert_eq!(
-            diags.len(),
-            1,
-            "a theme default export in a non-Docusaurus project must still be flagged: {diags:?}"
-        );
-        assert!(diags[0].message.contains("default"));
-    }
-
-    #[test]
-    fn still_flags_named_export_in_docusaurus_theme_file_issue_1558() {
-        // Negative-space guard for #1558 — only the `default` export of a theme
-        // swizzle is magic. A plain named export in the same file, with no
-        // importer, is genuinely dead and must still be flagged. Entrypoints are
-        // configured to disable the framework-dir bail-out so the per-export
-        // check is what decides.
-        let pkg = r#"{ "dependencies": { "@docusaurus/core": "3.0.0" } }"#;
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "src/theme/MDXComponents/index.tsx",
-                "export default function MDXComponents() { return null; }\n\
-                 export const unusedHelper = () => 1;\n",
-            ),
-            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
-        ];
-        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
-            pkg,
-            vec!["src/server.ts".to_string()],
-            &files,
-            "src/theme/MDXComponents/index.tsx",
-        );
-        assert_eq!(
-            diags.len(),
-            1,
-            "a named export in a Docusaurus theme file must still be flagged: {diags:?}"
-        );
-        assert!(diags[0].message.contains("unusedHelper"));
     }
 
     // Regression for #2201 (TanStack/virtual) — a demo app's entry file under a

@@ -558,7 +558,11 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         &config,
         &mut timings,
         cli.comply_only,
-        cli.type_aware,
+        // Type-aware analysis is mandatory: the full run always drives the
+        // sidecar and the tsgolint rule set. The `type_aware` gate below stays
+        // for the isolated per-rule path (`comply rules <id>`), which skips the
+        // sidecar when the requested rule doesn't need it.
+        true,
         cli.is_partial_scan(),
     )?;
 
@@ -748,6 +752,21 @@ fn collect_all_diagnostics(
                 None,
             )?);
         }
+        // Text/tree-sitter-only languages share the same engine entry point as
+        // vue/json; the engine picks each rule by its declared `Language`. Each
+        // bucket stays behind `is_empty()` so a project without these file types
+        // pays nothing.
+        for bucket in [
+            &by_lang.toml,
+            &by_lang.css,
+            &by_lang.yaml,
+            &by_lang.dockerfile,
+            &by_lang.sql,
+        ] {
+            if !bucket.is_empty() {
+                diags.extend(engine::lint_files_with_project(bucket, config, &project, None)?);
+            }
+        }
         Ok((project, diags))
     };
     let clones_work = || -> (Vec<Diagnostic>, std::time::Duration) {
@@ -932,26 +951,30 @@ struct FilesByLanguage<'a> {
     rs: Vec<&'a SourceFile>,
     vue: Vec<&'a SourceFile>,
     json: Vec<&'a SourceFile>,
+    toml: Vec<&'a SourceFile>,
+    css: Vec<&'a SourceFile>,
+    yaml: Vec<&'a SourceFile>,
+    dockerfile: Vec<&'a SourceFile>,
+    sql: Vec<&'a SourceFile>,
 }
 
 fn partition_by_language(discovered: &[SourceFile]) -> FilesByLanguage<'_> {
+    let of_language = |lang: Language| -> Vec<&SourceFile> {
+        discovered.iter().filter(|f| f.language == lang).collect()
+    };
     FilesByLanguage {
         ts: discovered
             .iter()
             .filter(|f| f.language.is_typescript_family())
             .collect(),
-        rs: discovered
-            .iter()
-            .filter(|f| f.language == Language::Rust)
-            .collect(),
-        vue: discovered
-            .iter()
-            .filter(|f| f.language == Language::Vue)
-            .collect(),
-        json: discovered
-            .iter()
-            .filter(|f| f.language == Language::Json)
-            .collect(),
+        rs: of_language(Language::Rust),
+        vue: of_language(Language::Vue),
+        json: of_language(Language::Json),
+        toml: of_language(Language::Toml),
+        css: of_language(Language::Css),
+        yaml: of_language(Language::Yaml),
+        dockerfile: of_language(Language::Dockerfile),
+        sql: of_language(Language::Sql),
     }
 }
 

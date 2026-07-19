@@ -9,9 +9,8 @@ use crate::files::Language;
 use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
-    is_angular_schematic_or_migration_entry, is_auto_mock_dir_path, is_config_file,
-    is_framework_entry_point, is_sample_dir_path, is_storybook_config_dir, is_storybook_story,
-    is_top_level_script_dir_path,
+    is_auto_mock_dir_path, is_config_file, is_framework_entry_point, is_sample_dir_path,
+    is_storybook_config_dir, is_storybook_story, is_top_level_script_dir_path,
 };
 use std::path::Path;
 
@@ -342,10 +341,6 @@ fn is_entry_point(
         return true;
     }
 
-    if is_angular_schematic_or_migration_factory(path, project) {
-        return true;
-    }
-
     // `main.{ts,js,mts,tsx,...}` is universally a bootstrapper/entry point: it is
     // launched directly (by a runtime or a test runner), never imported. Multi-app
     // monorepos (NestJS integration tests, Nx, Turborepo) place a `src/main.ts` in
@@ -414,21 +409,6 @@ fn is_entry_point(
     }
 
     false
-}
-
-/// True for an Angular schematic or `ng update` migration factory file: a
-/// source file under a `schematics/`/`migrations/` directory of an Angular
-/// package (one declaring `@angular/core` in its nearest `package.json`). The
-/// Angular CLI loads these by path string from the `collection.json`/
-/// `migration.json` manifest's `factory` field, never via a TypeScript
-/// `import`, so the import-graph BFS cannot reach them — yet they are real
-/// entry points. The Angular gate keeps a non-Angular project's `migrations/`
-/// directory (database migration scripts) flaggable.
-fn is_angular_schematic_or_migration_factory(path: &Path, project: &ProjectCtx) -> bool {
-    if !is_angular_schematic_or_migration_entry(path) {
-        return false;
-    }
-    project.frameworks_for_path(path).iter().any(|fw| fw.name == "angular")
 }
 
 /// True for a standalone sample script: a `*Sample.{ts,js,...}` file living
@@ -594,7 +574,7 @@ mod tests {
 
         // Dispatch on the once-per-project anchor the rule actually keys on (a
         // dispatched-language file), not the smallest path across all indexed
-        // languages — an index-only HTML/Markdown/Astro file is never linted.
+        // languages — an index-only HTML/Markdown file is never linted.
         let target_path: PathBuf = project.anchor_path().expect("at least one anchorable file");
         let source = fs::read_to_string(&target_path).unwrap();
         let language = Language::from_path(&target_path).unwrap();
@@ -613,7 +593,7 @@ mod tests {
 
     /// Faithfully mirror the engine: build the project, then dispatch the Check on
     /// every TS-family indexed file (the languages `unused-file` registers), as
-    /// `partition_by_language` does — never on an index-only HTML/Markdown/Astro
+    /// `partition_by_language` does — never on an index-only HTML/Markdown
     /// file. This exercises the real `ctx.path == anchor` gate instead of forcing
     /// `ctx.path` to the anchor, so it catches an anchor that no dispatched file
     /// can ever match (which would silently disable the rule).
@@ -1432,57 +1412,6 @@ mod tests {
         );
     }
 
-    // Regression for #1415: SvelteKit route files use a `+` prefix
-    // (`+page.svelte`, `+page.server.ts`, `+server.ts`, …) under a `routes/`
-    // directory. The framework's file-system router consumes them by path —
-    // nothing imports them — so they must not be flagged as unused.
-    #[test]
-    fn sveltekit_route_files_are_not_flagged() {
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "package.json",
-                r#"{"name":"app","dependencies":{"@sveltejs/kit":"2.0.0"}}"#,
-            ),
-            ("src/index.ts", "export const app = 1;\n"),
-            ("src/routes/+page.svelte", "<h1>Home</h1>\n"),
-            (
-                "src/routes/+page.server.ts",
-                "export const load = () => ({});\n",
-            ),
-            (
-                "src/routes/read/+server.js",
-                "export function GET() { return new Response('ok'); }\n",
-            ),
-        ];
-        let (_dir, diags) = run_on_project(&files);
-        assert!(
-            diags.is_empty(),
-            "SvelteKit `+`-prefixed route files are framework-routed entry points: {diags:?}"
-        );
-    }
-
-    // Regression for #1415: the SvelteKit exemption is precise — an ordinary
-    // never-imported `.ts` file outside the `routes/` convention is still a
-    // true positive even when the project is a SvelteKit app.
-    #[test]
-    fn orphan_file_in_sveltekit_app_still_flagged() {
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "package.json",
-                r#"{"name":"app","dependencies":{"@sveltejs/kit":"2.0.0"}}"#,
-            ),
-            ("src/index.ts", "export const app = 1;\n"),
-            ("src/routes/+page.svelte", "<h1>Home</h1>\n"),
-            ("src/lib/orphan.ts", "export const orphan = 1;\n"),
-        ];
-        let (_dir, diags) = run_on_project(&files);
-        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
-        assert!(
-            diags[0].path.to_str().unwrap().contains("orphan"),
-            "diagnostic should target the orphaned non-route file: {diags:?}"
-        );
-    }
-
     // Regression for #1402: Next.js page files under a `pages/` directory are
     // consumed by the framework's file-system router — nothing imports them
     // statically. They must not be flagged, including special files like
@@ -1502,51 +1431,6 @@ mod tests {
         assert!(
             diags.is_empty(),
             "Next.js pages/ files are framework-routed entry points: {diags:?}"
-        );
-    }
-
-    // Regression for #1989: Cypress spec files (**/*.cy.{ts,js,tsx,jsx}) are
-    // discovered via specPattern and executed by the runner, and the
-    // cypress/support/e2e.* and commands.* files are auto-imported before each
-    // suite. None are reachable through the import graph, so none must be flagged.
-    #[test]
-    fn cypress_spec_and_support_files_are_not_flagged() {
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "package.json",
-                r#"{"name":"app","devDependencies":{"cypress":"13.0.0"}}"#,
-            ),
-            ("src/index.ts", "export const app = 1;\n"),
-            ("cypress/e2e/Select.cy.ts", "describe('Select', () => {});\n"),
-            ("cypress/support/e2e.js", "import './commands';\n"),
-            ("cypress/support/commands.js", "Cypress.Commands.add('login', () => {});\n"),
-        ];
-        let (_dir, diags) = run_on_project(&files);
-        assert!(
-            diags.is_empty(),
-            "Cypress spec and support files are test-runner entry points: {diags:?}"
-        );
-    }
-
-    // Regression for #1989: the Cypress exemption is precise — a genuinely
-    // orphaned normal source file is still a true positive even when the
-    // project uses Cypress.
-    #[test]
-    fn orphan_file_in_cypress_project_still_flagged() {
-        let files: Vec<(&str, &str)> = vec![
-            (
-                "package.json",
-                r#"{"name":"app","devDependencies":{"cypress":"13.0.0"}}"#,
-            ),
-            ("src/index.ts", "export const app = 1;\n"),
-            ("cypress/e2e/Select.cy.ts", "describe('Select', () => {});\n"),
-            ("src/orphan.ts", "export const orphan = 1;\n"),
-        ];
-        let (_dir, diags) = run_on_project(&files);
-        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
-        assert!(
-            diags[0].path.to_str().unwrap().contains("orphan"),
-            "diagnostic should target the orphaned non-Cypress file: {diags:?}"
         );
     }
 
@@ -2025,45 +1909,6 @@ mod tests {
         );
     }
 
-    // Regression for #1687: Docusaurus loads `src/pages/` via filesystem
-    // routing, `src/theme/` via swizzling, `src/components/` via MDX injection,
-    // and `versioned_docs/` components by path — none through JS imports, so the
-    // import-graph BFS cannot reach them. Detection is gated on `@docusaurus/core`
-    // in the nearest package.json (here the nested `docs/` site), so these dirs
-    // are treated as framework entry points and must not be flagged.
-    #[test]
-    fn docusaurus_framework_loaded_files_are_not_flagged() {
-        let files: Vec<(&str, &str)> = vec![
-            ("index.ts", "export const root = 1;\n"),
-            (
-                "docs/package.json",
-                r#"{"name":"docs","private":true,"dependencies":{"@docusaurus/core":"^3.0.0"}}"#,
-            ),
-            ("docs/docusaurus.config.ts", "export default { title: 'Docs' };\n"),
-            (
-                "docs/src/pages/index.js",
-                "import React from 'react';\nexport default function Home() { return null; }\n",
-            ),
-            (
-                "docs/src/theme/Footer.tsx",
-                "export default function Footer() { return null; }\n",
-            ),
-            (
-                "docs/src/components/ReactPlayer.jsx",
-                "export default function Player() { return null; }\n",
-            ),
-            (
-                "docs/versioned_docs/version-1.0/ReactPlayer.jsx",
-                "export default function Player() { return null; }\n",
-            ),
-        ];
-        let (_dir, diags) = run_on_project(&files);
-        assert!(
-            diags.is_empty(),
-            "Docusaurus framework-loaded files must not be flagged: {diags:?}"
-        );
-    }
-
     // The Docusaurus exemption is precise: a genuinely orphaned file under a
     // non-entry-point directory of the same Docusaurus site (here `src/utils/`)
     // is still a true positive.
@@ -2086,38 +1931,6 @@ mod tests {
         );
     }
 
-    // Regression for #1624: Angular schematic (`schematics/ng-add/index.ts`) and
-    // `ng update` migration (`migrations/14_0_0/index.ts`) factory files are
-    // loaded by the Angular CLI by path string from `collection.json` /
-    // `migration.json`, never `import`ed, so the import-graph BFS cannot reach
-    // them. They are framework entry points and must not be flagged. The root
-    // package.json is a non-library (rule runs); the Angular module declares the
-    // `schematics`/`ng-update` keys.
-    #[test]
-    fn angular_schematic_and_migration_entries_are_not_flagged() {
-        let files: Vec<(&str, &str)> = vec![
-            ("package.json", r#"{"name":"platform"}"#),
-            ("src/index.ts", "export const root = 1;\n"),
-            (
-                "modules/router-store/package.json",
-                r#"{"name":"@ngrx/router-store","dependencies":{"@angular/core":"^17.0.0"},"schematics":"./schematics/collection.json","ng-update":{"migrations":"./migrations/migration.json"}}"#,
-            ),
-            (
-                "modules/router-store/schematics/ng-add/index.ts",
-                "export default function(): unknown { return {}; }\n",
-            ),
-            (
-                "modules/router-store/migrations/14_0_0/index.ts",
-                "export default function(): unknown { return {}; }\n",
-            ),
-        ];
-        let (_dir, diags) = run_on_project(&files);
-        assert!(
-            diags.is_empty(),
-            "Angular schematic/migration factory entry points must not be flagged: {diags:?}"
-        );
-    }
-
     // Regression for #1624: the Angular schematic/migration exemption is gated on
     // an Angular dependency in the nearest package.json — a project WITHOUT
     // `@angular/core` does not get a blanket pass for an orphaned file that merely
@@ -2137,32 +1950,6 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("schematics"),
             "without Angular, an orphaned schematics/ file is still flagged: {diags:?}"
-        );
-    }
-
-    // Regression for #1624: the exemption is precise — in an Angular project, a
-    // genuinely orphaned ordinary source file (outside any schematics/migrations
-    // directory) is still a true positive.
-    #[test]
-    fn orphan_file_in_angular_project_still_flagged() {
-        let files: Vec<(&str, &str)> = vec![
-            ("package.json", r#"{"name":"platform"}"#),
-            ("src/index.ts", "export const root = 1;\n"),
-            (
-                "modules/router-store/package.json",
-                r#"{"name":"@ngrx/router-store","dependencies":{"@angular/core":"^17.0.0"},"schematics":"./schematics/collection.json"}"#,
-            ),
-            (
-                "modules/router-store/schematics/ng-add/index.ts",
-                "export default function(): unknown { return {}; }\n",
-            ),
-            ("modules/router-store/src/orphan.ts", "export const orphan = 1;\n"),
-        ];
-        let (_dir, diags) = run_on_project(&files);
-        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
-        assert!(
-            diags[0].path.to_str().unwrap().contains("orphan"),
-            "only the genuine orphan must be flagged; schematic entries are entry points: {diags:?}"
         );
     }
 
