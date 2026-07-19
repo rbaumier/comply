@@ -6,7 +6,7 @@
 
 You can improve the prompt, use skills, but it won't catch everything. A linter
 will, on every run. I gathered every linter rule I could find and judged worth
-keeping, **~1900 of them**, into one fast binary.
+keeping, **~2000 of them**, into one fast binary.
 
 **Supported languages & frameworks:** TypeScript, JavaScript, Rust, Vue, CSS, SQL, JSON, YAML, Docker, TOML, React, Next.js, Nuxt, Node, Express, Hono, Elysia, Drizzle, Prisma, Zod, TanStack Query, TanStack Router, Vue Router, XState, shadcn/ui, Tailwind, React Email, React Native, Better Auth, better-result, Jest, Vitest, Playwright, Vite, Webpack, i18n, Kubernetes.
 
@@ -101,7 +101,7 @@ function feeFor(cart: Cart): number {
 }
 ```
 
-Run `comply explain <rule-id>` for the full rationale behind any of these.
+Run `comply explain <rule-id>` for the full rationale behind any of these, or browse every rule in [`docs/rules.md`](docs/rules.md).
 
 ## How it works
 
