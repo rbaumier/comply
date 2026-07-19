@@ -231,8 +231,8 @@ pub fn apply_to_all(
     // verbatim — the only producer of such paths is an external linter that
     // canonicalized them (oxlint). `canonical_key` is a `realpath` syscall, so
     // this reconciliation is skipped entirely when every path matched above
-    // (e.g. `--comply-only`, where no external linter runs), sparing one
-    // syscall per discovered file.
+    // (e.g. a project with no TypeScript, where oxlint never runs), sparing
+    // one syscall per discovered file.
     let mut orphans: Vec<Diagnostic> = Vec::new();
     if !by_raw.is_empty() {
         let mut by_canon: FxHashMap<PathBuf, Vec<Diagnostic>> = FxHashMap::default();

@@ -7,7 +7,7 @@
 //! Pipeline overview:
 //! 1. Parse CLI args → ScanMode (which files to lint).
 //! 2. Discover files via filesystem walk or git diff.
-//! 3. For TS/JS files: invoke oxlint subprocess (if installed) AND apply
+//! 3. For TS/JS files: invoke oxlint subprocess (required) AND apply
 //!    custom tree-sitter rules. The two passes are complementary —
 //!    oxlint catches type/style issues, custom rules catch architecture issues.
 //! 4. For Rust files: apply custom rules only (clippy integration is v2).
@@ -476,7 +476,7 @@ fn lint_with_rules(
     let (diagnostics, clean_files) = if filter.iter().any(|id| rule_requires_subprocess(id)) {
         let type_aware = filter.iter().any(|id| rule_requires_type_aware(id));
         let mut timings = Timings::default();
-        collect_all_diagnostics(&discovered, &config, &mut timings, false, type_aware, false)?
+        collect_all_diagnostics(&discovered, &config, &mut timings, type_aware, false)?
     } else {
         let all_refs: Vec<&SourceFile> = discovered.iter().collect();
         let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&all_refs, &config));
@@ -546,7 +546,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     // the editors finish, comply re-reads the files via the normal
     // pipeline so the user sees what's left — typically the
     // architectural diagnostics no fixer can address.
-    if cli.fix && !cli.comply_only {
+    if cli.fix {
         let t_fix = Instant::now();
         let runs = fix::apply_fixes(&discovered, &config)?;
         timings.fix = t_fix.elapsed();
@@ -557,7 +557,6 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         &discovered,
         &config,
         &mut timings,
-        cli.comply_only,
         // Type-aware analysis is mandatory: the full run always drives the
         // sidecar and the tsgolint rule set. The `type_aware` gate below stays
         // for the isolated per-rule path (`comply rules <id>`), which skips the
@@ -647,7 +646,6 @@ fn collect_all_diagnostics(
     discovered: &[SourceFile],
     config: &Config,
     timings: &mut Timings,
-    is_comply_only: bool,
     type_aware: bool,
     is_partial: bool,
 ) -> Result<(Vec<Diagnostic>, FxHashSet<std::path::PathBuf>)> {
@@ -724,19 +722,12 @@ fn collect_all_diagnostics(
                 config,
                 &project,
                 timings,
-                is_comply_only,
                 type_aware,
                 &type_program_ts,
             )?);
         }
         if !by_lang.rs.is_empty() {
-            diags.extend(lint_rust(
-                &by_lang.rs,
-                config,
-                &project,
-                timings,
-                is_comply_only,
-            )?);
+            diags.extend(lint_rust(&by_lang.rs, config, &project, timings)?);
         }
         if !by_lang.vue.is_empty() {
             let t = Instant::now();
@@ -834,6 +825,16 @@ fn apply_config_filters(mut diagnostics: Vec<Diagnostic>, config: &Config) -> Ve
     diagnostics
 }
 
+/// Abort with an actionable message when a linter comply delegates to is
+/// missing. These backends are not optional — skipping one would silently
+/// under-report — so comply refuses to run rather than report a false "clean".
+fn require_linter(available: bool, missing_msg: &str, install_cmd: &str) {
+    if !available {
+        eprintln!("comply: {missing_msg}.\nInstall it with: {install_cmd}");
+        std::process::exit(2);
+    }
+}
+
 /// Lint Rust files via clippy subprocess + custom tree-sitter rules.
 /// The two passes are complementary: clippy catches type-aware lints
 /// and the standard library footguns; custom rules catch the architecture
@@ -843,32 +844,25 @@ fn lint_rust(
     config: &Config,
     project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
-    is_comply_only: bool,
 ) -> Result<Vec<Diagnostic>> {
-    let clippy_available = !is_comply_only && clippy::is_available();
-    let shear_available = !is_comply_only && cargo_shear::is_available();
-    let modules_available = !is_comply_only && cargo_modules::is_available();
-
-    if !is_comply_only {
-        if !clippy_available {
-            eprintln!(
-                "comply: cargo clippy not found — skipping clippy-backed rules. \
-                 Install with: rustup component add clippy"
-            );
-        }
-        if !shear_available {
-            eprintln!(
-                "comply: cargo shear not found — skipping unused-dependency rule. \
-                 Install with: cargo install cargo-shear"
-            );
-        }
-        if !modules_available {
-            eprintln!(
-                "comply: cargo modules not found — skipping orphan-module rule. \
-                 Install with: cargo install cargo-modules"
-            );
-        }
-    }
+    // clippy, cargo-shear and cargo-modules each back Rust rules; none is
+    // optional, since a missing one would silently under-report. Refuse to run
+    // rather than report a false "clean".
+    require_linter(
+        clippy::is_available(),
+        "cargo clippy is required to lint Rust but was not found",
+        "rustup component add clippy",
+    );
+    require_linter(
+        cargo_shear::is_available(),
+        "cargo shear is required to lint Rust but was not found",
+        "cargo install cargo-shear",
+    );
+    require_linter(
+        cargo_modules::is_available(),
+        "cargo modules is required to lint Rust but was not found",
+        "cargo install cargo-modules",
+    );
 
     // All four phases below are independent: they read the same input
     // slice but never mutate shared state and each spawns its own
@@ -886,23 +880,14 @@ fn lint_rust(
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 
     let clippy_phase = || -> PhaseOut {
-        if !clippy_available {
-            return (Ok(Vec::new()), Duration::ZERO);
-        }
         let t = Instant::now();
         (clippy::lint_files(rs_files, config), t.elapsed())
     };
     let shear_phase = || -> PhaseOut {
-        if !shear_available {
-            return (Ok(Vec::new()), Duration::ZERO);
-        }
         let t = Instant::now();
         (cargo_shear::lint_files(rs_files), t.elapsed())
     };
     let modules_phase = || -> PhaseOut {
-        if !modules_available {
-            return (Ok(Vec::new()), Duration::ZERO);
-        }
         let t = Instant::now();
         (cargo_modules::lint_files(rs_files), t.elapsed())
     };
@@ -983,18 +968,17 @@ fn lint_typescript(
     config: &Config,
     project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
-    is_comply_only: bool,
     type_aware: bool,
     type_program_ts: &[&SourceFile],
 ) -> Result<Vec<Diagnostic>> {
-    let oxlint_available = !is_comply_only && oxlint::is_available();
-
-    if !is_comply_only && !oxlint_available {
-        eprintln!(
-            "comply: oxlint not found — skipping oxlint rules. \
-             Install with: npm install -g oxlint oxlint-tsgolint"
-        );
-    }
+    // oxlint is not optional: it backs comply's TS/JS lints, so a missing
+    // oxlint would silently under-report. Refuse to run rather than report a
+    // false "clean".
+    require_linter(
+        oxlint::is_available(),
+        "oxlint is required to lint TypeScript/JavaScript but was not found",
+        "npm install -g oxlint oxlint-tsgolint",
+    );
 
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 
@@ -1003,9 +987,6 @@ fn lint_typescript(
 
     let project2 = std::sync::Arc::clone(project);
     let oxlint_phase = || -> PhaseOut {
-        if !oxlint_available {
-            return (Ok(Vec::new()), Duration::ZERO);
-        }
         let t = Instant::now();
         (
             oxlint::lint_files(ts_files, config, project, type_aware, type_program_opt),
@@ -1032,10 +1013,10 @@ fn lint_typescript(
     timings.engine_ts = engine_dur;
     diagnostics.extend(engine_res?);
 
-    // Type-aware sidecar phase: only when --type-aware is set. Drives a
-    // TypeScript checker (typescript-go) through a Node sidecar to run the
-    // custom rules that need resolved types. Skipped in --comply-only.
-    if type_aware && !is_comply_only {
+    // Type-aware sidecar phase: only when type-aware analysis is requested.
+    // Drives a TypeScript checker (typescript-go) through a Node sidecar to
+    // run the custom rules that need resolved types.
+    if type_aware {
         let t = Instant::now();
         let res = typeaware::lint_files(ts_files, config);
         timings.type_aware = t.elapsed();

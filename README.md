@@ -118,7 +118,7 @@ Run `comply explain <rule-id>` for the full rationale behind any of these, or br
 ## How it works
 
 - **In-process AST rules** powered by [tree-sitter](https://tree-sitter.github.io/) — no Node runtime required for most checks.
-- **Delegation to best-in-class tools** when installed: [oxlint](https://oxc.rs/) for TypeScript/JS, [clippy](https://doc.rust-lang.org/clippy/) for Rust. Not on your `PATH`? comply degrades gracefully and runs its own rules only.
+- **Delegation to best-in-class tools**: [oxlint](https://oxc.rs/) for TypeScript/JS, [clippy](https://doc.rust-lang.org/clippy/) plus [cargo-shear](https://github.com/Boshen/cargo-shear) and [cargo-modules](https://github.com/regexident/cargo-modules) for Rust. These back part of the rule set and are **not optional** — if comply finds code in a language whose linter isn't on your `PATH`, it exits with an error rather than silently under-reporting.
 - **Framework-aware** — comply detects your stack from `package.json` and project files, then unlocks the matching rules automatically.
 
 ## Features
@@ -136,11 +136,15 @@ Run `comply explain <rule-id>` for the full rationale behind any of these, or br
 ### Prerequisites
 
 - A recent **Rust toolchain** (edition 2024) — install via [rustup](https://rustup.rs/).
-- *(Optional, recommended)* **oxlint** for the full TypeScript/JS rule set:
+- The delegated linters comply depends on. **oxlint** is required to lint TypeScript/JS; **clippy**, **cargo-shear** and **cargo-modules** are required to lint Rust. comply errors out if it needs one that isn't on your `PATH`. Install them all at once:
   ```bash
-  npm install -g oxlint
+  # TypeScript/JS
+  npm install -g oxlint oxlint-tsgolint
+
+  # Rust
+  rustup component add clippy
+  cargo install cargo-shear cargo-modules
   ```
-- *(Optional)* **clippy** for Rust delegation (`rustup component add clippy`).
 
 ### Build
 
@@ -186,7 +190,6 @@ comply --working-tree --diff-only   # restrict findings to changed lines only
 | `--fix` | Apply auto-fixes where supported |
 | `--json` | Emit diagnostics as JSON (for editors and CI) |
 | `--tui` | Launch the interactive terminal UI |
-| `--comply-only` | Run only the in-process tree-sitter rules (skip oxlint/clippy subprocesses) |
 | `--timings` | Print a per-phase timing breakdown to stderr |
 
 ### Subcommands
