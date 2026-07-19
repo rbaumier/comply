@@ -2,12 +2,11 @@
 
 > Your code will comply.
 
-**AI writes your code now. It ships slop.**
+**AI writes your code now, and it ships slop.**
 
-You can prompt it cleaner, but a prompt won't catch everything. A linter will,
-the same way on every run. I gathered every linter rule I could find and judged
-worth keeping, **~1900 of them**, into one fast binary. Run it as your agent's
-self-review step (`--diff-only`), a pre-commit hook, or in CI.
+You can improve the prompt, use skills, but it won't catch everything. A linter
+will, on every run. I gathered every linter rule I could find and judged worth
+keeping, **~1900 of them**, into one fast binary. For TS and Rust.
 
 > [!WARNING]
 > **comply is in early alpha and very much a work in progress.** Many rules are aggressively opinionated, and **you should expect a fair number of false positives.** Treat its output as suggestions to review, not gospel — and please [open an issue](https://github.com/rbaumier/comply/issues) when a rule fires where it shouldn't. Rule IDs, defaults, and behavior are all still subject to change.
