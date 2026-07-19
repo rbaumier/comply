@@ -15,8 +15,6 @@ keeping, **~2000 of them**, into one fast binary.
 
 ## See it in action
 
-An AI agent hands you this. It compiles. It "works". `comply` flags **all 29 problems below** — one caret per finding, pointing at the exact column:
-
 ```ts
 // TODO: handle partial refunds
 // ▲
@@ -81,7 +79,7 @@ export async function processOrder(id, items, discount, isGift = false, retry = 
 ```
 
 Here's the version comply signs off on (`comply: all clear`): the untrusted
-payload validated by a schema, named constants, early guards, and a `Result`
+order validated by a schema, named constants, early guards, and a `Result`
 returned instead of a thrown error, so failures come back to the caller as values.
 
 ```ts
@@ -92,18 +90,25 @@ const FREE_SHIPPING_THRESHOLD = 100;
 const EXPRESS_FEE = 5;
 const STANDARD_FEE = 2;
 
-export async function fulfillOrder(payload: unknown): Promise<Result<number, ReceiptError>> {
-  const order = orderSchema.parse(payload);
-  if (!order.cart.lines.includes(order.id)) return ok(0);
+export async function fulfillOrder(rawOrder: unknown): Promise<Result<Fulfillment, FulfillmentError>> {
+  const order = orderSchema.parse(rawOrder);
+  if (!order.cart.lines.includes(order.id)) {
+    return err(new LineItemNotFoundError(order.id));
+  }
 
   const receipt = await sendReceipt(order.id);
-  if (receipt.isErr()) return err(receipt.error);
+  if (receipt.isErr()) {
+    return err(receipt.error);
+  }
 
-  return ok(order.isGift ? 0 : feeFor(order.cart) - order.discount);
+  const shippingFee = order.isGift ? 0 : feeFor(order.cart) - order.discount;
+  return ok({ receipt: receipt.value, shippingFee });
 }
 
 function feeFor(cart: Cart): number {
-  if (cart.total > FREE_SHIPPING_THRESHOLD) return EXPRESS_FEE;
+  if (cart.total > FREE_SHIPPING_THRESHOLD) {
+    return EXPRESS_FEE;
+  }
   return cart.vip ? 0 : STANDARD_FEE;
 }
 ```
