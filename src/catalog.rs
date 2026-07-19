@@ -1,8 +1,14 @@
 //! `comply catalog` — auto-generated rule catalog grouped by category.
 //!
 //! Two output modes: markdown (for docs/README) and JSON (for tooling).
-//! Categories are hierarchical — a rule with `["typescript", "react"]`
-//! appears under "typescript > react" in the markdown output.
+//!
+//! A rule's `categories` slice is free-form, so the same subject can appear in
+//! several orders across rules (`drizzle`, `correctness > drizzle`,
+//! `database > drizzle`). [`canonical_label`] collapses each slice to a single
+//! `top` or `top > sub` heading using a controlled vocabulary: the technology or
+//! framework it targets heads the section (framework-first), and a cross-cutting
+//! concern becomes the sub-category. So `["typescript", "react"]` groups under
+//! `react`, and `["performance", "drizzle", "database"]` under `drizzle`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -28,11 +34,177 @@ pub fn run(should_emit_json: bool) -> Result<()> {
     }
 }
 
-fn category_label(cats: &[&str]) -> String {
-    if cats.is_empty() {
+/// Synonyms folded into a canonical token before grouping. An empty target
+/// drops the token entirely (it carries no user-facing meaning on its own).
+const SYNONYMS: &[(&str, &str)] = &[
+    ("a11y", "accessibility"),
+    ("web-performance", "performance"),
+    ("internationalization", "i18n"),
+    ("clean-code", "code-quality"),
+    ("unicorn", "code-quality"),
+    ("sonarjs", "code-quality"),
+    ("suspicious", "correctness"),
+    ("bundle", "bundle-size"),
+    ("es2023", ""),
+];
+
+/// Technology / framework / platform scopes. When a rule's categories name one,
+/// it heads the catalog section (framework-first). Ordered by specificity — the
+/// first match wins, so a library or framework outranks the language it targets
+/// (`["typescript", "react"]` heads under `react`, not `typescript`).
+const TECH_SCOPES: &[&str] = &[
+    "better-auth",
+    "better-result",
+    "drizzle",
+    "prisma",
+    "zod",
+    "xstate",
+    "shadcn",
+    "tanstack-query",
+    "tanstack-start",
+    "tanstack",
+    "nextjs",
+    "nuxt",
+    "react-native",
+    "react",
+    "vue",
+    "qwik",
+    "solid",
+    "elysia",
+    "hono",
+    "docker-compose",
+    "docker",
+    "kubernetes",
+    "postgresql",
+    "sql",
+    "tailwind",
+    "css",
+    "html",
+    "node",
+    "typescript",
+    "rust",
+    "e18e",
+];
+
+/// Cross-cutting concerns. With no tech scope present the first (by this order)
+/// heads the section; otherwise the first becomes the sub-category under a tech
+/// heading. Ordered by prominence so the most important concern wins.
+const DIMENSIONS: &[&str] = &[
+    "correctness",
+    "security",
+    "accessibility",
+    "performance",
+    "safety",
+    "reliability",
+    "validation",
+    "type-safety",
+    "type-aware",
+    "error-handling",
+    "async",
+    "promise",
+    "concurrency",
+    "unsafe",
+    "api",
+    "api-design",
+    "architecture",
+    "deployment",
+    "observability",
+    "ci-cd",
+    "configuration",
+    "serde",
+    "maintainability",
+    "code-quality",
+    "complexity",
+    "functional",
+    "immutability",
+    "naming",
+    "comments",
+    "suppressions",
+    "style",
+    "lint-comments",
+    "eslint-comments",
+    "imports",
+    "dependencies",
+    "bundle-size",
+    "package-json",
+    "modernization",
+    "testing",
+    "i18n",
+    "seo",
+    "ssr",
+    "rsc",
+    "database",
+    "migrations",
+    "indexing",
+    "constraints",
+    "ui",
+    "jsdoc",
+    "regex",
+    "json",
+    "mobile",
+];
+
+/// Test-runner refinements. They never head a section — their parent is
+/// `testing`, and they may appear as its sub-category.
+const TEST_REFINEMENTS: &[&str] = &["vitest", "playwright", "testing-library", "jest"];
+
+/// DB technologies under which the generic `database` dimension is redundant and
+/// dropped from the sub-category slot.
+const DB_TECH: &[&str] = &["sql", "postgresql", "drizzle", "prisma"];
+
+/// Fold a token to its canonical form, or `None` when it should be dropped.
+fn normalize(tok: &str) -> Option<&str> {
+    for (from, to) in SYNONYMS {
+        if *from == tok {
+            return if to.is_empty() { None } else { Some(to) };
+        }
+    }
+    Some(tok)
+}
+
+/// Collapse a rule's free-form `categories` slice to a single canonical catalog
+/// heading, either `top` or `top > sub`. See the module docs for the model.
+fn canonical_label(cats: &[&str]) -> String {
+    // Normalize and dedup, preserving first-seen order.
+    let mut toks: Vec<&str> = Vec::new();
+    for c in cats {
+        if let Some(n) = normalize(c) {
+            if !toks.contains(&n) {
+                toks.push(n);
+            }
+        }
+    }
+    if toks.is_empty() {
         return "uncategorized".to_string();
     }
-    cats.join(" > ")
+
+    // Top: first tech scope, else first dimension, else `testing` for a lone
+    // test refinement, else the first token as a last resort.
+    let top = TECH_SCOPES
+        .iter()
+        .copied()
+        .find(|t| toks.contains(t))
+        .or_else(|| DIMENSIONS.iter().copied().find(|d| toks.contains(d)))
+        .or_else(|| {
+            toks.iter()
+                .any(|t| TEST_REFINEMENTS.contains(t))
+                .then_some("testing")
+        })
+        .unwrap_or(toks[0]);
+
+    // Sub: first dimension (or test refinement) among the rest, skipping the
+    // redundant `database` under a DB tech.
+    let db_top = DB_TECH.contains(&top);
+    let sub = DIMENSIONS
+        .iter()
+        .chain(TEST_REFINEMENTS.iter())
+        .copied()
+        .find(|s| *s != top && toks.contains(s) && !(db_top && *s == "database"));
+
+    match sub {
+        Some(sub) => format!("{top} > {sub}"),
+        None => top.to_string(),
+    }
 }
 
 /// Escape a value for a single markdown table cell: a raw `|` would start a new
@@ -82,7 +254,7 @@ fn markdown_string(rules: &[rules::RuleDef]) -> String {
     // Group rules by their full category path.
     let mut by_category: BTreeMap<String, Vec<&rules::RuleDef>> = BTreeMap::new();
     for rule in rules {
-        let label = category_label(rule.meta.categories);
+        let label = canonical_label(rule.meta.categories);
         by_category.entry(label).or_default().push(rule);
     }
 
@@ -166,6 +338,54 @@ mod tests {
     #[test]
     fn json_output_does_not_error() {
         assert!(run(true).is_ok());
+    }
+
+    #[test]
+    fn every_category_token_is_in_the_controlled_vocabulary() {
+        let known = |tok: &str| {
+            SYNONYMS.iter().any(|(from, _)| *from == tok)
+                || TECH_SCOPES.contains(&tok)
+                || DIMENSIONS.contains(&tok)
+                || TEST_REFINEMENTS.contains(&tok)
+        };
+        let mut unknown: Vec<(&str, &str)> = Vec::new();
+        for rule in rules::all_rule_defs() {
+            for tok in rule.meta.categories {
+                if !known(tok) {
+                    unknown.push((rule.meta.id, tok));
+                }
+            }
+        }
+        assert!(
+            unknown.is_empty(),
+            "unknown category tokens (add to catalog.rs vocabulary): {unknown:?}"
+        );
+    }
+
+    #[test]
+    fn canonical_label_is_framework_first() {
+        // Tech scope heads the section; a library outranks its language.
+        assert_eq!(canonical_label(&["typescript", "react"]), "react");
+        assert_eq!(canonical_label(&["react", "nextjs"]), "nextjs");
+        assert_eq!(canonical_label(&["css", "tailwind"]), "tailwind");
+        // A concern under a tech scope becomes the sub-category, whatever the
+        // original order — this is what collapses the drizzle scatter.
+        assert_eq!(canonical_label(&["correctness", "drizzle"]), "drizzle > correctness");
+        assert_eq!(
+            canonical_label(&["performance", "drizzle", "database"]),
+            "drizzle > performance"
+        );
+        // Redundant `database` is dropped under a DB tech.
+        assert_eq!(canonical_label(&["database", "sql"]), "sql");
+        assert_eq!(canonical_label(&["database", "sql", "migrations"]), "sql > migrations");
+        // Synonyms fold; cross-cutting rules head under their concern.
+        assert_eq!(canonical_label(&["a11y", "performance"]), "accessibility > performance");
+        assert_eq!(canonical_label(&["unicorn"]), "code-quality");
+        // Test-runner refinements nest under `testing`.
+        assert_eq!(canonical_label(&["jest"]), "testing > jest");
+        assert_eq!(canonical_label(&["testing", "vitest"]), "testing > vitest");
+        // Empty slice is uncategorized.
+        assert_eq!(canonical_label(&[]), "uncategorized");
     }
 
     #[test]
