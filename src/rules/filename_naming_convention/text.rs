@@ -474,9 +474,6 @@ impl TextCheck for Check {
         if stem.is_empty() {
             return Vec::new();
         }
-        if super::is_sveltekit_route_file(file_name) {
-            return Vec::new();
-        }
         if super::is_tanstack_pathless_route(ctx.path, file_name) {
             return Vec::new();
         }

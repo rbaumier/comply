@@ -40,9 +40,6 @@ impl TextCheck for Check {
             return Vec::new();
         };
         let stem = file_name.split('.').next().unwrap_or(file_name);
-        if super::is_sveltekit_route_file(file_name) {
-            return Vec::new();
-        }
         if super::is_file_based_route_segment(ctx.path, file_name) {
             return Vec::new();
         }

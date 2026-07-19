@@ -398,18 +398,6 @@ pub fn is_cargo_integration_test_target_path(path: &Path) -> bool {
         == Some("tests")
 }
 
-/// True when `path` lives under an Angular `schematics/` or `migrations/`
-/// directory. These hold Angular CLI schematic and `ng update` migration entry
-/// points: each is an `index.ts` exporting a default factory function that the
-/// CLI loads dynamically via the `collection.json`/`migration.json` manifest,
-/// never imported from TypeScript. Despite being named `index.ts`, they are
-/// executable entry points, not re-export barrels, and their factory bodies are
-/// expected side effects — so the barrel-side-effects check skips them. Segment
-/// match keeps an unrelated `src/migrationsHelper.ts` from matching.
-pub fn is_angular_schematic_or_migration_entry(path: &Path) -> bool {
-    has_path_segment(path, &["schematics", "migrations"])
-}
-
 /// True for files under a developer-only directory (`scripts/`, `bin/`,
 /// `migrations/`). One-off data-processing and migration scripts trade
 /// readability for getting the job done; this is the narrow subset of
@@ -1275,44 +1263,11 @@ pub fn is_in_framework_entry_dir(path: &Path, project: &ProjectCtx) -> bool {
     })
 }
 
-/// True when `file_name` is a SvelteKit route file: a `+`-prefixed basename
-/// from the framework's file-system routing set (`+page`, `+layout`,
-/// `+server`, `+error` with `.svelte`/`.ts`/`.js` and an optional `.server`
-/// segment). `+page`/`+layout` may carry the layout-break `@<group>` syntax
-/// (`+page@.svelte`, `+layout@(group).ts`) that reparents the route's layout.
-/// These are discovered by the router at build time, never imported.
-pub fn is_sveltekit_route_file(file_name: &str) -> bool {
-    let Some(rest) = file_name.strip_prefix('+') else {
-        return false;
-    };
-    let mut parts: Vec<&str> = rest.split('.').collect();
-    // SvelteKit's layout-break syntax appends `@<group>` to the `page`/`layout`
-    // base segment (`+page@.js`, `+page@(admin).svelte`), reparenting which
-    // layout the route inherits. The `@` and everything after it up to the
-    // first `.` is the layout target, not part of the route kind — strip it so
-    // the base matches the same `page`/`layout` patterns as the plain form.
-    // Only `page`/`layout` carry this syntax, so an `@` after any other kind is
-    // left intact and stays a non-match.
-    if let Some(base) = parts.first_mut()
-        && let Some((kind @ ("page" | "layout"), _)) = base.split_once('@')
-    {
-        *base = kind;
-    }
-    matches!(
-        parts.as_slice(),
-        ["page" | "layout" | "error", "svelte"]
-            | ["page" | "layout", "js" | "ts"]
-            | ["page" | "layout", "server", "js" | "ts"]
-            | ["server", "js" | "ts"]
-    )
-}
-
 /// True when `path` is a route-parameter file: a `.js`/`.ts` file directly under
-/// a `params/` directory (`src/params/integer.ts`). Both SvelteKit (which
-/// consumes a `match` export) and Vue Router (which consumes a `parser` export)
-/// place route-parameter files here, and each framework's router consumes the
-/// reserved export by file convention, never through a static import. The
-/// per-framework export name is supplied by `RouteMagicExports::param_matchers`.
+/// a `params/` directory (`src/params/integer.ts`). Vue Router places its
+/// route-parameter matchers here and consumes their `parser` export by file
+/// convention, never through a static import. The per-framework export name is
+/// supplied by `RouteMagicExports::param_matchers`.
 pub fn is_param_dir_file(path: &Path) -> bool {
     let is_script = matches!(
         path.extension().and_then(|e| e.to_str()),
@@ -1325,51 +1280,6 @@ pub fn is_param_dir_file(path: &Path) -> bool {
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .is_some_and(|dir| dir == "params")
-}
-
-/// True when `path` is a Remix (React Router v7) route module: a file directly
-/// or transitively under an `app/routes/` directory. Remix's file-system router
-/// consumes the route conventions (`loader`, `action`, `meta`, `default`, …) by
-/// exact name, never through a static import, so they have no importer but are
-/// live. The `app/routes/` ancestor scopes the exemption to route modules,
-/// keeping a same-named export in an ordinary module flaggable.
-pub fn is_remix_route_file(path: &Path) -> bool {
-    let mut components = path.components();
-    while let Some(component) = components.next() {
-        if component.as_os_str() == std::ffi::OsStr::new("app")
-            && components
-                .clone()
-                .next()
-                .is_some_and(|next| next.as_os_str() == std::ffi::OsStr::new("routes"))
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// True when `path` is a React Router v7 app root module (`root.tsx`/`root.jsx`).
-/// Its `Layout`, `meta`, `links`, and default exports are consumed by the
-/// framework's render pipeline by exact name, never through a static import, so
-/// they have no importer but are live. Scoping is provided by the caller's
-/// framework-detection gate (React Router v7 framework mode), so basename match
-/// is enough here.
-pub fn is_react_router_root_module(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|n| n.to_str()),
-        Some("root.tsx" | "root.jsx")
-    )
-}
-
-/// True when `path` is a React Router v7 route-configuration entry
-/// (`routes.ts`/`routes.js`). Its `default` export is consumed by
-/// `@react-router/dev`, never through a static import. As with the root module,
-/// the caller's framework-detection gate scopes the exemption.
-pub fn is_react_router_routes_config(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|n| n.to_str()),
-        Some("routes.ts" | "routes.js")
-    )
 }
 
 /// Dependencies that mark a package as a Nuxt *module* (as opposed to a Nuxt
@@ -1585,75 +1495,6 @@ pub fn is_quasar_ssr_entry_file(path: &Path) -> bool {
     path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("src-ssr")
 }
 
-/// True when `path` is a Docusaurus theme swizzle component — a file under a
-/// `src/theme/` directory (consecutive `src` then `theme` segments, e.g.
-/// `src/theme/MDXComponents/index.tsx`). Docusaurus's theme system discovers
-/// these overrides by their path under `src/theme/` and resolves them through
-/// its webpack theme aliases, never through a static import, so the component's
-/// `default` export has no importer yet is live. Detection-gated by the caller.
-pub fn is_docusaurus_theme_swizzle(path: &Path) -> bool {
-    let segs: Vec<&str> = path
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => s.to_str(),
-            _ => None,
-        })
-        .collect();
-    segs.windows(2).any(|w| w == ["src", "theme"])
-}
-
-/// True when `path` is a Docusaurus plugin entry — an `index.{ts,js}` file
-/// directly inside a `plugins/<name>/` directory (e.g.
-/// `plugins/recent-blog-posts/index.ts`). Docusaurus loads local plugins by
-/// the path string declared in `docusaurus.config`, calling the module's
-/// `default` export, never through a static import, so it has no importer yet
-/// is live. Detection-gated by the caller.
-pub fn is_docusaurus_plugin_entry(path: &Path) -> bool {
-    if !matches!(
-        path.file_name().and_then(|n| n.to_str()),
-        Some("index.ts" | "index.js")
-    ) {
-        return false;
-    }
-    let Some(grandparent) = path.parent().and_then(Path::parent) else {
-        return false;
-    };
-    grandparent.file_name().and_then(|n| n.to_str()) == Some("plugins")
-}
-
-/// True when `path` is an Astro file-system-routed module: a file under a
-/// `pages/` or `content/` directory. Astro's router consumes a route module's
-/// reserved exports (`default`, the `GET`/`POST`/… HTTP method handlers,
-/// `getStaticPaths`, `prerender`, `partial`) by exact name, never through a
-/// static import, so they have no importer but are live. The `pages/`/`content/`
-/// ancestor scopes the exemption to route modules, keeping a same-named export
-/// in an ordinary module flaggable. Detection-gated by the caller.
-pub fn is_astro_routed_page(path: &Path) -> bool {
-    path.components()
-        .any(|c| matches!(c.as_os_str().to_str(), Some("pages" | "content")))
-}
-
-/// True when `path` is a SvelteKit route file (`+page.svelte`,
-/// `+page.server.ts`, `+server.ts`, …) located under a `routes/` directory in
-/// a project where SvelteKit is detected. SvelteKit's file-system router
-/// consumes these by path, so nothing imports them — they are implicit entry
-/// points. The `routes/` ancestor and detection gate keep the exemption from
-/// covering an unrelated `+`-named file.
-fn is_sveltekit_route_entry(path: &Path, project: &ProjectCtx) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if !is_sveltekit_route_file(name) {
-        return false;
-    }
-    if !path
-        .components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
-    {
-        return false;
-    }
-    project.has_framework("svelte")
-        || project.frameworks_for_path(path).iter().any(|f| f.name == "svelte")
-}
-
 /// Nuxt's conventional auto-loaded directories — those whose files Nuxt's
 /// file-system router and auto-import mechanism wire into the app by directory
 /// convention at build time, never through a static import: `pages/`
@@ -1691,10 +1532,6 @@ fn is_nuxt_framework_entry(path: &Path, project: &ProjectCtx) -> bool {
 /// framework. This covers file-based routers, generated route trees, and
 /// framework-owned files whose exports/import reachability is implicit.
 pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
-    if is_sveltekit_route_entry(path, project) {
-        return true;
-    }
-
     if is_nuxt_framework_entry(path, project) {
         return true;
     }
@@ -1723,7 +1560,7 @@ pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     // library's `app/`, a monorepo package) is invisible to the root-anchored
     // `detected_frameworks`. Its `dirs`/`files`/`suffixes` are path-relative,
     // so they identify file-system-routed entry points (Next.js `pages/`,
-    // Remix `routes/`, SvelteKit `src/routes/`) regardless of detection depth.
+    // Nuxt `pages/`) regardless of detection depth.
     for fw in project.frameworks_for_path(path) {
         if fw.entry_points.dirs.iter().any(|dir| path_str.contains(dir.as_str())) {
             return true;
@@ -2256,24 +2093,6 @@ mod aux_path_tests {
     }
 
     #[test]
-    fn angular_schematic_or_migration_entry_segments() {
-        // Issue #1597: ngrx/platform schematic and ng-update migration entry points.
-        assert!(is_angular_schematic_or_migration_entry(&PathBuf::from(
-            "modules/effects/schematics/ng-add/index.ts"
-        )));
-        assert!(is_angular_schematic_or_migration_entry(&PathBuf::from(
-            "modules/router-store/migrations/14_0_0/index.ts"
-        )));
-        // Segment (not substring) match.
-        assert!(!is_angular_schematic_or_migration_entry(&PathBuf::from(
-            "src/migrationsHelper.ts"
-        )));
-        assert!(!is_angular_schematic_or_migration_entry(&PathBuf::from(
-            "src/components/index.ts"
-        )));
-    }
-
-    #[test]
     fn test_suite_factory_suffix_match() {
         // Issue #1661: PascalCase `Tests`/`Spec` test-suite-factory convention.
         assert!(has_test_suite_factory_suffix(&PathBuf::from(
@@ -2449,82 +2268,6 @@ mod aux_path_tests {
         assert!(!is_generated_file_specifier("./generated"));
         assert!(!is_generated_file_specifier("./idle.js"));
         assert!(!is_generated_file_specifier("./prebuilt"));
-    }
-
-    #[test]
-    fn sveltekit_route_file_matches_plain_and_layout_break_forms() {
-        // Plain file-router forms.
-        for name in [
-            "+page.svelte",
-            "+layout.svelte",
-            "+error.svelte",
-            "+page.ts",
-            "+layout.js",
-            "+page.server.ts",
-            "+server.js",
-        ] {
-            assert!(is_sveltekit_route_file(name), "{name} is a SvelteKit route file");
-        }
-        // Issue #1608: layout-break `@<group>` syntax on `+page`/`+layout`.
-        for name in [
-            "+page@.js",
-            "+page@group.js",
-            "+page@(admin).svelte",
-            "+page@.server.ts",
-            "+layout@.svelte",
-            "+layout@reset.ts",
-        ] {
-            assert!(is_sveltekit_route_file(name), "{name} is a SvelteKit layout-break route file");
-        }
-        // Negative space: a genuinely misnamed file must still be flagged.
-        assert!(!is_sveltekit_route_file("PageComponent.svelte"));
-        assert!(!is_sveltekit_route_file("+widget.svelte"));
-        assert!(!is_sveltekit_route_file("page.svelte"));
-        // `@` is only the layout-break marker on `page`/`layout`; other kinds
-        // carrying it are not framework route files.
-        assert!(!is_sveltekit_route_file("+server@.js"));
-        assert!(!is_sveltekit_route_file("+error@.svelte"));
-    }
-
-    #[test]
-    fn remix_route_file_matches_app_routes_paths() {
-        for rel in [
-            "app/routes/index.tsx",
-            "app/routes/api.v1.projects.$projectRef.ts",
-            "app/routes/_auth.login.tsx",
-            "apps/webapp/app/routes/vercel.install.tsx",
-        ] {
-            assert!(
-                is_remix_route_file(Path::new(rel)),
-                "{rel} is a Remix route module"
-            );
-        }
-        // Negative space: `routes/` not under `app/`, an `app/` dir without a
-        // `routes/` child, and an ordinary module must not match.
-        assert!(!is_remix_route_file(Path::new("src/routes/index.tsx")));
-        assert!(!is_remix_route_file(Path::new("app/lib/data.ts")));
-        assert!(!is_remix_route_file(Path::new("app/root.tsx")));
-        assert!(!is_remix_route_file(Path::new("routes/index.tsx")));
-    }
-
-    #[test]
-    fn react_router_root_module_matches_root_tsx_and_jsx() {
-        assert!(is_react_router_root_module(Path::new("app/root.tsx")));
-        assert!(is_react_router_root_module(Path::new("docs/app/root.jsx")));
-        // Negative space: TanStack's `__root.tsx`, a route file, and an ordinary
-        // module must not match.
-        assert!(!is_react_router_root_module(Path::new("src/routes/__root.tsx")));
-        assert!(!is_react_router_root_module(Path::new("app/routes/index.tsx")));
-        assert!(!is_react_router_root_module(Path::new("app/root.css")));
-    }
-
-    #[test]
-    fn react_router_routes_config_matches_routes_ts_and_js() {
-        assert!(is_react_router_routes_config(Path::new("app/routes.ts")));
-        assert!(is_react_router_routes_config(Path::new("docs/app/routes.js")));
-        // Negative space: the `routes/` directory and an ordinary module name.
-        assert!(!is_react_router_routes_config(Path::new("app/routes/index.tsx")));
-        assert!(!is_react_router_routes_config(Path::new("app/route.ts")));
     }
 
     #[test]

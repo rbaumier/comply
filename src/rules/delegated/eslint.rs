@@ -603,12 +603,9 @@ const BROWSER_PACKAGES: &[&str] = &[
     "preact",
     "solid-js",
     "vue",
-    "svelte",
     "@sentry/react",
     "@sentry/browser",
     "@sentry/vue",
-    "@sentry/svelte",
-    "@angular/core",
     "@tanstack/react-router",
 ];
 

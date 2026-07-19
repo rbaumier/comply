@@ -182,37 +182,6 @@ pub(super) fn is_path_alias_prefix(spec: &str) -> bool {
     spec.starts_with('~') || spec.starts_with("@/")
 }
 
-/// Build-time virtual module specifiers injected by SvelteKit's official
-/// adapters. The adapter's Rollup/Vite plugin resolves each of these bare
-/// uppercase specifiers to generated code at bundle time (`HANDLER` → the
-/// request handler, `SERVER` → the SSR server, `MANIFEST` → the route
-/// manifest, `ENV` → the env accessor, `SHIMS` → runtime shims). They are
-/// intentionally absent from `package.json` — they are never npm packages.
-const SVELTEKIT_ADAPTER_VIRTUAL_MODULES: &[&str] =
-    &["HANDLER", "ENV", "SERVER", "SHIMS", "MANIFEST"];
-
-/// True if `spec` is a SvelteKit adapter build-time virtual module name.
-/// Gated by the caller on SvelteKit detection so the same uppercase specifier
-/// remains a genuine implicit-dependency error in a non-SvelteKit project.
-pub(super) fn is_sveltekit_adapter_virtual_module(spec: &str) -> bool {
-    SVELTEKIT_ADAPTER_VIRTUAL_MODULES.contains(&spec)
-}
-
-/// True if `spec` is a `$`-prefixed SvelteKit alias. This covers both the
-/// framework's reserved application aliases — `$lib`/`$lib/…` (→ `src/lib`),
-/// `$app/…` (runtime modules), `$env/…` (typed env accessors),
-/// `$service-worker` — and user-defined aliases declared under `kit.alias` in
-/// `svelte.config.js`, which are `$`-prefixed by convention (e.g. `$content`,
-/// `$houdini`). All resolve to local project source or generated code, never to
-/// an npm package: a name beginning with `$` is not a valid npm package name, so
-/// a `$`-prefixed specifier is structurally a path alias and never appears in
-/// `package.json`. Gated by the caller on SvelteKit detection so a `$`-prefixed
-/// specifier remains a genuine implicit-dependency error in a non-SvelteKit
-/// project.
-pub(super) fn is_sveltekit_app_alias(spec: &str) -> bool {
-    spec.starts_with('$')
-}
-
 /// True if `spec` is a bare specifier — a candidate npm package name rather
 /// than a relative path (`./`, `../`), an absolute path (`/`), or a URL import
 /// (`http://`, `https://`). URL imports are resolved by the runtime/CDN and are

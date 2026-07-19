@@ -64,19 +64,15 @@ pub struct MagicExports {
 /// rule to the matching file so a same-named export elsewhere stays flaggable.
 #[derive(Debug, Default, Deserialize)]
 pub struct RouteMagicExports {
-    /// Names consumed in file-system-routed route files (SvelteKit
-    /// `+page`/`+layout`/`+server`).
+    /// Names consumed in file-system-routed route files (Nuxt Nitro
+    /// `server/api`/`server/routes`/`server/middleware` modules, `plugins/*`,
+    /// and `middleware/*`).
     #[serde(default)]
     pub route_files: Vec<String>,
-    /// Names consumed in route-parameter matcher files (SvelteKit
+    /// Names consumed in route-parameter matcher files (Vue Router
     /// `src/params/*`).
     #[serde(default)]
     pub param_matchers: Vec<String>,
-    /// Names consumed in a framework's route-configuration entry file (React
-    /// Router v7 `routes.ts`/`routes.js`, whose `default` export is read by
-    /// `@react-router/dev`).
-    #[serde(default)]
-    pub config_files: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -87,35 +83,25 @@ pub struct ToolingDeps {
 
 const RAW: &[(&str, &str)] = &[
     ("nextjs", include_str!("nextjs.toml")),
-    ("remix", include_str!("remix.toml")),
     ("vite", include_str!("vite.toml")),
     ("express", include_str!("express.toml")),
     ("jest", include_str!("jest.toml")),
     ("playwright", include_str!("playwright.toml")),
-    ("cypress", include_str!("cypress.toml")),
     ("elysia", include_str!("elysia.toml")),
     ("tanstack-router", include_str!("tanstack-router.toml")),
     ("shadcn", include_str!("shadcn.toml")),
     ("react-email", include_str!("react-email.toml")),
     ("react-native", include_str!("react-native.toml")),
     ("webpack", include_str!("webpack.toml")),
-    ("mocha", include_str!("mocha.toml")),
     ("drizzle", include_str!("drizzle.toml")),
     ("better-result", include_str!("better-result.toml")),
     ("better-auth", include_str!("better-auth.toml")),
     ("tanstack-query", include_str!("tanstack-query.toml")),
-    ("angular", include_str!("angular.toml")),
     ("hono", include_str!("hono.toml")),
     ("xstate", include_str!("xstate.toml")),
     ("zod", include_str!("zod.toml")),
     ("i18n", include_str!("i18n.toml")),
     ("nuxt", include_str!("nuxt.toml")),
-    ("nestjs", include_str!("nestjs.toml")),
-    ("svelte", include_str!("svelte.toml")),
-    ("graphql", include_str!("graphql.toml")),
-    ("gatsby", include_str!("gatsby.toml")),
-    ("docusaurus", include_str!("docusaurus.toml")),
-    ("astro", include_str!("astro.toml")),
     ("vue-router", include_str!("vue-router.toml")),
 ];
 

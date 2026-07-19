@@ -524,13 +524,9 @@ fn should_skip_framework_scoped_rule(meta: &RuleMeta, project: &ProjectCtx) -> b
         "shadcn" => !project.has_framework("shadcn"),
         "hono" => !project.has_framework("hono"),
         "xstate" => !project.has_framework("xstate"),
-        "angular" => !project.has_framework("angular"),
         "nextjs" => !project.has_framework("nextjs"),
         "i18n" => !project.has_framework("i18n"),
         "nuxt" => !project.has_framework("nuxt"),
-        "nestjs" => !project.has_framework("nestjs"),
-        "svelte" => !project.has_framework("svelte"),
-        "graphql" => !project.has_framework("graphql"),
         "tanstack" | "tanstack-start" | "tanstack-query" => {
             !project.has_framework("tanstack-query")
                 && !project.has_framework("tanstack-router")
@@ -684,7 +680,7 @@ mod tests {
     #[test]
     fn next_rules_gated_off_outside_nextjs() {
         // These Next.js-only rules must run only when `nextjs` is detected,
-        // via the central framework gate — never on plain Node/Vite/SvelteKit.
+        // via the central framework gate — never on plain Node/Vite.
         let metas: &[(&str, &crate::rules::meta::RuleMeta)] = &[
             (
                 "next-inline-script-id",
@@ -1078,7 +1074,6 @@ key = "válue é 💡"
             (Language::Yaml, "src/torture.yaml", TEXT),
             (Language::Dockerfile, "Dockerfile", TEXT),
             (Language::Sql, "src/torture.sql", TEXT),
-            (Language::GraphQl, "src/torture.graphql", TEXT),
         ];
 
         for (language, path, source) in cases {

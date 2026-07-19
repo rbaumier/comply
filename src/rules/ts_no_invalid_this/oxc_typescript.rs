@@ -158,106 +158,6 @@ fn is_typed_callable_return(
         .is_some_and(is_callable_type_annotation)
 }
 
-/// Mocha test/suite globals whose `function` callback is invoked with a
-/// Test/Suite context bound to `this` (`this.timeout`, `this.retries`,
-/// `this.skip`, `this.slow`).
-const MOCHA_GLOBALS: &[&str] = &[
-    "describe", "it", "before", "after", "beforeEach", "afterEach", "context",
-    "specify",
-];
-
-/// True when `callee` is a Mocha global, either bare (`it(...)`) or a
-/// `.only`/`.skip` variant (`describe.only(...)`, `it.skip(...)`).
-fn callee_is_mocha_global(callee: &Expression) -> bool {
-    match callee {
-        Expression::Identifier(ident) => {
-            MOCHA_GLOBALS.contains(&ident.name.as_str())
-        }
-        Expression::StaticMemberExpression(member)
-            if matches!(member.property.name.as_str(), "only" | "skip") =>
-        {
-            matches!(
-                &member.object,
-                Expression::Identifier(ident)
-                    if MOCHA_GLOBALS.contains(&ident.name.as_str())
-            )
-        }
-        _ => false,
-    }
-}
-
-/// True when `func_id` is a `function` expression passed directly as an argument
-/// to a Mocha global (`describe`/`it`/`before`/... and `.only`/`.skip`
-/// variants). Mocha binds a Test/Suite context to `this` in such callbacks, so
-/// `this` inside the function body is valid. The function expression is the
-/// parent or grandparent's child of the `CallExpression` depending on whether
-/// the AST wraps arguments.
-fn is_mocha_callback(
-    func_id: oxc_semantic::NodeId,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let nodes = semantic.nodes();
-    let parent_id = nodes.parent_id(func_id);
-    let call = match nodes.kind(parent_id) {
-        AstKind::CallExpression(call) => call,
-        _ => {
-            let gp_id = nodes.parent_id(parent_id);
-            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
-                return false;
-            };
-            call
-        }
-    };
-    callee_is_mocha_global(&call.callee)
-}
-
-/// True when `expr` is a Cypress command chain rooted in the `cy` global
-/// (`cy`, `cy.get(...)`, `cy.get(...).as(...).contains(...)`, …). The chain is a
-/// left-spine of member accesses and calls that bottoms out at the `cy`
-/// identifier.
-fn is_cypress_chain(expr: &Expression) -> bool {
-    let mut current = expr;
-    loop {
-        match current {
-            Expression::Identifier(ident) => return ident.name == "cy",
-            Expression::CallExpression(call) => current = &call.callee,
-            Expression::StaticMemberExpression(member) => current = &member.object,
-            Expression::ComputedMemberExpression(member) => current = &member.object,
-            _ => return false,
-        }
-    }
-}
-
-/// True when `func_id` is a `function` expression passed as an argument to a
-/// `.then(...)`/`.should(...)` member call on a Cypress chain
-/// (`cy.get(...).then(function () { this.alias })`). Cypress binds the shared
-/// test context to `this` in such callbacks — aliases registered via
-/// `.as('name')` are read as `this.name` — so `this` inside the body is valid.
-fn is_cypress_callback(
-    func_id: oxc_semantic::NodeId,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let nodes = semantic.nodes();
-    let parent_id = nodes.parent_id(func_id);
-    let call = match nodes.kind(parent_id) {
-        AstKind::CallExpression(call) => call,
-        _ => {
-            let gp_id = nodes.parent_id(parent_id);
-            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
-                return false;
-            };
-            call
-        }
-    };
-    let Expression::StaticMemberExpression(member) = &call.callee else {
-        return false;
-    };
-    if !matches!(member.property.name.as_str(), "then" | "should") {
-        return false;
-    }
-    is_cypress_chain(&member.object)
-}
-
 /// Chai plugin-registration methods. Each invokes its registered function with
 /// `this` bound to the `chai.Assertion` instance, so `this` in the function body
 /// is the documented Chai plugin API.
@@ -842,19 +742,6 @@ fn is_valid_this_context(
                 if is_method_property_assignment(ancestor.id(), semantic) {
                     return true;
                 }
-                // Mocha callback: a `function` passed to `describe`/`it`/hooks
-                // is invoked with a Test/Suite context bound to `this`
-                // (`this.timeout()`, `this.retries()`), so `this` is valid.
-                if is_mocha_callback(ancestor.id(), semantic) {
-                    return true;
-                }
-                // Cypress callback: a `function` passed to `.then()`/`.should()`
-                // on a `cy` chain is invoked with the shared test context bound
-                // to `this` (`this.alias` from a prior `.as('alias')`), so
-                // `this` is valid.
-                if is_cypress_callback(ancestor.id(), semantic) {
-                    return true;
-                }
                 // Chai plugin registration: a `function` passed to a Chai
                 // plugin-registration method (`addMethod`/`addProperty`/
                 // `addChainableMethod`/`overwriteMethod`/`overwriteProperty`/
@@ -1158,36 +1045,6 @@ mod tests {
     }
 
     #[test]
-    fn allows_this_in_mocha_it_callback() {
-        // Regression for #2023: Mocha binds a Test context to `this` inside an
-        // `it(name, function() {...})` callback.
-        let src = "it('/POST (concurrent)', function () {\n  this.retries(10);\n  return request(server).post('/concurrent').expect(200);\n});";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_this_in_mocha_describe_skip_callback() {
-        // Regression for #2023: `describe.skip(name, function() {...})` with
-        // `this.timeout()` / `this.retries()`.
-        let src = "describe.skip('Kafka transport', function () {\n  this.timeout(50000);\n  this.retries(10);\n});";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_this_in_mocha_hook_callback() {
-        let src = "before('Start app', function () {\n  this.timeout(10000);\n});";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn flags_this_in_non_mocha_callback() {
-        // A `function` passed to a non-Mocha call gets no context — `this` is
-        // still unbound and must fire.
-        let diags = run_on("arr.forEach(function () { return this.x; });");
-        assert_eq!(diags.len(), 1);
-    }
-
-    #[test]
     fn allows_this_in_pascal_case_constructor_function() {
         // Regression for #1916: a PascalCase `function` is a constructor function
         // by convention — called with `new`, `this` is the new instance.
@@ -1245,23 +1102,6 @@ mod tests {
         // PascalCase, so its stray `this` must still fire.
         let diags = run_on("function _reply() {\n  return this.x;\n}\n_reply();");
         assert_eq!(diags.len(), 1);
-    }
-
-    #[test]
-    fn allows_this_in_cypress_then_callback() {
-        // Regression for #1842: Cypress binds the shared test context to `this`
-        // inside a `function` callback passed to `.then()` in a `cy` chain.
-        // Aliases registered via `.as('name')` are read as `this.name`.
-        let src = "cy.get('div')\n  .contains('animate')\n  .as('spring')\n  .then(function () {\n    const bounds = this.miniDefault[0].getBoundingClientRect();\n  });";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_this_in_cypress_should_callback() {
-        // Regression for #1842: `.should(function() {...})` is the other Cypress
-        // chain method that binds the test context to `this`.
-        let src = "cy.get('@spring').should(function () {\n  expect(this.value).to.equal(1);\n});";
-        assert!(run_on(src).is_empty());
     }
 
     #[test]

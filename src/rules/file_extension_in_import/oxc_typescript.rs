@@ -113,17 +113,6 @@ fn tsconfig_uses_bundler_resolution(ctx: &CheckCtx) -> bool {
         .is_some_and(|m| m.eq_ignore_ascii_case("bundler"))
 }
 
-/// Angular's build toolchain (`@angular/build`/Angular CLI) resolves TypeScript
-/// modules without explicit file extensions, so extensionless relative imports
-/// are correct there. Detection walks up to the nearest package.json, so a
-/// nested Angular example inside a non-Angular monorepo is recognised.
-fn project_is_angular(ctx: &CheckCtx) -> bool {
-    ctx.project
-        .frameworks_for_path(ctx.path)
-        .iter()
-        .any(|fw| fw.name == "angular")
-}
-
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -143,7 +132,6 @@ impl OxcCheck for Check {
         let skip_for_bundler = ctx.project.cached_bundler(ctx.path, || {
             project_uses_bundler(ctx)
                 || tsconfig_uses_bundler_resolution(ctx)
-                || project_is_angular(ctx)
                 || ctx.project.is_commonjs_project(ctx.path)
         });
         if skip_for_bundler {
@@ -439,34 +427,6 @@ mod tests {
 
     // Regression for #1712: Angular's build toolchain resolves extensionless
     // relative imports, so the rule must stay silent when Angular is detected.
-
-    #[test]
-    fn skips_angular_project_detected_via_angular_json() {
-        // examples/angular/filters carries angular.json but only @angular/build
-        // in devDependencies (no @angular/core), matching the issue's repro.
-        let pkg = r#"{"devDependencies":{"@angular/build":"^20.0.0","@angular/cli":"^20.0.0"}}"#;
-        let diags = run_in_project(
-            &[("package.json", pkg), ("angular.json", "{}")],
-            "import { columnHelper, columns } from './makeData';\nimport TableFilter from './table-filter/table-filter';\n",
-        );
-        assert!(
-            diags.is_empty(),
-            "Angular project (angular.json) must not require file extensions: {diags:?}"
-        );
-    }
-
-    #[test]
-    fn skips_angular_project_detected_via_angular_build_dep() {
-        let pkg = r#"{"devDependencies":{"@angular/build":"^20.0.0"}}"#;
-        let diags = run_in_project(
-            &[("package.json", pkg)],
-            "import { columns } from './makeData';\n",
-        );
-        assert!(
-            diags.is_empty(),
-            "@angular/build dependency must suppress the rule: {diags:?}"
-        );
-    }
 
     // Regression for #2243: a monorepo whose root carries vitest.config.ts (a
     // Vite-based bundler) but no vite.config.ts must be recognised as a bundler

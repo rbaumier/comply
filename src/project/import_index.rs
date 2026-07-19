@@ -638,7 +638,7 @@ impl ImportIndex {
         propagate_namespace_imports_through_star_edges(&mut namespace_imported, &star_edges);
 
         // Anchor candidates exclude import-index-only languages (Markdown /
-        // Astro / HTML): they are indexed for their imports but dispatched to no
+        // HTML): they are indexed for their imports but dispatched to no
         // lint engine, so a once-per-project rule anchored on one would never run.
         let min_indexed = exports
             .keys()
@@ -786,7 +786,7 @@ impl ImportIndex {
     }
 
     /// Lexicographically smallest indexed (canonical) path among languages that
-    /// are dispatched to a lint engine — import-index-only Markdown/Astro/HTML are
+    /// are dispatched to a lint engine — import-index-only Markdown/HTML are
     /// excluded (see [`Language::is_import_index_only`]). Precomputed once;
     /// cross-file rules use it as a deterministic per-run anchor, so it must be a
     /// file some engine actually visits.
@@ -1254,7 +1254,6 @@ fn is_indexable(lang: Language) -> bool {
             | Language::Rust
             | Language::Vue
             | Language::Markdown
-            | Language::Astro
             | Language::Html
     )
 }
@@ -1590,9 +1589,6 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
     if matches!(file.language, Language::Markdown) {
         return extract_markdown(&source, &file.path);
     }
-    if matches!(file.language, Language::Astro) {
-        return extract_astro(&source, &file.path);
-    }
     if matches!(file.language, Language::Html) {
         return extract_html(&source, &file.path);
     }
@@ -1737,7 +1733,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
 ///
 /// Two reference kinds are collected:
 /// - ESM `import … from '…'` statements. MDX (and MDX-flavored Markdown
-///   processed by Docusaurus / Nextra / Astro) uses standard ESM imports, so a
+///   processed by Docusaurus / Nextra) uses standard ESM imports, so a
 ///   component consumed only from a docs page is a real cross-file usage.
 ///   Markdown is not valid JS, so the whole file is never handed to the parser:
 ///   import-statement line spans are isolated (skipping fenced code blocks and
@@ -1930,40 +1926,6 @@ fn vitepress_snippet_specifier(line: &str) -> Option<String> {
     }
 }
 
-/// Extract the ESM `import` statements from an Astro component's frontmatter.
-///
-/// An `.astro` file opens with a frontmatter script block fenced by a leading
-/// line that is exactly `---` and a closing line that is exactly `---`; that
-/// block is plain TS/JS, so a module consumed only from an Astro component is a
-/// real cross-file usage. The frontmatter text is isolated and handed to the
-/// shared oxc import-clause logic — reusing the exact extraction as TS/JS
-/// imports — while the HTML template that follows is ignored. Files without a
-/// frontmatter fence are indexed as participants with no edges.
-///
-/// Only import edges are produced; an Astro file declares no exports.
-fn extract_astro(source: &str, path: &Path) -> Option<(PathBuf, FileExtract)> {
-    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let Some(frontmatter) = astro_frontmatter(source) else {
-        // No frontmatter fence — index the file as a participant with no edges,
-        // mirroring an import-free module.
-        return Some((canon, FileExtract::default()));
-    };
-
-    let imports = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        extract_imports_from_module(&frontmatter)
-    }))
-    .ok()
-    .unwrap_or_default();
-
-    Some((
-        canon,
-        FileExtract {
-            imports,
-            ..FileExtract::default()
-        },
-    ))
-}
-
 /// Extract the local bundler entries an HTML document declares through its
 /// `<script src="…">` tags.
 ///
@@ -2080,46 +2042,6 @@ fn local_script_specifier(src: &str) -> Option<String> {
         return Some(format!("./{rooted}"));
     }
     None
-}
-
-/// Return the frontmatter script block of an Astro component — the lines between
-/// the leading line that is exactly `---` and the next line that is exactly
-/// `---`. Blank lines preceding the script (and the closing line itself) are
-/// blanked to preserve the original line numbers, so import positions match the
-/// file. Returns `None` when the file has no opening fence.
-fn astro_frontmatter(source: &str) -> Option<String> {
-    let mut lines = source.lines();
-    let mut out = String::with_capacity(source.len());
-
-    // The opening fence must be the first non-empty line and equal to `---`.
-    // Preserve line numbers by emitting a blank line for each skipped line.
-    let mut opened = false;
-    for line in lines.by_ref() {
-        if line.trim().is_empty() {
-            out.push('\n');
-            continue;
-        }
-        if line.trim() != "---" {
-            return None;
-        }
-        out.push('\n'); // blank out the opening fence line
-        opened = true;
-        break;
-    }
-    if !opened {
-        return None;
-    }
-
-    let mut closed = false;
-    for line in lines {
-        if line.trim() == "---" {
-            closed = true;
-            break;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    closed.then_some(out)
 }
 
 /// Parse `source` as a JS module and return only its import edges. Shares the
@@ -4805,40 +4727,6 @@ pub(crate) fn ts_counterpart_exts(ext: &str) -> &'static [&'static str] {
     }
 }
 
-/// True when `dir` is the root of a SvelteKit project. Signals (any one
-/// suffices): `@sveltejs/kit` in the dir's `package.json`, a `svelte.config.*`
-/// file, or a generated `.svelte-kit/` directory. Gating the synthetic `$lib`
-/// alias on this keeps a `$lib` import in a non-SvelteKit project unresolved.
-fn is_sveltekit_dir(dir: &Path) -> bool {
-    if let Ok(raw) = std::fs::read_to_string(dir.join("package.json"))
-        && let Some(pkg) = crate::project::PackageJson::parse(&raw)
-        && pkg.has_dep_or_engine("@sveltejs/kit")
-    {
-        return true;
-    }
-    if dir.join(".svelte-kit").is_dir() {
-        return true;
-    }
-    ["svelte.config.js", "svelte.config.ts", "svelte.config.mjs"]
-        .iter()
-        .any(|f| dir.join(f).is_file())
-}
-
-/// True when `dir` is the root of a Cypress project. Signals (either suffices):
-/// a `cypress.config.*` file in `dir`, or a `cypress/` subdirectory of `dir`.
-/// Gating the synthetic `cypress/*` alias on this keeps a `cypress/...` import
-/// in a non-Cypress project unresolved, so it cannot hijack a real npm package
-/// named `cypress`.
-fn is_cypress_dir(dir: &Path) -> bool {
-    if ["cypress.config.ts", "cypress.config.js", "cypress.config.mjs"]
-        .iter()
-        .any(|f| dir.join(f).is_file())
-    {
-        return true;
-    }
-    dir.join("cypress").is_dir()
-}
-
 /// True when `dir` is the root of a Nuxt project, signalled by a
 /// `nuxt.config.{ts,js,mjs}` file in `dir`. Gating the synthetic `~/*` and
 /// `@/*` aliases on this keeps a `~/...` or `@/...` import in a non-Nuxt
@@ -5104,13 +4992,6 @@ impl OxcPathResolver {
     fn discover(known_paths: &FxHashSet<PathBuf>) -> Self {
         let mut seen_dirs: FxHashSet<PathBuf> = FxHashSet::default();
         let mut tsconfig_dirs: FxHashMap<PathBuf, PathBuf> = FxHashMap::default();
-        // Directories that are the root of a SvelteKit project. Their `$lib`
-        // alias is synthesized below, independent of whether the dir has a
-        // checked-in `tsconfig.json`.
-        let mut sveltekit_dirs: FxHashSet<PathBuf> = FxHashSet::default();
-        // Directories that are the root of a Cypress project. Their `cypress/*`
-        // alias is synthesized below, independent of a checked-in `tsconfig.json`.
-        let mut cypress_dirs: FxHashSet<PathBuf> = FxHashSet::default();
         // Directories that are the root of a Nuxt project. Their `~/*` and `@/*`
         // aliases are synthesized below, independent of a checked-in
         // `tsconfig.json`.
@@ -5152,12 +5033,6 @@ impl OxcPathResolver {
                             .or_insert(pkg.subpath_import_targets);
                     }
                 }
-                if is_sveltekit_dir(dir) {
-                    sveltekit_dirs.insert(dir.to_path_buf());
-                }
-                if is_cypress_dir(dir) {
-                    cypress_dirs.insert(dir.to_path_buf());
-                }
                 if is_nuxt_dir(dir) {
                     nuxt_dirs.insert(dir.to_path_buf());
                 }
@@ -5181,8 +5056,6 @@ impl OxcPathResolver {
                 let aliases = Self::aliases_for_dir(
                     &dir,
                     Some(&tsconfig_path),
-                    &sveltekit_dirs,
-                    &cypress_dirs,
                     &nuxt_dirs,
                     &vite_dirs,
                     &subpath_import_dirs,
@@ -5193,19 +5066,15 @@ impl OxcPathResolver {
             .collect();
 
         // Project roots that carry an in-process synthetic alias but no
-        // checked-in `tsconfig.json` still need a resolver entry: `$lib` for
-        // SvelteKit, `cypress/*` for Cypress, `~/*` and `@/*` for Nuxt, `@/*` →
-        // `src/*` for Vite, and `#`-subpath imports from `package.json`. A
-        // Cypress base dir, in particular, typically ships only
-        // `cypress.config.*` and no `tsconfig.json`; a Nuxt root's `~/`/`@/`
-        // aliases live in the gitignored `.nuxt/tsconfig.json`; a plain Vite
-        // Vue/React app commonly declares `@` only in `vite.config.*` with no
-        // `tsconfig` `paths` mirror; and a `package.json` with an `imports`
-        // field need not have a sibling `tsconfig.json` at all.
-        let synthetic_dirs: FxHashSet<&PathBuf> = sveltekit_dirs
+        // checked-in `tsconfig.json` still need a resolver entry: `~/*` and
+        // `@/*` for Nuxt, `@/*` → `src/*` for Vite, and `#`-subpath imports from
+        // `package.json`. A Nuxt root's `~/`/`@/` aliases live in the gitignored
+        // `.nuxt/tsconfig.json`; a plain Vite Vue/React app commonly declares
+        // `@` only in `vite.config.*` with no `tsconfig` `paths` mirror; and a
+        // `package.json` with an `imports` field need not have a sibling
+        // `tsconfig.json` at all.
+        let synthetic_dirs: FxHashSet<&PathBuf> = nuxt_dirs
             .iter()
-            .chain(cypress_dirs.iter())
-            .chain(nuxt_dirs.iter())
             .chain(vite_dirs.iter())
             .chain(subpath_import_dirs.keys())
             .collect();
@@ -5216,8 +5085,6 @@ impl OxcPathResolver {
             let aliases = Self::aliases_for_dir(
                 dir,
                 None,
-                &sveltekit_dirs,
-                &cypress_dirs,
                 &nuxt_dirs,
                 &vite_dirs,
                 &subpath_import_dirs,
@@ -5240,17 +5107,6 @@ impl OxcPathResolver {
     /// Path aliases active for `dir`: the tsconfig `paths` (when `tsconfig_path`
     /// is present) plus framework-synthetic mappings:
     ///
-    /// - SvelteKit root: `$lib` → `src/lib`. `$lib` is declared only in the
-    ///   generated `.svelte-kit/tsconfig.json` (gitignored, absent in a fresh
-    ///   clone) which the checked-in `tsconfig.json` `extends`; since alias
-    ///   reading does not follow `extends`, the mapping is reconstructed here.
-    ///   `$app`/`$env`/`$service-worker` are virtual modules with no on-disk
-    ///   file, so they are not synthesized.
-    /// - Cypress root: `cypress/*` → `<dir>/cypress/*`. Cypress resolves a
-    ///   `cypress/...` import from the project root, so `cypress/utils/urls`
-    ///   maps to `<dir>/cypress/utils/urls`. The alias only wins when the
-    ///   expanded path is an indexed source file; a real npm `cypress` subpath
-    ///   import (no matching project file) falls through to oxc resolution.
     /// - Nuxt root: `~/*` and `@/*` → `<dir>/*`. Nuxt maps both built-in
     ///   aliases to `srcDir` (its default, the project root), but declares them
     ///   only in the generated `.nuxt/tsconfig.json` (gitignored, absent in a
@@ -5278,8 +5134,6 @@ impl OxcPathResolver {
     fn aliases_for_dir(
         dir: &Path,
         tsconfig_path: Option<&Path>,
-        sveltekit_dirs: &FxHashSet<PathBuf>,
-        cypress_dirs: &FxHashSet<PathBuf>,
         nuxt_dirs: &FxHashSet<PathBuf>,
         vite_dirs: &FxHashSet<PathBuf>,
         subpath_import_dirs: &FxHashMap<PathBuf, Vec<(String, String)>>,
@@ -5287,13 +5141,6 @@ impl OxcPathResolver {
         let mut aliases = tsconfig_path
             .map(|p| Self::read_path_aliases(dir, p))
             .unwrap_or_default();
-        if sveltekit_dirs.contains(dir) {
-            aliases.push(("$lib/*".to_string(), vec![dir.join("src/lib").join("*")]));
-            aliases.push(("$lib".to_string(), vec![dir.join("src/lib")]));
-        }
-        if cypress_dirs.contains(dir) {
-            aliases.push(("cypress/*".to_string(), vec![dir.join("cypress").join("*")]));
-        }
         if nuxt_dirs.contains(dir) {
             aliases.push(("~/*".to_string(), vec![dir.join("*")]));
             aliases.push(("@/*".to_string(), vec![dir.join("*")]));
@@ -6504,64 +6351,6 @@ mod tests {
         );
     }
 
-    // Regression for #2141: a `.ts` module imported only from an `.astro`
-    // component's frontmatter is reached through the import graph, so its
-    // exports are not flagged dead and the file is not flagged unused.
-    #[test]
-    fn astro_frontmatter_imports_make_the_module_reachable() {
-        let (_dir, index, paths) = build_index(&[
-            (
-                "src/components/color-lib.ts",
-                "export function oklchToHex() {}\n",
-            ),
-            (
-                "src/components/color-editor.astro",
-                "---\nimport { oklchToHex } from './color-lib';\n---\n<div />\n",
-            ),
-        ]);
-
-        let lib = &paths[0];
-        let astro = &paths[1];
-
-        let imp = index
-            .get_imports(astro)
-            .iter()
-            .find(|i| i.local_name == "oklchToHex")
-            .expect("astro frontmatter import must be indexed");
-        assert_eq!(
-            imp.source_path.as_ref(),
-            Some(lib),
-            "astro import must resolve to the ts module source"
-        );
-
-        // The named import flows into the per-symbol usage map, so dead-export
-        // sees the export as used.
-        assert_eq!(
-            index.get_usages(lib, "oklchToHex").len(),
-            1,
-            "the astro component registers a usage of the export"
-        );
-    }
-
-    // The HTML template after the closing `---` fence is not JS — a stray
-    // `import` word there must not become an edge. Only the frontmatter counts.
-    #[test]
-    fn astro_template_body_is_not_scanned_for_imports() {
-        let (_dir, index, paths) = build_index(&[
-            ("src/lib/widget.ts", "export const Widget = 1;\n"),
-            (
-                "src/pages/page.astro",
-                "---\nconst title = 'hi';\n---\n<p>import the Widget from '../lib/widget'</p>\n",
-            ),
-        ]);
-
-        let astro = &paths[1];
-        assert!(
-            index.get_imports(astro).is_empty(),
-            "template-body text must not create import edges"
-        );
-    }
-
     /// Index a project reached through a symlinked directory, mirroring macOS
     /// where `/tmp` is a symlink to `/private/tmp`. Both the indexed file keys
     /// and the resolved import targets are canonicalized, so a relative import
@@ -7617,262 +7406,6 @@ mod tests {
             imp.as_ref(),
             Some(&lib_canon),
             "referenced config `paths` must resolve against its own dir (packages/app/src)",
-        );
-    }
-
-    /// Build a SvelteKit-shaped project: the given `package.json`, a root
-    /// `tsconfig.json` that `extends` the generated `.svelte-kit/tsconfig.json`
-    /// (absent, so it defines no `$lib` alias), `src/lib/utils.ts` exporting `foo`,
-    /// and `src/routes/x.ts` importing it via the `$lib/*` alias plus `$app/stores`.
-    #[cfg(test)]
-    fn build_sveltekit_index(pkg_json: &str) -> (TempDir, ImportIndex, PathBuf, PathBuf) {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("package.json"), pkg_json).unwrap();
-        // Root tsconfig extends the generated SvelteKit config (absent here, as
-        // in a fresh clone), so it carries no `$lib` `paths` entry of its own.
-        fs::write(
-            dir.path().join("tsconfig.json"),
-            r#"{ "extends": "./.svelte-kit/tsconfig.json" }"#,
-        )
-        .unwrap();
-        fs::create_dir_all(dir.path().join("src/lib")).unwrap();
-        fs::create_dir_all(dir.path().join("src/routes")).unwrap();
-        let lib = dir.path().join("src/lib/utils.ts");
-        fs::write(&lib, "export const foo = 1;\n").unwrap();
-        let route = dir.path().join("src/routes/x.ts");
-        fs::write(
-            &route,
-            "import { foo } from '$lib/utils';\nimport { page } from '$app/stores';\nexport const used = foo;\n",
-        )
-        .unwrap();
-
-        let sources = [
-            SourceFile { path: lib.clone(), language: Language::TypeScript },
-            SourceFile { path: route.clone(), language: Language::TypeScript },
-        ];
-        let refs: Vec<&SourceFile> = sources.iter().collect();
-        let index = ImportIndex::build(&refs);
-        let lib_canon = fs::canonicalize(&lib).unwrap();
-        let route_canon = fs::canonicalize(&route).unwrap();
-        (dir, index, lib_canon, route_canon)
-    }
-
-    // Regression for #2112: in a SvelteKit project the `$lib/*` alias is defined
-    // only in the generated `.svelte-kit/tsconfig.json` (gitignored, absent in a
-    // fresh clone). The index synthesizes `$lib` → `src/lib` on the SvelteKit
-    // signal so `import { foo } from '$lib/utils'` resolves to `src/lib/utils.ts`
-    // — keeping `foo` cross-file used (not dead) and linking the importer.
-    #[test]
-    fn sveltekit_lib_alias_resolves_without_generated_tsconfig() {
-        let (_dir, index, lib_canon, route_canon) =
-            build_sveltekit_index(r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2.0.0"}}"#);
-
-        let imp = index
-            .get_imports(&route_canon)
-            .iter()
-            .find(|i| i.specifier == "$lib/utils")
-            .expect("$lib/utils import must be indexed");
-        assert_eq!(
-            imp.source_path.as_ref(),
-            Some(&lib_canon),
-            "$lib/* must resolve to src/lib/* in a SvelteKit project"
-        );
-        // `foo` is reachable from the route importer, so it is not dead.
-        assert!(
-            !index.get_usages(&lib_canon, "foo").is_empty(),
-            "foo must record a cross-file usage via the $lib alias"
-        );
-        // `$app/stores` is a virtual module: no physical file, so it stays
-        // unresolved (no spurious source_path) and is left to no-implicit-deps.
-        let app = index
-            .get_imports(&route_canon)
-            .iter()
-            .find(|i| i.specifier == "$app/stores")
-            .expect("$app/stores import must be indexed");
-        assert!(
-            app.source_path.is_none(),
-            "$app/* is a virtual module and must not resolve to a file"
-        );
-    }
-
-    // #2112: `$lib/stores.svelte` (a Svelte 5 `.svelte.ts` runes module, written
-    // without the `.ts`) must resolve through the synthetic alias to
-    // `src/lib/stores.svelte.ts`.
-    #[test]
-    fn sveltekit_lib_alias_resolves_svelte_dot_ts_module() {
-        let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path().join("package.json"),
-            r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2.0.0"}}"#,
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("tsconfig.json"),
-            r#"{ "extends": "./.svelte-kit/tsconfig.json" }"#,
-        )
-        .unwrap();
-        fs::create_dir_all(dir.path().join("src/lib")).unwrap();
-        fs::create_dir_all(dir.path().join("src/routes")).unwrap();
-        let store = dir.path().join("src/lib/stores.svelte.ts");
-        fs::write(&store, "export const staleTime = 5000;\n").unwrap();
-        let route = dir.path().join("src/routes/App.ts");
-        fs::write(
-            &route,
-            "import { staleTime } from '$lib/stores.svelte';\nexport const used = staleTime;\n",
-        )
-        .unwrap();
-        let sources = [
-            SourceFile { path: store.clone(), language: Language::TypeScript },
-            SourceFile { path: route.clone(), language: Language::TypeScript },
-        ];
-        let refs: Vec<&SourceFile> = sources.iter().collect();
-        let index = ImportIndex::build(&refs);
-        let store_canon = fs::canonicalize(&store).unwrap();
-        let route_canon = fs::canonicalize(&route).unwrap();
-        let imp = index
-            .get_imports(&route_canon)
-            .iter()
-            .find(|i| i.specifier == "$lib/stores.svelte")
-            .expect("$lib/stores.svelte import must be indexed");
-        assert_eq!(
-            imp.source_path.as_ref(),
-            Some(&store_canon),
-            "$lib/stores.svelte must resolve to src/lib/stores.svelte.ts"
-        );
-        assert!(
-            !index.get_usages(&store_canon, "staleTime").is_empty(),
-            "staleTime must record a cross-file usage via the $lib alias"
-        );
-    }
-
-    // Negative-space guard for #2112: the `$lib` synthesis is gated on the
-    // SvelteKit signal. In a project without `@sveltejs/kit` (and no SvelteKit
-    // detection file), `$lib/*` must stay unresolved — the same `src/lib`
-    // layout must not opportunistically resolve a `$lib` import.
-    #[test]
-    fn lib_alias_not_resolved_without_sveltekit_signal() {
-        let (_dir, index, _lib_canon, route_canon) =
-            build_sveltekit_index(r#"{"name":"app","dependencies":{"react":"^18.0.0"}}"#);
-
-        let imp = index
-            .get_imports(&route_canon)
-            .iter()
-            .find(|i| i.specifier == "$lib/utils")
-            .expect("$lib/utils import must be indexed");
-        assert!(
-            imp.source_path.is_none(),
-            "$lib/* must not resolve in a non-SvelteKit project"
-        );
-    }
-
-    /// Build a Cypress-shaped project: a `cypress.config.ts` at the root, a
-    /// `cypress/utils/urls.ts` exporting `used_export` (and `dead_export`), and a
-    /// `cypress/e2e/x.test.ts` importing `used_export` via the `cypress/utils/...`
-    /// alias.
-    #[cfg(test)]
-    fn build_cypress_index() -> (TempDir, ImportIndex, PathBuf, PathBuf) {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("cypress.config.ts"), "export default {};\n").unwrap();
-        fs::create_dir_all(dir.path().join("cypress/utils")).unwrap();
-        fs::create_dir_all(dir.path().join("cypress/e2e")).unwrap();
-        let utils = dir.path().join("cypress/utils/urls.ts");
-        fs::write(
-            &utils,
-            "export const used_export = '/dashboard/list';\nexport const dead_export = '/chart/list';\n",
-        )
-        .unwrap();
-        let test = dir.path().join("cypress/e2e/x.test.ts");
-        fs::write(
-            &test,
-            "import { used_export } from 'cypress/utils/urls';\nexport const used = used_export;\n",
-        )
-        .unwrap();
-        let sources = [
-            SourceFile { path: utils.clone(), language: Language::TypeScript },
-            SourceFile { path: test.clone(), language: Language::TypeScript },
-        ];
-        let refs: Vec<&SourceFile> = sources.iter().collect();
-        let index = ImportIndex::build(&refs);
-        let utils_canon = fs::canonicalize(&utils).unwrap();
-        let test_canon = fs::canonicalize(&test).unwrap();
-        (dir, index, utils_canon, test_canon)
-    }
-
-    // Regression for #1562: in a Cypress project, `cypress/<path>` resolves from
-    // the project root, so `import { used_export } from 'cypress/utils/urls'`
-    // resolves to `cypress/utils/urls.ts`. The synthesized `cypress/*` alias must
-    // link the importer and keep `used_export` cross-file used (not a dead export).
-    #[test]
-    fn cypress_alias_resolves_when_cypress_detected() {
-        let (_dir, index, utils_canon, test_canon) = build_cypress_index();
-
-        let imp = index
-            .get_imports(&test_canon)
-            .iter()
-            .find(|i| i.specifier == "cypress/utils/urls")
-            .expect("cypress/utils/urls import must be indexed");
-        assert_eq!(
-            imp.source_path.as_ref(),
-            Some(&utils_canon),
-            "cypress/* must resolve to <root>/cypress/* in a Cypress project"
-        );
-        // `used_export` is reachable from the test importer, so it is not dead.
-        assert!(
-            !index.get_usages(&utils_canon, "used_export").is_empty(),
-            "used_export must record a cross-file usage via the cypress alias"
-        );
-    }
-
-    // Negative-space guard for #1562: an export that nothing imports stays dead
-    // even when the Cypress alias is active. The alias must not blanket-resolve
-    // every export in the cypress dir as used.
-    #[test]
-    fn cypress_alias_keeps_genuinely_unused_export_dead() {
-        let (_dir, index, utils_canon, _test_canon) = build_cypress_index();
-
-        assert!(
-            index.get_usages(&utils_canon, "dead_export").is_empty(),
-            "an export imported by nobody must stay dead under the cypress alias"
-        );
-    }
-
-    // Negative-space guard for #1562: the `cypress/*` synthesis is gated on the
-    // Cypress signal (a `cypress.config.*` file or a `cypress/` directory). A
-    // project with neither must not synthesize the alias, so a `cypress/...`
-    // specifier stays unresolved here — leaving a real npm `cypress` package
-    // submodule import to oxc rather than mis-mapping it to a project file.
-    #[test]
-    fn cypress_alias_not_resolved_without_cypress_signal() {
-        let dir = TempDir::new().unwrap();
-        // No cypress.config.* and no `cypress/` directory: not a Cypress project.
-        fs::create_dir_all(dir.path().join("utils")).unwrap();
-        let utils = dir.path().join("utils/urls.ts");
-        fs::write(&utils, "export const used_export = '/x';\n").unwrap();
-        let consumer = dir.path().join("consumer.ts");
-        // A `cypress/...` specifier that happens to match a relative source path
-        // shape must NOT be alias-resolved: this is a real npm `cypress` package
-        // submodule import in a non-Cypress project.
-        fs::write(
-            &consumer,
-            "import mount from 'cypress/utils/urls';\nexport const used = mount;\n",
-        )
-        .unwrap();
-        let sources = [
-            SourceFile { path: utils.clone(), language: Language::TypeScript },
-            SourceFile { path: consumer.clone(), language: Language::TypeScript },
-        ];
-        let refs: Vec<&SourceFile> = sources.iter().collect();
-        let index = ImportIndex::build(&refs);
-        let consumer_canon = fs::canonicalize(&consumer).unwrap();
-
-        let imp = index
-            .get_imports(&consumer_canon)
-            .iter()
-            .find(|i| i.specifier == "cypress/utils/urls")
-            .expect("cypress/utils/urls import must be indexed");
-        assert!(
-            imp.source_path.is_none(),
-            "cypress/* must not alias-resolve in a non-Cypress project"
         );
     }
 

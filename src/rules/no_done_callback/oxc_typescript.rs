@@ -26,7 +26,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if !ctx.project.has_framework("jest") && !ctx.project.has_framework("mocha") {
+        if !ctx.project.has_framework("jest") {
             return;
         }
 

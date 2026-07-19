@@ -43,18 +43,6 @@ impl OxcCheck for Check {
             return;
         }
 
-        // SvelteKit route modules (`+page.ts`, `+layout.server.ts`, `+server.ts`,
-        // …) expose page options through `const` exports whose names are the
-        // framework's protocol: `export const prerender = true`, `ssr`, `csr`.
-        // SvelteKit reads them by exact lowercase name, so they cannot be
-        // SCREAMING_SNAKE_CASE (issue #1586). The route-file gate keeps the
-        // exemption from covering an ordinary lowercase const in the same file.
-        let in_svelte_route = ctx
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(crate::rules::path_utils::is_sveltekit_route_file);
-
         // Mock and fixture files (under `mock/`, `mocks/`, `__mocks__/`,
         // `fixtures/`, `__fixtures__/`) hold value-level mocks of runtime config
         // objects and scenario fixture data. A boolean mock flag mirrors the
@@ -72,10 +60,6 @@ impl OxcCheck for Check {
             };
 
             let name = id.name.as_str();
-
-            if in_svelte_route && is_sveltekit_page_option(name) {
-                continue;
-            }
 
             if !is_primitive_init(declarator) {
                 continue;
@@ -139,17 +123,6 @@ impl OxcCheck for Check {
             });
         }
     }
-}
-
-/// SvelteKit's documented page-option export names. In a SvelteKit route module
-/// these `const` exports form the framework's protocol — SvelteKit reads them by
-/// exact lowercase name, so they cannot be renamed to SCREAMING_SNAKE_CASE.
-/// See <https://svelte.dev/docs/kit/page-options>.
-fn is_sveltekit_page_option(name: &str) -> bool {
-    matches!(
-        name,
-        "prerender" | "ssr" | "csr" | "trailingSlash" | "config" | "actions" | "load" | "entries"
-    )
 }
 
 /// Canonical DOM, canvas, and viewport dimension property names. In web

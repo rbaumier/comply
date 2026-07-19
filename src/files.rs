@@ -24,16 +24,13 @@ const TSX_EXTENSIONS: &[&str] = &["tsx", "jsx"];
 const JS_EXTENSIONS: &[&str] = &["js", "mjs"];
 const RUST_EXTENSIONS: &[&str] = &["rs"];
 const VUE_EXTENSIONS: &[&str] = &["vue"];
-const SVELTE_EXTENSIONS: &[&str] = &["svelte"];
 const TOML_EXTENSIONS: &[&str] = &["toml"];
 const JSON_EXTENSIONS: &[&str] = &["json"];
 const CSS_EXTENSIONS: &[&str] = &["css"];
 const YAML_EXTENSIONS: &[&str] = &["yml", "yaml"];
 const DOCKERFILE_EXTENSIONS: &[&str] = &["dockerfile"];
 const SQL_EXTENSIONS: &[&str] = &["sql"];
-const GRAPHQL_EXTENSIONS: &[&str] = &["graphql", "gql"];
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "mdx"];
-const ASTRO_EXTENSIONS: &[&str] = &["astro"];
 const HTML_EXTENSIONS: &[&str] = &["html", "htm"];
 
 /// A discovered file tagged with its detected language.
@@ -79,23 +76,12 @@ pub enum Language {
     Dockerfile,
     /// SQL file `.sql` — text-based rules only.
     Sql,
-    /// GraphQL schema or operation file `.graphql` / `.gql` — text-based
-    /// rules only.
-    GraphQl,
-    /// Svelte component `.svelte` — text-based rules only.
-    Svelte,
     /// Markdown / MDX documentation `.md` / `.mdx`. Indexed only for the ESM
-    /// `import` statements at the top of the file (MDX/Docusaurus/Nextra/Astro
-    /// process these at build time), so a component consumed exclusively from a
+    /// `import` statements at the top of the file (an MDX toolchain processes
+    /// these at build time), so a component consumed exclusively from a
     /// docs page is recorded as a real cross-file usage. No tree-sitter grammar
     /// is bundled; no lint rule targets it.
     Markdown,
-    /// Astro component `.astro`. Indexed only for the ESM `import` statements in
-    /// the frontmatter script block (between the leading `---` fences), so a
-    /// module consumed exclusively from an `.astro` file is recorded as a real
-    /// cross-file usage. No tree-sitter grammar is bundled; no lint rule targets
-    /// it.
-    Astro,
     /// HTML document `.html` / `.htm`. Indexed only for the local
     /// `<script src="…">` bundler entries it declares (Parcel/Vite/plain-ESM load
     /// the app from an HTML file), so the entry module a `<script>` points at —
@@ -121,21 +107,18 @@ impl Language {
             Language::Yaml => "yaml",
             Language::Dockerfile => "dockerfile",
             Language::Sql => "sql",
-            Language::GraphQl => "graphql",
-            Language::Svelte => "svelte",
             Language::Markdown => "md",
-            Language::Astro => "astro",
             Language::Html => "html",
         }
     }
 
     /// True for a language indexed only for the cross-file imports it declares
-    /// and dispatched to no lint engine (Markdown / Astro / HTML). A file in such
+    /// and dispatched to no lint engine (Markdown / HTML). A file in such
     /// a language is never visited by a rule, so it must never be chosen as a
     /// once-per-project anchor: a cross-file rule keyed to that anchor would find
     /// no dispatched file matching it and silently emit nothing.
     pub fn is_import_index_only(self) -> bool {
-        matches!(self, Language::Markdown | Language::Astro | Language::Html)
+        matches!(self, Language::Markdown | Language::Html)
     }
 
     /// True if the language is a TypeScript/JavaScript variant — used by the
@@ -176,8 +159,6 @@ impl Language {
             Some(Language::Rust)
         } else if VUE_EXTENSIONS.contains(&ext) {
             Some(Language::Vue)
-        } else if SVELTE_EXTENSIONS.contains(&ext) {
-            Some(Language::Svelte)
         } else if TOML_EXTENSIONS.contains(&ext) {
             Some(Language::Toml)
         } else if JSON_EXTENSIONS.contains(&ext) {
@@ -188,12 +169,8 @@ impl Language {
             Some(Language::Yaml)
         } else if SQL_EXTENSIONS.contains(&ext) {
             Some(Language::Sql)
-        } else if GRAPHQL_EXTENSIONS.contains(&ext) {
-            Some(Language::GraphQl)
         } else if MARKDOWN_EXTENSIONS.contains(&ext) {
             Some(Language::Markdown)
-        } else if ASTRO_EXTENSIONS.contains(&ext) {
-            Some(Language::Astro)
         } else if HTML_EXTENSIONS.contains(&ext) {
             Some(Language::Html)
         } else if DOCKERFILE_EXTENSIONS.contains(&ext)
@@ -449,12 +426,8 @@ fn classify(path: &Path) -> Option<SourceFile> {
             Language::Yaml
         } else if SQL_EXTENSIONS.contains(&ext) {
             Language::Sql
-        } else if GRAPHQL_EXTENSIONS.contains(&ext) {
-            Language::GraphQl
         } else if MARKDOWN_EXTENSIONS.contains(&ext) {
             Language::Markdown
-        } else if ASTRO_EXTENSIONS.contains(&ext) {
-            Language::Astro
         } else if HTML_EXTENSIONS.contains(&ext) {
             Language::Html
         } else if DOCKERFILE_EXTENSIONS.contains(&ext) {
@@ -515,13 +488,6 @@ mod tests {
         // component consumed only from a docs page is recorded as used.
         assert_eq!(lang_for("md"), Language::Markdown);
         assert_eq!(lang_for("mdx"), Language::Markdown);
-    }
-
-    #[test]
-    fn classify_astro_files() {
-        // `.astro` is indexed for its frontmatter ESM imports so a module
-        // consumed only from an Astro component is recorded as used.
-        assert_eq!(lang_for("astro"), Language::Astro);
     }
 
     #[test]

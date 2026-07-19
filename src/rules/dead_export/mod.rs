@@ -80,8 +80,8 @@ mod tests {
     }
 
     // Regression for #1556 — a component consumed only from `.md` / `.mdx` doc
-    // pages (Docusaurus/Nextra/Astro ESM imports) must not be flagged dead: the
-    // import index now scans those files, so the export has a real importer.
+    // pages (MDX ESM imports) must not be flagged dead: the import index now
+    // scans those files, so the export has a real importer.
     #[test]
     fn no_fp_for_export_imported_only_from_markdown_issue_1556() {
         let files: Vec<(&str, &str)> = vec![

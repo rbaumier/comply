@@ -250,16 +250,6 @@ disabled = true
 [rules.compose-healthcheck-required]
 
 # ---------------------------------------------------------------
-# NestJS — no thresholds, surfaced for `comply config print`.
-# ---------------------------------------------------------------
-
-[rules.nestjs-controller-return-type]
-
-[rules.nestjs-no-entity-in-controller]
-
-[rules.nestjs-no-forwardref-abuse]
-
-# ---------------------------------------------------------------
 # Next.js — no thresholds, same rationale.
 # ---------------------------------------------------------------
 
@@ -424,25 +414,6 @@ min_replicas = 3
 [rules.security-no-cors-reflect-origin]
 
 [rules.security-no-password-in-log]
-
-# ---------------------------------------------------------------
-# GraphQL — description style.
-#
-# `block` requires triple-quoted (`"""…"""`) descriptions; `inline`
-# requires single-quoted (`"…"`) ones. Either way the whole schema
-# must use the one configured style.
-# ---------------------------------------------------------------
-
-[rules.use-consistent-graphql-descriptions]
-style = "block"
-
-# Disallowed GraphQL root types. Empty by default — the rule is a no-op until a
-# project lists the object types it forbids (matched case-insensitively against
-# `type Foo`/`extend type Foo` names), e.g. to forbid mutations and
-# subscriptions:
-#   disallow = ["mutation", "subscription"]
-[rules.no-root-type]
-disallow = []
 
 [rules.use-unique-element-ids]
 # Component names whose static `id` is intentional (e.g. an i18n message id, not
