@@ -6,7 +6,9 @@
 
 You can improve the prompt, use skills, but it won't catch everything. A linter
 will, on every run. I gathered every linter rule I could find and judged worth
-keeping, **~1900 of them**, into one fast binary. For TS and Rust.
+keeping, **~1900 of them**, into one fast binary.
+
+**Supported languages & frameworks:** TypeScript, JavaScript, Rust, Vue, CSS, SQL, JSON, YAML, Dockerfile, TOML, React, Next.js, Nuxt, Node, Express, Hono, Elysia, Drizzle, Prisma, Zod, TanStack Query, TanStack Router, Vue Router, XState, shadcn/ui, Tailwind, React Email, React Native, Better Auth, better-result, Jest, Playwright, Vite, Webpack, i18n, Kubernetes, Docker Compose, GitHub Actions.
 
 > [!WARNING]
 > **comply is in early alpha and very much a work in progress.** Many rules are aggressively opinionated, and **you should expect a fair number of false positives.** Treat its output as suggestions to review, not gospel — and please [open an issue](https://github.com/rbaumier/comply/issues) when a rule fires where it shouldn't. Rule IDs, defaults, and behavior are all still subject to change.
@@ -71,20 +73,26 @@ export async function processOrder(id, items, discount, isGift = false, retry = 
 }
 ```
 
-Here's the version comply signs off on (`comply: all clear`) — validated input,
-named constants, an early guard, and the error left to propagate with its stack
-intact instead of being re-wrapped and swallowed:
+Here's the version comply signs off on (`comply: all clear`): validated input,
+named constants, early guards, and a `Result` returned instead of a thrown
+error, so failures come back to the caller as values.
 
 ```ts
+import { ok, err } from "better-result";
+import type { Result } from "better-result";
+
 const FREE_SHIPPING_THRESHOLD = 100;
 const EXPRESS_FEE = 5;
 const STANDARD_FEE = 2;
 
-export async function fulfillOrder(order: Order): Promise<number> {
+export async function fulfillOrder(order: Order): Promise<Result<number, ReceiptError>> {
   const cart = cartSchema.parse(order.cart);
-  if (!cart.lines.includes(order.id)) return 0;
-  await sendReceipt(order.id);
-  return order.isGift ? 0 : feeFor(cart) - order.discount;
+  if (!cart.lines.includes(order.id)) return ok(0);
+
+  const receipt = await sendReceipt(order.id);
+  if (receipt.isErr()) return err(receipt.error);
+
+  return ok(order.isGift ? 0 : feeFor(cart) - order.discount);
 }
 
 function feeFor(cart: Cart): number {
@@ -100,23 +108,6 @@ Run `comply explain <rule-id>` for the full rationale behind any of these.
 - **In-process AST rules** powered by [tree-sitter](https://tree-sitter.github.io/) — no Node runtime required for most checks.
 - **Delegation to best-in-class tools** when installed: [oxlint](https://oxc.rs/) for TypeScript/JS, [clippy](https://doc.rust-lang.org/clippy/) for Rust. Not on your `PATH`? comply degrades gracefully and runs its own rules only.
 - **Framework-aware** — comply detects your stack from `package.json` and project files, then unlocks the matching rules automatically.
-
-## Supported languages & frameworks
-
-comply's engine lints these languages:
-
-| Language | Extensions | What runs |
-| --- | --- | --- |
-| **TypeScript / JavaScript** | `.ts` `.tsx` `.js` `.jsx` `.mts` `.mjs` | Full in-process rule set + oxlint delegation + type-aware checks |
-| **Rust** | `.rs` | In-process tree-sitter rules + clippy delegation |
-| **Vue** | `.vue` | Single-File-Component template/script rules |
-| **JSON** | `.json` | Config & i18n-translation rules |
-
-Markdown and HTML are read only for their `import` / `<script src>` references, so
-a component used exclusively from a docs page or an HTML entry point still counts
-as "used" — no rules target them directly.
-
-**Auto-detected frameworks:** Next.js · Nuxt · Elysia · Hono · Express · Drizzle ORM · Zod · TanStack Query · TanStack Router · Vue Router · XState · shadcn/ui · React Email · React Native · Better Auth · better-result · Jest · Playwright · Vite · Webpack · i18n.
 
 ## Features
 
