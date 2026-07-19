@@ -9,7 +9,7 @@ A fast, opinionated, multi-language linter that enforces architecture and coding
 
 ## What it is
 
-comply walks your project, runs **1893 rules across 169 categories**, and reports violations in a familiar ESLint-style format. Rather than wiring up a different linter per language and framework, it bundles everything into one tool:
+comply walks your project, runs **2010 rules across 184 categories**, and reports violations in a familiar ESLint-style format. Rather than wiring up a different linter per language and framework, it bundles everything into one tool. Browse the full, auto-generated list in [`docs/rules.md`](docs/rules.md):
 
 - **In-process AST rules** powered by [tree-sitter](https://tree-sitter.github.io/) — no Node runtime required for most checks.
 - **Delegation to best-in-class tools** when they're installed: [oxlint](https://oxc.rs/) for TypeScript/JS, [clippy](https://doc.rust-lang.org/clippy/) for Rust. If they're not on your `PATH`, comply degrades gracefully and runs its own rules only.
@@ -96,7 +96,7 @@ comply --working-tree --diff-only   # restrict findings to changed lines only
 ```bash
 comply list                  # list every registered rule
 comply explain <rule-id>     # full description + remediation for one rule
-comply catalog               # generate a markdown catalog grouped by category
+comply catalog               # generate a markdown catalog grouped by category (see docs/rules.md)
 comply rules "id-a,id-b"     # run only the named rules
 comply config init           # write a comply.toml seeded with all defaults
 comply config print          # print the default config to stdout
@@ -162,7 +162,7 @@ comply [path]
   └─ 6. Format, print, exit 0/1/2
 ```
 
-Rules are grouped into categories you can explore with `comply catalog`. Each rule has a stable ID, a severity, a one-line description, and a remediation message surfaced via `comply explain <rule-id>`.
+Rules are grouped into categories you can explore with `comply catalog` — the full generated list lives in [`docs/rules.md`](docs/rules.md). Each rule has a stable ID, a severity, a one-line description, and a remediation message surfaced via `comply explain <rule-id>`.
 
 ## Status & feedback
 
