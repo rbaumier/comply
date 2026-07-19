@@ -2,22 +2,115 @@
 
 > Your code will comply.
 
-A fast, opinionated, multi-language linter that enforces architecture and coding-standards rules across your whole repository — TypeScript, Rust, Vue, SQL, CSS, Dockerfiles, Kubernetes manifests, and more — from a single binary.
+**AI writes your code now, and it ships slop.**
+
+You can improve the prompt, use skills, but it won't catch everything. A linter
+will, on every run. I gathered every linter rule I could find and judged worth
+keeping, **~1900 of them**, into one fast binary.
+
+**Supported languages & frameworks:** TypeScript, JavaScript, Rust, Vue, CSS, SQL, JSON, YAML, Docker, TOML, React, Next.js, Nuxt, Node, Express, Hono, Elysia, Drizzle, Prisma, Zod, TanStack Query, TanStack Router, Vue Router, XState, shadcn/ui, Tailwind, React Email, React Native, Better Auth, better-result, Jest, Vitest, Playwright, Vite, Webpack, i18n, Kubernetes.
 
 > [!WARNING]
-> **comply is in early alpha and very much a work in progress.** It ships ~1900 rules, many of them aggressively opinionated, and **you should expect a fair number of false positives.** Treat its output as suggestions to review, not gospel — and please [open an issue](https://github.com/rbaumier/comply/issues) when a rule fires where it shouldn't. Rule IDs, defaults, and behavior are all still subject to change.
+> **comply is in early alpha and very much a work in progress.** Many rules are aggressively opinionated, and **you should expect a fair number of false positives.** Treat its output as suggestions to review, not gospel — and please [open an issue](https://github.com/rbaumier/comply/issues) when a rule fires where it shouldn't. Rule IDs, defaults, and behavior are all still subject to change.
 
-## What it is
+## See it in action
 
-comply walks your project, runs **2010 rules across 184 categories**, and reports violations in a familiar ESLint-style format. Rather than wiring up a different linter per language and framework, it bundles everything into one tool. Browse the full, auto-generated list in [`docs/rules.md`](docs/rules.md):
+An AI agent hands you this. It compiles. It "works". `comply --comply-only` flags **all 24 problems below** — one caret per finding, pointing at the exact column:
+
+```ts
+// TODO: handle partial refunds
+// ▲
+// └── todo-needs-issue-link
+export async function processOrder(id, items, discount, isGift = false, retry = false) {
+//     ▲              ▲                ▲
+//     │              │                └── no-generic-names -> 'items'
+//     │              └── no-generic-names -> 'process...'
+//     ├── max-params (5 params, max 4)
+//     └── no-async-without-await
+  let done = false;
+//▲   ▲
+//│   └── boolean-naming -> isDone
+//└── no-let
+  const cart = JSON.parse(items) as Cart;
+//             ▲
+//             ├── no-type-assertion
+//             ├── no-json-parse-cast
+//             ├── no-unchecked-json-parse
+//             ├── try-catch-json-parse
+//             └── ts-no-as-narrowing
+  if (cart.lines.indexOf(id) === -1) return 0;
+//    ▲
+//    └── no-indexof-equality
+  let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;
+//▲                      ▲     ▲   ▲
+//│                      │     │   └── no-nested-ternary
+//│                      │     └── no-magic-numbers -> 5
+//│                      └── no-magic-numbers -> 100
+//└── no-let
+  if (!isGift) {
+//▲   ▲
+//│   └── no-negated-condition
+//└── prefer-ternary
+    fee = fee - discount;
+  } else {
+    fee = 0;
+  }
+  try {
+//▲
+//└── no-try-statements
+    sendReceipt(id);
+    done = true;
+  } catch (e) {
+//         ▲
+//         ├── catch-error-name -> error
+//         └── ts-no-implicit-any-catch
+    throw new Error(e.message);
+//        ▲
+//        ├── error-without-cause
+//        └── exception-use-error-cause
+  }
+  return done == true ? fee : 0;
+}
+```
+
+Here's the version comply signs off on (`comply: all clear`): validated input,
+named constants, early guards, and a `Result` returned instead of a thrown
+error, so failures come back to the caller as values.
+
+```ts
+import { ok, err } from "better-result";
+import type { Result } from "better-result";
+
+const FREE_SHIPPING_THRESHOLD = 100;
+const EXPRESS_FEE = 5;
+const STANDARD_FEE = 2;
+
+export async function fulfillOrder(order: Order): Promise<Result<number, ReceiptError>> {
+  const cart = cartSchema.parse(order.cart);
+  if (!cart.lines.includes(order.id)) return ok(0);
+
+  const receipt = await sendReceipt(order.id);
+  if (receipt.isErr()) return err(receipt.error);
+
+  return ok(order.isGift ? 0 : feeFor(cart) - order.discount);
+}
+
+function feeFor(cart: Cart): number {
+  if (cart.total > FREE_SHIPPING_THRESHOLD) return EXPRESS_FEE;
+  return cart.vip ? 0 : STANDARD_FEE;
+}
+```
+
+Run `comply explain <rule-id>` for the full rationale behind any of these.
+
+## How it works
 
 - **In-process AST rules** powered by [tree-sitter](https://tree-sitter.github.io/) — no Node runtime required for most checks.
-- **Delegation to best-in-class tools** when they're installed: [oxlint](https://oxc.rs/) for TypeScript/JS, [clippy](https://doc.rust-lang.org/clippy/) for Rust. If they're not on your `PATH`, comply degrades gracefully and runs its own rules only.
-- **Framework awareness** — comply detects what you're using (Next.js, Remix, Elysia, Angular, Drizzle, TanStack, Zod…) and unlocks framework-specific rules automatically.
+- **Delegation to best-in-class tools** when installed: [oxlint](https://oxc.rs/) for TypeScript/JS, [clippy](https://doc.rust-lang.org/clippy/) for Rust. Not on your `PATH`? comply degrades gracefully and runs its own rules only.
+- **Framework-aware** — comply detects your stack from `package.json` and project files, then unlocks the matching rules automatically.
 
 ## Features
 
-- **One binary, many languages** — TypeScript / JSX / TSX / JavaScript, Rust, Vue SFCs, TOML, JSON, CSS, YAML (Kubernetes, docker-compose, GitHub Actions), Dockerfiles, SQL, and GraphQL.
 - **Git-aware scanning** — lint the whole tree, the working tree, staged files, a specific commit, or a commit range.
 - **CI-friendly diff mode** — `--diff-only` reports only findings on lines you actually changed, so you don't drown in pre-existing tech debt.
 - **Auto-fix** — `--fix` applies fixes for any rule whose backend supports them.
@@ -54,19 +147,12 @@ cargo install --path .
 
 ### Run
 
-Lint the current directory:
-
 ```bash
-comply
+comply            # lint the current directory
+comply ./src      # lint a specific path
 ```
 
-Lint a specific path:
-
-```bash
-comply ./src
-```
-
-That's it. comply exits `0` when clean, `1` when it finds violations, and `2` if it crashes.
+comply exits `0` when clean, `1` when it finds violations, and `2` if it crashes.
 
 ## Usage
 
@@ -96,7 +182,7 @@ comply --working-tree --diff-only   # restrict findings to changed lines only
 ```bash
 comply list                  # list every registered rule
 comply explain <rule-id>     # full description + remediation for one rule
-comply catalog               # generate a markdown catalog grouped by category (see docs/rules.md)
+comply catalog               # generate a markdown catalog grouped by category
 comply rules "id-a,id-b"     # run only the named rules
 comply config init           # write a comply.toml seeded with all defaults
 comply config print          # print the default config to stdout
@@ -105,24 +191,17 @@ comply lsp                   # run as a Language Server on stdio
 
 ## Configuration
 
-comply reads an optional `comply.toml` from your project root, merged on top of its built-in defaults. Generate a fully-commented starting point with:
-
-```bash
-comply config init
-```
-
-Every tunable threshold lives under a `[rules.<id>]` table:
+comply reads an optional `comply.toml` from your project root, merged on top of its built-in defaults. Generate a fully-commented starting point with `comply config init`. Every tunable threshold lives under a `[rules.<id>]` table:
 
 ```toml
 [rules.id-length]
 min = 3
 
-[rules.no-multi-op-oneliner]
-min_ops = 10
-min_line_length = 100
+[rules.max-params]
+max = 4
 ```
 
-The goal is to keep this file short — if you find yourself reaching for lots of overrides, that's usually a signal a rule needs fixing rather than silencing. Issues welcome.
+Keep this file short — if you find yourself reaching for lots of overrides, that's usually a signal a rule needs fixing rather than silencing. Issues welcome.
 
 ## Suppressing diagnostics
 
@@ -131,38 +210,13 @@ When a rule fires where it genuinely shouldn't, suppress it inline. A justificat
 ```ts
 // comply-ignore: no-throw — rethrowing after cleanup, intentional
 throw err;
-
-const x = cheat(); // comply-ignore: rust-no-unwrap — value is a compile-time constant
 ```
 
-Suppress a rule for an entire file with:
-
-```ts
-// comply-ignore-file: no-anonymous-default-export — this is a framework entry point
-```
+Suppress a rule for an entire file with `// comply-ignore-file: <rule-id> — <reason>`.
 
 ## Editor integration
 
 comply ships a Language Server. Point your editor at `comply lsp` (stdio transport) to get diagnostics inline as you type. The LSP path skips the oxlint/clippy subprocesses for responsiveness and runs the in-process tree-sitter rules only.
-
-## How it works
-
-```
-comply [path]
-  ├─ 1. Parse CLI → scan mode (which files)
-  ├─ 2. Discover files (filesystem walk or git diff)
-  ├─ 3. Detect frameworks from package.json + project files
-  ├─ 4. For each file, run matching rule backends:
-  │       • tree-sitter  — in-process AST walk
-  │       • text         — line/regex/filesystem checks
-  │       • oxlint        — delegated TS/JS linting (if installed)
-  │       • clippy        — delegated Rust linting (if installed)
-  │       • type-aware    — TypeScript checker queries (opt-in)
-  ├─ 5. Apply comply-ignore suppressions
-  └─ 6. Format, print, exit 0/1/2
-```
-
-Rules are grouped into categories you can explore with `comply catalog` — the full generated list lives in [`docs/rules.md`](docs/rules.md). Each rule has a stable ID, a severity, a one-line description, and a remediation message surfaced via `comply explain <rule-id>`.
 
 ## Status & feedback
 
