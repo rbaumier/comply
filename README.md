@@ -90,36 +90,36 @@ import { ok, err } from "better-result";
 import type { Result } from "better-result";
 
 const FREE_SHIPPING_THRESHOLD = 100;
-const EXPRESS_FEE = 5;
-const STANDARD_FEE = 2;
+const STANDARD_SHIPPING_FEE = 5;
 
 /**
- * Validates a raw order, charges shipping, and emits a receipt.
+ * Validates a raw order, computes the shipping fee, and emits a receipt.
  *
  * @example
  *   const result = await fulfillOrder(req.body);
- *   // => ok({ receipt, shippingFee: 5 })
+ *   // => ok({ receipt, shippingFee })
  */
 export async function fulfillOrder(rawOrder: unknown): Promise<Result<Fulfillment, FulfillmentError>> {
-  const order = orderSchema.parse(rawOrder);
-  if (!order.cart.lines.includes(order.id)) {
-    return err(new LineItemNotFoundError(order.id));
+  const parsed = orderSchema.safeParse(rawOrder);
+  if (!parsed.success) {
+    return err(new InvalidOrderError(parsed.error));
   }
+  const order = parsed.data;
 
-  const receipt = await sendReceipt(order.id);
+  const shippingFee = shippingFeeFor(order.cart);
+  const receipt = await sendReceipt(order.id, shippingFee);
   if (receipt.isErr()) {
     return err(receipt.error);
   }
 
-  const shippingFee = order.isGift ? 0 : feeFor(order.cart) - order.discount;
   return ok({ receipt: receipt.value, shippingFee });
 }
 
-function feeFor(cart: Cart): number {
-  if (cart.total > FREE_SHIPPING_THRESHOLD) {
-    return EXPRESS_FEE;
+function shippingFeeFor(cart: Cart): number {
+  if (cart.total >= FREE_SHIPPING_THRESHOLD) {
+    return 0;
   }
-  return cart.vip ? 0 : STANDARD_FEE;
+  return STANDARD_SHIPPING_FEE;
 }
 ```
 
