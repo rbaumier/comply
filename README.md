@@ -15,7 +15,7 @@ keeping, **~2000 of them**, into one fast binary.
 
 ## See it in action
 
-An AI agent hands you this. It compiles. It "works". `comply --comply-only` flags **all 24 problems below** — one caret per finding, pointing at the exact column:
+An AI agent hands you this. It compiles. It "works". `comply` flags **all 29 problems below** — one caret per finding, pointing at the exact column:
 
 ```ts
 // TODO: handle partial refunds
@@ -32,7 +32,8 @@ export async function processOrder(id, items, discount, isGift = false, retry = 
 //│   └── boolean-naming -> isDone
 //└── no-let
   const cart = JSON.parse(items) as Cart;
-//             ▲
+//             ▲          ▲
+//             │          └── no-unsafe-argument
 //             ├── no-type-assertion
 //             ├── no-json-parse-cast
 //             ├── no-unchecked-json-parse
@@ -52,6 +53,8 @@ export async function processOrder(id, items, discount, isGift = false, retry = 
 //│   └── no-negated-condition
 //└── prefer-ternary
     fee = fee - discount;
+//  ▲
+//  └── operator-assignment
   } else {
     fee = 0;
   }
@@ -70,12 +73,16 @@ export async function processOrder(id, items, discount, isGift = false, retry = 
 //        └── exception-use-error-cause
   }
   return done == true ? fee : 0;
+//       ▲    ▲
+//       │    └── eqeqeq
+//       ├── no-unnecessary-boolean-literal-compare
+//       └── no-unnecessary-condition
 }
 ```
 
-Here's the version comply signs off on (`comply: all clear`): validated input,
-named constants, early guards, and a `Result` returned instead of a thrown
-error, so failures come back to the caller as values.
+Here's the version comply signs off on (`comply: all clear`): the untrusted
+payload validated by a schema, named constants, early guards, and a `Result`
+returned instead of a thrown error, so failures come back to the caller as values.
 
 ```ts
 import { ok, err } from "better-result";
@@ -85,14 +92,14 @@ const FREE_SHIPPING_THRESHOLD = 100;
 const EXPRESS_FEE = 5;
 const STANDARD_FEE = 2;
 
-export async function fulfillOrder(order: Order): Promise<Result<number, ReceiptError>> {
-  const cart = cartSchema.parse(order.cart);
-  if (!cart.lines.includes(order.id)) return ok(0);
+export async function fulfillOrder(payload: unknown): Promise<Result<number, ReceiptError>> {
+  const order = orderSchema.parse(payload);
+  if (!order.cart.lines.includes(order.id)) return ok(0);
 
   const receipt = await sendReceipt(order.id);
   if (receipt.isErr()) return err(receipt.error);
 
-  return ok(order.isGift ? 0 : feeFor(cart) - order.discount);
+  return ok(order.isGift ? 0 : feeFor(order.cart) - order.discount);
 }
 
 function feeFor(cart: Cart): number {
