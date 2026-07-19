@@ -14,25 +14,50 @@ step (`--diff-only`), a pre-commit hook, or in CI.
 
 ## See it in action
 
-An AI agent hands you this. It compiles. It "works". `comply --comply-only` flags **25 violations** in 19 lines (a selection annotated below):
+An AI agent hands you this. It compiles. It "works". `comply --comply-only` flags **all 25 problems below** — one caret per finding, pointing at the exact column:
 
 ```ts
-// TODO: handle partial refunds                                       // ✗ todo-needs-issue-link
-export async function processOrder(id, items, discount, isGift = false, retry = false) { // ✗ max-params · no-async-without-await · no-generic-names (process, items)
-  let done = false;                                                   // ✗ no-let · boolean-naming → isDone
-  const cart = JSON.parse(localStorage.getItem("cart")) as Cart;      // ✗ no-type-assertion · no-unchecked-json-parse · no-json-parse-cast
-  if (cart.lines.indexOf(id) === -1) return 0;                        // ✗ no-indexof-equality
-  let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;                  // ✗ no-nested-ternary · no-magic-numbers · no-let
-  if (!isGift) {                                                       // ✗ no-negated-condition · prefer-ternary
+// TODO: handle partial refunds
+// ^ todo-needs-issue-link
+export async function processOrder(id, items, discount, isGift = false, retry = false) {
+//     ^ max-params (5 params, max 4)
+//     ^ no-async-without-await
+//                    ^ no-generic-names -> 'process...'
+//                                     ^ no-generic-names -> 'items'
+  let done = false;
+//^ no-let
+//    ^ boolean-naming -> isDone
+  const cart = JSON.parse(localStorage.getItem("cart")) as Cart;
+//             ^ no-type-assertion
+//             ^ no-json-parse-cast
+//             ^ no-unchecked-json-parse
+//             ^ try-catch-json-parse
+//             ^ ts-no-as-narrowing
+//                        ^ react-no-unwrapped-localstorage
+  if (cart.lines.indexOf(id) === -1) return 0;
+//    ^ no-indexof-equality
+  let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;
+//^ no-let
+//                       ^ no-magic-numbers -> 100
+//                             ^ no-magic-numbers -> 5
+//                                 ^ no-nested-ternary
+  if (!isGift) {
+//^ prefer-ternary
+//    ^ no-negated-condition
     fee = fee - discount;
   } else {
     fee = 0;
   }
-  try {                                                               // ✗ no-try-statements
+  try {
+//^ no-try-statements
     sendReceipt(id);
     done = true;
-  } catch (e) {                                                        // ✗ catch-error-name · ts-no-implicit-any-catch
-    throw new Error(e.message);                                       // ✗ error-without-cause
+  } catch (e) {
+//         ^ catch-error-name -> error
+//         ^ ts-no-implicit-any-catch
+    throw new Error(e.message);
+//        ^ error-without-cause
+//        ^ exception-use-error-cause
   }
   return done == true ? fee : 0;
 }
