@@ -87,7 +87,7 @@ impl OxcCheck for Check {
             message: "Stream `.pipe()` does not destroy upstream/downstream on error — use \
                       `pipeline()` from `node:stream/promises` for automatic cleanup."
                 .to_string(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

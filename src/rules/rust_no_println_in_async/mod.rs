@@ -22,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
                   that stalls the reactor and interleaves output from concurrent \
                   tasks. Tracing macros are non-blocking and respect subscriber \
                   filters/spans.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

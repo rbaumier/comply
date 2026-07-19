@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "actions/setup-node without `cache:` re-downloads the npm registry on \
                   every run, wasting minutes and bandwidth.",
     remediation: "Add `cache: 'npm'` (or 'pnpm'/'yarn') inside the step's `with:` block.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ci-cd"],
 

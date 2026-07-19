@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "migration-needs-rollback",
     description: "Migration without a `down`/rollback function is irreversible.",
     remediation: "Add an explicit `down()` / `rollback()` function to every migration. Irreversible migrations prevent quick recovery from bad deploys. Make data migrations idempotent with `ON CONFLICT DO NOTHING`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "migrations"],
 

@@ -90,7 +90,7 @@ impl OxcCheck for Check {
                      the suffix keeps the schema distinguishable from the inferred \
                      TypeScript type."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

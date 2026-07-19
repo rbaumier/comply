@@ -57,7 +57,7 @@ impl OxcCheck for Check {
             message: "Casting a literal to its own literal type adds noise — use \
                       `as const` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -14,7 +14,7 @@ crate::ast_check! { on ["declaration"] prefilter = ["-webkit-", "-moz-", "-ms-",
                         &kid,
                         super::META.id,
                         format!("Vendor-prefixed value `{v}`; remove the prefix and rely on autoprefixer."),
-                        Severity::Warning,
+                        Severity::Error,
                     ));
                 }
             }
@@ -28,7 +28,7 @@ crate::ast_check! { on ["declaration"] prefilter = ["-webkit-", "-moz-", "-ms-",
                             &name,
                             super::META.id,
                             format!("Vendor-prefixed value function `{n}`; remove the prefix and rely on autoprefixer."),
-                            Severity::Warning,
+                            Severity::Error,
                         ));
                     }
                 }

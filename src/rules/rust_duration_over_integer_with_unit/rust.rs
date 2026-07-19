@@ -363,7 +363,7 @@ fn make_diagnostic(
              type-checked — `window: Duration` can't be confused between \
              seconds and millis."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     }
 }

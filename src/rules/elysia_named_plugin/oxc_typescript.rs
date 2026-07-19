@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Exported Elysia plugin has no `name` \u{2014} pass `new Elysia({ name: '...' })` for deduplication and clearer error traces.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

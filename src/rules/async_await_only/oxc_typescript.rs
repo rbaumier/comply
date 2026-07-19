@@ -258,7 +258,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`.{method}()` chain — prefer `async`/`await` for readability."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

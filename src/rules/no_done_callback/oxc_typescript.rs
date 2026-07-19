@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Test callback takes a `done`-style parameter — use async/await instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -30,7 +30,7 @@ impl TextCheck for Check {
                                 column: 1,
                                 rule_id: "sql-text-search-missing-language".into(),
                                 message: "`to_tsvector`/`to_tsquery` without a language argument is not IMMUTABLE and depends on `default_text_search_config`. Pass the language explicitly, e.g. `'english'`.".into(),
-                                severity: Severity::Warning,
+                                severity: Severity::Error,
                                 span: None,
                             });
                         }

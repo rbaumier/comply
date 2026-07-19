@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "hono-no-hardcoded-cors-origin",
     description: "CORS origin is a hardcoded string literal — environments share the same allowed origin.",
     remediation: "Read the origin from an environment variable or per-environment config (e.g. `cors({ origin: env.CORS_ORIGIN })`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["hono", "security"],
 

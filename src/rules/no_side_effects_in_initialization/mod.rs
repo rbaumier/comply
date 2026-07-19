@@ -25,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Top-level side effects (bare calls, `new`, IIFE) at module \
                   scope prevent tree-shaking.",
     remediation: "Avoid side effects at module top-level for tree-shaking",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/lukastaegert/eslint-plugin-tree-shaking"),
     categories: &["code-quality"],
 

@@ -49,7 +49,7 @@ impl OxcCheck for Check {
                     message:
                         "`default` clause should be the last clause in the switch statement."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

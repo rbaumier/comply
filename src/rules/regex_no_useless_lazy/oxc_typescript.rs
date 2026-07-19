@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Useless lazy quantifier \u{2014} the `?` after a fixed quantifier has no effect.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

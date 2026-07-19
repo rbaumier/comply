@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-exponentiation-operator",
     description: "Prefer `x ** y` over `Math.pow(x, y)`.",
     remediation: "Replace `Math.pow(x, y)` with `x ** y` (ES2016).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://eslint.org/docs/latest/rules/prefer-exponentiation-operator"),
     categories: &["e18e", "modernization"],
 

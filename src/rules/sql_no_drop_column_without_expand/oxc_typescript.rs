@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "DROP COLUMN without a prior deprecation release breaks running deploys — deprecate first, drop later.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

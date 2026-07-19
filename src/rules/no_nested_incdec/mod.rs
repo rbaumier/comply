@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-nested-incdec",
     description: "`++` or `--` used inside an expression, not as a standalone statement.",
     remediation: "Separate the increment/decrement from the expression. Write `i++; arr[i] = x;` instead of `arr[i++] = x;` to make the order of operations explicit.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-assign-mutated-array",
     description: "Do not assign the result of a mutating array method (`sort`, `reverse`, `fill`).",
     remediation: "Use `toSorted()`, `toReversed()`, or spread before mutating: `[...arr].sort()`",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

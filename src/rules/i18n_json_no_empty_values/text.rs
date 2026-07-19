@@ -85,7 +85,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: format!("Empty translation value for `{key}`"),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

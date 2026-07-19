@@ -75,7 +75,7 @@ impl OxcCheck for Check {
                     message: "This `type` alias duplicates a Zod schema in the same file — \
                               use `z.infer<typeof Schema>` instead so the type stays in sync."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

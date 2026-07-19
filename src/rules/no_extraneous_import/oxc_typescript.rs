@@ -229,7 +229,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "`{root}` is a devDependency; production code should import from dependencies, peerDependencies, or optionalDependencies."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

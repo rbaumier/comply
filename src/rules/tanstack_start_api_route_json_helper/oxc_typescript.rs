@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             message: "Use `json(data)` from `@tanstack/react-start` instead of \
                       `new Response(JSON.stringify(data))`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-text-size-below-12px",
     description: "Text below 12px fails accessibility audits and is hard to read.",
     remediation: "Use `text-xs` (12px) or larger.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "accessibility"],
 

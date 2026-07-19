@@ -39,7 +39,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("Table `{name}` appears plural — use singular (one row = one entity)."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

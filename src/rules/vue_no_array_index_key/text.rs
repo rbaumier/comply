@@ -138,7 +138,7 @@ impl TextCheck for Check {
                             "`:key=\"{index_var}\"` uses the loop index — this breaks on reorder/filter. \
                              Use a stable id from the data."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     break;

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-let",
     description: "Disallow `let` declarations — prefer `const` for immutable bindings.",
     remediation: "Replace `let` with `const`. If you truly need to reassign, restructure the code to use a new binding, `reduce`, or a pure function instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["functional"],
 

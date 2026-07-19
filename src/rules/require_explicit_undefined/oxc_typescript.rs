@@ -101,7 +101,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "require-explicit-undefined".into(),
                     message: "Bare `return;` in a function that returns a value — use `return undefined;` for clarity.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

@@ -103,7 +103,7 @@ impl AstCheck for Check {
                  Wait on a condition (channel, polled deadline), or use \
                  `tokio::time::pause()` + `advance(d)` for virtual time."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

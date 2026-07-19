@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-headers-lowercase",
     description: "`headers:` schema uses uppercase header names — runtime values are always lowercased.",
     remediation: "Use lowercase keys (`authorization`, `content-type`) — Elysia normalises incoming headers to lowercase before validation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

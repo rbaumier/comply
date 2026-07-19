@@ -48,7 +48,7 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: "no-inverted-boolean-check".into(),
         message: "`!a == b` negates `a` before comparing \u{2014} use `a != b` or `!(a == b)`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

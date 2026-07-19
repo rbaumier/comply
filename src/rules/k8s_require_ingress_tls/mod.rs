@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-ingress-tls",
     description: "Ingress resources must declare spec.tls to terminate TLS.",
     remediation: "Add a `spec.tls` section with `hosts` and `secretName` referencing a TLS certificate.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

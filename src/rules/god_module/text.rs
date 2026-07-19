@@ -93,7 +93,7 @@ impl TextCheck for Check {
                 "imported by {importer_count}/{total_files} files ({percent}%). \
                  Consider splitting into smaller, focused modules."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

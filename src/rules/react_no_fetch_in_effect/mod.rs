@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`fetch()` inside `useEffect` lacks caching, deduping, and race protection.",
     remediation: "Use a data-fetching library (TanStack Query, SWR) or move \
                   fetching to a server component / loader.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

@@ -91,7 +91,7 @@ impl OxcCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "`test.slow()` is already called in this test; remove the duplicate."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

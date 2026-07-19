@@ -110,7 +110,7 @@ impl OxcCheck for Check {
                 "Return value of `.{}` is ignored — the call has no side effect.",
                 method_name
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

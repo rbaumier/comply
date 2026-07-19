@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Avoid the Tailwind `!` important modifier — fix specificity instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

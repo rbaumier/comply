@@ -214,7 +214,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Bare `z.string()` accepts empty strings \u{2014} add `.min(1)` or a format constraint.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

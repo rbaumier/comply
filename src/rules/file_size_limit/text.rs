@@ -32,7 +32,7 @@ impl TextCheck for Check {
             message: format!(
                 "File has {line_count} lines (limit: {limit}) — consider splitting into smaller modules."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

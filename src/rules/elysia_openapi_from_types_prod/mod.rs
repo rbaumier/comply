@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-openapi-from-types-prod",
     description: "`fromTypes('src/index.ts')` reads source files at runtime — should be conditional for prod builds.",
     remediation: "Gate `fromTypes()` behind `process.env.NODE_ENV !== 'production'` or pre-compute the spec at build time.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

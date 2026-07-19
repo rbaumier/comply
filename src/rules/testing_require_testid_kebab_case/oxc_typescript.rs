@@ -82,7 +82,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "'{name}=\"{value_str}\"' is not kebab-case — use lowercase letters, digits, and hyphens only."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

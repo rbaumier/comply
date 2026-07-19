@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "hook-use-state",
     description: "useState destructuring must follow `[value, setValue]` naming.",
     remediation: "Rename the setter to `set` + PascalCase of the state variable name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/hook-use-state.md",
     ),

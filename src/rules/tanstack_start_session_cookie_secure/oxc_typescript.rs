@@ -86,7 +86,7 @@ impl OxcCheck for Check {
             message: "`useSession` cookie config must set `secure` so session cookies are \
                       only transmitted over HTTPS."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

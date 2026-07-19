@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`<form action={...}>` is used without a pending-state hook — submitters get no feedback.",
     remediation: "Read the pending state via `useFormStatus()` inside a child of the form, \
                   or switch to `useActionState`. For non-form actions, use `useTransition`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react.dev/reference/react-dom/hooks/useFormStatus"),
     categories: &["react"],
 

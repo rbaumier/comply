@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-full-import",
     description: "Full-library default imports from `lodash`/`underscore`/`ramda` bloat bundles.",
     remediation: "Import individual functions: `import debounce from 'lodash/debounce'` or `import { debounce } from 'lodash-es'`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jfmengels/eslint-plugin-lodash-fp/blob/master/docs/rules/use-fp.md",
     ),

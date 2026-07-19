@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`useState` whose setter is never used — the value never changes.",
     remediation: "Replace with a plain `const` or `useMemo`. A state variable that \
                   is never updated adds unnecessary re-render machinery.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

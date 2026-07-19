@@ -49,7 +49,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "`.filter(... indexOf ...)` is O(n²) dedup — use `[...new Set(arr)]` (O(n)).".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

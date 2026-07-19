@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.all()` matches any HTTP method — prefer a specific method (`.get`, `.post`, etc.) to communicate intent.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

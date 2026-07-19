@@ -70,7 +70,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "`preventDefault()` inside `{attr_name}` is a no-op — React attaches this listener as passive."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;

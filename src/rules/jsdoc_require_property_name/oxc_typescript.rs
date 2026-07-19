@@ -57,7 +57,7 @@ impl OxcCheck for Check {
                             column: 1,
                             rule_id: super::META.id.into(),
                             message: "@property tag is missing a name — add an identifier after the type.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

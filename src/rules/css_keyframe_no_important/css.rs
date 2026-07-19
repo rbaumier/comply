@@ -19,7 +19,7 @@ crate::ast_check! { on ["important"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "`!important` is ignored inside `@keyframes`; remove it.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

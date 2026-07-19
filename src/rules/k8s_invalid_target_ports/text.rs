@@ -42,7 +42,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                         &name_pair,
                         super::META.id,
                         format!("Port name `{}` does not conform to IANA naming.", name),
-                        Severity::Warning,
+                        Severity::Error,
                     ));
                 }
             }
@@ -63,7 +63,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &name_pair,
                     super::META.id,
                     format!("Port name `{}` does not conform to IANA naming.", name),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
             // targetPort, when string-valued, must also match IANA.
@@ -77,7 +77,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &tp_pair,
                     super::META.id,
                     format!("targetPort `{}` does not conform to IANA naming.", tp),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

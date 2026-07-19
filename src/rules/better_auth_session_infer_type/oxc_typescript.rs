@@ -74,7 +74,7 @@ impl OxcCheck for Check {
             message:
                 "Manual `Session` declaration — use `type Session = typeof auth.$Infer.Session` instead."
                     .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

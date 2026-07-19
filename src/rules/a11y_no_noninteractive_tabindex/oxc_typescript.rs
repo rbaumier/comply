@@ -117,7 +117,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Non-interactive element `<{tag}>` should not have `tabIndex`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

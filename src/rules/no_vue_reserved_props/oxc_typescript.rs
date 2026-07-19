@@ -232,7 +232,7 @@ fn report_reserved(name: &str, span_start: u32, ctx: &CheckCtx, diagnostics: &mu
             message: format!(
                 "`{name}` is a Vue-reserved attribute and cannot be used as a prop name."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

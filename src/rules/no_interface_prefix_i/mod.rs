@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-interface-prefix-i",
     description: "TypeScript interface uses the `I` prefix (Hungarian notation).",
     remediation: "Remove the `I` prefix — name the interface after the concept, not the language construct.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
 

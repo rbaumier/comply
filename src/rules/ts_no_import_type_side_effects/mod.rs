@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-import-type-side-effects",
     description: "Inline `type` qualifiers on every specifier leave a side-effect import at runtime.",
     remediation: "Use a top-level `import type { ... }` instead of `import { type A, type B }`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-import-type-side-effects/"),
     categories: &["typescript"],
 

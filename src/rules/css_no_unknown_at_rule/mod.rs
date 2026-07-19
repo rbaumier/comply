@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-unknown-at-rule",
     description: "Disallow unknown CSS at-rules.",
     remediation: "Use a standard CSS at-rule, or remove the unknown at-rule.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

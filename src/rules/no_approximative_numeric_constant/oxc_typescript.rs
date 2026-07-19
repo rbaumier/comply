@@ -229,7 +229,7 @@ impl OxcCheck for Check {
                     "Prefer the standard constant `Math.{}` over the approximated literal `{}`.",
                     name, raw
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

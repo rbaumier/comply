@@ -100,7 +100,7 @@ impl TextCheck for Check {
                     "Wrap `new {class}(...)` in `markRaw()` — Vue should not deeply reactify \
                      a third-party instance."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

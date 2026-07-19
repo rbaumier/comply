@@ -46,7 +46,7 @@ impl OxcCheck for Check {
                         rule_id: super::META.id.into(),
                         message: "Class cannot have method named `new` — use `constructor` instead."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -69,7 +69,7 @@ impl OxcCheck for Check {
                         message:
                             "Interfaces cannot be constructed — use `new(): Type` instead of `constructor()`."
                                 .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

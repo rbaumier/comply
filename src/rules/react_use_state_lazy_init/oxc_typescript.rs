@@ -96,7 +96,7 @@ impl OxcCheck for Check {
             message: "`useState(expensive())` runs the initializer on every render \
                       and crashes in SSR. Wrap in a lazy function: \
                       `useState(() => expensive())`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

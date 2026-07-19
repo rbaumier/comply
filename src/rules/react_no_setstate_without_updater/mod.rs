@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   variable directly — races against concurrent updates in React 18+.",
     remediation: "Use the functional updater: `setX(prev => prev + 1)` or \
                   `setX(prev => [...prev, item])`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

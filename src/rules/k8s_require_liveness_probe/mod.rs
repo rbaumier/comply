@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-liveness-probe",
     description: "Each long-running workload container must define a livenessProbe.",
     remediation: "Add `livenessProbe` (httpGet / tcpSocket / exec) to each container spec.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
                   sections that should be mutually exclusive — both confuse package managers \
                   about which version wins.",
     remediation: "Remove one of the listings so each dependency appears in exactly one section.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["suspicious", "package-json"],
 

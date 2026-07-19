@@ -54,7 +54,7 @@ impl AstCheck for Check {
             message: "`.union()` deduplicates rows — use `.unionAll()` when \
                       rows are already unique."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -52,7 +52,7 @@ impl OxcCheck for Check {
                 "`staggerChildren: {}` is above 0.05s — lists will feel slow; cap at 0.05.",
                 num.value
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

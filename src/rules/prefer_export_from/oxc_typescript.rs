@@ -111,7 +111,7 @@ impl OxcCheck for Check {
                             "Use `export {{ {local_name} }} from '{module_specifier}'` instead of \
                              importing then re-exporting `{local_name}`."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

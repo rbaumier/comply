@@ -39,7 +39,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Global CSS variable change inside `requestAnimationFrame` triggers full-page style recalc every frame.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

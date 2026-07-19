@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Gray text on colored background — low contrast, hard to read.",
     remediation: "Use a lighter or white text color on saturated backgrounds \
                   for adequate contrast.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

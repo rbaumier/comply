@@ -78,7 +78,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "`createServerFn` with mutations must verify authentication before proceeding.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

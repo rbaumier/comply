@@ -110,7 +110,7 @@ impl TextCheck for Check {
                 rule_id: super::META.id.into(),
                 message: "CORS `origin` is a hardcoded string — read it from an environment variable instead."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             })
             .collect()

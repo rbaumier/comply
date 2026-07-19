@@ -16,7 +16,7 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
             "Comment uses `{phrase}` — narrator filler typical of AI-generated \
              prose. State the point directly or delete the comment."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

@@ -37,7 +37,7 @@ impl OxcCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "Field named after a known format uses bare `t.String()` — add `{ format: 'email' }` (or `'uri'`).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

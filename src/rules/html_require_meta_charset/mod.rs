@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-require-meta-charset",
     description: "HTML documents must declare a character encoding via `<meta charset>`.",
     remediation: "Add <meta charset=\"utf-8\"> to the head",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

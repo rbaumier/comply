@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Extract dynamic `queryKey` to a key factory: `const keys = { detail: (id) => ['res', id] as const }`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

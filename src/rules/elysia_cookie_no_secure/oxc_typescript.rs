@@ -46,7 +46,7 @@ impl OxcCheck for Check {
                 column: 1,
                 rule_id: super::META.id.into(),
                 message: "Cookie config is missing `secure: true` \u{2014} cookie can travel over plain HTTP.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

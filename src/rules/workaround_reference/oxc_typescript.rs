@@ -49,7 +49,7 @@ impl OxcCheck for Check {
                 message: "Workaround/hack comment without an issue reference — \
                           add a link or ticket number."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

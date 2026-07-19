@@ -88,7 +88,7 @@ impl OxcCheck for Check {
                         message: "`scale(0)` causes subpixel rendering blur and makes elements appear from \
                                   nowhere — use `scale(0.95)` with `opacity: 0` instead."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

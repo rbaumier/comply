@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-no-transition-all",
     description: "Using `transition: all` animates every changed property, causing jank and unintended motion.",
     remediation: "List properties explicitly: `transition: transform 200ms, opacity 200ms;`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

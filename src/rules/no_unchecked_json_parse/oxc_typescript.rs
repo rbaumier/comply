@@ -152,7 +152,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`JSON.parse()` returns `any` — wrap it with a Zod schema or type guard before using the result.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

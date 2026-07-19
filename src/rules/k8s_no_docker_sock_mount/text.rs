@@ -18,7 +18,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &volume_map,
                 super::META.id,
                 "Volume mounts the docker socket from the host; this grants full root on the node.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

@@ -31,7 +31,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &report_node,
                     super::META.id,
                     label,
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

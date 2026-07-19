@@ -44,7 +44,7 @@ fn make_diag(ctx: &CheckCtx, line: usize) -> Diagnostic {
         column: 1,
         rule_id: super::META.id.into(),
         message: "`is_deleted BOOLEAN` loses the deletion time — use `deleted_at TIMESTAMPTZ NULL` instead.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     }
 }

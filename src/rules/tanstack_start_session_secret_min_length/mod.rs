@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Read the secret from an environment variable, or use a \
                   literal of at least 32 characters to prevent brute-force \
                   attacks on the session cookie.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start", "security"],
 

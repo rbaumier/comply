@@ -65,7 +65,7 @@ fn check_text(text: &str, base_offset: usize, ctx: &CheckCtx, diagnostics: &mut 
                     column: col_in_line + 1,
                     rule_id: super::META.id.into(),
                     message: (*message).into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 // Only one diagnostic per line.

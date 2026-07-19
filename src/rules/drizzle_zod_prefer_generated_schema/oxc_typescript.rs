@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Manual `z.object({})` in a Drizzle schema file likely duplicates column definitions — use `createInsertSchema`/`createSelectSchema` from `drizzle-zod` instead.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

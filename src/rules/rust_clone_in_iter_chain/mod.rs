@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
                   expresses intent more clearly and is the same in performance. \
                   The closure form makes readers ask whether anything else is \
                   going on inside the closure.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

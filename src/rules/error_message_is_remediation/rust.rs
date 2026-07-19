@@ -190,7 +190,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
             column: pos.column + 1,
             rule_id: "error-message-is-remediation".into(),
             message: "Error message is too vague — describe what went wrong and what to do.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-response-t-unknown",
     description: "`response: t.Unknown()` / `t.Any()` disables response validation, so Eden inherits no type-safety.",
     remediation: "Describe the response with a concrete TypeBox schema (`t.Object({...})`, `t.String()`, etc.).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

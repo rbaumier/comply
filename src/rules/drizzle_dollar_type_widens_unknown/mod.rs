@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-dollar-type-widens-unknown",
     description: "`.$type<unknown>()` / `.$type<any>()` removes Drizzle's column type-safety with no benefit.",
     remediation: "Pass a concrete type to `.$type<...>()` (the JSON shape, the literal union, etc.).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "drizzle"],
 

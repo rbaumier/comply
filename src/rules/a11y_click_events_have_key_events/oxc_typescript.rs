@@ -89,7 +89,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Element has `onClick` without a corresponding keyboard event handler (`onKeyDown`/`onKeyUp`/`onKeyPress`).".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

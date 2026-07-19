@@ -8,7 +8,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "mutex-over-atomic",
     description: "`Mutex` wrapping a primitive type — prefer an atomic type.",
     remediation: "Use `AtomicBool`, `AtomicUsize`, etc. instead of `Mutex<bool>`, `Mutex<usize>`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

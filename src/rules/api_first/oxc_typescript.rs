@@ -118,7 +118,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Route handler without schema definition — define the API schema (e.g. `z.object`, `zodValidator`) before the handler.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

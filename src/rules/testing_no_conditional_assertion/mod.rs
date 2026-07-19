@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-no-conditional-assertion",
     description: "Assertions inside if-branches silently skip when the branch is not taken — the test passes but checks nothing.",
     remediation: "Make the assertion unconditional. If the branch depends on input, split into separate tests or use expect.soft / describe.each.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

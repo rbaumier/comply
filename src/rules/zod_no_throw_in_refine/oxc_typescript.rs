@@ -45,7 +45,7 @@ impl OxcCheck for Check {
                                       issue aggregation — use `ctx.addIssue()` in superRefine, or \
                                       return `false` in refine."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

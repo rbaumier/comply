@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-test-return-statement",
     description: "Disallow `return` statements inside `test`/`it` callbacks.",
     remediation: "Remove return statement from test, use expect assertions",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

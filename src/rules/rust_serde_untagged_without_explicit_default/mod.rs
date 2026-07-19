@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   `Option<T>` field can match an empty input by accident, \
                   which silently shadows later variants. The explicit \
                   default makes the matching deterministic.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "serde"],
 

@@ -116,7 +116,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`z-*` on `{tag}` fights shadcn's overlay stacking — drop the z-index utility."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

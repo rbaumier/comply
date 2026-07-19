@@ -47,7 +47,7 @@ fn push_for_buf(buf: &str, ctx: &CheckCtx, line: usize, out: &mut Vec<Diagnostic
             message: format!(
                 "BOOLEAN column `{col}` should start with `is_` or `has_` so call sites read as predicates."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

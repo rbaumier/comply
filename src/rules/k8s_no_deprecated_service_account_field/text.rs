@@ -13,7 +13,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &pair,
             super::META.id,
             "Pod spec uses deprecated `serviceAccount` field; rename to `serviceAccountName`.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

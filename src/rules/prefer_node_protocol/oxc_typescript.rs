@@ -125,7 +125,7 @@ impl OxcCheck for Check {
                 "Prefer `node:{specifier}` over `{specifier}` — the `node:` prefix \
                  makes it unambiguous that this is a Node.js builtin."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

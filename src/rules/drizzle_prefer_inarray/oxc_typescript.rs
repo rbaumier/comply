@@ -173,7 +173,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`sql` template contains `IN (...)` \u{2014} prefer `inArray(col, [...])` for a parameterized, typed alternative.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

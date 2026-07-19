@@ -31,7 +31,7 @@ impl TextCheck for Check {
                         column: 1,
                         rule_id: "sql-recursive-cte-no-termination".into(),
                         message: "`WITH RECURSIVE` has no `CYCLE` clause or depth guard. A cycle in the data will loop forever — add `CYCLE` or `WHERE depth < N`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

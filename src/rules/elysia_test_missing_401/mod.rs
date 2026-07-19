@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-test-missing-401",
     description: "Test file exercises an authenticated route but never asserts a 401 / Unauthorized response.",
     remediation: "Add a test case that sends the request without credentials and asserts the route returns 401.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing", "elysia"],
 

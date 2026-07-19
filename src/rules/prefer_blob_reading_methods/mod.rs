@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-blob-reading-methods",
     description: "Prefer `Blob#text()` / `Blob#arrayBuffer()` over `FileReader` methods.",
     remediation: "Use `await blob.text()` instead of `reader.readAsText(blob)`, or `await blob.arrayBuffer()` instead of `reader.readAsArrayBuffer(blob)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -54,7 +54,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "`{obj_text}.{prop_text}` is not available in Node.js {min_version}; requires Node.js {required} or later."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     continue;
@@ -75,7 +75,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`.{prop_text}()` is not available in Node.js {min_version}; requires Node.js {required} or later."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

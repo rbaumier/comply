@@ -62,7 +62,7 @@ impl OxcCheck for Check {
                  obvious and the TypeScript compiler can warn on \
                  missing cases for union-typed values."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

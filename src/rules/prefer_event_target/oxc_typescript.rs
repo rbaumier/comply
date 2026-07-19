@@ -54,7 +54,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: super::META.id.into(),
                             message: "Prefer `EventTarget` over `EventEmitter`.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -88,7 +88,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: super::META.id.into(),
                             message: "Prefer `EventTarget` over `EventEmitter`.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

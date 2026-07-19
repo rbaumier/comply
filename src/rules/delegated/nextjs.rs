@@ -34,7 +34,7 @@ pub fn register_all() -> Vec<RuleDef> {
                               supply-chain attack, and many of the polyfills it serves are \
                               already shipped by Next.js, so the request is both unsafe and \
                               redundant.",
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 doc_url: None,
                 categories: &["nextjs"],
                 skip_in_test_dir: false,

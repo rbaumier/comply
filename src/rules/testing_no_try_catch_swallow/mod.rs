@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-no-try-catch-swallow",
     description: "Empty catch around the act phase masks the very errors the test is meant to surface.",
     remediation: "Either let the error propagate, or assert on it with expect(() => fn()).toThrow(...) / expect(promise).rejects.toThrow(...).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

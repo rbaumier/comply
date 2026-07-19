@@ -67,7 +67,7 @@ impl OxcCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: "This branch has the same body as the previous branch — merge conditions or remove the duplicate.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

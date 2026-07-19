@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`public static` field is missing `readonly` \u{2014} add it to prevent mutation."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

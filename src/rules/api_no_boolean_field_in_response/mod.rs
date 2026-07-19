@@ -25,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-no-boolean-field-in-response",
     description: "Response types should use string-unions / enums instead of booleans for extensibility.",
     remediation: "Replace `isActive: boolean` with `status: 'active' | 'inactive' | ...` so new states don't break the wire contract.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api"],
 

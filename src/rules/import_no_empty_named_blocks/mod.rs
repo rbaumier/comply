@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-no-empty-named-blocks",
     description: "Empty named import blocks are forbidden.",
     remediation: "Remove the empty `import { }` or add the intended named imports.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-empty-named-blocks.md",
     ),

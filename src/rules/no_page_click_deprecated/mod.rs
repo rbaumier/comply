@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `page.locator(selector).click()`. The locator API \
                   auto-waits and auto-retries, and the direct page methods \
                   are deprecated in Playwright.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

@@ -126,7 +126,7 @@ impl AstCheck for Check {
                      equality is reflexive and unlocks `HashSet` / `BTreeSet` \
                      usage."
                 ),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

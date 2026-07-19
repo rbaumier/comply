@@ -33,7 +33,7 @@ impl TextCheck for Check {
                     message: format!(
                         "Redundant word in `alt=\"{alt}\"` — screen readers already announce images."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

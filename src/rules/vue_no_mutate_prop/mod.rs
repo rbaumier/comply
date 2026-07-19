@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-mutate-prop",
     description: "Don't mutate a prop directly — props are one-way.",
     remediation: "Emit an event or copy the prop into a local ref to mutate.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

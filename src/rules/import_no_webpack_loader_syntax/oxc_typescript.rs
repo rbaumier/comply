@@ -43,7 +43,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Unexpected `!` in {text}. Do not use import syntax to configure webpack loaders."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -69,7 +69,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Unexpected `!` in {text}. Do not use import syntax to configure webpack loaders."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

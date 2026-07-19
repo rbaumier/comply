@@ -27,7 +27,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "A reused component renders duplicate ids. Generate the id with \
                   React's `useId()` hook and pass it via `id={id}` instead of a \
                   hardcoded string.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

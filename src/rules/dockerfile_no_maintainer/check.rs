@@ -9,7 +9,7 @@ crate::ast_check! { on ["maintainer_instruction"] => |node, source, ctx, diagnos
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "MAINTAINER is deprecated; use `LABEL maintainer=...` instead.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

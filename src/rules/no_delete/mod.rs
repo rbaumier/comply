@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-delete",
     description: "Disallow the `delete` operator — it mutates objects in place.",
     remediation: "Build a new object without the property, e.g. `const { [key]: _, ...rest } = obj;` or use `Object.fromEntries(Object.entries(obj).filter(...))`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["functional"],
 

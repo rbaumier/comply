@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-no-redundant-roundtrip-around-write",
     description: "A Drizzle existence-probe guarding a write on the same table+key, or a re-read of a just-written row, is a redundant non-atomic round-trip.",
     remediation: "Fold the probe into the write with `.onConflictDoNothing()` / `.onConflictDoUpdate()`, and read the written row back with `.returning()` instead of a follow-up query.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://orm.drizzle.team/docs/insert#upserts-and-conflicts"),
     categories: &["drizzle", "database", "performance"],
 

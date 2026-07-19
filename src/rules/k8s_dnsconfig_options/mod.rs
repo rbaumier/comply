@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-dnsconfig-options",
     description: "Pods should set dnsConfig.options (e.g. `ndots:2`) to reduce DNS lookup latency.",
     remediation: "Add `dnsConfig.options: [{name: ndots, value: '2'}]` to the pod spec.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

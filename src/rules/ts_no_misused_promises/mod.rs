@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-misused-promises",
     description: "Async function passed to a callback slot that expects void — the returned Promise is dropped.",
     remediation: "Either drop the `async` and use `.then(...)` explicitly, or wrap the body in a `void (async () => { ... })()` IIFE so the unhandled Promise is intentional.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-misused-promises/"),
     categories: &["typescript"],
 

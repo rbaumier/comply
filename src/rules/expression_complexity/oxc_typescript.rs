@@ -46,7 +46,7 @@ impl OxcCheck for Check {
                     "Expression has {max_ops}+ logical/conditional operators — \
                      extract to named variables."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             })
             .collect()

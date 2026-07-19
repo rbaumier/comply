@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-non-standard-flag",
     description: "Regex uses a non-standard flag that is not part of the ECMAScript specification.",
     remediation: "Remove the non-standard flag. Standard flags are: d, g, i, m, s, u, v, y.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-non-standard-flag.html",
     ),

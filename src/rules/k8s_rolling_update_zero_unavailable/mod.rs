@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-rolling-update-zero-unavailable",
     description: "Deployment strategy.rollingUpdate.maxUnavailable must be 0 to avoid downtime.",
     remediation: "Set `spec.strategy.rollingUpdate.maxUnavailable: 0` and use `maxSurge` to add capacity during rollout.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

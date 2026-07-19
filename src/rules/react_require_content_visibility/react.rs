@@ -213,7 +213,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         msg,
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

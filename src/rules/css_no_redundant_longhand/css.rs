@@ -91,7 +91,7 @@ crate::ast_check! { on ["block"] => |node, source, ctx, diagnostics|
             &target,
             super::META.id,
             format!("All longhands present; use the `{shorthand}` shorthand."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-no-mutex-in-single-threaded",
     description: "`Mutex<T>` outside of `Arc<Mutex<T>>` is usually a `RefCell<T>` — no thread sharing means no reason to pay for a lock.",
     remediation: "Replace `Mutex<T>` with `RefCell<T>` when the value is not shared across threads, or wrap it in `Arc<Mutex<T>>` when it is.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "performance"],
 

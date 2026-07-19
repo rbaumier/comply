@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-extra-lookaround-assertions",
     description: "Lookaround assertion is useless and can be inlined into the parent pattern.",
     remediation: "Remove the unnecessary lookaround wrapper and inline its contents.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-extra-lookaround-assertions.html",
     ),

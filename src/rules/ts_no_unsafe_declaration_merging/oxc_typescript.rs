@@ -67,7 +67,7 @@ impl OxcCheck for Check {
                         "Unsafe declaration merging — interface `{iface_name}` \
                          shares a name with a class."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -89,7 +89,7 @@ impl OxcCheck for Check {
                         "Unsafe declaration merging — class `{class_name}` \
                          shares a name with an interface."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -301,7 +301,7 @@ fn check_statements(
                                 ca = group[a].required_params,
                                 cb = group[b].required_params,
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         continue 'outer;
@@ -324,7 +324,7 @@ fn check_statements(
                             message: format!(
                                 "Overload of `{name}` uses more general parameter types than a later one; reorder specific-to-general."
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         continue 'outer;

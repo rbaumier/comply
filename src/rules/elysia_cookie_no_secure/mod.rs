@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-cookie-no-secure",
     description: "Cookie config is missing `secure: true` — cookie can be sent over plain HTTP.",
     remediation: "Add `secure: true` so the cookie is only sent over HTTPS.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

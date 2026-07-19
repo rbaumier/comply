@@ -16,25 +16,25 @@ pub fn register_all() -> Vec<RuleDef> {
     vec![
         entry(
             "no-duplicate-type-definition",
-            Severity::Warning,
+            Severity::Error,
             "Two or more named types share an identical object shape — a likely copy-paste.",
             "Consolidate the structurally identical types into a single shared type.",
         ),
         entry(
             "no-redundant-nullish-coalescing-null",
-            Severity::Warning,
+            Severity::Error,
             "`?? null` / `?? undefined` is redundant when the left operand's type already includes that nullish value.",
             "Drop the `?? null` (or `?? undefined`) — it cannot change the value or the type.",
         ),
         entry(
             "ts-no-in-operator",
-            Severity::Warning,
+            Severity::Error,
             "The `in` operator probes the shape of an unvalidated `unknown`/`any` value by hand instead of parsing it.",
             "Parse the external input with a schema (e.g. Zod) to obtain a typed value. `in` is fine on an already-typed value, a caught error, or inside a user-defined type predicate (`x is T`).",
         ),
         entry(
             "ts-no-typeof-operator",
-            Severity::Warning,
+            Severity::Error,
             "`typeof` on an `any` value sniffs at runtime in place of typing it — the `any` means the type was lost.",
             "Give the value a real type, or narrow it from `unknown` (typeof-narrowing an honest `unknown` is fine — `any` is the smell). Also fine: an environment guard (`typeof window`), a caught error, a `z.preprocess` normaliser, or inside a user-defined type predicate (`x is T`).",
         ),

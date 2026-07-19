@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "require-too-many-arguments",
     description: "`require()` accepts only one argument; extra arguments are ignored.",
     remediation: "require() takes only one argument",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports"],
 

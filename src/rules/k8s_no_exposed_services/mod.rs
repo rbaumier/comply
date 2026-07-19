@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-exposed-services",
     description: "Service.spec.type must not be NodePort or LoadBalancer; expose via Ingress / Gateway instead.",
     remediation: "Use `type: ClusterIP` and route external traffic through an Ingress, Gateway, or service-mesh gateway.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

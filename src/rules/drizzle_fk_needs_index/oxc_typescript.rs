@@ -94,7 +94,7 @@ impl OxcCheck for Check {
                           Add an explicit index to avoid sequential scans \
                           on JOINs and cascading deletes."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

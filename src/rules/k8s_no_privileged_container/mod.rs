@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-privileged-container",
     description: "Container sets `securityContext.privileged: true`; this disables container isolation.",
     remediation: "Remove `privileged: true`; grant only the specific Linux capabilities needed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-leaked-fetch",
     description: "`fetch(...)` in `useEffect` without an AbortController signal cannot be cancelled on unmount.",
     remediation: "Create an AbortController, pass its `signal` to `fetch`, and return a cleanup that calls `controller.abort()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

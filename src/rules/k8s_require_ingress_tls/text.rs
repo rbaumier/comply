@@ -22,7 +22,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
         &anchor,
         super::META.id,
         "Ingress must define spec.tls to terminate TLS.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

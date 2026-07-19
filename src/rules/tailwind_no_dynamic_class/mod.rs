@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   `const colors = { blue: 'bg-blue-500', red: 'bg-red-500' }; \
                   colors[color]`. Tailwind's purge only sees full static \
                   strings, so `bg-${color}-500` never ships.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css", "tailwind"],
     skip_in_test_dir: true,

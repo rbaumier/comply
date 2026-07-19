@@ -65,7 +65,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "TaggedError tag '{trimmed}' does not match class name '{class_name}'."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

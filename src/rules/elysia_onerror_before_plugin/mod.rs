@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-onerror-before-plugin",
     description: "`.onError(...)` registered after `.use(plugin)` does not catch errors thrown by that plugin.",
     remediation: "Chain `.onError(...)` before `.use(plugin)` so the handler is in scope when the plugin registers its routes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

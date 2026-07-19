@@ -43,7 +43,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `cookie.<name>.value` instead of `cookie.get/set(...)` — Elysia cookies are reactive accessors.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

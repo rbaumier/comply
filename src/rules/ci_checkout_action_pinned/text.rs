@@ -34,7 +34,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
         message: format!(
             "actions/checkout is pinned to `@{at_ref}` — pin to `@v4` or a commit SHA."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((value_node.byte_range().start, value_node.byte_range().len())),
     });
 }

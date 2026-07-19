@@ -25,7 +25,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
                 &node,
                 super::META.id,
                 format!("Unquoted multi-word font name `{font}`; wrap in quotes."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

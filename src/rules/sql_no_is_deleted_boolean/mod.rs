@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-is-deleted-boolean",
     description: "Use `deleted_at TIMESTAMPTZ` instead of `is_deleted BOOLEAN`.",
     remediation: "Soft-delete markers should carry *when* it happened: `deleted_at TIMESTAMPTZ NULL`. A nullable timestamp encodes both the boolean and the event time.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

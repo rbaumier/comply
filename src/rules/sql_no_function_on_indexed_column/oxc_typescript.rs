@@ -43,7 +43,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{func}` in WHERE defeats the index — normalize the column or add a functional index."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

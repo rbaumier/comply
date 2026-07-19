@@ -48,7 +48,7 @@ impl OxcCheck for Check {
                         message:
                             "`@typedef` declares an object type but no `@property` entries \u{2014} document each field."
                                 .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

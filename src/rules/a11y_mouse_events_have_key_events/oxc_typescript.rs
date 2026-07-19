@@ -61,7 +61,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`onMouseOver` must be accompanied by `onFocus` for keyboard accessibility.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -74,7 +74,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`onMouseOut` must be accompanied by `onBlur` for keyboard accessibility.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

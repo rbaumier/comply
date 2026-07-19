@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-class-literal-property-style",
     description: "Enforce that literals on classes are exposed in a consistent style (fields vs getters).",
     remediation: "Use `readonly` fields for literals instead of trivial getter methods (default), or vice versa.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/class-literal-property-style/"),
     categories: &["typescript"],
 

@@ -71,7 +71,6 @@ impl Diagnostic {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
     Error,
-    Warning,
 }
 
 mod arc_path_serde {
@@ -112,7 +111,7 @@ mod tests {
             column: 1,
             rule_id: "r".into(),
             message: "m".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((10, 5)),
         };
         let json = serde_json::to_string(&d).unwrap();
@@ -127,7 +126,7 @@ mod tests {
             column: 1,
             rule_id: "r".into(),
             message: "m".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         };
         let json = serde_json::to_string(&d).unwrap();
@@ -153,7 +152,7 @@ mod tests {
             &decl,
             "test-rule",
             "body".into(),
-            Severity::Warning,
+            Severity::Error,
         );
 
         assert_eq!(&*diag.path, Path::new("fixture.ts"));

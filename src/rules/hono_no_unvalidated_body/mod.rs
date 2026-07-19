@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "hono-no-unvalidated-body",
     description: "Reading the request body without a validator middleware skips schema validation and can let malformed input reach handlers.",
     remediation: "Use `validator('json', schema)` (or `zValidator`, `tbValidator`, etc.) and read the parsed body via `c.req.valid('json')`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["hono", "security"],
 

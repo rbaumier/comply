@@ -50,7 +50,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Hardcoded port in `.listen()` — read from `process.env.PORT` so deploy platforms can override it.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

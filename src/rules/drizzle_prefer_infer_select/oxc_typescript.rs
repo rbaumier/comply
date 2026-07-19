@@ -61,7 +61,7 @@ fn walk_type(ty: &TSType, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>) {
                             },
                             name
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

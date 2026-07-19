@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   prevent hoisting — use a function declaration instead.",
     remediation: "Replace `const foo = (…) => { … }` at module scope with \
                   `function foo(…) { … }`. Keep arrow functions for callbacks and inline expressions.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["style"],
 

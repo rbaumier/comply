@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Eden mutation called with `undefined` body — pass `null` instead so the request serializes correctly.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

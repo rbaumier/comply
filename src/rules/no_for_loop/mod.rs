@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `for (let i = 0; i < arr.length; i++)` with \
                   `for (const item of arr)`. If the index is needed, use \
                   `for (const [i, item] of arr.entries())`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

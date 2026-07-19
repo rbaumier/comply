@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-large-snapshots",
     description: "Inline snapshots exceeding `max_lines` are noisy and signal over-broad assertions.",
     remediation: "Narrow the assertion to the field under test, or split into smaller snapshots.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance", "testing"],
 

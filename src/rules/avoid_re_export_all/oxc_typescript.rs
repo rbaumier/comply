@@ -60,7 +60,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Avoid `export * from '...'` \u{2014} use named re-exports instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

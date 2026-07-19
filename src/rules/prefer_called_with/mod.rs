@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-called-with",
     description: "Prefer `toHaveBeenCalledWith(...)` over bare `toHaveBeenCalled()` to assert specific arguments.",
     remediation: "Use toHaveBeenCalledWith() to assert specific arguments",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jest-community/eslint-plugin-jest/blob/main/docs/rules/prefer-called-with.md",
     ),

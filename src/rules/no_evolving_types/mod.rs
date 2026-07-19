@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-evolving-types",
     description: "Variable may implicitly evolve into the `any` type.",
     remediation: "Add an explicit type annotation or a concrete initializer to pin the type.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

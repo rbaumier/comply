@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-important-modifier",
     description: "The Tailwind `!` important modifier signals a specificity fight, not a real fix.",
     remediation: "Fix the specificity issue instead of using `!` — restructure class order or use a more specific selector.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

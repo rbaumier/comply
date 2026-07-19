@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "promise-catch-or-return",
     description: "A floating Promise chain without `.catch()` or `return` swallows rejection at the runtime's discretion.",
     remediation: "Either `.catch(handler)` the chain, `return` it from the function so the caller deals with rejection, or `void promise.catch(...)` if rejection is genuinely ignorable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/eslint-community/eslint-plugin-promise/blob/main/docs/rules/catch-or-return.md"),
     categories: &["promise"],
 

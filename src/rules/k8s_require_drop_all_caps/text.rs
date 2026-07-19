@@ -19,7 +19,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &container,
                 super::META.id,
                 "Container must drop ALL capabilities via securityContext.capabilities.drop.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

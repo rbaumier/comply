@@ -45,7 +45,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Parenthesize the ternary in array spread: \
                       `[...(condition ? ['a'] : [])]`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

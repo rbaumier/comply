@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-ban-ts-comment",
     description: "`@ts-ignore` and `@ts-nocheck` suppress compiler errors and hide bugs.",
     remediation: "Fix the underlying type error, or use `@ts-expect-error` with a description.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/ban-ts-comment/"),
     categories: &["typescript"],
 

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-create-index-concurrently",
     description: "`CREATE INDEX` without `CONCURRENTLY` takes an `ACCESS EXCLUSIVE` lock, blocking all table access.",
     remediation: "Use `CREATE INDEX CONCURRENTLY` for production migrations. Run outside a transaction block.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql", "migrations"],
 

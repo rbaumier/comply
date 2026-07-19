@@ -107,7 +107,7 @@ impl OxcCheck for Check {
                         rule_id: super::META.id.into(),
                         message: "Exported function has parameters but no `@param` tags in its JSDoc."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -123,7 +123,7 @@ impl OxcCheck for Check {
                         message:
                             "Exported function returns a value but JSDoc has no `@returns` tag."
                                 .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

@@ -68,7 +68,7 @@ impl OxcCheck for Check {
                           — every migration must be reversible for quick \
                           recovery from bad deploys."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             }]
         } else {

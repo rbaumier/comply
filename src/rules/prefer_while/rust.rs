@@ -70,7 +70,7 @@ crate::ast_check! { on ["loop_expression"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: "prefer-while".into(),
         message: "Use `while` instead of `loop` with a break guard at the top.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

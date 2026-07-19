@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "consistent-existence-index-check",
     description: "Enforce `=== -1` / `!== -1` for index existence checks.",
     remediation: "Use `index === -1` to check non-existence and `index !== -1` to check existence, instead of `< 0`, `>= 0`, or `> -1`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

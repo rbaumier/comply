@@ -34,7 +34,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "sql-alter-column-type-unsafe".into(),
                     message: "`ALTER COLUMN ... TYPE` without a `USING` clause may rewrite the entire table. Add a `USING` cast or use expand/contract.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

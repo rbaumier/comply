@@ -42,7 +42,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Don't read `__NEXT_DATA__`. Use `process.env.NEXT_PUBLIC_*` for build-time configuration.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

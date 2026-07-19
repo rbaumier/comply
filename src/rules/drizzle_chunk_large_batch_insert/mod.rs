@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-chunk-large-batch-insert",
     description: "Drizzle `.values([...])` with a very large array risks exceeding bind-parameter limits.",
     remediation: "Split the input into fixed-size chunks (e.g. `chunk(rows, 500).forEach(c => db.insert(t).values(c))`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://orm.drizzle.team/docs/insert#insert-multiple-rows"),
     categories: &["drizzle", "database"],
 

@@ -81,7 +81,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "elysia-t-unknown-format-string".into(),
                     message: format!("`format: '{format_str}'` is not a recognised JSON-schema format \u{2014} TypeBox will silently skip the check."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

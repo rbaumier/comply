@@ -24,7 +24,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Em-dash/en-dash in user-facing JSX copy reads as AI-generated prose.",
     remediation: "Replace the em-dash (\u{2014}) or en-dash (\u{2013}) with a plain hyphen, \
                   or rewrite the sentence to drop the dash.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

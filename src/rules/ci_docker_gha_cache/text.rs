@@ -33,7 +33,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
                   `cache-from: type=gha` and `cache-to: type=gha,mode=max` \
                   to reuse layer cache across runs."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

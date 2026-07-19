@@ -92,7 +92,7 @@ impl OxcCheck for Check {
             message: "Wrapping a value in `Promise.resolve/reject` inside `.then()` \
                       is redundant — return the value directly (or `throw` to reject)."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

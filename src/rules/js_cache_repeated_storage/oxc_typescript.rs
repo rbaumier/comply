@@ -109,7 +109,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Repeated `getItem(\"{display_key}\")` — read once into a variable.",
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

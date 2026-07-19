@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-single-jsdoc-asterisk",
     description: "JSDoc comment lines should start (and end before `*/`) with a single asterisk.",
     remediation: "Remove the extra asterisk so the line begins with one `*` after the indentation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/use-single-js-doc-asterisk/"),
     categories: &["jsdoc"],
 

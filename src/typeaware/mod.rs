@@ -136,7 +136,6 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     Ok(map_diagnostics(
         response.diagnostics,
         &enabled,
-        config,
         &canon_to_orig,
     ))
 }
@@ -239,19 +238,18 @@ fn sidecar_error(err: &str) -> anyhow::Error {
     }
 }
 
-/// Map sidecar diagnostics into comply diagnostics, applying the rule's
-/// configured severity (or its default) and ignoring any unknown rule id.
+/// Map sidecar diagnostics into comply diagnostics at the rule's severity,
+/// ignoring any unknown rule id.
 fn map_diagnostics(
     diags: Vec<SidecarDiag>,
     enabled: &[&'static crate::rules::meta::RuleMeta],
-    config: &Config,
     canon_to_orig: &rustc_hash::FxHashMap<String, PathBuf>,
 ) -> Vec<Diagnostic> {
     diags
         .into_iter()
         .filter_map(|d| {
             let meta = enabled.iter().find(|m| m.id == d.rule)?;
-            let severity = config.severity_for(meta.id).unwrap_or(meta.severity);
+            let severity = meta.severity;
             let path = canon_to_orig
                 .get(&d.file)
                 .cloned()
@@ -281,7 +279,6 @@ impl Drop for TempFile<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::default_static_config;
     use crate::diagnostic::Severity;
     use crate::rules::meta::RuleMeta;
 
@@ -292,7 +289,7 @@ mod tests {
             id: REDUNDANT_NULLISH,
             description: "d",
             remediation: "r",
-            severity: Severity::Warning,
+            severity: Severity::Error,
             doc_url: None,
             categories: &["typescript", "type-aware"],
             skip_in_test_dir: false,
@@ -315,7 +312,7 @@ mod tests {
             rule: REDUNDANT_NULLISH.to_string(),
             message: "msg".to_string(),
         }];
-        let out = map_diagnostics(diags, &[m], default_static_config(), &canon);
+        let out = map_diagnostics(diags, &[m], &canon);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].path.to_string_lossy(), "/tmp/proj/src/a.ts");
         assert_eq!(out[0].line, 6);
@@ -334,7 +331,7 @@ mod tests {
             rule: "some-other-rule".to_string(),
             message: "msg".to_string(),
         }];
-        let out = map_diagnostics(diags, &[m], default_static_config(), &canon);
+        let out = map_diagnostics(diags, &[m], &canon);
         assert!(out.is_empty(), "unknown rule ids must be ignored");
     }
 
@@ -349,7 +346,7 @@ mod tests {
             rule: REDUNDANT_NULLISH.to_string(),
             message: "msg".to_string(),
         }];
-        let out = map_diagnostics(diags, &[m], default_static_config(), &canon);
+        let out = map_diagnostics(diags, &[m], &canon);
         assert_eq!(out[0].path.to_string_lossy(), "/abs/unmapped.ts");
     }
 

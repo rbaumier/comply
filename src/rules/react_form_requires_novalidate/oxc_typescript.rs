@@ -91,7 +91,7 @@ impl OxcCheck for Check {
             message: "Native `<form>` is missing `noValidate` \u{2014} the browser will run its \
                       own HTML validation alongside the app's. Add `noValidate`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

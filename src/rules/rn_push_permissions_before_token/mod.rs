@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-push-permissions-before-token",
     description: "`getExpoPushTokenAsync` must be preceded by `requestPermissionsAsync` in the same function.",
     remediation: "Await `Notifications.requestPermissionsAsync()` before requesting the push token.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

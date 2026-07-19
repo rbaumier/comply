@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-boolean-column-prefix",
     description: "BOOLEAN columns should be prefixed with `is_` or `has_`.",
     remediation: "Rename `active BOOLEAN` -> `is_active BOOLEAN`, `admin BOOLEAN` -> `is_admin BOOLEAN`. The prefix makes boolean semantics obvious at call sites.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

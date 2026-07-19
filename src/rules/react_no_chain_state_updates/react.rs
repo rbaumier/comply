@@ -76,7 +76,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`useEffect` chains multiple `setX(...)` calls — collapse them into one state object / reducer or derive during render.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Viewport meta disables pinch-to-zoom — accessibility violation.",
     remediation: "Remove `user-scalable=no` and `maximum-scale=1` from the viewport \
                   meta tag. Users with low vision rely on zoom.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

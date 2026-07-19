@@ -60,7 +60,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Character class contains multi-codepoint graphemes \u{2014} they will be split into individual code points.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -22,7 +22,7 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
             "Heading selector `{}` is missing `text-wrap: balance` — long titles will orphan the last word.",
             sel_text.trim()
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

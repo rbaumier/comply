@@ -37,7 +37,7 @@ impl TextCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "Commented-out test — delete it or restore behind `.skip`."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

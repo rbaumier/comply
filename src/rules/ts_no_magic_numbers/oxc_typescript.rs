@@ -292,7 +292,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Magic number `{text}` — extract into a named constant."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-adjacent-inline-elements",
     description: "Adjacent inline elements without whitespace between them.",
     remediation: "Add a space or wrapper between adjacent inline elements.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

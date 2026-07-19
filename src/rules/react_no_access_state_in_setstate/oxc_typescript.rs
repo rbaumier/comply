@@ -58,7 +58,7 @@ impl OxcCheck for Check {
                                   state. Use the updater callback: \
                                   `setState(prev => ...)`."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

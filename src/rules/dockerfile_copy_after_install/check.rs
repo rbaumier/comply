@@ -37,7 +37,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                         column: 1,
                         rule_id: super::META.id.into(),
                         message: "`COPY . .` before dependency install — copy the lockfile, run install, then copy the rest to keep layer caching effective.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

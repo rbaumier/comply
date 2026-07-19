@@ -31,7 +31,7 @@ pub const META: RuleMeta = RuleMeta {
                   statically analyze.",
     remediation: "Import `process` explicitly with `import process from \"node:process\";` instead \
                   of relying on the implicit global.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-process-global/"),
     categories: &["typescript"],
 

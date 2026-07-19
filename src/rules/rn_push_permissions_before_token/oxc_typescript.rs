@@ -76,7 +76,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`getExpoPushTokenAsync` without a preceding `requestPermissionsAsync` — request notification permissions first.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

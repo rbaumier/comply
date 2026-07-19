@@ -88,7 +88,7 @@ fn check_statements(
                     column,
                     rule_id: super::META.id.into(),
                     message: format!("Duplicate {name} in describe block."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

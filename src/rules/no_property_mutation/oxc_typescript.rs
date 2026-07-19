@@ -573,7 +573,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "no-property-mutation".into(),
                             message: "Property mutation — use spread or immutable patterns.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -624,7 +624,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "no-property-mutation".into(),
                             message: "Property mutation — use spread or immutable patterns.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -666,7 +666,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "no-property-mutation".into(),
                             message: "Property mutation (increment/decrement) — use immutable patterns.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -690,7 +690,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "no-property-mutation".into(),
                             message: "Property mutation (increment/decrement) — use immutable patterns.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -742,7 +742,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "no-property-mutation".into(),
                     message: "Property deletion — use destructuring or immutable patterns.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

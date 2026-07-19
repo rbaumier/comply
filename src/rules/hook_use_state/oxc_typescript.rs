@@ -73,7 +73,7 @@ impl OxcCheck for Check {
                     "useState setter `{setter_name}` should be named `{expected}` \
                      to match the state variable `{value_name}`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "boundary-condition",
     description: "Array boundary access (`arr[0]` or `arr[arr.length - 1]`) without a length guard or fallback.",
     remediation: "Guard the access with `if (arr.length)` / `arr.length > 0`, use `arr.at(0)` / `arr.at(-1)`, or provide a fallback via `?? fallback` or `|| fallback`. On an empty array, a raw boundary access returns `undefined` and will crash downstream code.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

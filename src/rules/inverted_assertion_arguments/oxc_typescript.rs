@@ -113,7 +113,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Expected and actual are inverted — put the literal in `.toBe()`/`.toEqual()`, not in `expect()`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

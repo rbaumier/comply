@@ -107,7 +107,7 @@ fn push(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span: oxc_span::Span)
         column,
         rule_id: super::META.id.into(),
         message: "Do not override `valueOf`. Use an explicit conversion method instead.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

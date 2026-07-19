@@ -45,7 +45,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Drizzle query inside a loop / `.map` / `.forEach` causes N+1 round-trips — batch with `inArray(...)` or join instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

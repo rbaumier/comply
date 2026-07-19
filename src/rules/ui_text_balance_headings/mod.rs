@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-text-balance-headings",
     description: "Heading selectors (h1-h6) should declare `text-wrap: balance` to avoid orphan words.",
     remediation: "Add `text-wrap: balance;` to the heading rule.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

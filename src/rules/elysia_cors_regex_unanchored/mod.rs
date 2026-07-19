@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-cors-regex-unanchored",
     description: "CORS origin regex without trailing `$` matches more than intended (e.g. `evil.com.attacker.com`).",
     remediation: "Anchor the regex with `$` at the end to match the full origin only: `/^https:\\/\\/.*\\.example\\.com$/`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

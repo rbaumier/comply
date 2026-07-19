@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-useless-intersection",
     description: "Intersecting with `unknown` or `never` is useless — `& unknown` is a no-op, `& never` collapses to `never`.",
     remediation: "Remove `& unknown` (no-op) or simplify `Foo & never` to `never`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

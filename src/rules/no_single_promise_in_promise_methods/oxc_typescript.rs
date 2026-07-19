@@ -62,7 +62,7 @@ impl OxcCheck for Check {
                 "Wrapping single-element array with `Promise.{method_name}()` is unnecessary \
                  \u{2014} use the value directly."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

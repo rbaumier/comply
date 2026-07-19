@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   causes per-frame layout recalculation.",
     remediation: "Animate `transform`, `opacity`, `color`, `background`, or `filter` instead — \
                   they don't trigger layout.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

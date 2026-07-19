@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-now-in-transaction",
     description: "`NOW()` inside a transaction freezes at BEGIN time — use `clock_timestamp()` for real-time values.",
     remediation: "`NOW()`/`CURRENT_TIMESTAMP` return the transaction start time. For per-statement wall-clock, use `clock_timestamp()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

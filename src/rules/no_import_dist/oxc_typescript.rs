@@ -57,7 +57,7 @@ fn emit(ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>, spec: &str, offset: u
         message: format!(
             "Import from '{spec}' targets `dist/`. Import from package entry point, not dist/."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

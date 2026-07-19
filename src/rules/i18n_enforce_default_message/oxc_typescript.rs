@@ -52,7 +52,7 @@ impl OxcCheck for Check {
             message: "`<FormattedMessage>` without `defaultMessage` falls back to the \
                       raw key when no translation exists. Add a human-readable default."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

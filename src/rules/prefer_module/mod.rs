@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `require()` with `import`, `module.exports` / \
                   `exports.x` with `export`, and `__dirname` / `__filename` \
                   with `import.meta.dirname` / `import.meta.filename`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

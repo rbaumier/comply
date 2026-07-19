@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-start-server-fn-requires-auth",
     description: "`createServerFn` handlers with DB mutations must verify authentication.",
     remediation: "Call `getSession()` or `auth()` at the top of the handler and throw if no session.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start", "security"],
 

@@ -52,7 +52,7 @@ impl OxcCheck for Check {
             message: "`z.object({...}).passthrough()` is deprecated in Zod v4 — \
                       use `z.looseObject({...})` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

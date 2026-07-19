@@ -104,7 +104,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: format!("Invalid `rel` value `{token}` on `<{tag}>`."),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

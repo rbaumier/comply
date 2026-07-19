@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Repeated `getItem()` calls with the same key — read once into a variable.",
     remediation: "Store the result of `localStorage.getItem(key)` in a variable and \
                   reuse it instead of calling `getItem` multiple times.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

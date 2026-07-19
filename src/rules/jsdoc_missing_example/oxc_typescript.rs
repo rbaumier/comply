@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                  and its return value — examples are the fastest way for \
                  callers to understand the API."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

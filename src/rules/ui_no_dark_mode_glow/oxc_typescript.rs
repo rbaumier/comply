@@ -155,7 +155,7 @@ impl OxcCheck for Check {
                 rule_id: super::META.id.into(),
                 message: "Colored glow shadow on a dark background — prefer subtle neutral shadows."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

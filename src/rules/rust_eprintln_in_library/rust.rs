@@ -275,7 +275,7 @@ impl AstCheck for Check {
                  can't redirect, configure, or capture it. Use \
                  `tracing::warn!` / `tracing::error!` instead."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

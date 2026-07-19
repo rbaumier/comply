@@ -69,7 +69,7 @@ impl OxcCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: "Generator function is missing `@yields` — document what it yields.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

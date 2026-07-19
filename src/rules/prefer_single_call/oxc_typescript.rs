@@ -44,7 +44,7 @@ fn scan_statements(stmts: &[Statement], source: &str, ctx: &CheckCtx, diagnostic
                             column,
                             rule_id: super::META.id.into(),
                             message: format!("Combine consecutive `{key}()` calls into one."),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

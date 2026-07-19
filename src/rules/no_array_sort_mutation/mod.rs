@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `.sort()` with `.toSorted()`. `Array#sort()` mutates the \
                   array in place which can cause subtle bugs. `Array#toSorted()` \
                   returns a new sorted array, leaving the original unchanged.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

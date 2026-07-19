@@ -102,7 +102,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Assertion inside an optional group is effectively ignored.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `export const UserSchema = z.object({...})`). The naming \
                   convention keeps the schema distinguishable from the \
                   inferred TypeScript type (`type User = z.infer<typeof UserSchema>`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

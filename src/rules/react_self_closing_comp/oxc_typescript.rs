@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "`<{tag}></{tag}>` has no children \u{2014} use `<{tag} />` instead."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-returns-description",
     description: "`@returns` tag must have a description.",
     remediation: "Describe what the function returns after the optional `{type}`: `@returns {User} the updated user, or null if not found`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-returns-description.md",
     ),

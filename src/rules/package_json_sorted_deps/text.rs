@@ -82,7 +82,7 @@ impl TextCheck for Check {
                              `{}` should come before `{}`.",
                             w[1], w[0],
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     break; // One diagnostic per section.

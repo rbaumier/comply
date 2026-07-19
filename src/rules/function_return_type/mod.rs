@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "function-return-type",
     description: "Detects functions returning inconsistent types across branches.",
     remediation: "Ensure all return paths return the same type, or use a discriminated union.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://rules.sonarsource.com/javascript/RSPEC-3800"),
     categories: &["sonarjs", "code-quality"],
 

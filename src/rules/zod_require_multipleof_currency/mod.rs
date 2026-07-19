@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   off-by-penny bugs downstream.",
     remediation: "Constrain to two decimals with `.multipleOf(0.01)` (or use integer \
                   minor units: `.int().nonnegative()` representing cents).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

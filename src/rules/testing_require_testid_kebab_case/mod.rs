@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-require-testid-kebab-case",
     description: "data-testid / data-test values must be kebab-case for consistent, selector-safe querying.",
     remediation: "Use lowercase letters, digits, and hyphens only (e.g. 'submit-button', 'user-card-name').",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

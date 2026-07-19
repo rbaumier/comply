@@ -93,7 +93,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Handler returns only a static string \u{2014} pass the literal directly so Elysia can compile it ahead of time.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

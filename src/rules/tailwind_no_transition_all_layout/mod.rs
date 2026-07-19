@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-transition-all-layout",
     description: "Forbid `transition-all` with width/height/top/left utilities — causes layout thrash.",
     remediation: "Animate via `translate-*` + `transition-transform` or `opacity-*` + `transition-opacity`. These are composited and never trigger layout.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "web-performance"],
 

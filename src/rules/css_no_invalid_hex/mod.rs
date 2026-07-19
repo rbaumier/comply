@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-invalid-hex",
     description: "Hex color must have 3, 4, 6, or 8 hexadecimal digits.",
     remediation: "Replace the value with a valid hex color (e.g. `#ff0000`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

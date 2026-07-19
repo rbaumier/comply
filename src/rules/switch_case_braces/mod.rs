@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   Without braces, `let`/`const`/`class`/`function` declarations \
                   leak into the enclosing `switch` scope and can cause \
                   `SyntaxError` or surprising variable sharing between cases.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

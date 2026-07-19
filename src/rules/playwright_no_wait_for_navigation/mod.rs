@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`page.waitForNavigation()` is discouraged — use `waitForURL` instead.",
     remediation: "Replace `waitForNavigation()` with `page.waitForURL(url)` \
                   or a web-first assertion.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-wait-for-navigation.md",
     ),

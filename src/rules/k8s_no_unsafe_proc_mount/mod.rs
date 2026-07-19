@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-unsafe-proc-mount",
     description: "Container sets `securityContext.procMount: Unmasked`; this exposes /proc paths normally hidden by the runtime.",
     remediation: "Remove `procMount: Unmasked` (or set to `Default`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

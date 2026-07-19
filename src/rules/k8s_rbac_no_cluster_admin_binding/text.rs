@@ -15,7 +15,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &name_pair,
             super::META.id,
             "Binding targets the `cluster-admin` role; use a least-privilege role instead.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

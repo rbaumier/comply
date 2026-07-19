@@ -96,7 +96,7 @@ impl OxcCheck for Check {
                     "Locator `{name}` is declared but never used. Call an action or \
                      assertion on it, or remove the declaration."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

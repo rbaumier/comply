@@ -21,7 +21,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &pair,
             super::META.id,
             "SecurityContextConstraints must not set allowPrivilegedContainer: true.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

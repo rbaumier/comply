@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-prefer-cn-utility",
     description: "Ternary or concatenation in `className` should use `cn()` or `clsx()` for readability.",
     remediation: "Replace `className={x ? 'a' : 'b'}` with `className={cn('a', { b: x })}`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

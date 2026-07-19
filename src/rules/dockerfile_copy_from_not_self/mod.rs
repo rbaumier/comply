@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-copy-from-not-self",
     description: "`COPY --from` must not reference the current build stage.",
     remediation: "Reference a different stage, or use a plain COPY without `--from`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

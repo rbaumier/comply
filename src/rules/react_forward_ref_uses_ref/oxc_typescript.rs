@@ -164,7 +164,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`forwardRef` component is missing the `ref` parameter.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

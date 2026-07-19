@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-restart-policy-required",
     description: "Standalone Pod manifests must explicitly set `spec.restartPolicy`.",
     remediation: "Add `spec.restartPolicy: Always` (long-running) or `OnFailure`/`Never` for batch workloads.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

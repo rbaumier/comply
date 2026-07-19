@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Use lowercase primitives (`string`, `number`, `boolean`) instead of wrapper object types.",
     remediation: "Replace `String` with `string`, `Number` with `number`, `Boolean` with `boolean`, \
                   `Object` with `object`, `Symbol` with `symbol`, `BigInt` with `bigint`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

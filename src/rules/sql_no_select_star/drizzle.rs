@@ -58,7 +58,7 @@ impl AstCheck for Check {
                       list columns explicitly with \
                       `db.select({ id: table.id, name: table.name })`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

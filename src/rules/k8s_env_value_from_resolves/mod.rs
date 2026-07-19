@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-env-value-from-resolves",
     description: "Container env `valueFrom.secretKeyRef`/`configMapKeyRef` must reference an existing resource.",
     remediation: "Create the missing Secret/ConfigMap in the namespace, or fix the reference name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

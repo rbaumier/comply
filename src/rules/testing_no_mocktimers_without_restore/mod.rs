@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-no-mocktimers-without-restore",
     description: "useFakeTimers() without a matching useRealTimers() in afterEach/afterAll leaks mocked timers into sibling tests.",
     remediation: "Call vi.useRealTimers() (or jest.useRealTimers()) in afterEach/afterAll to restore the real timers.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://vitest.dev/api/vi.html#vi-userealtimers"),
     categories: &["testing"],
 

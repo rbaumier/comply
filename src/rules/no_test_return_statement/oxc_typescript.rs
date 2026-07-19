@@ -121,7 +121,7 @@ impl OxcCheck for Check {
                         message:
                             "Remove `return` from test body — use `expect` assertions instead."
                                 .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;

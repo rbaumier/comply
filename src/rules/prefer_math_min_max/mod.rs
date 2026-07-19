@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer `Math.min()`/`Math.max()` over comparison ternaries.",
     remediation: "Replace `value > max ? max : value` with `Math.min(value, max)` \
                   (or `Math.max` for the inverse pattern).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

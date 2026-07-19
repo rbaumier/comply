@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "workaround-reference",
     description: "Workaround/hack comment without a reference to the upstream issue.",
     remediation: "Add a link or issue number explaining what the workaround is for.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

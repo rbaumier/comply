@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-no-autofocus",
     description: "Avoid using `autoFocus` — it is disorienting for screen reader users.",
     remediation: "Remove `autoFocus` and let the user navigate to the element naturally.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

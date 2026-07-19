@@ -34,7 +34,7 @@ impl AstCheck for Check {
             &node,
             super::META.id,
             "ADD CONSTRAINT without NOT VALID locks the table during the scan — split into ADD ... NOT VALID + VALIDATE CONSTRAINT.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

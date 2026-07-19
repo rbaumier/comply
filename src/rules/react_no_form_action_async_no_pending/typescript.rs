@@ -116,7 +116,7 @@ impl TextCheck for Check {
                                       submitters get no pending feedback. Add a child component that calls \
                                       `useFormStatus()` to read `pending`."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

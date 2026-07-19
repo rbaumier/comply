@@ -23,7 +23,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "sql-add-not-null-without-default".into(),
                     message: "`SET NOT NULL` on an existing table requires a full scan under ACCESS EXCLUSIVE lock. Use `CHECK (... IS NOT NULL) NOT VALID` then `VALIDATE CONSTRAINT` instead.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

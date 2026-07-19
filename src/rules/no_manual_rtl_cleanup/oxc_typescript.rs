@@ -70,7 +70,7 @@ impl OxcCheck for Check {
             message: "Manual `cleanup` import from `@testing-library` — \
                       Vitest runs cleanup automatically after each test."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

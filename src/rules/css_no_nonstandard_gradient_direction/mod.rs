@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-nonstandard-gradient-direction",
     description: "Use the standard `to <side>` direction syntax for `linear-gradient()`.",
     remediation: "Prefix the direction with `to` (e.g. `to top`, `to bottom right`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

@@ -138,7 +138,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("`{method}(...)` is a debugging helper — remove before committing."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

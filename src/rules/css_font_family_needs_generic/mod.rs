@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-font-family-needs-generic",
     description: "`font-family` should end with a generic family fallback.",
     remediation: "Append a generic family (e.g. `sans-serif`, `serif`, `monospace`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

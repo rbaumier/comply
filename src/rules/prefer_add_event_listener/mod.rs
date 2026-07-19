@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-add-event-listener",
     description: "Prefer `.addEventListener()` over `on`-event property assignment.",
     remediation: "Replace `element.onclick = handler` with `element.addEventListener('click', handler)`. `addEventListener` supports multiple listeners and provides better control via options (capture, passive, once).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

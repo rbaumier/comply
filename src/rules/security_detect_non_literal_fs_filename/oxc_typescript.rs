@@ -385,7 +385,7 @@ impl OxcCheck for Check {
                 message: "Dynamic path passed to `fs.*` — path traversal vector when the \
                           input is user-controlled. Validate against an allowlist."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

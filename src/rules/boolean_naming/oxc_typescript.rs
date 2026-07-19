@@ -552,7 +552,7 @@ impl OxcCheck for Check {
                  `is*`, `has*`, `should*`, `can*`, `will*`, `did*`, `was*`, \
                  `in*`, `seen*`, `found*`, `are*`, `needs*`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

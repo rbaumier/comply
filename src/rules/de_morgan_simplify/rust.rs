@@ -88,7 +88,7 @@ crate::ast_check! { on ["unary_expression"] => |node, source, ctx, diagnostics|
         message: format!(
             "Apply De Morgan's law: `!(a {op_str} b)` simplifies to `!a {suggested} !b`."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -975,7 +975,7 @@ impl TextCheck for Check {
                      Remove it or document why it's part of the public surface.",
                     export.name
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

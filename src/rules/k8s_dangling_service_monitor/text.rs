@@ -51,7 +51,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             format!(
                 "ServiceMonitor selector does not match any workload's pod template labels in namespace {namespace}; the monitor scrapes nothing."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

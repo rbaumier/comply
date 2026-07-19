@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "option-vs-result",
     description: "Functions named `find*`/`get*` returning `null`/`undefined` should use an Option type.",
     remediation: "Wrap the return value in an Option/Result type instead of returning bare `null` or `undefined`. This makes the absence of a value explicit in the type system.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

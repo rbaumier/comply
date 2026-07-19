@@ -74,7 +74,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "The count argument is unnecessary \u{2014} `.splice(start)` already removes all elements from `start`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

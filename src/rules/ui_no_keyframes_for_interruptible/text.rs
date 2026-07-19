@@ -34,7 +34,7 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
         message: format!(
             "Class selector `{sel}` runs a `@keyframes` animation — swap for `transition` so toggles can interrupt."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

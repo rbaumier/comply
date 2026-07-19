@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-no-inline-styles",
     description: "Inline style objects allocate on every render and break memoisation.",
     remediation: "Move styles to `StyleSheet.create(...)` or wrap in `useMemo`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

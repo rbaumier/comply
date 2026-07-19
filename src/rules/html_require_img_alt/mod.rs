@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-require-img-alt",
     description: "`<img>` elements must declare an `alt` attribute.",
     remediation: "Add `alt=\"<description>\"` for meaningful images or `alt=\"\"` for decorative ones.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["a11y"],
 

@@ -64,7 +64,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Cannot use `module.exports`/`exports` in a module that uses `import` declarations — pick one module system.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Use `using` / `await using` instead of try/finally with `.{method}()` (TS 5.2+)."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

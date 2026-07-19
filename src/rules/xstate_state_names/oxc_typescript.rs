@@ -87,7 +87,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "State name `{name}` should be camelCase or snake_case (e.g. `fetchingData`)."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

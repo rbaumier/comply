@@ -77,7 +77,7 @@ impl OxcCheck for Check {
                 message: "Enum member should be initialized with a literal value \
                           (string or number), not a computed expression."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

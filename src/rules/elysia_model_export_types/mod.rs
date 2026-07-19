@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-model-export-types",
     description: "Module exports a `t.Object(...)` const but no static type derived from it.",
     remediation: "Export the inferred type alongside the schema: `export type User = typeof UserModel.static;`",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["type-safety", "elysia"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prisma-no-findunique-without-where",
     description: "`findUnique` without a `where` argument always resolves to null.",
     remediation: "Pass `{ where: { id } }`, or switch to `findFirst` if filtering on a non-unique field.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["prisma"],
 

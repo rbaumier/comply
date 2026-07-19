@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Add `{ error: '...' }` to `.refine()` — bare refine produces no helpful error message.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

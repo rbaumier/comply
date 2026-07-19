@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-calc-needs-spaces",
     description: "Operators in `calc()` must be surrounded by spaces.",
     remediation: "Add spaces around `+`, `-`, `*`, and `/` inside `calc()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

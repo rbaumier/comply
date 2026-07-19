@@ -238,7 +238,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Use `Math.trunc(x)` instead of `~~x`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -277,7 +277,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: format!("Use `Math.trunc(x)` instead of bitwise `{op_str} 0`."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -312,7 +312,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Use `Math.trunc(x)` instead of bitwise assignment `{op_str} 0`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

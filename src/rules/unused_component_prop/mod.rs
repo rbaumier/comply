@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the unused prop from the type definition, or start using \
                   it in the component. Unused props bloat the public API and mislead \
                   consumers into passing data that is silently ignored.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

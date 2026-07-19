@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-no-void-query-fn",
     description: "`queryFn` must return data — a void / undefined return causes silent cache misses and `data: undefined` everywhere.",
     remediation: "Return the parsed response from `queryFn`. If you only need a side effect, use `useMutation` instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://tanstack.com/query/latest/docs/eslint/no-void-query-fn"),
     categories: &["tanstack-query"],
 

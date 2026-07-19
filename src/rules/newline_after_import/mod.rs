@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "newline-after-import",
     description: "Missing blank line after the last import statement.",
     remediation: "Add an empty line between the last import and the first code statement for visual separation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports"],
 

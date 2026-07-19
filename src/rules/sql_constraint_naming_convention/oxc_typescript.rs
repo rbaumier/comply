@@ -41,7 +41,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Constraint `{name}` must end with _pk|_fk|_key|_chk|_exl|_idx|_pkey|_fkey (format: {{table}}_{{col}}_{{suffix}})."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

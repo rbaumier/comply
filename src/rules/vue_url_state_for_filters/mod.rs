@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Filters, pagination, search, and sort state should survive a page \
                   reload and be shareable by URL. Use `useUrlSearchParams` from \
                   VueUse (or your router's query) instead of a local `ref()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

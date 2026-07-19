@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   are expensive to construct and should be cached.",
     remediation: "Hoist `z.object({...})` / `z.string()` to module scope and reference \
                   the same schema instance from your render / handler.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

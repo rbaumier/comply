@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   keeps the input type intact.",
     remediation: "Replace `.transform(fn)` with `.overwrite(fn)` whenever `fn` returns \
                   the same shape as its input (e.g. `s => s.trim()`, `n => Math.round(n)`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

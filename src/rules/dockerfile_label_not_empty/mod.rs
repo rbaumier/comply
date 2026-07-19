@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-label-not-empty",
     description: "LABEL value must not be empty.",
     remediation: "Provide a meaningful value for the label or remove it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

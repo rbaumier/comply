@@ -57,7 +57,7 @@ fn check_peer_sequence(
                     format!(
                         "NetworkPolicy peer podSelector does not match any workload's pod template labels in namespace {namespace}; the rule references no pods."
                     ),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

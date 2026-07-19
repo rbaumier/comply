@@ -40,7 +40,7 @@ impl OxcCheck for Check {
                 rule_id: "a11y-no-autofocus".into(),
                 message: "Avoid `autoFocus` — it is disorienting for screen reader users."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

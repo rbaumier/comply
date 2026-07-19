@@ -104,7 +104,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 &node,
                 super::META.id,
                 "Move the minus inside the brackets (e.g. `top-[-1px]` instead of `-top-[1px]`).".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

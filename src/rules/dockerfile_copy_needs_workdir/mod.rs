@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-copy-needs-workdir",
     description: "COPY with a relative destination needs a prior WORKDIR.",
     remediation: "Add a WORKDIR before this COPY, or use an absolute destination path.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

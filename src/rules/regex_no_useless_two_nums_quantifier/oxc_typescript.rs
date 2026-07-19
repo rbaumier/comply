@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Redundant quantifier `{n,n}` \u{2014} simplify to `{n}`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

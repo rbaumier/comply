@@ -35,7 +35,7 @@ impl TextCheck for Check {
                 column: 1,
                 rule_id: super::META.id.into(),
                 message: "Unexpected empty object key.".to_string(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: Some((byte_offset, 0)),
             })
             .collect()

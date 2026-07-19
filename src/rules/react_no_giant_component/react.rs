@@ -71,7 +71,7 @@ crate::ast_check! { on ["function_declaration", "arrow_function"] => |node, sour
         message: format!(
             "Component `{name}` is {line_count} lines — break into smaller focused components."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

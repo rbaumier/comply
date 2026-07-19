@@ -9,7 +9,7 @@ crate::ast_check! { on ["comment"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "Empty comment; remove or add content.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

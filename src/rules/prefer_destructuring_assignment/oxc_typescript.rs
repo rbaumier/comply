@@ -52,7 +52,7 @@ fn scan_statements<'a>(stmts: &'a [Statement<'a>], source: &'a str, ctx: &CheckC
                     message: format!(
                         "{count} consecutive property accesses on `{obj_name}` — use destructuring instead."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 i = j;

@@ -93,7 +93,7 @@ impl TextCheck for Check {
                 rule_id: RULE_ID.into(),
                 message: "File is not reachable from any entry point via the import graph."
                     .to_string(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

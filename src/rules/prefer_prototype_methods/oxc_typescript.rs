@@ -117,7 +117,7 @@ impl OxcCheck for Check {
                 "Prefer `{replacement}.{delegation}(\u{2026})` over borrowing from a literal instance. \
                  Use `{constructor}.prototype.{method}` instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

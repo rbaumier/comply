@@ -118,7 +118,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("Top-level constant `{name}` is not in `SCREAMING_SNAKE_CASE`."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

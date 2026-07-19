@@ -88,7 +88,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`baseURL` duplicates `BETTER_AUTH_URL` — remove it and use the env var."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

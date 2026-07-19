@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Domain must not import from infrastructure or application. \
                   Application must not import from infrastructure. \
                   Use dependency injection or ports/adapters instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["architecture"],
 

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-raw-color-utilities",
     description: "Forbid raw palette color utilities (bg-white, text-gray-900, bg-blue-500).",
     remediation: "Use semantic design tokens (bg-background, text-foreground, bg-primary, text-muted-foreground) so theming and dark mode stay centralized.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

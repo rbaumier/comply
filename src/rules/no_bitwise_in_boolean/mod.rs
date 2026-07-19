@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-bitwise-in-boolean",
     description: "Bitwise operators in boolean contexts are likely typos.",
     remediation: "Use `&&` instead of `&`, `||` instead of `|`. Bitwise operators in `if`/`while` conditions are almost always a mistake.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

@@ -48,7 +48,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Missing return type on function.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -65,7 +65,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Missing return type on function.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

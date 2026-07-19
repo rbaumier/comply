@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-no-react-navigation-stack",
     description: "`@react-navigation/stack` and `createStackNavigator` are forbidden; use Expo Router.",
     remediation: "Delete the stack navigator and migrate routes to Expo Router file-based routing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

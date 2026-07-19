@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-bearer-missing-www-auth",
     description: "Bearer auth 401/400 response without `WWW-Authenticate` header — RFC 6750 violation.",
     remediation: "Add `set.headers['WWW-Authenticate'] = 'Bearer realm=\"...\"'` before returning the 401/400.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-prefer-secret-files-over-env",
     description: "Container env entries should not source values from `secretKeyRef`; mount the Secret as a file instead.",
     remediation: "Mount the Secret via `volumes`/`volumeMounts` and read the value from the filesystem; env vars leak through `kubectl describe` and child processes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

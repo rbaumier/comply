@@ -78,7 +78,7 @@ fn check_function_params(func: &Function, ctx: &CheckCtx, diagnostics: &mut Vec<
                     "Exported function '{name}' parameter '{param_name}' \
                      is missing a type annotation."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -104,7 +104,7 @@ fn check_arrow_params(
                     "Exported function '{name}' parameter '{param_name}' \
                      is missing a type annotation."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

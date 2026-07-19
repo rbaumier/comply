@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-large-string-union",
     description: "String-literal union has more than 50 members; consider a branded string or enum.",
     remediation: "Replace the union with a branded string type, a const object + `keyof typeof`, or an enum. Huge unions slow the compiler and produce useless error messages.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-conditional-async-return",
     description: "Function returns `T` on one branch and `Promise<T>` on another — always return a promise for consistency.",
     remediation: "If the function is async, every branch must return a value (or `await` a promise). If sync, don't return a promise on some branches.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

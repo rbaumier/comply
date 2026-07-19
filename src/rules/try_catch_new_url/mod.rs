@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "`new URL(invalid)` throws a TypeError. Either wrap in try/catch \
                   and handle the invalid-URL case, or gate with `URL.canParse(s)` \
                   before constructing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["error-handling"],
 

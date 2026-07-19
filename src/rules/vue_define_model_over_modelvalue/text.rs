@@ -43,7 +43,7 @@ crate::ast_check! { on ["component"] prefilter = ["modelValue"] => |node, source
             column: 1,
             rule_id: super::META.id.into(),
             message: "Replace `modelValue` prop + `update:modelValue` emit with `defineModel()` (Vue 3.4+).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

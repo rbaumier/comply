@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-non-null-asserted-optional-chain",
     description: "Non-null assertion after optional chain contradicts its purpose.",
     remediation: "Remove the `!` — the optional chain already handles the nullish case.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

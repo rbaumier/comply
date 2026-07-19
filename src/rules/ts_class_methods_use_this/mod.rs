@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-class-methods-use-this",
     description: "Class methods that don't use `this` should be static or extracted to a standalone function.",
     remediation: "Add `static` to the method, move it to a standalone function, or use `this` in the body.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/class-methods-use-this"),
     categories: &["typescript"],
 

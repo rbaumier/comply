@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `new Response(JSON.stringify(data), { headers: ... })` \
                   with `json(data)` — it sets the correct Content-Type and is \
                   safer to type.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start"],
 

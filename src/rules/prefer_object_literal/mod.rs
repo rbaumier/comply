@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-object-literal",
     description: "Use `{}` instead of `new Object()`.",
     remediation: "Replace `new Object()` with `{}` — object literals are cleaner and more idiomatic.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

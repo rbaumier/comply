@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-no-dynamic-require",
     description: "Calls to `require()` should use string literals.",
     remediation: "Replace the dynamic `require()` argument with a static string literal.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-dynamic-require.md",
     ),

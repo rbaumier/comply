@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-standard-labels",
     description: "Resources must include app.kubernetes.io/name and app.kubernetes.io/instance labels.",
     remediation: "Add `app.kubernetes.io/name` and `app.kubernetes.io/instance` under metadata.labels.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

@@ -116,7 +116,7 @@ impl OxcCheck for Check {
                      always return `undefined`. Configure it or pass an implementation to \
                      `fn(impl)`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Guard reads `headers.authorization` without a `headers:` schema \u{2014} add one so the field is validated.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -360,7 +360,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Direct cast to branded type `{base_name}`; route through a validator/constructor function."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

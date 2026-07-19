@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "xstate-no-invalid-transition-props",
     description: "Transition objects in XState `on` handlers must only use known properties.",
     remediation: "Use only valid XState transition properties",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://stately.ai/docs/transitions"),
     categories: &["xstate"],
 

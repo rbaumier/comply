@@ -149,7 +149,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Interactive element below the ~44x44px touch target (WCAG 2.5.5). Use `h-11` + sufficient padding, or `size-11` for icon buttons.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

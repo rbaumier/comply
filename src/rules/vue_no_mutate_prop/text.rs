@@ -316,7 +316,7 @@ impl TextCheck for Check {
                         message: "Mutating a prop directly breaks Vue's one-way data flow. \
                              Emit an event or copy the prop into a local ref instead."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

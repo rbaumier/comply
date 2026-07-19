@@ -20,7 +20,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "sql-no-serial-use-identity".into(),
                     message: "`SERIAL`/`BIGSERIAL`/`SMALLSERIAL` create implicit sequences with awkward ownership. Use `GENERATED ALWAYS AS IDENTITY` instead.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

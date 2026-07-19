@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-approximative-numeric-constant",
     description: "Use standard constants instead of approximated literals.",
     remediation: "Replace the approximated literal with the matching `Math` constant (e.g. `Math.PI`, `Math.E`, `Math.SQRT2`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["suspicious"],
 

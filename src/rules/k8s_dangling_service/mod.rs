@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-dangling-service",
     description: "Service.spec.selector must match at least one workload's pod template labels.",
     remediation: "Align the Service selector with a workload's pod template labels, or remove the unused Service.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

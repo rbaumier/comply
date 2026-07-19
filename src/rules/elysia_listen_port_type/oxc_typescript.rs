@@ -57,7 +57,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.listen(process.env.PORT)` passes a string \u{2014} wrap with `Number(...)` or `parseInt(...)`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

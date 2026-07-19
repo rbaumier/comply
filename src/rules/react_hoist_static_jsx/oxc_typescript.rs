@@ -125,7 +125,7 @@ impl OxcCheck for Check {
                       Move this element to a module-level `const` above the \
                       component so it's built once."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

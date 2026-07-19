@@ -89,7 +89,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`new X()` without assignment — constructors should not be called for side effects.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

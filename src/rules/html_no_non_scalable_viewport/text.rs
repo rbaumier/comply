@@ -36,7 +36,7 @@ impl TextCheck for Check {
                         rule_id: super::META.id.into(),
                         message: "Viewport meta tag disables user scaling. Allow users to zoom."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     search_from = match_start + needle.len();

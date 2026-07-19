@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-unknown-property-value",
     description: "Disallow unknown keyword values for `display` and `position`.",
     remediation: "Use a valid keyword (e.g. `flex`, `grid`, `relative`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

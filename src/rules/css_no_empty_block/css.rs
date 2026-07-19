@@ -12,7 +12,7 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
         &block,
         super::META.id,
         "Empty declaration block; remove or populate it.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

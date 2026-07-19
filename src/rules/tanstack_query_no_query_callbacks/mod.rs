@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-no-query-callbacks",
     description: "`onSuccess`/`onError`/`onSettled` callbacks on `useQuery` were removed in v5.",
     remediation: "Move side-effects to `useEffect` watching the query result.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5"),
     categories: &["tanstack"],
 

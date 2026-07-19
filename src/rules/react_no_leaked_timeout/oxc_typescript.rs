@@ -39,7 +39,7 @@ impl OxcCheck for Check {
                 message: "`setTimeout` in `useEffect` without `clearTimeout` cleanup — \
                           the timeout may fire after the component unmounts."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

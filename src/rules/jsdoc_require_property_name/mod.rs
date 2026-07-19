@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-property-name",
     description: "Each @property tag must have a name.",
     remediation: "Add a property name after the type annotation (e.g. `@property {string} name`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-property-name.md",
     ),

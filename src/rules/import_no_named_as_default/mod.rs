@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Default import should not share a name with a named export of the source.",
     remediation: "Use a named import `import { name }` instead of a default import, \
                   or rename the default import to avoid confusion.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-named-as-default.md",
     ),

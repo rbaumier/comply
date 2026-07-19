@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "error-message-is-remediation",
     description: "Error messages should describe what went wrong and what to do about it.",
     remediation: "Replace short/noun-only error messages like `\"Invalid\"` or `\"Not found\"` with actionable messages: `\"User not found — verify the ID and retry\"`. Good errors contain a verb and guide the reader toward a fix.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

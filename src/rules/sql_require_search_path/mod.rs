@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-require-search-path",
     description: "Migration files must set `search_path` or use schema-qualified identifiers.",
     remediation: "Start migrations with `SET search_path = pg_catalog, public;` or qualify every identifier (`public.user`, `pg_catalog.setval`). An attacker with CREATE on any schema in search_path can shadow functions.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

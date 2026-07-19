@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   circumvent the public API and cause inconsistent schemas across the codebase. \
                   Official versioned entry points (`zod/v3`, `zod/v4`, `zod/v4-mini`) are allowed.",
     remediation: "Use consistent import source for zod",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

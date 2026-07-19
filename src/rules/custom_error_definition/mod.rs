@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use a class field `name = 'MyError';` instead of setting \
                   `this.name` in the constructor. Pass the error message to \
                   `super()` instead of setting `this.message`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

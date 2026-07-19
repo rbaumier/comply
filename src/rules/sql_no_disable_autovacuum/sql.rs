@@ -17,7 +17,7 @@ impl TextCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "Disabling autovacuum causes bloat and XID wraparound — tune `autovacuum_vacuum_scale_factor` / `autovacuum_vacuum_threshold` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

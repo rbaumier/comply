@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-dangling-ingress",
     description: "Ingress backend.service.name must reference a Service that exists in the project.",
     remediation: "Create the referenced Service in the matching namespace, or fix the backend.service.name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

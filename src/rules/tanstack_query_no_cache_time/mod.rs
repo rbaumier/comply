@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-no-cache-time",
     description: "`cacheTime` was renamed to `gcTime` in TanStack Query v5.",
     remediation: "Replace `cacheTime` with `gcTime`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5"),
     categories: &["tanstack"],
 

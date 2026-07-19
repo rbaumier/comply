@@ -52,7 +52,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: "prefer-top-level-await".into(),
                 message: "Prefer top-level await over an async IIFE.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -96,7 +96,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Prefer top-level await over calling async function `{func_name}()`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

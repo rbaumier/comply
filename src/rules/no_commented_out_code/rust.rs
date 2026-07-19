@@ -103,7 +103,7 @@ impl AstCheck for Check {
                 message: "This comment looks like commented-out code — \
                           delete it. Git history preserves the original."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

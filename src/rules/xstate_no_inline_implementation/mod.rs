@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "xstate-no-inline-implementation",
     description: "Inline functions as XState `actions`, `guards`, or `services` hinder reuse and testing.",
     remediation: "Use named actions/guards/services instead of inline functions",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://stately.ai/docs/machines#implementations"),
     categories: &["xstate"],
 

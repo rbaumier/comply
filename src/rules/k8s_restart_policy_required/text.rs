@@ -23,7 +23,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &kind_pair,
             super::META.id,
             "Pod must set spec.restartPolicy explicitly (Always | OnFailure | Never).".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

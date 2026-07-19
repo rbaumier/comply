@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Use `toHaveLength(n)` instead of `expect(x.length).{matcher}(n)`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-script-setup-required",
     description: "`<script>` without `setup` attribute uses Options-API-style Composition API — use `<script setup>` instead.",
     remediation: "Change `<script lang=\"ts\">` to `<script setup lang=\"ts\">` and remove the `setup()` function.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

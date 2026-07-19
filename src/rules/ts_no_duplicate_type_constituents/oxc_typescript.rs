@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Duplicate member `{dup}` in {kind_label} type — remove the repeat."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

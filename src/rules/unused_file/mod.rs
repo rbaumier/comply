@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "unused-file",
     description: "File is not reachable from any entry point via the import graph.",
     remediation: "Delete the file if it's truly unused, or add an import from a reachable module.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "imports"],
 

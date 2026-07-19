@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-animate-transform-opacity-only",
     description: "Animations should only target `transform` and `opacity`; other properties trigger layout/paint.",
     remediation: "Rewrite the `@keyframes` to animate `transform` / `opacity`; use layout tricks or FLIP instead of animating top/left/width/height/margin/padding.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Move the conditional logic into the event handler that sets \
                   the dependency. Effects should synchronize with external systems, \
                   not react to user events.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

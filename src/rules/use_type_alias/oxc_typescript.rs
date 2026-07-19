@@ -223,7 +223,7 @@ impl OxcCheck for Check {
                             annotation,
                             lines.len()
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

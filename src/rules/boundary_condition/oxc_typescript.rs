@@ -457,7 +457,7 @@ impl OxcCheck for Check {
                 "Unchecked access to the {which} element — on an empty array this is `undefined`. \
                  Guard with `if ({obj_text}.length)`, use `{obj_text}.at({at_arg})`, or add a `?? fallback`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

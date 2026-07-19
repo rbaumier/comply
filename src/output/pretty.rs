@@ -118,7 +118,6 @@ impl miette::Diagnostic for MietteDiag<'_> {
     fn severity(&self) -> Option<miette::Severity> {
         Some(match self.diag.severity {
             Severity::Error => miette::Severity::Error,
-            Severity::Warning => miette::Severity::Warning,
         })
     }
 
@@ -169,7 +168,7 @@ mod tests {
             column: 7,
             rule_id: "no-weak-cipher".into(), // real rule id in registry
             message: "example message".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((6, 1)),
         };
         let out = render_pretty(&[diag]);
@@ -206,7 +205,7 @@ mod tests {
             column: 1,
             rule_id: "not-a-real-rule-id".into(),
             message: "unknown rule message".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((0, 3)),
         };
         let out = render_pretty(&[diag]);
@@ -223,7 +222,7 @@ mod tests {
             column: 1,
             rule_id: "no-weak-cipher".into(),
             message: "m".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         };
         let out = render_pretty(&[diag]);

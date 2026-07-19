@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             message: "`z.coerce.boolean()` treats every non-empty string as `true` — \
                       use `z.stringbool()` for HTML form inputs and query strings."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

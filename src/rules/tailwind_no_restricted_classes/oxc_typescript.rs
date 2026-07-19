@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                         "Class `{blocked}` is on the project blocklist — use the \
                          design-system equivalent or remove."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

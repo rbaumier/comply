@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   actually types into a form) differs from the output.",
     remediation: "Use `z.input<typeof Schema>` for form values and `z.output<typeof Schema>` \
                   (or `z.infer`) for the parsed result.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

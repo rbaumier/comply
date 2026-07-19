@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "hono-cookie-no-samesite",
     description: "Cookie without `sameSite` or with `sameSite: 'None'` — vulnerable to CSRF.",
     remediation: "Set `sameSite: 'Lax'` (default for most cases) or `sameSite: 'Strict'` for sensitive cookies.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "hono"],
 

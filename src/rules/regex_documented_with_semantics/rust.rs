@@ -40,7 +40,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Regex::new"] => |node, 
         &node,
         super::META.id,
         "Complex regex without a comment — add a description of what it matches.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

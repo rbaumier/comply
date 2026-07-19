@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-inline-handlers",
     description: "Route handler passed by reference instead of inline — type inference is degraded.",
     remediation: "Use inline handlers for type inference: `.get('/', ({ body }) => Controller.method(body))`",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["type-safety", "elysia"],
 

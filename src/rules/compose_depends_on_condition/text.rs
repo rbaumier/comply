@@ -52,7 +52,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
         column: 1,
         rule_id: super::META.id.into(),
         message: "`depends_on:` short form only waits for startup; use the long form with `condition: service_healthy`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((value.byte_range().start, value.byte_range().len())),
     });
 }

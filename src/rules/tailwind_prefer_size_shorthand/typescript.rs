@@ -64,7 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             format!("Replace `w-{val} h-{val}` with `size-{val}`."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

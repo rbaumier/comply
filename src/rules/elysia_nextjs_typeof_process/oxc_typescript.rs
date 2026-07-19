@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `typeof process` instead of `typeof window` — `window` checks misclassify edge / RSC runtimes.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

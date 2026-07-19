@@ -131,7 +131,7 @@ fn flag_onmounted(
             message: format!(
                 "`onMounted` duplicates the `watch` — pass `{{ immediate: true }}` to the watch of `{fname}` instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     });

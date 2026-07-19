@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-no-rewrap-error",
     description: "Forbid `return Result.err(result.error)` when `return result` suffices.",
     remediation: "Return the existing Result directly instead of re-wrapping its error.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

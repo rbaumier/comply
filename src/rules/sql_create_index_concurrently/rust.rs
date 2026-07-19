@@ -29,7 +29,7 @@ impl AstCheck for Check {
                 "`CREATE INDEX` without `CONCURRENTLY` locks the table. \
                  Use `CREATE INDEX CONCURRENTLY` instead."
                     .into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
         diagnostics

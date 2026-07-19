@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/check-types",
     description: "Prefer lowercase primitives in JSDoc types (e.g. `string` over `String`).",
     remediation: "Use the lowercase primitive: `String` → `string`, `Number` → `number`, `Boolean` → `boolean`, `Object` → `object`, `Symbol` → `symbol`, `Bigint` → `bigint`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/check-types.md",
     ),

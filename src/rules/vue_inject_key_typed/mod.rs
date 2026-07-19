@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-inject-key-typed",
     description: "String keys in `provide()`/`inject()` lose type information.",
     remediation: "Declare `const MY_KEY: InjectionKey<T> = Symbol('my-key')` and pass it to provide/inject.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

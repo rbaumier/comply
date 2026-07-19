@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-auth-no-duplicate-baseurl",
     description: "Avoid hardcoding `baseURL` in `betterAuth()` — rely on `BETTER_AUTH_URL`.",
     remediation: "Remove `baseURL` from the config and set `BETTER_AUTH_URL` in the environment instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://www.better-auth.com/docs/installation"),
     categories: &["better-auth"],
 

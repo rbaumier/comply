@@ -340,7 +340,7 @@ impl OxcCheck for Check {
                                 "Use destructured variable for `{}` instead of `{}.{}`.",
                                 c.prop_text, c.obj_text, c.prop_text,
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         break;

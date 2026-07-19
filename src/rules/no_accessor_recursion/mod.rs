@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "A getter that reads `this.foo` or a setter that writes \
                   `this.foo` on the same property triggers infinite recursion. \
                   Use a backing field (e.g. `this._foo`) or a `WeakMap`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

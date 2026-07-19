@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace in-app `fetch('/api/...')` calls with a typed \
                   `createServerFn` call — you gain type safety and skip the \
                   HTTP round-trip on SSR.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start"],
 

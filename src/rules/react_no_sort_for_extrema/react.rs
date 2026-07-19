@@ -141,7 +141,7 @@ crate::ast_check! { on ["subscript_expression"] => |node, source, ctx, diagnosti
         "`.sort(...)[0]` / `.sort(...)[length-1]` picks an extremum via O(n log n) work — \
          use `Math.min` / `Math.max` or a single-pass fold."
             .into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-no-static-element-interactions",
     description: "Flag `<div>` and `<span>` with `onClick` but no `role` attribute.",
     remediation: "Add a `role` attribute or use a native interactive element like `<button>` instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

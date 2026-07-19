@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-prefer-shorthand-v-on",
     description: "Event bindings should use the `@` shorthand instead of longhand `v-on:`.",
     remediation: "Replace `v-on:click=\"onClick\"` with `@click=\"onClick\"`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

@@ -61,7 +61,7 @@ impl TextCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "`.passthrough()` on an API input schema lets clients smuggle unknown keys — use `.strict()` or omit."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

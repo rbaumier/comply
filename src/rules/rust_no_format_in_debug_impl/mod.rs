@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
                   call. `write!` streams into the formatter's writer; \
                   `format!` builds an intermediate `String` that you \
                   immediately throw away.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

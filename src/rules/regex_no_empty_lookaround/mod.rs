@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-empty-lookaround",
     description: "Empty lookaround (`(?=)`, `(?!)`, `(?<=)`, `(?<!)`) always matches or always fails — likely a mistake.",
     remediation: "Add a pattern inside the lookaround or remove it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["regex"],
 

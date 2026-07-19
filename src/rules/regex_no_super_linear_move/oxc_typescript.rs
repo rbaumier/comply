@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Quantifier followed by the same element can cause quadratic runtime.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

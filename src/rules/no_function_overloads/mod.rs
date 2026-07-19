@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   generic signature. Overloads are purely ambient \
                   declarations — the compiler checks the implementation \
                   against the last signature only, which hides bugs.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

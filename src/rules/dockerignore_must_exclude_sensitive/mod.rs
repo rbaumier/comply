@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerignore-must-exclude-sensitive",
     description: "When Dockerfile uses `COPY .`, `.dockerignore` must exclude `.env`, `.git`, `node_modules`, keys, etc.",
     remediation: "Create or extend `.dockerignore` with `.env*`, `.git`, `node_modules`, `*.pem`, `id_rsa`, `.npmrc`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

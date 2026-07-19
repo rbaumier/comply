@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: super::META.id.into(),
                             message: "`set.status = ...` after `return` has no effect — set the status before returning.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

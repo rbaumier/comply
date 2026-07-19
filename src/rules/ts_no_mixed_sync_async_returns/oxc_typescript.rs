@@ -72,7 +72,7 @@ fn check_function_body_fn(
             column,
             rule_id: super::META.id.into(),
             message: "Function returns both a sync value and a Promise; mark it `async` so callers always `await`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }
@@ -113,7 +113,7 @@ fn check_arrow_body(
             column,
             rule_id: super::META.id.into(),
             message: "Function returns both a sync value and a Promise; mark it `async` so callers always `await`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

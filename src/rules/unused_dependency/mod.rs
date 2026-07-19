@@ -22,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "unused-dependency",
     description: "Dependency in package.json is never imported in the project.",
     remediation: "Remove the dependency from package.json, or add an import if it's actually needed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports", "dependencies"],
 

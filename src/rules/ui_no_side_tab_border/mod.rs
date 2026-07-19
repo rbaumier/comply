@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   the side borders compete with the active-tab affordance.",
     remediation: "Drop the side borders and keep only the `borderBottom` (or use a dedicated \
                   active-state indicator).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

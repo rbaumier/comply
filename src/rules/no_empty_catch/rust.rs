@@ -146,7 +146,7 @@ fn push_diag(
         message: "Empty error-handling block silently swallows the error \u{2014} \
                   log it, propagate it, or add a comment explaining why."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

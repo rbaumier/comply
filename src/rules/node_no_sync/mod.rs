@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-no-sync",
     description: "Synchronous Node.js methods block the event loop.",
     remediation: "Use the asynchronous variant (e.g. `readFile` instead of `readFileSync`) or `fs.promises`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["node"],
 

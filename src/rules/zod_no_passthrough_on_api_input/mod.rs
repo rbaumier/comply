@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-no-passthrough-on-api-input",
     description: "`.passthrough()` on API input schemas lets unknown keys through.",
     remediation: "Use `.strict()` to reject unknown keys, or remove `.passthrough()` and let zod strip them.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod", "security"],
 

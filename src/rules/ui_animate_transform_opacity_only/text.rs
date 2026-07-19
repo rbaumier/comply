@@ -51,7 +51,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
         message: format!(
             "`@keyframes` animates `{lower}` — prefer animating `transform`/`opacity` to stay off the layout/paint path."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((range.start, range.len())),
     });
 }

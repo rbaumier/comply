@@ -53,7 +53,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "WebSocket route reads request headers but declares no `headers:` schema — header presence is not enforced.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

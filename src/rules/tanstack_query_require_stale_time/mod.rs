@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-require-stale-time",
     description: "`QueryClient` without a default `staleTime` refetches on every mount.",
     remediation: "Add `defaultOptions: { queries: { staleTime: 60_000 } }` to `QueryClient`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-prefer-safe-parse",
     description: "`.parse()` in a route handler throws `ZodError` unhandled — use `.safeParse()` instead.",
     remediation: "Use `.safeParse()` and handle `!result.success` to return a structured 400 response.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod", "api"],
 

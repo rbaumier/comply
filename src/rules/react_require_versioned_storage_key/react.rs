@@ -67,7 +67,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             "Storage key `{key}` has no `:vN` version suffix — bumping the \
              version lets you migrate or drop old entries when the shape changes."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

@@ -83,7 +83,7 @@ impl TextCheck for Check {
                         neg = b.cond,
                         base = a.cond,
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

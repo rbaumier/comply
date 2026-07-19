@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-unsafe-ffi-isolation",
     description: "`extern \"C\"` blocks should be isolated inside a `mod sys`, `mod ffi`, or `mod raw` module.",
     remediation: "Move the `extern \"C\"` block into a dedicated submodule: `mod sys { extern \"C\" { ... } }`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

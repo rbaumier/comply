@@ -62,7 +62,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("Abstract ARIA role `{role}` must not be used on DOM elements."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

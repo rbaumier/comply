@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "function-component-definition",
     description: "React components must be defined using `function` declarations, not arrow functions.",
     remediation: "Replace `const MyComponent = () => <JSX />` with `function MyComponent() { return <JSX />; }`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/function-component-definition.md",
     ),

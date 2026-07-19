@@ -76,7 +76,7 @@ impl OxcCheck for Check {
             message: "`page.evaluate()` callback captures an outer-scope \
                       variable — pass it as the second argument."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

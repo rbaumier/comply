@@ -217,7 +217,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Replacement string references a capturing group that does not exist in the regex.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

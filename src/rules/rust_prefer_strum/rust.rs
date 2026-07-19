@@ -111,7 +111,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                      form differs from the variant name) so the round-trip stays in \
                      sync by construction."
                 ),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

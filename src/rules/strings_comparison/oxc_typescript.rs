@@ -75,7 +75,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Relational comparison with string literal uses lexicographic order \u{2014} this is rarely the intent.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

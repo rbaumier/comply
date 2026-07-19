@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{name}(...)` must be called inside an action (e.g. `actions: [{name}(...)]`), not imperatively."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -42,7 +42,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Passing `1` as the `depth` argument of `.flat()` is unnecessary \u{2014} it is the default.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

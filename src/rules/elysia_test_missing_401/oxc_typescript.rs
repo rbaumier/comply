@@ -117,7 +117,7 @@ impl OxcCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "Test exercises an authenticated route but never asserts a 401/Unauthorized response.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

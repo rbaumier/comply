@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   competing error UXs.",
     remediation: "Add `noValidate` to the `<form>` so the app's client-side validation \
                   owns the error experience end to end.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

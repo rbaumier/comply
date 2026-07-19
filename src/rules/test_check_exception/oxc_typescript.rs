@@ -64,7 +64,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`.toThrow()` without specifying error type or message — any error will pass."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

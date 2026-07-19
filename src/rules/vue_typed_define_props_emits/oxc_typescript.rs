@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             message: format!(
                 "In `lang=\"ts\"` SFCs use the type form: `{name}<{{ ... }}>()` instead of the runtime object/array form."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

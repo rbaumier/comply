@@ -57,7 +57,7 @@ impl AstCheck for Check {
                              `is_` or `has_` — the prefix makes boolean semantics \
                              obvious at call sites."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

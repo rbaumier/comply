@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`[\\b]` matches backspace, not a word boundary \u{2014} use `\\b` outside a character class for word boundaries.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "require() takes only one argument.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

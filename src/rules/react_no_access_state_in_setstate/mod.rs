@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   count: prevState.count + 1 }))`. Reading `this.state` inside \
                   `setState` may read a stale value because React batches state \
                   updates.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

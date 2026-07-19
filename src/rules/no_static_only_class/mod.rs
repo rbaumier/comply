@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   literal. Static-only classes add indirection without benefit \
                   — they cannot be instantiated meaningfully and prevent \
                   tree-shaking.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

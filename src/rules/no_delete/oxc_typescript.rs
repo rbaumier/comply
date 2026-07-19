@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`delete` mutates the target object — return a new object without the property instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

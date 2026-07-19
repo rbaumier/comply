@@ -50,7 +50,7 @@ crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
             "'{name}' encodes a type prefix '{prefix}' — Hungarian notation is \
              obsolete. Remove the prefix; the type system already tells you the type."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `<link rel=\"stylesheet\" href=\"/foo.css\" />` with `import './foo.css'` \
                   in the relevant component or layout. Next.js then bundles, minifies, and \
                   code-splits the stylesheet alongside the JS chunk that needs it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["nextjs"],
 

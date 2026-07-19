@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-require-explicit-size",
     description: "`<img>` and `<video>` must declare `width` and `height` to avoid layout shift.",
     remediation: "Add explicit `width` and `height` attributes (or CSS `aspect-ratio`) to reserve space.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["a11y", "performance"],
 

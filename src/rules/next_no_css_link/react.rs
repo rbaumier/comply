@@ -52,7 +52,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: "`<link rel=\"stylesheet\">` — import CSS directly so Next.js can bundle and optimize it.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

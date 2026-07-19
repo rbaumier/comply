@@ -44,7 +44,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`staticPlugin()` is async — use `await staticPlugin()` so HMR picks up file changes.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

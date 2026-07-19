@@ -93,7 +93,7 @@ impl OxcCheck for Check {
                     message: "`className` uses raw Tailwind colors — switch to shadcn semantic \
                               tokens (`bg-primary`, `text-muted-foreground`, …)."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

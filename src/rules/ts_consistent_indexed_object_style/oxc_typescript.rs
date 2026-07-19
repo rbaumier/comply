@@ -52,7 +52,7 @@ fn check_type_literal(
         column,
         rule_id: super::META.id.into(),
         message: format!("A `Record<{key_type}, {value_type}>` is preferred over an index signature."),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }
@@ -78,7 +78,7 @@ fn check_interface_body(
         column,
         rule_id: super::META.id.into(),
         message: format!("A `Record<{key_type}, {value_type}>` is preferred over an index signature."),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

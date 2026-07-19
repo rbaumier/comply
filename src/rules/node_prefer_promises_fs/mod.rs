@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-prefer-promises-fs",
     description: "Callback-based `fs.*` methods are discouraged.",
     remediation: "Use `fs.promises.*` or import from `fs/promises` instead of callback-based `fs` methods.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["node"],
 

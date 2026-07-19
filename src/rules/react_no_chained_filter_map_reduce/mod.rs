@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Three or more consecutive `.filter`/`.map`/`.reduce` calls walk the array \
                   multiple times and allocate intermediate arrays.",
     remediation: "Collapse the chain into a single `for`/`reduce` pass or use a lazy iterator.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react", "code-quality"],
 

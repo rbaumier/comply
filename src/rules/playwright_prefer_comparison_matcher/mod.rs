@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Use built-in comparison matchers instead of comparing manually.",
     remediation: "Replace `expect(a > b).toBe(true)` with \
                   `expect(a).toBeGreaterThan(b)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-comparison-matcher.md",
     ),

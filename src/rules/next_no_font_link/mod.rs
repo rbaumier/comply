@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   `import { Inter } from 'next/font/google'; const inter = Inter({ subsets: ['latin'] });`. \
                   `next/font` self-hosts the font, eliminates a render-blocking request, and \
                   reserves layout space to avoid CLS.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["nextjs"],
 

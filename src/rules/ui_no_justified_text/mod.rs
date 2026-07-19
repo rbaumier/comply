@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`textAlign: 'justify'` without `hyphens: 'auto'` — produces rivers of whitespace.",
     remediation: "Either drop `textAlign: 'justify'` or pair it with `hyphens: 'auto'` so the \
                   browser can break long words and avoid awkward spacing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-comment-textnodes",
     description: "JS-style comments in Vue template text are rendered as visible text.",
     remediation: "Use `<!-- comment -->` for HTML comments in Vue templates.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

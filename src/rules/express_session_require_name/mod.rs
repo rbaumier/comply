@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "express-session-require-name",
     description: "`session({...})` config is missing the `name` property — the default session cookie name is predictable.",
     remediation: "Add name property to session config to avoid default session name",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://expressjs.com/en/resources/middleware/session.html#options"),
     categories: &["security"],
 

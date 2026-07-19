@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "unicorn-no-useless-undefined",
     description: "Explicit `undefined` in a position where the default is already undefined is redundant.",
     remediation: "Drop the explicit `undefined`: `return;` instead of `return undefined;`, `let x;` instead of `let x = undefined;`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/no-useless-undefined.md"),
     categories: &["code-quality"],
 

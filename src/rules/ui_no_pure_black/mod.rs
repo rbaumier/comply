@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-no-pure-black",
     description: "Pure black (`#000`, `rgb(0,0,0)`, `black`) looks harsh on screens — prefer a near-black.",
     remediation: "Use a slightly warmer/softer tone such as `#0a0a0a` or an OKLCH near-black.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

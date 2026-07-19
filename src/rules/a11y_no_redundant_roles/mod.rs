@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-no-redundant-roles",
     description: "Flag elements with explicit roles matching their implicit ARIA role.",
     remediation: "Remove the redundant `role` attribute. The element already has this role implicitly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-antialiased-on-root",
     description: "The root element should set `-webkit-font-smoothing: antialiased` for crisp text on macOS/iOS.",
     remediation: "Add `-webkit-font-smoothing: antialiased;` to `html`, `body`, or `:root`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

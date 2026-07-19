@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`t.Boolean()` in a `body:` schema rejects `\"true\"`/`\"false\"` — use `t.BooleanString()` for form-encoded payloads.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

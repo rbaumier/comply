@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-absolute-workdir",
     description: "WORKDIR must use an absolute path.",
     remediation: "Replace the relative WORKDIR path with an absolute path starting with `/`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

@@ -112,7 +112,7 @@ impl OxcCheck for Check {
                  are not assignable to each other.",
                 key_text.trim_matches(|c: char| c == '"' || c == '\''),
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

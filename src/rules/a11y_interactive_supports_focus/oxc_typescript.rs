@@ -52,7 +52,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Element with interactive handler and `role` must have `tabIndex` to be focusable.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -109,7 +109,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`useEffect` chains multiple `setX(...)` calls \u{2014} collapse them into one state object / reducer or derive during render.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

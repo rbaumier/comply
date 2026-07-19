@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-button-has-type",
     description: "`<button>` without an explicit `type` attribute defaults to `submit`, which may cause unexpected form submissions.",
     remediation: "Add an explicit `type` attribute (`button`, `submit`, or `reset`) to every `<button>` element.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue", "html"],
 

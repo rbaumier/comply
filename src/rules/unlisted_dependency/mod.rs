@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "unlisted-dependency",
     description: "Import references an npm package not declared in package.json.",
     remediation: "Add the package to the appropriate section of package.json (dependencies or devDependencies).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports", "dependencies"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-arbitrary-z-index",
     description: "Arbitrary z-index values `z-[n]` bypass the design token scale.",
     remediation: "Use a design token (`z-10`, `z-50`) or define a custom token in `tailwind.config.ts`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

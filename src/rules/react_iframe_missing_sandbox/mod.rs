@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add a `sandbox` attribute to the `<iframe>`. The `sandbox` \
                   attribute restricts the iframe's capabilities (scripts, forms, \
                   popups) and prevents it from accessing the parent page.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

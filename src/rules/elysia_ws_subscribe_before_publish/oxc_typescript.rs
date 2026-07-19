@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`ws.publish()` is called but no client is `subscribe()`d to the topic — messages will be dropped.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

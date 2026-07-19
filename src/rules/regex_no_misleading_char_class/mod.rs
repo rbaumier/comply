@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-misleading-char-class",
     description: "Character class contains multi-codepoint graphemes that will be split.",
     remediation: "Emoji with ZWJ or chars above U+FFFF inside `[...]` are split into individual code points. Use alternation `(?:a|b)` instead of `[ab]` for multi-codepoint sequences.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

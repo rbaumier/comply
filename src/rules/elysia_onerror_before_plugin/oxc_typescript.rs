@@ -108,7 +108,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "`.onError(...)` chained after `.use(plugin)` won't catch errors thrown by that plugin — move it before `.use(...)`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

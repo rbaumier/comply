@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             message: "Throw `notFound()` instead of `new Error('...not found...')` so the \
                       router can render the 404 boundary."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

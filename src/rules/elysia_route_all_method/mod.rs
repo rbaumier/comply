@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-route-all-method",
     description: "`.all()` accepts any HTTP method — usually a specific method is more appropriate.",
     remediation: "Replace `.all('/path', ...)` with `.get`, `.post`, `.put`, `.patch`, or `.delete` to communicate intent and let routers/proxies cache safely.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "elysia"],
 

@@ -127,7 +127,7 @@ fn check_loop_body(
         column,
         rule_id: super::META.id.into(),
         message: "Loop body always exits on the first iteration — the loop is redundant.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((loop_span.start as usize, loop_span.size() as usize)),
     });
 }

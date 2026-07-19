@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   the executor, and CPU-bound work should go through \
                   `tokio::task::spawn_blocking` (or `rayon`). Use \
                   `tokio::spawn` for futures, `spawn_blocking` for sync work.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

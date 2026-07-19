@@ -52,7 +52,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Avoid re-wrapping error — return `{base}` directly instead of `Result.err({base}.error)`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -50,7 +50,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Expected imports instead of AMD `{name}()`."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-standalone-backslash",
     description: "Backslash followed by a non-special character in regex is an identity escape — likely a mistake.",
     remediation: "Remove the unnecessary backslash or use the correct escape sequence.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["regex"],
 

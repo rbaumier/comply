@@ -40,7 +40,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "better-result-no-manual-propagation".into(),
             message: "Avoid manual error propagation — use Result.gen + yield* instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

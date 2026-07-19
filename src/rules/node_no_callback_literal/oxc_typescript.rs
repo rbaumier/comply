@@ -51,7 +51,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Unexpected string literal in error position of callback. Pass `new Error(...)` or `null` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

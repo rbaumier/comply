@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Extract the inline type to a named `type` declaration \
                   above the function. A named type has an identity, can be \
                   shared across call sites, and shows up in IDE hover.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

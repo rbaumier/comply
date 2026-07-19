@@ -76,7 +76,7 @@ impl TextCheck for Check {
                         column: col + 1,
                         rule_id: super::META.id.into(),
                         message: (*message).into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     // Only emit one diagnostic per line to avoid

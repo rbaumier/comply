@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Regex `{var_name}` has the `g` flag and is used with `.test()`/`.exec()` \u{2014} `lastIndex` is stateful and causes subtle bugs."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

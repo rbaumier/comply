@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{callee_name}` callback has no try/catch — an unhandled throw will poison the cache."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((range_start, range_len)),
         });
     }

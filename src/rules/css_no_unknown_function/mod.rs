@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-unknown-function",
     description: "Disallow unknown CSS functions.",
     remediation: "Use a standard CSS function or remove the call.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Zero quantifier `{0}` or `{0,0}` matches nothing \u{2014} remove or fix the quantifier.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -91,7 +91,7 @@ impl OxcCheck for Check {
                 rule_id: super::META.id.into(),
                 message: "Array destructuring may not contain consecutive ignored values."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

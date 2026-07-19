@@ -92,7 +92,7 @@ fn emit(
              `React.cache(...)` so multiple Server Components in the \
              same render share one request."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

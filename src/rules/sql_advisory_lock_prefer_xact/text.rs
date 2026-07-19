@@ -26,7 +26,7 @@ impl TextCheck for Check {
                     column: col + 1,
                     rule_id: super::META.id.into(),
                     message: "Use `pg_advisory_xact_lock()` instead of `pg_advisory_lock()` — it releases automatically at transaction end.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

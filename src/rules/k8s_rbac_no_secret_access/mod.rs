@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-rbac-no-secret-access",
     description: "RBAC rules must not grant get/list/watch on `secrets`.",
     remediation: "Avoid granting read access on secrets; use a dedicated service account scoped to specific secret names if absolutely required.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

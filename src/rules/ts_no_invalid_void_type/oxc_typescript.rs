@@ -413,7 +413,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`void` is only valid as a return type or generic type argument."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

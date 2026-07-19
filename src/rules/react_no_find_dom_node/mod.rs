@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-find-dom-node",
     description: "`findDOMNode` is deprecated in React 19 — use refs instead.",
     remediation: "Use refs instead of findDOMNode.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react.dev/reference/react-dom/findDOMNode"),
     categories: &["react"],
 

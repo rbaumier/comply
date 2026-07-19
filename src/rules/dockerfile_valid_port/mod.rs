@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-valid-port",
     description: "EXPOSE port must be a valid integer in 0..=65535.",
     remediation: "Replace the EXPOSE value with a port between 0 and 65535.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

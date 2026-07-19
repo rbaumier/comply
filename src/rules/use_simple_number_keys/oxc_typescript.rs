@@ -80,7 +80,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "use-simple-number-keys".into(),
             message: wrong.message().into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

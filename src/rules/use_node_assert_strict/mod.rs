@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-node-assert-strict",
     description: "Importing `node:assert` uses the loose assertion API; `node:assert/strict` is preferred.",
     remediation: "Import from `node:assert/strict` instead of `node:assert`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/use-node-assert-strict/"),
     categories: &["node"],
 

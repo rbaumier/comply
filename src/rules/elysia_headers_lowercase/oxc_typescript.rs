@@ -60,7 +60,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`headers:` schema uses uppercase keys — Elysia lowercases header names, so the schema will never match.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

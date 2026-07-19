@@ -32,7 +32,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
         message: "CI install step uses `npm install` — use `npm ci` for \
                   reproducible, lockfile-exact installs."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((value.byte_range().start, value.byte_range().len())),
     });
 }

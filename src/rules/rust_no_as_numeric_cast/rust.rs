@@ -175,7 +175,7 @@ impl AstCheck for Check {
                  `{target}::from(x)` for widening-safe casts or \
                  `{target}::try_from(x)?` for fallible narrowing."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

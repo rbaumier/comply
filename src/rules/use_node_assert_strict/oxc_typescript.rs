@@ -32,7 +32,7 @@ fn emit(ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>, offset: usize) {
         rule_id: super::META.id.into(),
         message: "Use `node:assert/strict` instead of `node:assert`. The use of stricter assertion is preferred."
             .to_string(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

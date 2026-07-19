@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-rename-column",
     description: "`ALTER TABLE ... RENAME COLUMN` breaks running deploys.",
     remediation: "Use expand-contract: add the new column, dual-write from the app, backfill, switch reads, drop the old column in a later release. A single RENAME COLUMN is a breaking change for any process with cached query plans.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

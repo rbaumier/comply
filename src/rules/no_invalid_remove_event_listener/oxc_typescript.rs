@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "The listener argument should be a function reference — inline functions and `.bind()` create a new reference each call.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `.innerText` with `.textContent`. \
                   `.textContent` is faster (no layout reflow), works on all \
                   node types, and returns text from hidden elements too.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

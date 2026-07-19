@@ -75,7 +75,7 @@ impl OxcCheck for Check {
                 "Destructuring `{name}` from `render(...)` — use `screen.{name}` \
                  instead. Stable across refactors, less repetition."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

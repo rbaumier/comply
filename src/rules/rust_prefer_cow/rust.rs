@@ -124,7 +124,7 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
             &param,
             super::META.id,
             "Public fn takes owned `String` — forces every caller to allocate. Prefer `&str` (no ownership) or `impl Into<Cow<'_, str>>` (conditional ownership).".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

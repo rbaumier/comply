@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add `rel=\"noreferrer\"` (or `rel=\"noopener noreferrer\"`) when \
                   using `target=\"_blank\"`. Without it, the opened page can access \
                   `window.opener` and redirect the parent page.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `useEffect` + `navigate`.",
     remediation: "Move the auth check to `beforeLoad` and `throw redirect({ to: '/login' })`. \
                   This runs before render and avoids the protected UI flashing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start"],
 

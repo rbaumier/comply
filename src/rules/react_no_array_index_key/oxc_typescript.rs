@@ -61,7 +61,7 @@ impl OxcCheck for Check {
                       associates the wrong DOM state with the wrong item. Use a \
                       stable id from the data."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

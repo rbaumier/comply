@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer omitting the `catch` binding parameter when it is unused.",
     remediation: "Remove the unused catch binding: use `catch { … }` instead of \
                   `catch (error) { … }`. Optional catch binding is supported in ES2019+.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

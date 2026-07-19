@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-vue-hyphenated-attributes",
     description: "Template attribute and prop names should be hyphenated (kebab-case).",
     remediation: "Rename the attribute to kebab-case, e.g. `:some-prop` instead of `:someProp`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

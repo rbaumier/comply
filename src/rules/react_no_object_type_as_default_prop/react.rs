@@ -125,7 +125,7 @@ crate::ast_check! { on ["function_declaration", "arrow_function", "lexical_decla
                               reference every render, breaking `React.memo`. Move \
                               the default to a module-level constant."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

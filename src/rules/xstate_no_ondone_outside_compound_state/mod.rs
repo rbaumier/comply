@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "xstate-no-ondone-outside-compound-state",
     description: "XState `onDone` is only valid on compound states (with nested `states`) or invoking states (with `invoke`).",
     remediation: "onDone only valid on compound states (with states) or invoking states (with invoke)",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://stately.ai/docs/final-states"),
     categories: &["xstate"],
 

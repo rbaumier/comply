@@ -27,7 +27,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "a11y-interactive-supports-focus".into(),
                     message: "Element with interactive handler and `role` must have `tabindex` to be focusable.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

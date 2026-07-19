@@ -35,7 +35,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                   and crashes in SSR. Wrap in a lazy function: \
                   `useState(() => expensive())`."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

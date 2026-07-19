@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-empty-string-match",
     description: "Regex that matches the empty string used in `.split()` or `.replace()`.",
     remediation: "A pattern like `*`, `?`, or `{0,}` can match zero characters, causing unexpected splits or replacements. Use `+` or `{1,}` instead, or add anchors.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

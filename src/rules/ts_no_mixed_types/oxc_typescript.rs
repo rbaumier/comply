@@ -109,7 +109,7 @@ impl OxcCheck for Check {
                         "`{name}` mixes property signatures with method signatures \u{2014} use \
                          consistent signatures: either all properties or all methods."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -138,7 +138,7 @@ impl OxcCheck for Check {
                         "`{name}` mixes property signatures with method signatures \u{2014} use \
                          consistent signatures: either all properties or all methods."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

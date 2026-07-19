@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-consistent-indexed-object-style",
     description: "Prefer `Record<K, V>` over manual index signature `{ [key: K]: V }` for consistency.",
     remediation: "Replace the index signature with `Record<K, V>`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/consistent-indexed-object-style/"),
     categories: &["typescript"],
 

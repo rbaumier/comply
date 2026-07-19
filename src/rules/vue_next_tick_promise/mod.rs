@@ -51,7 +51,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Vue `nextTick` was called with a callback instead of using its returned Promise.",
     remediation: "Drop the callback and await the Promise: `await nextTick()` \
                   (or `nextTick().then(…)`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/use-vue-next-tick-promise/"),
     categories: &["vue"],
 

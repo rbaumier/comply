@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use ratatui::prelude::*;
 
-use crate::diagnostic::{Diagnostic, Severity};
+use crate::diagnostic::Diagnostic;
 
 use super::event;
 use super::ui;
@@ -33,13 +33,11 @@ pub enum Row {
 
 pub struct GroupSummary {
     pub total: usize,
-    pub errors: usize,
-    pub warnings: usize,
     pub file_count: usize,
 }
 
 pub struct GroupPreviewInfo {
-    pub summary: Option<(usize, usize, usize)>, // (total, errors, warnings)
+    pub summary: Option<usize>, // total violations
     pub children: Vec<String>,
 }
 
@@ -280,10 +278,7 @@ impl App {
             Row::Group { key, .. } => key.clone(),
             _ => return None,
         };
-        let summary = self
-            .group_summaries
-            .get(&key)
-            .map(|s| (s.total, s.errors, s.warnings));
+        let summary = self.group_summaries.get(&key).map(|s| s.total);
         let indices: &[usize] = match self.view_mode {
             ViewMode::All => unreachable!(),
             ViewMode::ByFile => self
@@ -410,23 +405,14 @@ impl App {
             }
             filtered_count += kept.len();
 
-            let mut errors = 0usize;
-            let mut warnings = 0usize;
             let mut files: FxHashSet<&Arc<Path>> = FxHashSet::default();
             for &i in &kept {
-                let d = &self.diagnostics[i];
-                match d.severity {
-                    Severity::Error => errors += 1,
-                    Severity::Warning => warnings += 1,
-                }
-                files.insert(&d.path);
+                files.insert(&self.diagnostics[i].path);
             }
             summaries.insert(
                 key.clone(),
                 GroupSummary {
                     total: kept.len(),
-                    errors,
-                    warnings,
                     file_count: files.len(),
                 },
             );

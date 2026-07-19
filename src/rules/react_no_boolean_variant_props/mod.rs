@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   become representable.",
     remediation: "Replace the booleans with a single `variant: 'primary' | 'ghost' | ...` \
                   prop.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

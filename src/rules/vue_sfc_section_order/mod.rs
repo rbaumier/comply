@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-sfc-section-order",
     description: "SFC sections must be ordered: `<script setup>` → `<template>` → `<style>`.",
     remediation: "Reorder sections: script first, template second, style last.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

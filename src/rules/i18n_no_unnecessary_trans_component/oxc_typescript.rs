@@ -77,7 +77,7 @@ impl OxcCheck for Check {
             message: "`<Trans>` with only plain-text children is unnecessary. \
                       Use `t('key')` instead \u{2014} reserve `<Trans>` for JSX interpolation."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

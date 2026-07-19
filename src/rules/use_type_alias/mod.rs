@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-type-alias",
     description: "Repeated complex inline type annotations should be extracted into a type alias.",
     remediation: "Create a `type` alias for the repeated annotation and use it in all positions.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

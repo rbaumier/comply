@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   not baked into static styles.",
     remediation: "Apply `will-change` only during the active animation (e.g. on hover/focus) and \
                   remove it after, or set it to `'auto'`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

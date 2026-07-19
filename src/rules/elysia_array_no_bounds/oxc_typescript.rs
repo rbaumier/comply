@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`t.Array(...)` has no `minItems`/`maxItems` — unbounded arrays let clients send huge payloads.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

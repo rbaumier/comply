@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-unused-vars",
     description: "Declared variables that are never used are dead code.",
     remediation: "Remove the unused variable or prefix with `_` to indicate intentional non-use.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-unused-vars"),
     categories: &["typescript"],
 

@@ -49,7 +49,7 @@ crate::ast_check! { on ["block_mapping_pair"] prefilter = ["actions/upload-artif
                   `actions/upload-artifact@v4` step with `if: failure()` to preserve \
                   traces and screenshots."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

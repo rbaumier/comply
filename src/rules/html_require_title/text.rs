@@ -27,7 +27,7 @@ impl TextCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "HTML document is missing a `<title>` element.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

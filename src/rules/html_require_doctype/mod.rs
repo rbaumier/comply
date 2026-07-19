@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-require-doctype",
     description: "HTML files must start with a `<!DOCTYPE html>` declaration.",
     remediation: "Add <!DOCTYPE html> at the beginning of the file",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

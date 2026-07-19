@@ -78,7 +78,7 @@ impl OxcCheck for Check {
             message: "Non-null assertion `!` after optional chain `?.` is unsafe — \
                       the chain can return `undefined` by design."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

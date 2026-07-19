@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
                   LinkedList's theoretical O(1) splice is dominated in \
                   practice by Vec's cache locality for any realistic size. \
                   Enable `clippy::linkedlist`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 
@@ -45,7 +45,7 @@ mod tests {
         assert_clippy_rule(
             register(),
             "rust-no-linkedlist",
-            Severity::Warning,
+            Severity::Error,
             &["clippy::linkedlist"],
         );
     }

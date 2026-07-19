@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add `#[must_use]` above the struct definition. Without \
                   it, callers who forget the final `.build()` get a silent \
                   no-op instead of a compiler warning.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Either switch to a design-token class (`p-4`, `bg-brand`) or import the \
                   theme via `resolveConfig(tailwindConfig)` / `theme('spacing.4')` so the \
                   arbitrary value stays in sync with the config.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

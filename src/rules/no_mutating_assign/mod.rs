@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-mutating-assign",
     description: "Disallow `Object.assign(target, ...)` when `target` is not an empty object literal — it mutates the target in place.",
     remediation: "Use spread syntax `{...target, ...source}` or `Object.assign({}, target, source)` to produce a new object instead of mutating.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

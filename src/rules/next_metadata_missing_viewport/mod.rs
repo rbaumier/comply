@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "next-metadata-missing-viewport",
     description: "Layout files exporting `metadata` should also export `viewport` (inherited by nested pages).",
     remediation: "Add `export const viewport: Viewport = { width: 'device-width', initialScale: 1 };` next to your `metadata` export.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/app/api-reference/functions/generate-viewport"),
     categories: &["nextjs", "a11y"],
     skip_in_test_dir: true,

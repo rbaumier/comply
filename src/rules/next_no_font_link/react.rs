@@ -46,7 +46,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: "Loading Google Fonts via `<link>` — use `next/font` for self-hosting and zero layout shift.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

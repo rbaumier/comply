@@ -176,7 +176,7 @@ fn scan_expr(
                             "`{name}.*` in render breaks SSR. Read from `{name}` inside a \
                              `useEffect`, or guard with `typeof {name} !== 'undefined'`."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -202,7 +202,7 @@ fn scan_expr(
                             "`{name}.*` in render breaks SSR. Read from `{name}` inside a \
                              `useEffect`, or guard with `typeof {name} !== 'undefined'`."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

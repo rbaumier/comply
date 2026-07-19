@@ -43,7 +43,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `<Image>` from `next/image` instead of `<img>` for automatic optimization.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -46,7 +46,7 @@ crate::ast_check! { on ["run_instruction"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`useradd` without `-l`/`--no-log-init` can bloat the image with a sparse `/var/log/lastlog`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

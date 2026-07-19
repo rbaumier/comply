@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             message: "All specifiers have inline `type` qualifiers \u{2014} use a \
                       top-level `import type` to avoid a runtime side-effect import."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "compose-no-latest-tag",
     description: "docker-compose `image:` values must pin a tag (no `:latest`, no missing tag).",
     remediation: "Replace `:latest` or untagged images with a precise pin like `postgres:16.6-alpine3.20`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker", "docker-compose"],
 

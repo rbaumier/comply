@@ -873,7 +873,7 @@ impl OxcCheck for Check {
                 rule_id: super::META.id.into(),
                 message: "`this` used outside a class or valid context — likely a bug."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

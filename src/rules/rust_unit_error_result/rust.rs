@@ -160,7 +160,7 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
                   real error type, or return `Option<T>` if absence is the \
                   only failure mode."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

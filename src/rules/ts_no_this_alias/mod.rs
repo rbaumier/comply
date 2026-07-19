@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-this-alias",
     description: "Assigning `this` to a variable is a legacy pattern — use arrow functions instead.",
     remediation: "Use an arrow function to capture `this` lexically.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-this-alias/"),
     categories: &["typescript"],
 

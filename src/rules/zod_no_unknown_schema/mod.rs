@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   the expected shape (e.g. `z.object({...})`, `z.string()`, \
                   `z.array(...)`). If the value truly is unknown until runtime, \
                   validate it at the boundary where the shape becomes known.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

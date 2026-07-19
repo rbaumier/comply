@@ -94,7 +94,7 @@ impl OxcCheck for Check {
             message: "Avoid accessing namespace imports dynamically — it prevents tree shaking \
                       and increases bundle size. Use a static property access or a named import."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

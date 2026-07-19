@@ -26,7 +26,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &pair,
             super::META.id,
             format!("HPA minReplicas must be >= {min_replicas} (found {n})."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{key_name}` must be a string, function, action creator call, or array \u{2014} got an invalid value.",
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

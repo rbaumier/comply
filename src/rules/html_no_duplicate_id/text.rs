@@ -89,7 +89,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "html-no-duplicate-id".into(),
                     message: format!("Duplicate id `{value}` in the same file."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

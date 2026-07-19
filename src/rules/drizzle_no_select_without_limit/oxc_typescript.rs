@@ -244,7 +244,7 @@ impl OxcCheck for Check {
                 message: "`db.select().from(table)` without `.limit()` or `.where()` scans the \
                           entire table — add a bound to avoid loading unbounded rows."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -260,7 +260,7 @@ impl OxcCheck for Check {
                 message: "`db.query.<table>.findMany()` without `limit` or `where` scans the \
                           entire table — add a bound to avoid loading unbounded rows."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

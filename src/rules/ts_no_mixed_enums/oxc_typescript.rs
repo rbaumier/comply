@@ -55,7 +55,7 @@ impl OxcCheck for Check {
             message: "Enum has both numeric and string members — pick one shape per \
                       enum to keep inference and serialization predictable."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

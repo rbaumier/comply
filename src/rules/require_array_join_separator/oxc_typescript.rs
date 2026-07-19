@@ -44,7 +44,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Missing the separator argument in `.join()` \u{2014} use `.join(',')` explicitly.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

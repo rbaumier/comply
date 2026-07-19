@@ -132,7 +132,7 @@ impl OxcCheck for Check {
                             "Use a class field `name = '{class_name}';` instead \
                              of setting `this.name` in the constructor."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -150,7 +150,7 @@ impl OxcCheck for Check {
                         message: "Pass the error message to `super()` instead \
                                   of setting `this.message`."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

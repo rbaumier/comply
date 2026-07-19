@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-listen-callback-info",
     description: "`.listen(PORT)` called without a callback — server boot info is silently dropped.",
     remediation: "Pass a callback to `.listen` and log `app.server?.hostname`/`app.server?.port` so deploys surface where the server is actually bound.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["observability", "elysia"],
 

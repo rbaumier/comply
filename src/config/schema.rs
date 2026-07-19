@@ -4,7 +4,6 @@
 //!
 //! - `[rules.<rule-id>]` — per-rule overrides applied to every file
 //!     - `disabled = true` — skip the rule entirely
-//!     - `severity = "warning" | "error"` — override the rule's default
 //!     - `<threshold-key> = <value>` — rule-specific knobs (max, min, etc.)
 //!
 //! - `[overrides."<glob>"]` — per-path overrides matched against the
@@ -64,8 +63,6 @@ pub struct RuleConfig {
     pub disabled: Option<bool>,
     #[serde(default)]
     pub enabled: Option<bool>,
-    #[serde(default)]
-    pub severity: Option<SeverityToml>,
     #[serde(default, flatten)]
     pub extra: FxHashMap<String, toml::Value>,
 }
@@ -81,22 +78,3 @@ pub struct OverrideConfig {
     pub disable: Vec<String>,
 }
 
-/// Severity values accepted in TOML. Mirrors `crate::diagnostic::Severity`
-/// but kept separate so the wire format can evolve independently of the
-/// internal type.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SeverityToml {
-    Warning,
-    Error,
-}
-
-impl From<SeverityToml> for crate::diagnostic::Severity {
-    fn from(s: SeverityToml) -> Self {
-        match s {
-            SeverityToml::Warning => crate::diagnostic::Severity::Warning,
-            SeverityToml::Error => crate::diagnostic::Severity::Error,
-        }
-    }
-}

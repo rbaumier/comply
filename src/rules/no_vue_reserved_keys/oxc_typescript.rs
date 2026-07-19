@@ -323,7 +323,7 @@ fn report(name: &str, span_start: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
         column,
         rule_id: super::META.id.into(),
         message: format!("`{name}` is a Vue-reserved key — rename it to avoid shadowing Vue's instance member."),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

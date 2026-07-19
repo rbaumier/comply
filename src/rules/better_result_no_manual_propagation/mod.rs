@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-no-manual-propagation",
     description: "Forbid manual error propagation via `if (r.isErr()) return Result.err(r.error)`.",
     remediation: "Use Result.gen + yield* to propagate errors.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

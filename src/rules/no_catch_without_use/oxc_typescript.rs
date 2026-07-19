@@ -62,7 +62,7 @@ impl OxcCheck for Check {
                 "`catch ({name})` is never used — drop the binding (`catch {{ ... }}`) \
                  or reference `{name}` in the handler."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

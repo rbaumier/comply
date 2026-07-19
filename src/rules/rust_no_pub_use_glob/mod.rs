@@ -22,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "List the re-exports explicitly: `pub use foo::{Bar, Baz};`. \
                   Glob re-exports turn every change in `foo` into a silent \
                   change to your public API.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
     skip_in_test_dir: false,

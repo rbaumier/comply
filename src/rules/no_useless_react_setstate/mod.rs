@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-useless-react-setstate",
     description: "Calling a `useState` setter with its own state value is a no-op.",
     remediation: "Remove the useless `setState` call or pass a different value. `setX(x)` triggers a re-render but does not change state.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "react"],
 

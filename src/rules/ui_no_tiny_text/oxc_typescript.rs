@@ -74,7 +74,7 @@ impl OxcCheck for Check {
                      comfortable reading.",
                     num.value
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

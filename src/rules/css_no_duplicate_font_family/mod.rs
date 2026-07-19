@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-duplicate-font-family",
     description: "Disallow duplicated font names within a `font-family` value.",
     remediation: "Remove the duplicate name from the font stack.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

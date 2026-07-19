@@ -63,7 +63,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "node-prefer-promises-dns".into(),
             message: format!("Use `dns.promises.{method}()` instead of callback-based `dns.{method}()`."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

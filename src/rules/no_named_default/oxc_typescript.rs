@@ -41,7 +41,7 @@ impl OxcCheck for Check {
                     "Replace `{{ default as {alias} }}` with `import {alias} from …` \
                      — prefer the default import syntax."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

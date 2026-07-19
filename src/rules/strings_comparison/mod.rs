@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "strings-comparison",
     description: "Relational comparison with string literals uses lexicographic order.",
     remediation: "Use `localeCompare()` for locale-aware ordering, or compare numeric values explicitly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

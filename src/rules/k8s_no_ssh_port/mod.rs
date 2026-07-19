@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-ssh-port",
     description: "Deployments should not expose TCP port 22 (SSH).",
     remediation: "Remove port 22 from the container spec. Use `kubectl exec` or `kubectl debug` for debugging.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

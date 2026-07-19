@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-import-node-test",
     description: "Importing from `node:test` alongside vitest/jest mixes test runners.",
     remediation: "Don't mix node:test with vitest/jest",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

@@ -69,7 +69,7 @@ impl OxcCheck for Check {
             message: "`.map(fn).flat()` walks the array twice — use `.flatMap(fn)` \
                       to do it in a single pass."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

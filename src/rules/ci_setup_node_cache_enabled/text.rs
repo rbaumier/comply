@@ -30,7 +30,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
         message: "actions/setup-node is used without `cache:` — add `cache: 'npm'` \
                   (or pnpm/yarn) to reuse the dependency cache across runs."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "Hono app defines routes without `secureHeaders()` middleware \u{2014} security headers are missing.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

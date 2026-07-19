@@ -25,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-jsx-no-new-array-as-prop",
     description: "Array literals as JSX prop values create a new reference every render.",
     remediation: "Extract array to a constant or use useMemo",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

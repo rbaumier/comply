@@ -82,7 +82,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: format!("Describe depth {total_depth} exceeds maximum allowed {max_depth}."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -90,7 +90,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "{writes} Prisma write calls in this function — wrap them in `prisma.$transaction([...])` for atomicity."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

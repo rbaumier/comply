@@ -22,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
                   section (clippy, rust, rustdoc). In every member crate, add \
                   `[lints]` followed by `workspace = true` to inherit the policy. \
                   Prevents per-crate drift of clippy categories and `deny(warnings)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

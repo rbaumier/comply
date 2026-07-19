@@ -71,7 +71,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `<Link>` from `next/link` for internal routes — `<a>` triggers a full reload.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((opening.span.start as usize, (opening.span.end - opening.span.start) as usize)),
         });
     }

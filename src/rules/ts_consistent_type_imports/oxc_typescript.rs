@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             message: "All imported specifiers are types — use `import type { ... }` \
                       at the top level instead of inline `type` markers."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

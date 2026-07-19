@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "This lookaround can be replaced with a predefined assertion like `\\b`, `^`, or `$`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

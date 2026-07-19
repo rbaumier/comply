@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   handlers are reusable, work with any HTTP client, and \
                   test real request/response cycles. Switching HTTP clients \
                   won't break your tests.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

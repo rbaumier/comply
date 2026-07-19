@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Service modules should not import framework symbols from `elysia` (only `status` is allowed). Move HTTP concerns to the route layer.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

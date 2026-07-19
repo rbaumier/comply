@@ -98,7 +98,7 @@ impl OxcCheck for Check {
                 message:
                     "Unexpected use of `process.env`. Centralize environment access in a config module."
                         .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

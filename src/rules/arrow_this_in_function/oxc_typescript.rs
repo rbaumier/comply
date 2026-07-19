@@ -42,7 +42,7 @@ impl OxcCheck for Check {
                           function or method — arrow functions don't bind their own \
                           `this`."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

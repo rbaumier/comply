@@ -24,7 +24,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
                     value,
                     super::META.id,
                     format!("`{p}: {v}` is deprecated; {hint}."),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

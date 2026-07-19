@@ -44,7 +44,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`NOW()`/`CURRENT_TIMESTAMP` freezes at transaction start — use `clock_timestamp()` inside BEGIN blocks.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

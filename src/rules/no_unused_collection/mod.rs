@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-unused-collection",
     description: "Collection is populated but never read.",
     remediation: "Either use the collection (iterate, return, pass to a function) or remove the dead code. Populated-but-unread collections indicate logic that was never finished or already removed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

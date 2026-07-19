@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-no-non-scalable-viewport",
     description: "Viewport meta tag must not disable user scaling (`user-scalable=no`).",
     remediation: "Allow user scaling in viewport meta tag",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

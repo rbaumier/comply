@@ -67,7 +67,7 @@ impl OxcCheck for Check {
                         "Type `{type_name}` is trivially inferred from the literal — \
                          remove the type annotation."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

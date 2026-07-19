@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                       already logs uncaught errors. Delete the catch, or add real value \
                       (wrap with context, recover, translate)."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

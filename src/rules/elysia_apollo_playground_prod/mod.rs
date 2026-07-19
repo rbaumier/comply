@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-apollo-playground-prod",
     description: "Apollo Playground enabled unconditionally — exposing the schema explorer in production leaks introspection.",
     remediation: "Gate `enablePlayground` on `process.env.NODE_ENV !== 'production'` (or another env flag).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

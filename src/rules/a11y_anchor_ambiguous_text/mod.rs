@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-anchor-ambiguous-text",
     description: "Flag `<a>` elements with ambiguous text like \"click here\" or \"read more\".",
     remediation: "Use descriptive link text that indicates the purpose of the link, e.g., \"View documentation\" instead of \"click here\".",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

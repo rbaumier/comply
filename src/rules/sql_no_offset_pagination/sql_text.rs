@@ -34,7 +34,7 @@ impl TextCheck for Check {
                                   cursor-based pagination: \
                                   `WHERE id > :last_id ORDER BY id LIMIT N`."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -52,7 +52,7 @@ impl TextCheck for Check {
                           cursor-based pagination: \
                           `WHERE id > :last_id ORDER BY id LIMIT N`."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

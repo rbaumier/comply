@@ -51,7 +51,7 @@ impl OxcCheck for Check {
             rule_id: "better-result-no-try-catch".into(),
             message: "Replace try/catch with Result.try({ try, catch }) in better-result modules."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

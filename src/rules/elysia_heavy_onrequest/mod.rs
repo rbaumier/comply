@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-heavy-onrequest",
     description: "`.onRequest()` performs heavy work (await/fetch/db/JSON.parse) — runs before routing.",
     remediation: "Move heavy work to `.beforeHandle()` (per route) or `.derive()`/`.resolve()` so it runs only for routes that need it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance", "elysia"],
 

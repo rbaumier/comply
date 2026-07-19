@@ -30,7 +30,7 @@ impl TextCheck for Check {
                     message:
                         "`@mouseover` must be accompanied by `@focus` for keyboard accessibility."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -43,7 +43,7 @@ impl TextCheck for Check {
                     message:
                         "`@mouseout` must be accompanied by `@blur` for keyboard accessibility."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -33,7 +33,7 @@ fn check_type_params(
         column,
         rule_id: super::META.id.into(),
         message: "Empty type-parameter list `<>` is confusing; remove it or add a type parameter.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

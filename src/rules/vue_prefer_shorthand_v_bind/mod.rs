@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-prefer-shorthand-v-bind",
     description: "Bound attributes should use the `:` shorthand instead of longhand `v-bind:`.",
     remediation: "Replace `v-bind:foo=\"bar\"` with `:foo=\"bar\"`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

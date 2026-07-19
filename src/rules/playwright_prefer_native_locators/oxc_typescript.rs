@@ -74,7 +74,7 @@ impl OxcCheck for Check {
                         "Attribute selector `{attr}...]` in `.locator()` — \
                          use `{replacement}()` instead."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 break;

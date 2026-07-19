@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-no-noninteractive-tabindex",
     description: "Flag non-interactive elements with `tabIndex` (other than -1).",
     remediation: "Remove `tabIndex` from non-interactive elements or use a native interactive element. `tabIndex={-1}` is acceptable for programmatic focus.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

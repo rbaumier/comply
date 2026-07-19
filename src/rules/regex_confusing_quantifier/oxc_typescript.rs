@@ -94,7 +94,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Confusing quantifier \u{2014} minimum is non-zero but the element can match empty string.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

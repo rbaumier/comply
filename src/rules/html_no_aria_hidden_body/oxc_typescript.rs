@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "`aria-hidden=\"true\"` on `<body>` hides the entire page from assistive tech.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -36,7 +36,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Importing from `lodash` pulls the entire library — \
                       use `lodash/<fn>` subpath imports or `lodash-es` for tree-shaking.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

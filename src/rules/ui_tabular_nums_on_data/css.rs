@@ -44,7 +44,7 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
         message: format!(
             "Selector `{selector_text}` suggests numeric data but the rule lacks `font-variant-numeric: tabular-nums` — digits will jitter between updates."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

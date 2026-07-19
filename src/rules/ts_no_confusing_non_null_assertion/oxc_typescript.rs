@@ -50,7 +50,7 @@ impl OxcCheck for Check {
                       `a! == b` looks like `a !== b`. Remove the `!` or \
                       wrap in parentheses."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

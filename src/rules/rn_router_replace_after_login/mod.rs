@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-router-replace-after-login",
     description: "Navigating after login/logout must not keep the previous screen on the back stack.",
     remediation: "Use `router.replace('/path')` instead of `router.push('/path')` after auth.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

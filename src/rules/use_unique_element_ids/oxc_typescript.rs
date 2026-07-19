@@ -102,7 +102,7 @@ impl Check {
             message: "Avoid a static `id` on a JSX element. A reused component \
                       renders duplicate ids; use `useId()` and pass `id={id}`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }
     }

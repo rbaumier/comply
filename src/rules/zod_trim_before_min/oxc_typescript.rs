@@ -140,7 +140,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Add `.trim()` before `.min()` — `z.string().min(1)` allows whitespace-only strings.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

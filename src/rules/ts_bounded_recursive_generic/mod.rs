@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-bounded-recursive-generic",
     description: "Recursive conditional or mapped type lacks a depth parameter; it can blow up the type checker.",
     remediation: "Add a depth accumulator (e.g. `D extends 0 ? ... : Recurse<Next<D>, ...>`) to bound recursion.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

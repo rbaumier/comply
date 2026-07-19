@@ -58,7 +58,7 @@ impl OxcCheck for Check {
                               become UnhandledPromiseRejection. Add `await`, chain `.catch`, \
                               or prefix with `void` if you really want to ignore it."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

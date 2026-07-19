@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-no-keyframes-for-interruptible",
     description: "Class-toggled (state-driven) animations should use `transition`; `@keyframes` can't interrupt mid-flight.",
     remediation: "Replace the `@keyframes` + `animation:` pair with `transition` on the same properties so toggles interpolate from the current value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

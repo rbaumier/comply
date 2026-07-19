@@ -40,8 +40,6 @@ pub struct RustcDiagnostic {
     #[serde(default)]
     pub code: Option<RustcCode>,
     #[serde(default)]
-    pub level: RustcLevel,
-    #[serde(default)]
     pub spans: Vec<RustcSpan>,
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
@@ -54,19 +52,6 @@ pub struct RustcCode {
     pub code: String,
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
-}
-
-#[non_exhaustive]
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum RustcLevel {
-    #[default]
-    Note,
-    Help,
-    Warning,
-    Error,
-    #[serde(rename = "failure-note")]
-    FailureNote,
 }
 
 /// External wire format mirror — see comply:rust-serde-deny-unknown-fields.

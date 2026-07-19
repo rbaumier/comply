@@ -83,7 +83,7 @@ impl OxcCheck for Check {
                             "Setter `{setter_name}` is never called — this state \
                              never changes. Use a constant instead."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

@@ -109,7 +109,7 @@ impl OxcCheck for Check {
                               Error subclasses capture the stack trace \
                               automatically via `super()`."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer `Reflect.apply(fn, thisArg, args)` over `fn.apply(thisArg, args)`.",
     remediation: "Replace `fn.apply(ctx, args)` with `Reflect.apply(fn, ctx, args)`. \
                   `Reflect.apply` cannot be overridden and makes the intent explicit.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

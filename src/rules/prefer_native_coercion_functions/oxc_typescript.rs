@@ -117,7 +117,7 @@ impl OxcCheck for Check {
                 "Prefer `{func_name}` directly over wrapping it in a function. \
                  Use `.map({func_name})` instead of `.map(x => {func_name}(x))`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

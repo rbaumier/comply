@@ -111,7 +111,7 @@ crate::ast_check! { on ["struct_item"] prefilter = ["struct"] => |node, source, 
         &node,
         super::META.id,
         format!("Struct `{name}` has {count} fields (limit: {MAX_FIELDS}) — decompose into smaller types."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

@@ -216,7 +216,7 @@ impl TextCheck for Check {
                     message: "`.parse(...)` in a render path re-validates every render and throws on bad data — \
                               move validation to the data fetch boundary or `useMemo`."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

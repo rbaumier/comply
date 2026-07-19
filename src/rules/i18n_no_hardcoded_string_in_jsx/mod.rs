@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-no-hardcoded-string-in-jsx",
     description: "Hardcoded string literals in JSX text content won't be translated.",
     remediation: "Wrap the string with the `t()` translation function.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

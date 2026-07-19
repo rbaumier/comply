@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Use `toContain()` instead of `expect(arr.includes(x)).toBe(true)`.",
     remediation: "Replace `expect(arr.includes(x)).toBe(true)` with \
                   `expect(arr).toContain(x)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-to-contain.md",
     ),

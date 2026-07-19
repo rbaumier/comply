@@ -23,7 +23,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &rule_map,
                 super::META.id,
                 "RBAC rule grants get/list/watch on `secrets`; avoid broad read access to secrets.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

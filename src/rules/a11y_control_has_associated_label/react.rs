@@ -80,7 +80,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: "a11y-control-has-associated-label".into(),
         message: "Interactive element is missing an accessible label (`aria-label` or `aria-labelledby`).".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-no-scroll-trigger-markers-prod",
     description: "`markers: true` in a ScrollTrigger config ships debug overlays to production.",
     remediation: "Gate it: `markers: process.env.NODE_ENV !== \"production\"`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

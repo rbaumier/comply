@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-derive-validated-data",
     description: "`.derive()` callback reads `body`/`params`/`query` — those are pre-validation in `.derive()`.",
     remediation: "Use `.resolve(...)` instead; it runs after validation so `body`/`params`/`query` reflect the validated shape.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

@@ -108,7 +108,7 @@ impl OxcCheck for Check {
                                 message: format!(
                                     "JSDoc type `{bad}` refers to the wrapper object — use lowercase `{good}` instead."
                                 ),
-                                severity: Severity::Warning,
+                                severity: Severity::Error,
                                 span: None,
                             });
                         }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "playwright-max-nested-describe",
     description: "Deeply nested `describe` blocks reduce readability.",
     remediation: "Flatten the describe hierarchy to at most 5 levels deep.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/max-nested-describe.md",
     ),

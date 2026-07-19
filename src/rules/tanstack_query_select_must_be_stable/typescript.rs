@@ -108,7 +108,7 @@ impl TextCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "`select:` is an inline arrow — wrap with `useCallback` or hoist to module scope so the selector reference is stable."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

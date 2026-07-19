@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Loading Google Fonts via `<link>` — use `next/font` for self-hosting and zero layout shift.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

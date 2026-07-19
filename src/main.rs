@@ -808,20 +808,12 @@ fn collect_all_diagnostics(
     Ok((diagnostics, clean_files))
 }
 
-/// Apply config-driven filters to subprocess diagnostics (oxlint, clippy)
-/// where the rule already ran but the user wants it dropped or its
-/// severity changed. Tree-sitter rules are filtered upstream in the engine.
-///
-/// We need this post-filter because oxlint/clippy don't know about
-/// per-glob `disable = [...]` overrides — they run their full lint set
-/// and we filter the resulting diagnostics by `(rule_id, file_path)`.
+/// Drop subprocess diagnostics (oxlint, clippy) the user disabled: the
+/// linter already ran its full set, so we filter the results by
+/// `(rule_id, file_path)`. Tree-sitter rules are filtered upstream in the
+/// engine, which knows the per-glob `disable = [...]` overrides.
 fn apply_config_filters(mut diagnostics: Vec<Diagnostic>, config: &Config) -> Vec<Diagnostic> {
     diagnostics.retain(|d| config.is_rule_enabled(d.rule_id.as_ref(), d.path.as_ref()));
-    for d in &mut diagnostics {
-        if let Some(override_sev) = config.severity_for(d.rule_id.as_ref()) {
-            d.severity = override_sev;
-        }
-    }
     diagnostics
 }
 

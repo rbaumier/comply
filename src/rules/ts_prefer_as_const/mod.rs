@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-as-const",
     description: "Casting to a literal type (`as \"foo\"`, `as 42`) loses the link to the value — use `as const` instead.",
     remediation: "Replace `value as \"literal\"` with `value as const`. The const assertion preserves the literal type without forcing the cast.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/prefer-as-const/"),
     categories: &["typescript"],
 

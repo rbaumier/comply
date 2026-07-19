@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   `items.map(item => <X key={item.id} />)` instead of \
                   `items.map((item, i) => <X key={i} />)`. Index keys \
                   associate DOM state with the wrong item on reorder/filter.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "react"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-prefer-msw",
     description: "Mocking HTTP clients directly is brittle — use MSW to intercept at the network layer.",
     remediation: "Replace `vi.mock('axios')` / `jest.mock('node-fetch')` / `global.fetch = vi.fn()` with an MSW request handler.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://mswjs.io/"),
     categories: &["testing"],
 

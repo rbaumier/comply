@@ -115,7 +115,7 @@ fn emit(
             "Useless HTML entity `{entity}` in JSX — use `{replacement}` directly. \
              React renders the raw character."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

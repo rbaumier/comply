@@ -498,7 +498,7 @@ impl crate::rules::backend::AstCheck for Check {
                 format!(
                     "`{kind}` has no `.max(N)` — unbounded API input is a resource-exhaustion vector."
                 ),
-                Severity::Warning,
+                Severity::Error,
             ));
         });
 

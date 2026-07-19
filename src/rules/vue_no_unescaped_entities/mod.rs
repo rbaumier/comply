@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-unescaped-entities",
     description: "Unescaped entities in Vue template text can cause unexpected rendering.",
     remediation: "Replace the character with its HTML entity.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

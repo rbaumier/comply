@@ -55,7 +55,7 @@ impl OxcCheck for Check {
             message: "Explicit `any` disables type checking — prefer `unknown` (forces \
                       narrowing at the use site) or a precise type."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -88,7 +88,7 @@ impl OxcCheck for Check {
                             message:
                                 "Insert a `-` between the @param name and its description for readability."
                                     .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

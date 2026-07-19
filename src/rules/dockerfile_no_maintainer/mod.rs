@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-maintainer",
     description: "MAINTAINER is deprecated since Docker 1.13; use a LABEL instead.",
     remediation: "Replace `MAINTAINER user@example.com` with `LABEL maintainer=\"user@example.com\"`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

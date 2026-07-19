@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             message: "Missing braces in `case` clause \u{2014} wrap the body in `{ }` \
                       to avoid scope leaking."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-parameters-only-used-in-recursion",
     description: "A function parameter is only ever forwarded to recursive calls to the same function, never read otherwise, so it carries no information into the computation.",
     remediation: "Remove the parameter (and the argument at every call site) or replace it with a constant; prefix it with `_` if the recursion genuinely needs the slot.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["suspicious"],
 

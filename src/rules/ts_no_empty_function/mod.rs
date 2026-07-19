@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-empty-function",
     description: "Empty functions are often a sign of incomplete refactoring.",
     remediation: "Add a comment explaining why the function is intentionally empty, or remove it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-empty-function/"),
     categories: &["typescript"],
 

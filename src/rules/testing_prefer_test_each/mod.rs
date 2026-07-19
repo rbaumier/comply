@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-prefer-test-each",
     description: "Looping over `test` / `it` hides failures — use `test.each` so each row is its own named case.",
     remediation: "Replace `for (const row of cases) { test(..., () => {...}) }` with `test.each(cases)(..., (row) => {...})`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://jestjs.io/docs/api#testeachtablename-fn-timeout"),
     categories: &["testing"],
 

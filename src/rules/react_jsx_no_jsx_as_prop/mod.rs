@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-jsx-no-jsx-as-prop",
     description: "JSX elements/fragments passed directly as prop values cause unnecessary re-renders.",
     remediation: "Extract JSX to a variable or use useMemo so the prop reference is stable across renders.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

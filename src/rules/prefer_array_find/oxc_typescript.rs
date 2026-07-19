@@ -47,7 +47,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Prefer `.find(…)` over `.filter(…)[0]` — `.find()` short-circuits on the first match.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -87,7 +87,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Prefer `.find(…)` over `.filter(…)[0]` — `.find()` short-circuits on the first match.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

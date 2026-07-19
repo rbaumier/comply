@@ -66,7 +66,7 @@ fn check_class(
         message: format!(
             "className `{cls}` suggests numeric data but is missing `tabular-nums` — digits will jitter between updates."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

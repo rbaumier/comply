@@ -146,7 +146,7 @@ fn push_diag(
         column: file_col + 1,
         rule_id: "justify-inaction".into(),
         message: msg,
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

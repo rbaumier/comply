@@ -58,7 +58,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Provide expected error message to toThrow().".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

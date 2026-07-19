@@ -68,7 +68,7 @@ crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
             message: format!(
                 "`<{tag}></{tag}>` has no children — use `<{tag} />` instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

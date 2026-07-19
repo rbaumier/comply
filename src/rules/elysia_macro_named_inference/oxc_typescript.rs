@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.macro({ ... })` bulk form blocks cross-macro inference — use `.macro('name', { ... })`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

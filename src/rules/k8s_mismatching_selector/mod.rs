@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-mismatching-selector",
     description: "Deployment selector.matchLabels must match spec.template.metadata.labels.",
     remediation: "Ensure spec.selector.matchLabels is a subset of spec.template.metadata.labels.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

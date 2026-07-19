@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-inconsistent-returns",
     description: "Function has inconsistent returns — some paths return a value, others return nothing.",
     remediation: "Ensure every return path either returns a value or returns nothing. Mixing `return expr;` with bare `return;` or implicit returns is confusing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

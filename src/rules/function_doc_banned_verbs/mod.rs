@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "function-doc-banned-verbs",
     description: "Function docstring opens with a verb that paraphrases the implementation.",
     remediation: "Open the docstring with intent (`Ensure…`, `Return…`), not restatement (`Reads…`, `Iterates…`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

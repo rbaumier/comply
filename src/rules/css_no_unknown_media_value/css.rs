@@ -36,7 +36,7 @@ crate::ast_check! { on ["feature_query", "parenthesized_value"] => |node, source
             v,
             super::META.id,
             format!("Invalid value `{val}` for `{name}`."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

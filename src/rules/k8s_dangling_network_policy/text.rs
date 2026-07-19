@@ -54,7 +54,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             format!(
                 "NetworkPolicy podSelector does not match any workload's pod template labels in namespace {namespace}; the policy applies to no pods."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

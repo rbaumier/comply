@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Inline `fontSize` below 12px — too small for comfortable reading.",
     remediation: "Use a fontSize of at least 12px, or rely on a typography scale defined in your \
                   design system.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

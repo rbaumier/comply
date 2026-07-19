@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prisma-select-only-needed-fields",
     description: "`findMany` without `select` fetches every column — wasteful for wide tables.",
     remediation: "Add `select: { id: true, ... }` (or `include` for relations) to fetch only what's needed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["prisma", "performance"],
 

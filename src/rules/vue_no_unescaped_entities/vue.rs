@@ -37,7 +37,7 @@ impl AstCheck for Check {
                 column: pos.column + 1,
                 rule_id: "vue-no-unescaped-entities".into(),
                 message: "Unescaped entity in template text — use the HTML entity instead.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

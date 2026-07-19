@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "promise-no-return-in-finally",
     description: "Returning a value from `.finally(...)` is silently discarded.",
     remediation: "Move the return value to a preceding `.then(...)`. The `.finally` callback should only run side effects.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/eslint-community/eslint-plugin-promise/blob/main/docs/rules/no-return-in-finally.md"),
     categories: &["promise"],
 

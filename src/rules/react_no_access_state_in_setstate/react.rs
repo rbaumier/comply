@@ -44,7 +44,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
                       state. Use the updater callback: \
                       `setState(prev => ...)`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

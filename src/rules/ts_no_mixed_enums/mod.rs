@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-mixed-enums",
     description: "Enums mixing numeric and string members produce confusing inference and serialization.",
     remediation: "Pick one shape per enum — all string members, or all numeric. If the enum needs both kinds of values, split it into two enums.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-mixed-enums/"),
     categories: &["typescript"],
 

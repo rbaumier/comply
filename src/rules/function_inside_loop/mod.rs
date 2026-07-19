@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "function-inside-loop",
     description: "Function declared inside loop creates new function object each iteration.",
     remediation: "Move the function outside the loop, or use a method reference.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://rules.sonarsource.com/javascript/RSPEC-1515"),
     categories: &["sonarjs", "performance"],
 

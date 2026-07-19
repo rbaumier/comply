@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-outline-none-needs-focus",
     description: "`outline: none` or `outline: 0` outside of `:focus` rules removes the keyboard focus indicator, harming accessibility.",
     remediation: "Only use `outline: none` inside `:focus` rules, and provide a visible alternative focus style.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css", "a11y"],
 

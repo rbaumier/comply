@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "xstate-spawn-usage",
     description: "`spawn()` must be called inside an `assign()` action.",
     remediation: "spawn() must be called inside assign() action",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://stately.ai/docs/spawn"),
     categories: &["xstate"],
 

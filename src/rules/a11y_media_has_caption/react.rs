@@ -57,7 +57,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
             column: pos.column + 1,
             rule_id: "a11y-media-has-caption".into(),
             message: format!("`<{tag}>` elements must have a `<track kind=\"captions\">` child for accessibility."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
         return;
@@ -79,7 +79,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
             column: pos.column + 1,
             rule_id: "a11y-media-has-caption".into(),
             message: format!("`<{tag}>` elements must have a `<track kind=\"captions\">` child for accessibility."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

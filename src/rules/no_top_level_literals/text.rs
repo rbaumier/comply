@@ -26,7 +26,7 @@ impl TextCheck for Check {
             column: literal.column + 1,
             rule_id: super::META.id.into(),
             message: "Expected the top-level value to be an array or object.".to_string(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((literal.byte_offset, literal.byte_len)),
         }]
     }

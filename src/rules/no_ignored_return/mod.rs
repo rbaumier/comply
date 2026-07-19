@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-ignored-return",
     description: "Return value of a pure method is ignored — the call has no effect.",
     remediation: "Assign or return the result: `const result = arr.map(...)` or use a side-effect method instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

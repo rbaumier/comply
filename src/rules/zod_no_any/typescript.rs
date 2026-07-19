@@ -24,7 +24,7 @@ crate::ast_check! { prefilter = ["z.any"] => |node, source, ctx, diagnostics|
                   TypeScript type forces downstream code to narrow before \
                   using the value."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`Object.keys(obj).forEach(k => obj[k])` is type-unsound — TS widens to `any`.",
     remediation: "Use `for (const [k, v] of Object.entries(obj))`, or cast: \
                   `(Object.keys(obj) as Array<keyof typeof obj>).forEach(...)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

@@ -41,7 +41,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "BOOLEAN column `{col}` should start with `is_` or `has_` so call sites read as predicates."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

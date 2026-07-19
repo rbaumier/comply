@@ -44,7 +44,7 @@ impl OxcCheck for Check {
                         message: "Suspicious semicolon in JSX — it is rendered as \
                                   literal text. Remove it or move it inside `{';'}`."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

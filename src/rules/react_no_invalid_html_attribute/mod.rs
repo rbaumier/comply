@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use a valid `rel` value. Common valid values for `<a>` include \
                   `noopener`, `noreferrer`, `nofollow`. For `<link>` they include \
                   `stylesheet`, `icon`, `preload`, `prefetch`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-invalid-html-attribute.md",
     ),

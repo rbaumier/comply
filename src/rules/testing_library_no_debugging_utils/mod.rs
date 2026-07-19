@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-library-no-debugging-utils",
     description: "Debug helpers (`screen.debug()`, `prettyDOM()`, `logRoles()`) left in committed tests pollute CI output.",
     remediation: "Delete the debug call before committing, or wrap it in `if (process.env.DEBUG)` if it's a temporary affordance.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/testing-library/eslint-plugin-testing-library/blob/main/docs/rules/no-debugging-utils.md"),
     categories: &["testing", "testing-library"],
 

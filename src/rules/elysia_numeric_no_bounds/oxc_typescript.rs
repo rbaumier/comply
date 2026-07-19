@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`t.Number()` / `t.Numeric()` without `minimum`/`maximum` accepts any numeric value, including IDs <= 0.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

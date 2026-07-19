@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-union-when-union-all",
     description: "`UNION` forces a dedup sort; prefer `UNION ALL` when rows are already unique.",
     remediation: "If both sides include a primary key or are otherwise guaranteed distinct, use `UNION ALL`. The dedup step in `UNION` requires a hash or sort across the combined set.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

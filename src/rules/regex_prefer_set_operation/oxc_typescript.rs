@@ -60,7 +60,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "This lookaround + character pattern can be expressed using a v-flag set operation.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

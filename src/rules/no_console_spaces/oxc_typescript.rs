@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "no-console-spaces".into(),
                     message: "Do not use leading space between `console` parameters.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "no-console-spaces".into(),
                     message: "Do not use trailing space between `console` parameters.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

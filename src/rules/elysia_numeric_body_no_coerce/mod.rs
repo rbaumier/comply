@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-numeric-body-no-coerce",
     description: "`t.Number()` inside a `body:` schema rejects numeric strings — use `t.Numeric()` for form-encoded payloads.",
     remediation: "Replace `t.Number()` with `t.Numeric()` in `body:` schemas so multipart/urlencoded numeric fields coerce.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["validation", "elysia"],
 

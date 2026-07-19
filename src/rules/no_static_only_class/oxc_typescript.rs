@@ -75,7 +75,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Use an object or plain functions instead of a class with only static members."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

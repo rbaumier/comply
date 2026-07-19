@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "When wrapping a caught error in a new one, pass `{ cause: e }` \
                   as the second argument: `throw new Error('context', { cause: e })`. \
                   Otherwise the original stack trace and error chain are lost.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["error-handling"],
 

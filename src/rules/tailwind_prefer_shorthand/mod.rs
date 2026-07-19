@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-prefer-shorthand",
     description: "Collapse redundant Tailwind utility pairs into their shorthand form (e.g. `px-2 py-2` → `p-2`).",
     remediation: "Replace pairs like `pt-N pb-N` with `py-N`, `pl-N pr-N` with `px-N`, and `px-N py-N` with `p-N`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

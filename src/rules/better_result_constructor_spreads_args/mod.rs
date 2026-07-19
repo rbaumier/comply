@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-constructor-spreads-args",
     description: "TaggedError constructors with computed message must spread args in super().",
     remediation: "Call super({ ...args, message }) to forward all constructor args.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-array-reduce",
     description: "`Array#reduce()` and `Array#reduceRight()` are not allowed.",
     remediation: "Use a `for` loop, `for...of`, or other array methods instead of `.reduce()` / `.reduceRight()` for better readability.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

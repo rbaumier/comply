@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Move the literal assignment from the constructor to a class \
                   field declaration. Class fields are more declarative and \
                   make the default value visible at a glance.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

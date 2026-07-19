@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
                   stays small. Otherwise every instance of the enum — even \
                   the small-variant case — pays the full size cost. Enable \
                   `clippy::large_enum_variant`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 
@@ -45,7 +45,7 @@ mod tests {
         assert_clippy_rule(
             register(),
             "rust-large-enum-variant",
-            Severity::Warning,
+            Severity::Error,
             &["clippy::large_enum_variant"],
         );
     }

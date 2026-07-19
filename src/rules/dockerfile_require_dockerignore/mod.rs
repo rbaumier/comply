@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-require-dockerignore",
     description: "Dockerfile uses broad `COPY .`; ensure a `.dockerignore` file excludes build artefacts and secrets.",
     remediation: "Add a `.dockerignore` (mention it in a comment above the COPY) so `node_modules`, `.env`, `.git`, etc. don't leak into the image.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

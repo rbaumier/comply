@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-interface-extends",
     description: "Prefer `interface X extends A, B` to `type X = A & B` for object composition.",
     remediation: "Convert the type alias to an interface with `extends`. Interfaces give better error messages, support declaration merging, and compile faster.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

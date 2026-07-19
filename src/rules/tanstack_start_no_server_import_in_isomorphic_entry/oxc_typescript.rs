@@ -64,7 +64,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{specifier}` is server-only; a static import in this isomorphic entry ships Node code into the client bundle. Gate it behind `if (import.meta.env.SSR)` with a dynamic `import()`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

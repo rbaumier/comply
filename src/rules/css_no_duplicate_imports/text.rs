@@ -15,7 +15,7 @@ crate::ast_check! { on ["stylesheet"] => |node, source, ctx, diagnostics|
                 &kid,
                 super::META.id,
                 format!("Duplicate `@import` of {target}."),
-                Severity::Warning,
+                Severity::Error,
             ));
         } else {
             seen.push(target);

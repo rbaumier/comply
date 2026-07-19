@@ -80,7 +80,7 @@ impl TextCheck for Check {
                 missing.len(),
                 keys_str
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

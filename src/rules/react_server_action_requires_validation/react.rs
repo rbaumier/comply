@@ -72,7 +72,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                 &inner,
                 super::META.id,
                 "Server Action with parameters must validate input with `.parse()` or `.safeParse()`.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

@@ -38,7 +38,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["z.number"] => |node, so
         rule_id: "zod-no-number-schema-with-int".into(),
         message: "`z.number().int()` can be replaced by `z.int()` in Zod v4+."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

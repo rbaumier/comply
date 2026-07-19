@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the empty/null/undefined argument from the collection \
                   constructor. `new Set([])` and `new Map(undefined)` are \
                   equivalent to `new Set()` and `new Map()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

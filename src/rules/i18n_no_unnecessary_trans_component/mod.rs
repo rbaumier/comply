@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-no-unnecessary-trans-component",
     description: "`<Trans>` is for interpolating JSX children — use `t()` for plain text.",
     remediation: "Replace `<Trans i18nKey=\"x\">Plain text</Trans>` with `{t('x')}`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

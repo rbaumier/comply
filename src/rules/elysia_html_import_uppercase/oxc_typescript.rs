@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Import `Html` (uppercase) from `@elysiajs/html` — JSX needs the factory binding to be in scope.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

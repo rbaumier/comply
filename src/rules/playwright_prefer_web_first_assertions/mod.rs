@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `await expect(el).toBeVisible()`. Web-first assertions \
                   auto-retry until the condition is met or the timeout \
                   expires, making tests more reliable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

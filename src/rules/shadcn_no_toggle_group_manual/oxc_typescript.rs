@@ -51,7 +51,7 @@ impl OxcCheck for Check {
                                     column,
                                     rule_id: super::META.id.into(),
                                     message: "Manual toggle group — replace `.map(... => <Button variant={cond ? ... : ...}>)` with `<ToggleGroup>` + `<ToggleGroupItem>`.".into(),
-                                    severity: Severity::Warning,
+                                    severity: Severity::Error,
                                     span: None,
                                 });
                                 return;
@@ -75,7 +75,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: "Manual toggle group — replace `.map(... => <Button variant={cond ? ... : ...}>)` with `<ToggleGroup>` + `<ToggleGroupItem>`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Extract the inner expression from the arrow function body \
                   into a variable, or remove the unnecessary parentheses \
                   around the body.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

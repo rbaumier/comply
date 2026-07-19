@@ -134,7 +134,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: "structured-api-error".into(),
         message: "Bare `panic!` in route handler — use structured error types.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

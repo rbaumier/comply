@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`z.union([z.literal('...'), ...])` with only string literals \u{2014} use `z.enum([...])` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

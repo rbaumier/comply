@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-invalid-void-type",
     description: "`void` is only valid as a return type or generic type argument.",
     remediation: "Use `undefined` instead of `void` outside of return types.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-invalid-void-type/"),
     categories: &["typescript"],
 

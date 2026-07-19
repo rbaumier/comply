@@ -64,7 +64,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             "Avoid the Tailwind `!` important modifier — fix specificity instead.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

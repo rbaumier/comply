@@ -44,7 +44,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Non-standard regex flag detected \u{2014} standard flags are: d, g, i, m, s, u, v, y.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add an `onChange` handler or `readOnly` prop. Without either, \
                   React renders a frozen checkbox/radio that the user cannot \
                   interact with, and emits a console warning.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

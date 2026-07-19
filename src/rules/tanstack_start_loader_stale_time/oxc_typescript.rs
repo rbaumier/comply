@@ -96,7 +96,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`staleTime: {n}` is below {min_stale_time}ms — loader data will refetch during navigation."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -109,7 +109,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`ensureQueryData` call is missing `staleTime` — set it to at least {min_stale_time}ms to avoid refetches during navigation."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

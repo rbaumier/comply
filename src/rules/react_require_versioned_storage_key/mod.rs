@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   so a shape change to the stored value cannot be rolled forward.",
     remediation: "Add a version suffix (e.g. `\"settings:v1\"`) and bump it when the \
                   serialized shape changes so old entries can be migrated or dropped.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

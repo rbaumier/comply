@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-inverted-boolean-check",
     description: "`!a === b` negates `a` before comparing — likely meant `a !== b`.",
     remediation: "The `!` operator binds tighter than `===`/`!==`, so `!a === b` is `(!a) === b`, not `!(a === b)`. Use `a !== b` or wrap explicitly: `!(a === b)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-anchor-precedence",
     description: "Anchor `^` or `$` in alternation may not bind as expected.",
     remediation: "Wrap the alternation in a group: `/^(a|b)$/` instead of `/^a|b$/`. Without grouping, `/^a|b$/` means `(^a)|(b$)`, not `^(a|b)$`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

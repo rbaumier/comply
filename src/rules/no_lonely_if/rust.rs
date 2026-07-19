@@ -51,7 +51,7 @@ crate::ast_check! { on ["if_expression"] => |node, _source, ctx, diagnostics|
         message: "Unexpected `if` as the only statement in an `else` block \
                   \u{2014} use `else if` instead."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

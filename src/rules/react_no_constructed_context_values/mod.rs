@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Memoize the context value with `useMemo` or extract it to a \
                   stable reference. `<Provider value={memoized}>` avoids \
                   unnecessary re-renders of every consumer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

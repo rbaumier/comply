@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             message: "All exported specifiers are types — use `export type { ... }` \
                       at the top level instead of inline `type` markers."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

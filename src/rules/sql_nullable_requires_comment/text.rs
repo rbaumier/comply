@@ -33,7 +33,7 @@ impl TextCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "Nullable column has no comment explaining why NULL is allowed."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

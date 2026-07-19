@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-jsonb-not-json",
     description: "`JSON` stores raw text and re-parses on every read; `JSONB` is the binary, indexable form.",
     remediation: "Use `JSONB` unless you genuinely need to preserve key order or whitespace. `JSONB` supports GIN indexes, path operators, and is faster for every operation except a single insert.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

@@ -96,7 +96,7 @@ impl AstCheck for Check {
                  handle and `.await` it, or wrap the work in a \
                  logging helper."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

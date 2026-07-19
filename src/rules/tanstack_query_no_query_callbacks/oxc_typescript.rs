@@ -53,7 +53,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{key_name}:` on `useQuery` was removed in TanStack Query v5 — move side-effects to `useEffect`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Manual `.{member}(...)` chain — prefer `db.query.X.findMany({{ with: {{ ... }} }})` when relations are defined."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

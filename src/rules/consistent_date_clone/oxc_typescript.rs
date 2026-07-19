@@ -57,7 +57,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Unnecessary `.getTime()`/`.valueOf()` — use `new Date(date)` directly.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

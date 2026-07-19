@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-duplicate-chars",
     description: "Duplicate characters in regex character class are redundant.",
     remediation: "Remove duplicate characters from the `[...]` character class.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

@@ -61,7 +61,7 @@ impl Check {
             message: format!(
                 "Storing the return of `{label}` is always `undefined` — the call returns void."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

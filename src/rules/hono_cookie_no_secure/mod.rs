@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "hono-cookie-no-secure",
     description: "Cookie set without `secure` — sent over unencrypted HTTP.",
     remediation: "Add `secure: true` to cookie options so the cookie is only sent over HTTPS.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "hono"],
 

@@ -60,7 +60,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `path.join()` or `path.resolve()` instead of string concatenation with `__dirname`/`__filename`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

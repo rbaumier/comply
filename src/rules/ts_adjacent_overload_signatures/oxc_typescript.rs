@@ -141,7 +141,7 @@ fn check_body_items(
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("All `{name}` signatures should be adjacent."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         } else if !was_seen {

@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("`<{tag}>` elements must have a `<track kind=\"captions\">` child for accessibility."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -99,7 +99,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("`<{tag}>` elements must have a `<track kind=\"captions\">` child for accessibility."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

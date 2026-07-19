@@ -190,7 +190,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Assertion is always true or always false and has no effect.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

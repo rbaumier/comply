@@ -54,7 +54,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "Derived state in `useEffect` is an anti-pattern. Compute the value during render instead.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

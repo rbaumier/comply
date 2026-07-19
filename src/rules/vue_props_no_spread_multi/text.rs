@@ -25,7 +25,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "vue-props-no-spread-multi".into(),
                     message: "Same `v-bind` spread used multiple times on this element.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

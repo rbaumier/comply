@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-tagged-error-cause-unknown",
     description: "The cause field in TaggedError must be typed `unknown`, not Error/any.",
     remediation: "Declare `cause: unknown` so callers can't rely on a specific error shape.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

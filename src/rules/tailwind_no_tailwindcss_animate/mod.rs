@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-tailwindcss-animate",
     description: "Forbid imports from `tailwindcss-animate`; use `tw-animate-css` instead.",
     remediation: "Uninstall `tailwindcss-animate` and install `tw-animate-css`, then replace the import / plugin entry accordingly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

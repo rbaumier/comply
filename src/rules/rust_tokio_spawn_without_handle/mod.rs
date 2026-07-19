@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
                   task through a wrapper like `tokio::spawn(async { \
                   if let Err(e) = work().await { tracing::error!(?e); } \
                   })`. Fire-and-forget loses every error and every panic.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

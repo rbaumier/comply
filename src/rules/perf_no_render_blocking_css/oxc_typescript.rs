@@ -71,7 +71,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`<link rel=\"stylesheet\">` without a `media` attribute blocks first paint — add `media=\"...\"` so the browser can defer non-critical CSS.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -127,7 +127,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`findMany()` without `take`/`first` returns unbounded results — add a row limit."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

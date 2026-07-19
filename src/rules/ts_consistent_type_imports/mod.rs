@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-consistent-type-imports",
     description: "Type-only imports should use `import type` rather than `import`.",
     remediation: "Replace `import { Foo }` with `import type { Foo }` when only types are imported.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/consistent-type-imports/"),
     categories: &["typescript"],
 

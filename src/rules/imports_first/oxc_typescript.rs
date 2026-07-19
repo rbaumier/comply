@@ -227,7 +227,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: super::META.id.into(),
                             message: "Import statement after non-import code \u{2014} move to the top of the file.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

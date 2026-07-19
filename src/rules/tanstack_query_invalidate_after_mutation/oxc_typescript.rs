@@ -76,7 +76,7 @@ impl OxcCheck for Check {
             message: "`useMutation` performs a write but does not update the query cache. \
                      Add `onSuccess` or `onSettled` that calls `invalidateQueries` or `setQueryData`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

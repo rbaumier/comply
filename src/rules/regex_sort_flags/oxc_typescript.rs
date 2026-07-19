@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Regex flags are not sorted alphabetically \u{2014} reorder them (e.g. `dgimsvy`).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "User-defined JSX components must use PascalCase.",
     remediation: "Rename the component to PascalCase (e.g., `MyComponent` instead \
                   of `my_component` or `myComponent`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-pascal-case.md",
     ),

@@ -24,7 +24,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "A `package.json` is missing a script the project requires — consistent \
                   scripts across packages let each one be run reliably from the repo root.",
     remediation: "Add the missing script(s) to the `scripts` section of `package.json`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["package-json"],
 

@@ -79,7 +79,7 @@ impl TextCheck for Check {
                         rule_id: "vue-no-adjacent-inline-elements".into(),
                         message: "Adjacent inline elements without whitespace — add a space."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

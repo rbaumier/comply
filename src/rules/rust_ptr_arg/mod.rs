@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `&String` with `&str`, `&Vec<T>` with `&[T]`, \
                   `&PathBuf` with `&Path`. The slice form accepts more \
                   caller types with no extra cost. Enable `clippy::ptr_arg`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 
@@ -44,7 +44,7 @@ mod tests {
         assert_clippy_rule(
             register(),
             "rust-ptr-arg",
-            Severity::Warning,
+            Severity::Error,
             &["clippy::ptr_arg"],
         );
     }

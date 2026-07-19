@@ -22,7 +22,7 @@ crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "COPY destination must end with `/` when copying multiple sources.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((last.byte_range().start, last.byte_range().len())),
     });
 }

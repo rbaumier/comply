@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-unknown-unit",
     description: "Disallow unknown CSS units.",
     remediation: "Use a known CSS unit such as `px`, `em`, `rem`, `deg`, `s`, or `fr`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Values_and_Units"),
     categories: &["css"],
 

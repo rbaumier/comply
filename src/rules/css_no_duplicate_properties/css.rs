@@ -32,7 +32,7 @@ crate::ast_check! { on ["block"] => |node, source, ctx, diagnostics|
             &decl,
             super::META.id,
             format!("Duplicate property `{name}` in block."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

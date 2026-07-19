@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-pool-requires-timeouts",
     description: "`new Pool()` must define both `idleTimeoutMillis` and `connectionTimeoutMillis`.",
     remediation: "Add `idleTimeoutMillis` and `connectionTimeoutMillis` to the `new Pool(...)` config so stuck connections don't leak and new ones fail fast.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle"],
 

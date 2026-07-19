@@ -115,7 +115,7 @@ impl OxcCheck for Check {
             message: "Use explicit length comparison: `arr.length > 0` instead of \
                       `arr.length`, or `arr.length === 0` instead of `!arr.length`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

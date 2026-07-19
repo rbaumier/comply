@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "HTML attribute on an intrinsic JSX element is not a valid React prop.",
     remediation: "Replace the HTML attribute with its React camelCase equivalent \
                   (e.g. `class` → `className`, `for` → `htmlFor`, `onclick` → `onClick`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-unknown-property.md",
     ),

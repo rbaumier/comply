@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-unused-private-class-members",
     description: "Private class members that are never used are dead code.",
     remediation: "Remove the unused private member or use it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-unused-private-class-members"),
     categories: &["typescript"],
 

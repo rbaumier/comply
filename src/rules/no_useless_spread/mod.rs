@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Disallow unnecessary spread.",
     remediation: "Remove the redundant spread — `[...[1,2]]` is just `[1,2]` \
                   and `{...{a:1}}` is just `{a:1}`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

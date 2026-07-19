@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `throw 'msg'` or `throw { code: ... }` with \
                   `throw new Error('msg')`. Thrown non-Error values lose stack \
                   traces and break `instanceof Error` checks in catch handlers.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["error-handling"],
 

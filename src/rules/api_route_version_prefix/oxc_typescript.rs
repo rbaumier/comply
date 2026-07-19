@@ -280,7 +280,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Route `{route_path}` does not start with a version prefix (e.g. /v1/\u{2026})."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -27,7 +27,7 @@ pub const META: RuleMeta = RuleMeta {
                   Validate at the boundary: if the input is invalid, return \
                   a Result error. Silent defaults turn caller bugs into \
                   silent wrong answers.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

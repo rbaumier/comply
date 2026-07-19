@@ -53,7 +53,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Classes extending TaggedError must declare a `message: string` field.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

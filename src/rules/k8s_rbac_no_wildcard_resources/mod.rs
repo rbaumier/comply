@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-rbac-no-wildcard-resources",
     description: "RBAC rules must not grant resources: [\"*\"]; enumerate the resources needed.",
     remediation: "Replace `resources: [\"*\"]` with the specific resources required (pods, services, etc.).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

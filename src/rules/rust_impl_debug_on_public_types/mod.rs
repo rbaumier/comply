@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   for free, and consumers shouldn't have to wrap your type \
                   to get a `Debug` impl. If a field can't be Debug (e.g. a \
                   closure), implement `Debug` by hand instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`async function f() { return await x; }` is redundant — the wrapper adds no behaviour over `function f() { return x; }`.",
     remediation: "Drop `async` and `await`, or keep them only when you need a try/catch \
                   around the awaited expression.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "async"],
 

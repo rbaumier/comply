@@ -23,7 +23,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &name_pair,
                 super::META.id,
                 format!("Sysctl `{name}` is unsafe and must not be set on a Pod."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

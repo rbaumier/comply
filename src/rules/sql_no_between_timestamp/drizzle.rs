@@ -71,7 +71,7 @@ impl AstCheck for Check {
             message: "`between()` on a timestamp column has an off-by-one — \
                       use `gte(col, start)` and `lt(col, end)` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

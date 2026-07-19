@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "perf-font-preload-crossorigin",
     description: "`<link rel=\"preload\" as=\"font\">` must include `crossorigin` and `type=\"font/woff2\"`.",
     remediation: "Add `crossorigin` and `type=\"font/woff2\"` to the font preload link.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["web-performance"],
 

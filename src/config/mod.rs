@@ -12,7 +12,6 @@
 //!   - `Config::default()` — defaults only, used by tests
 //!   - `Config::is_rule_enabled(rule_id, file_path)` — combine global
 //!     `disabled = true` with per-glob `disable = [...]` overrides
-//!   - `Config::severity_for(rule_id)` — global severity override
 //!   - `Config::threshold(rule_id, key)` — typed threshold accessor
 //!     used by every rule that has a knob (panics if the key is not
 //!     declared in `src/config/defaults.toml`)
@@ -39,7 +38,6 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
-use crate::diagnostic::Severity;
 use crate::files::Language;
 
 type LangConfigMap = FxHashMap<String, FxHashMap<Language, FxHashMap<String, toml::Value>>>;
@@ -172,16 +170,6 @@ impl Config {
             .rules
             .get(rule_id)
             .is_some_and(|r| r.disabled == Some(true))
-    }
-
-    /// Override severity for a rule, or `None` if the user didn't set one.
-    #[must_use]
-    pub fn severity_for(&self, rule_id: &str) -> Option<Severity> {
-        self.raw
-            .rules
-            .get(rule_id)
-            .and_then(|r| r.severity)
-            .map(Into::into)
     }
 
     /// Iterate over every `[rules.<id>]` block the user (or the
@@ -424,9 +412,6 @@ fn merge(mut base: ComplyToml, user: ComplyToml) -> ComplyToml {
         if let Some(e) = user_rule.enabled {
             entry.enabled = Some(e);
         }
-        if let Some(s) = user_rule.severity {
-            entry.severity = Some(s);
-        }
         for (k, v) in user_rule.extra {
             entry.extra.insert(k, v);
         }
@@ -441,7 +426,7 @@ fn merge(mut base: ComplyToml, user: ComplyToml) -> ComplyToml {
 // `print_default_toml`. Wire it up here rather than in schema.rs so the
 // public schema struct stays minimal.
 mod serialize_impl {
-    use super::schema::{ComplyToml, OverrideConfig, RuleConfig, SeverityToml};
+    use super::schema::{ComplyToml, OverrideConfig, RuleConfig};
     use serde::ser::SerializeStruct;
     use serde::{Serialize, Serializer};
 
@@ -464,15 +449,9 @@ mod serialize_impl {
             if self.disabled.is_some() {
                 len += 1;
             }
-            if self.severity.is_some() {
-                len += 1;
-            }
             let mut map = s.serialize_map(Some(len))?;
             if let Some(d) = self.disabled {
                 map.serialize_entry("disabled", &d)?;
-            }
-            if let Some(sev) = self.severity {
-                map.serialize_entry("severity", &sev)?;
             }
             for (k, v) in &self.extra {
                 map.serialize_entry(k, v)?;
@@ -489,14 +468,6 @@ mod serialize_impl {
         }
     }
 
-    impl Serialize for SeverityToml {
-        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-            match self {
-                SeverityToml::Warning => s.serialize_str("warning"),
-                SeverityToml::Error => s.serialize_str("error"),
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -703,26 +674,6 @@ mod tests {
             cfg.is_rule_enabled("unused-file", &abs_other),
             "absolute path outside overridden glob must keep the rule enabled"
         );
-    }
-
-    #[test]
-    fn severity_override_returns_user_choice() {
-        let tmp = TempDir::new().unwrap();
-        let cfg_path = tmp.path().join("comply.toml");
-        fs::write(
-            &cfg_path,
-            r#"
-            [rules.max-function-lines]
-            severity = "error"
-            "#,
-        )
-        .unwrap();
-        let cfg = Config::load_from(tmp.path()).unwrap();
-        assert!(matches!(
-            cfg.severity_for("max-function-lines"),
-            Some(Severity::Error)
-        ));
-        assert!(cfg.severity_for("max-file-lines").is_none());
     }
 
     #[test]

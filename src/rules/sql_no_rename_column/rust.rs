@@ -34,7 +34,7 @@ impl AstCheck for Check {
             &node,
             super::META.id,
             "RENAME COLUMN breaks in-flight queries — use expand-contract (add, dual-write, backfill, drop).".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-enforce-default-message",
     description: "`<FormattedMessage>` without `defaultMessage` displays the raw key when no translation exists.",
     remediation: "Add a `defaultMessage` prop that the user can read in the absence of a localised string.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://formatjs.io/docs/tooling/linter#enforce-default-message"),
     categories: &["i18n"],
 

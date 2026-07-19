@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-url-canparse",
     description: "Prefer `URL.canParse(url)` over try-catch with `new URL()`.",
     remediation: "Replace try-catch URL validation with `URL.canParse(url)` (available in modern runtimes).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://developer.mozilla.org/en-US/docs/Web/API/URL/canParse_static"),
     categories: &["e18e", "modernization"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "security-detect-non-literal-fs-filename",
     description: "Dynamic path passed to `fs.*` — path traversal vector when the input can be influenced by user data.",
     remediation: "Validate / normalize the path against an allowlist before passing it to `fs.*`. Use `path.resolve` + a prefix check, or use a sandboxed FS abstraction.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/eslint-community/eslint-plugin-security/blob/main/docs/rules/detect-non-literal-fs-filename.md"),
     categories: &["security"],
 

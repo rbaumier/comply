@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`space-x-*` / `space-y-*` are fragile — use `flex gap-*` (or `flex flex-col gap-*`) instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

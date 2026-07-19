@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the `await` keyword from array elements passed to Promise methods. \
                   Awaiting inside the array serializes the calls, defeating the purpose of \
                   `Promise.all()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

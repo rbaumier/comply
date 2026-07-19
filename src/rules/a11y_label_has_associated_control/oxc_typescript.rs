@@ -122,7 +122,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`<label>` is missing `htmlFor` — associate it with a form control."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   and `parent.replaceChild(newNode, old)` with `old.replaceWith(newNode)`. \
                   The modern APIs are called on the target node directly, removing the \
                   need for a parent reference.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

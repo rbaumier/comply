@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                           defaults to `submit`, which may cause unexpected \
                           form submissions."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`new QueryClient()` inside a component recreates the cache every render.",
     remediation: "Hoist `new QueryClient()` to module scope, or wrap it in \
                   `useState(() => new QueryClient())` / `useRef`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-query"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-hooks-before-routes",
     description: "Lifecycle hook chained after route definitions — Elysia hooks only apply to routes registered after them.",
     remediation: "Chain `.onBeforeHandle(...)`, `.onError(...)`, etc. before `.get(...)`/`.post(...)` so they apply to subsequent routes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

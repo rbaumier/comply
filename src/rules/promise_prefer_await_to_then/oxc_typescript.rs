@@ -90,7 +90,7 @@ impl OxcCheck for Check {
             message: "`.then(...)` inside an async function — replace with \
                       `const r = await expr; …`. Easier to read, simpler stack traces."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

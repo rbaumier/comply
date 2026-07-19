@@ -105,7 +105,7 @@ impl AstCheck for Check {
                  mutability — use `const {name}` so the value inlines \
                  at every use site instead of reserving a fixed address."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

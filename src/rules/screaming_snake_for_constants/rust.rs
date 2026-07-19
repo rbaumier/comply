@@ -35,7 +35,7 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
         &name_node,
         super::META.id,
         format!("Constant `{name}` is not in `SCREAMING_SNAKE_CASE`."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

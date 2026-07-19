@@ -14,7 +14,7 @@ crate::ast_check! { on ["run_instruction"] prefilter = ["zypper"] => |node, sour
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`zypper install` must pass `-n` or `--non-interactive`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

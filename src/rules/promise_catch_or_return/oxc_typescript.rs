@@ -169,7 +169,7 @@ impl OxcCheck for Check {
             message: "Floating `.then(...)` without a `.catch` / `.finally` and not \
                       returned/awaited — rejection will be swallowed."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

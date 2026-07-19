@@ -65,7 +65,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "Prefer shorthand: `{variant}{bang}{left_prefix}{lv} {variant}{bang}{right_prefix}{rv}` can be written as `{variant}{bang}{short_prefix}{lv}`."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

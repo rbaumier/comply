@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-zypper-dist-upgrade",
     description: "`zypper dist-upgrade` (or `dup`) is non-deterministic and bloats images.",
     remediation: "Remove `zypper dist-upgrade`/`dup`; install only the packages you need.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

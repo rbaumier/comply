@@ -56,7 +56,7 @@ impl OxcCheck for Check {
                         "Duplicate import from `{}` \u{2014} already imported on line {}. Merge into a single statement.",
                         module, first_line
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             } else {

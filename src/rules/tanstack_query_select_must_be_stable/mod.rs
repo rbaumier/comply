@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-select-must-be-stable",
     description: "Inline `select:` arrow rebuilds each render and re-runs the selector.",
     remediation: "Wrap the selector with `useCallback` or hoist it to module scope.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

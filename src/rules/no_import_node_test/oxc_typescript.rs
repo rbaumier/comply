@@ -75,7 +75,7 @@ impl OxcCheck for Check {
                     message:
                         "Importing from `node:test` mixes test runners; use vitest/jest APIs instead."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-network-policy",
     description: "Each Deployment should have an accompanying NetworkPolicy; namespaces should not rely on default-allow.",
     remediation: "Author a NetworkPolicy that whitelists ingress/egress for this workload.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

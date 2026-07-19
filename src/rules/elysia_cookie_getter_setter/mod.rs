@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-cookie-getter-setter",
     description: "Code uses `cookie.get(...)` / `cookie.set(...)` — Elysia exposes cookies as `cookie.<name>.value`.",
     remediation: "Use `ctx.cookie.<name>.value` for reads and assignment for writes (e.g. `cookie.session.value = '...'`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

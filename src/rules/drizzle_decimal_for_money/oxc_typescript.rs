@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                  to avoid unbounded SQL `numeric`.",
                 func_name, col
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

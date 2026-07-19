@@ -33,8 +33,6 @@ pub struct OxlintDiag {
     #[serde(default)]
     pub code: Option<String>,
     #[serde(default)]
-    pub severity: OxlintSeverity,
-    #[serde(default)]
     pub filename: String,
     /// Position labels — first label carries the primary span.
     #[serde(default)]
@@ -42,16 +40,6 @@ pub struct OxlintDiag {
     /// Catches `causes`, `url`, `help`, `related`, etc.
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
-}
-
-#[non_exhaustive]
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum OxlintSeverity {
-    #[default]
-    Error,
-    Warning,
-    Advice,
 }
 
 /// External wire format mirror — see comply:rust-serde-deny-unknown-fields.

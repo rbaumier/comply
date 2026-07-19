@@ -108,7 +108,7 @@ fn check_hook_order_in_body(
                             "`{name}` hooks should be before any `{}` hooks.",
                             HOOK_ORDER[prev]
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -185,7 +185,7 @@ fn check_program_stmts(
                             "`{name}` hooks should be before any `{}` hooks.",
                             HOOK_ORDER[prev]
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

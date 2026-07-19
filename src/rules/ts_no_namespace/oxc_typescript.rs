@@ -138,7 +138,7 @@ impl OxcCheck for Check {
             message: "TypeScript `namespace` is a legacy construct \u{2014} \
                       use ES module `export` / `import` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

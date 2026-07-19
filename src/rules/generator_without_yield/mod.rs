@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "generator-without-yield",
     description: "Generator function does not contain a `yield` expression.",
     remediation: "Add a `yield` expression or convert to a regular function. A generator without `yield` is misleading — callers expect lazy iteration.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

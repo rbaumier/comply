@@ -5,7 +5,6 @@
 //! uses `AstKind` discriminant (u8) for O(1) lookup.
 
 use super::{LangDispatch, WorkerState};
-use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::CheckCtx;
 use oxc_semantic::Semantic;
@@ -49,7 +48,6 @@ pub(super) fn run_oxc_checks(
     ld: &LangDispatch,
     semantic: &Semantic,
     ctx: &CheckCtx,
-    config: &Config,
     pre_enabled: &[bool],
     worker: &mut WorkerState,
     diagnostics: &mut Vec<Diagnostic>,
@@ -149,15 +147,10 @@ pub(super) fn run_oxc_checks(
         }
     }
 
-    // Apply severity overrides and collect.
-    for (i, (meta, _)) in ld.oxc_rules.iter().enumerate() {
+    // Collect enabled rules' diagnostics.
+    for (i, _) in ld.oxc_rules.iter().enumerate() {
         if !enabled[i] {
             continue;
-        }
-        if let Some(sev) = config.severity_for(meta.id) {
-            for d in &mut per_rule_diags[i] {
-                d.severity = sev;
-            }
         }
         diagnostics.append(&mut per_rule_diags[i]);
     }

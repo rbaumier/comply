@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-button-icon-data-attr",
     description: "Icons inside `<Button>` must use `data-icon` instead of `mr-2`/`ml-2` for positioning.",
     remediation: "Replace `className=\"mr-2\"` with `data-icon=\"inline-start\"` (and `ml-2` with `data-icon=\"inline-end\"`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn"],
 

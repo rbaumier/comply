@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                         column: abs_col,
                         rule_id: super::META.id.into(),
                         message: "JSDoc uses `*` or `any` type \u{2014} provide a specific type instead.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use a reduce or for-loop: \
                   `array.reduce((a, b) => a < b ? a : b, Infinity)` for min, \
                   or `-Infinity` and `>` for max.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

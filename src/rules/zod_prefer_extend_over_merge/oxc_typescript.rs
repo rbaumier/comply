@@ -63,7 +63,7 @@ impl OxcCheck for Check {
             message: "`.merge()` is removed in Zod v4 — use `.extend(other.shape)` \
                       to combine object schemas."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

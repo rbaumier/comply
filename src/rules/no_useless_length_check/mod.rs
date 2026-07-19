@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   already returns `false` for an empty array, and \
                   `Array#every()` already returns `true` for an empty array. \
                   The length check adds no value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

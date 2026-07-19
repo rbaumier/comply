@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-no-custom-skeleton",
     description: "Custom skeletons built from `animate-pulse` drift from the shadcn design tokens.",
     remediation: "Replace `<div className=\"animate-pulse …\">` with `<Skeleton className=\"…\" />`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn"],
 

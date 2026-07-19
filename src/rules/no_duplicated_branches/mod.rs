@@ -44,7 +44,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-duplicated-branches",
     description: "Two branches of an if/else have identical bodies.",
     remediation: "Merge the conditions or remove the duplicate branch.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

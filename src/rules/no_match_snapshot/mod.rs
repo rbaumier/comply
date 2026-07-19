@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   protocol/wire-format contract, test the snapshot mechanism \
                   itself, or assert the exact output of a code transformation \
                   (where the output IS the spec), and are the correct tool there.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

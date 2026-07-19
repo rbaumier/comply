@@ -95,7 +95,7 @@ impl OxcCheck for Check {
             message: format!(
                 "<{tag}> exit duration {exit}s is longer than enter duration {enter}s — dismiss will feel sluggish."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Manual redirect via `set.status` + `set.headers.location` — return `redirect(url, code)` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

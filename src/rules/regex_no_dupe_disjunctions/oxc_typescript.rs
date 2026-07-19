@@ -88,7 +88,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Duplicate alternative in regex disjunction \u{2014} remove the redundant branch.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

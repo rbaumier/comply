@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-invalid-this",
     description: "`this` used outside a class or class-like object is likely a bug.",
     remediation: "Move the code into a class method, or use an explicit parameter instead of `this`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-invalid-this"),
     categories: &["typescript"],
 

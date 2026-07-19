@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-pass-data-to-parent",
     description: "`useEffect` that only calls a parent callback to pass data up — lift state instead.",
     remediation: "Move the state to the parent component and pass down a setter, or restructure to avoid the effect.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

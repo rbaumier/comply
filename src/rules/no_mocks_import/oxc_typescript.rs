@@ -34,7 +34,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Import from {raw} references `__mocks__`. Let Jest/Vitest auto-resolve mocks, don't import from __mocks__ directly."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

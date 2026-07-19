@@ -78,7 +78,7 @@ impl OxcCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "Home-grown badge detected \u{2014} use `<Badge>` from shadcn/ui instead of `<span className=\"rounded-full bg-\u{2026}\">`."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

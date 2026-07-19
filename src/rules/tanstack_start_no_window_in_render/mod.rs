@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`window.*` / `document.*` in render breaks SSR.",
     remediation: "Read from `window`/`document` inside a `useEffect` or behind \
                   a `typeof window !== 'undefined'` guard.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start", "react"],
 

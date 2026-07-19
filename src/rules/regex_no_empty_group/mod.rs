@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-empty-group",
     description: "Empty capturing group `()` is likely a mistake.",
     remediation: "Remove the empty group or add a pattern inside it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   videos are lost with the runner.",
     remediation: "Add a step using `actions/upload-artifact@v4` that uploads \
                   `playwright-report/` with `if: failure()` (or `if: always()`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ci-cd"],
 

@@ -40,7 +40,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.decorate(...)` runs once at boot \u{2014} `Date.now()` / `Math.random()` here freezes a single value for every request. Use `.derive(...)` for per-request data.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

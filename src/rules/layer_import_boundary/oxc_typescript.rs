@@ -111,7 +111,7 @@ impl OxcCheck for Check {
                 layer_name(file_layer),
                 layer_name(import_layer),
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

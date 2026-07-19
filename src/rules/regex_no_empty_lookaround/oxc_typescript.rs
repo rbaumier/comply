@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Empty lookaround always matches or always fails \u{2014} add a pattern or remove it.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

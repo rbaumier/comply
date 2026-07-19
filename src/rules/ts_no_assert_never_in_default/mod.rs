@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`switch { default: throw }` without an exhaustive `never` check goes stale when union variants are added.",
     remediation: "Replace `default: throw new Error(...)` with `default: return assertNever(x);` \
                   (or `const _exhaustive: never = x;`) so TypeScript flags the missing case at compile time.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-copy-from-known-stage",
     description: "`COPY --from=<name>` must reference a known build stage.",
     remediation: "Define the stage with `FROM ... AS <name>` or fix the typo.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

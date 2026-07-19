@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "Custom skeleton detected — use `<Skeleton />` from shadcn/ui instead of `<div className=\"animate-pulse …\">`."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   schedules a render on every frame (or faster).",
     remediation: "Store the transient value in a `useRef` and read it when you actually \
                   need to commit a render (e.g. on drag end).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

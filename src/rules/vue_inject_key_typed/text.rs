@@ -30,7 +30,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                             "`{}` uses a string key — use a typed `InjectionKey<T>` symbol instead.",
                             fn_name.trim_end_matches('(')
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

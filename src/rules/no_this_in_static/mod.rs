@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-this-in-static",
     description: "A bare `this` value (or `super`) in a static context refers to the class, not an instance — usually a mistake.",
     remediation: "Use the class name for a bare `this` and the parent class name for `super`; member access through `this` (`this.x`, `new this()`) stays valid for inherited statics.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-this-in-static/"),
     categories: &["typescript"],
 

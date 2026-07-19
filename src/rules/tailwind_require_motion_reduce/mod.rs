@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-require-motion-reduce",
     description: "Elements with `transition-*` / `animate-*` must also declare a `motion-reduce:*` variant.",
     remediation: "Add `motion-reduce:transition-none` (or `motion-reduce:animate-none`) so users with `prefers-reduced-motion: reduce` are respected.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "a11y"],
 

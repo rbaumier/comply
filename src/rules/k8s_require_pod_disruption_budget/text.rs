@@ -25,7 +25,7 @@ crate::ast_check! { on ["stream"] prefilter = ["apiVersion"] => |node, source, c
                 manifest,
                 super::META.id,
                 "Deployment/StatefulSet should have a PodDisruptionBudget to survive voluntary disruptions.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

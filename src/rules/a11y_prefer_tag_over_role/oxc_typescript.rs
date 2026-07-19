@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "Prefer `{suggested}` over `<{tag} role=\"{role}\">` for semantic HTML."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

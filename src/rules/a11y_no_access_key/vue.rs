@@ -23,7 +23,7 @@ impl TextCheck for Check {
                     message:
                         "Avoid `accesskey` — it conflicts with screen reader keyboard shortcuts."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sonarjs-no-useless-catch",
     description: "`catch (e) { throw e; }` adds no value — remove the try/catch.",
     remediation: "Delete the try/catch and let the exception propagate. If you wanted to add context, wrap the error or convert to a typed Result; if you wanted to log, log alongside the rethrow.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/SonarSource/eslint-plugin-sonarjs/blob/master/docs/rules/no-useless-catch.md"),
     categories: &["code-quality"],
 

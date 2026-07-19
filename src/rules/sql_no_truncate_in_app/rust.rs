@@ -37,7 +37,7 @@ impl AstCheck for Check {
             &node,
             super::META.id,
             "`TRUNCATE` bypasses triggers and audit — use `DELETE FROM` instead.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

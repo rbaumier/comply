@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-apply-for-variants",
     description: "`@apply` outside `@layer base` defeats Tailwind's purging and specificity model.",
     remediation: "Compose classes in JSX/HTML instead, or use CSS variables for theming. Reserve `@apply` for `@layer base` resets only.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

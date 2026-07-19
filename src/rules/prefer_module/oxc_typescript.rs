@@ -70,7 +70,7 @@ impl OxcCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "Use `import` instead of `require()` — prefer ESM over CommonJS."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -108,7 +108,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: msg.into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -131,7 +131,7 @@ impl OxcCheck for Check {
                         message:
                             "Use `export` instead of `module.exports` — prefer ESM over CommonJS."
                                 .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 } else if obj_name == "exports" && is_assignment_target(node, member, semantic) {
@@ -145,7 +145,7 @@ impl OxcCheck for Check {
                         message:
                             "Use `export` instead of `exports.x = …` — prefer ESM over CommonJS."
                                 .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

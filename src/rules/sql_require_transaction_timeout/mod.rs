@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-require-transaction-timeout",
     description: "DB connection pool config should set `statement_timeout` and `idle_in_transaction_session_timeout` to prevent runaway queries.",
     remediation: "Add `statement_timeout: '30s'` and `idle_in_transaction_session_timeout: '60s'` to the pool config.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

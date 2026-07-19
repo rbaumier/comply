@@ -44,7 +44,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "better-result-no-catch-panic".into(),
             message: "Do not match/re-handle Panic in a catch — let it propagate.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

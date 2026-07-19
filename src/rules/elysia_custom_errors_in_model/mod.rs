@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-custom-errors-in-model",
     description: "Custom error class declared in a service file — Elysia error mapping lives next to the model.",
     remediation: "Move `class FooError extends Error` to the matching `*.model.ts` so `app.error({ FOO: FooError })` and the schema stay co-located.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["architecture", "elysia"],
 

@@ -25,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
                   events, ...) are left alone — they have no clean \
                   `userEvent` equivalent and are the right tool for testing \
                   low-level focus, keyboard or debounce behaviour.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

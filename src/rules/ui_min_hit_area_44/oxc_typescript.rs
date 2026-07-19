@@ -97,7 +97,7 @@ impl OxcCheck for Check {
             message: format!(
                 "<{tag}> has a tap area under 44\u{00d7}44 px (className `{cls}`) \u{2014} add padding or grow the hit target."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

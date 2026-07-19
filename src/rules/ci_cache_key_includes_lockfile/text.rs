@@ -39,7 +39,7 @@ crate::ast_check! { on ["block_mapping_pair"] prefilter = ["hashFiles"] => |node
             message: "actions/cache step has no `key:` — add one that includes \
                       `${{ hashFiles('**/package-lock.json') }}`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
         return;
@@ -58,7 +58,7 @@ crate::ast_check! { on ["block_mapping_pair"] prefilter = ["hashFiles"] => |node
                       `${{ hashFiles('**/package-lock.json') }}` so the cache \
                       invalidates when dependencies change."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

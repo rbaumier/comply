@@ -122,7 +122,7 @@ crate::ast_check! { on ["function_declaration", "function_expression", "arrow_fu
         "Layout reads (e.g. `offsetWidth`, `getBoundingClientRect`) interleaved \
          with `.style.*` writes force sync layout. Batch reads first, writes second."
             .into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

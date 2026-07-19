@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-while",
     description: "`for (;;)` or `for (;cond;)` without init/update — use `while` instead.",
     remediation: "Replace `for (;;)` with `while (true)` and `for (;condition;)` with `while (condition)`. The `for` form hides intent when init and update are unused.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

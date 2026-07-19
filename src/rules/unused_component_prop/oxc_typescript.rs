@@ -135,7 +135,7 @@ impl OxcCheck for Check {
                             "Prop `{}` is declared but never read in the component.",
                             prop.name
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

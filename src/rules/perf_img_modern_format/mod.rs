@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "perf-img-modern-format",
     description: "`<img>` with .jpg/.jpeg/.png should provide a WebP/AVIF fallback via `<picture>` or `srcset`.",
     remediation: "Wrap the image in a `<picture>` with `<source type=\"image/webp\">`, or use `srcset` with a modern format.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["web-performance"],
 

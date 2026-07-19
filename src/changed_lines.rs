@@ -291,7 +291,7 @@ diff --git a/x.rs b/x.rs
             column: 1,
             rule_id: "r".into(),
             message: String::new(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         };
         let on_miss = Diagnostic {
@@ -300,7 +300,7 @@ diff --git a/x.rs b/x.rs
             column: 1,
             rule_id: "r".into(),
             message: String::new(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         };
         assert!(diag_in_diff(&on_hit, &changed));
@@ -317,7 +317,7 @@ diff --git a/x.rs b/x.rs
             column: 1,
             rule_id: "r".into(),
             message: String::new(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         };
         assert!(!diag_in_diff(&diag, &changed));
@@ -335,7 +335,7 @@ diff --git a/x.rs b/x.rs
                 column: 1,
                 rule_id: "keep".into(),
                 message: String::new(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             },
             Diagnostic {
@@ -344,7 +344,7 @@ diff --git a/x.rs b/x.rs
                 column: 1,
                 rule_id: "drop".into(),
                 message: String::new(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             },
         ];

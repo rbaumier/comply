@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-checked-requires-onchange",
     description: "`checked` attribute without `v-model` or `@change` makes the input uncontrollable.",
     remediation: "Add `v-model` or an `@change` handler. Without either, the checkbox/radio is frozen.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

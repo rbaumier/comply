@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-start-loader-stale-time",
     description: "Loader `staleTime` too short — data will refetch during navigation.",
     remediation: "Set `staleTime: 5000` or more (ms) on `ensureQueryData` loader calls to cover navigation duration.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack", "performance"],
 

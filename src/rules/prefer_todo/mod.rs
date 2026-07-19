@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-todo",
     description: "Empty test body — use `test.todo` to mark unimplemented tests.",
     remediation: "Use test.todo('description') for placeholder tests",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

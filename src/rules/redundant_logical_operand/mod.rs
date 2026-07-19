@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "redundant-logical-operand",
     description: "Logical expression with a redundant boolean-literal or null operand.",
     remediation: "Drop the redundant term: `true && x` and `x && true` are `x`; `false && x` is `false`; `false || x` and `x || false` are `x`; `true || x` is `true`; `null ?? x` is `x`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

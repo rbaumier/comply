@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-indexof-equality",
     description: "Prefer `includes()`/`startsWith()` over `indexOf()` equality checks.",
     remediation: "Use `str.includes(x)` instead of `str.indexOf(x) !== -1`, `str.startsWith(x)` instead of `str.indexOf(x) === 0`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["e18e", "modernization"],
 

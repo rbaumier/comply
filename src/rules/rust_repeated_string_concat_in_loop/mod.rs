@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `push_str` into it, or collect into `Vec<String>` and \
                   use `.join(\"\")`. The bare `s = s + …` form drops and \
                   re-allocates on every iteration.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "performance"],
 

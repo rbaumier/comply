@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-require-focus-ring",
     description: "Interactive elements must carry a `focus:ring-*` class for keyboard a11y.",
     remediation: "Add `focus:ring-2` (and ideally `focus:ring-offset-2`, `focus:outline-none`) to buttons, anchors, inputs, selects, textareas, and role=button elements.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "a11y"],
 

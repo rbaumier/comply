@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-promise-reject-errors",
     description: "`Promise.reject()` should receive an `Error` instance, not a primitive or plain object.",
     remediation: "Call `Promise.reject(new Error('...'))` instead of passing a string, number, or object literal.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/prefer-promise-reject-errors/"),
     categories: &["typescript"],
 

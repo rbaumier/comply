@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             message: "Use `z.uuid()` instead of `z.string().uuid()` — the \
                       chained form is deprecated in Zod v4."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

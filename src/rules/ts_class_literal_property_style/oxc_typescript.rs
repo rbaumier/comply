@@ -106,7 +106,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Getter `{name}` returns a literal — use a `readonly` field instead."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

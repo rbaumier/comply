@@ -44,7 +44,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "A Vue-reserved key was used in a component's data, computed, methods, or props.",
     remediation: "Rename the key: Vue reserves the `$` prefix (e.g. `$el`, `$emit`) and the `_` \
                   prefix in `data` for internal use.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-vue-reserved-keys/"),
     categories: &["vue"],
 

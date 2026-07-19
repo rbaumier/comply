@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-flashlist-estimated-item-size",
     description: "`<FlashList>` is missing the `estimatedItemSize` prop.",
     remediation: "Add `estimatedItemSize={<px>}` (approximate row height).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

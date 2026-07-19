@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   return value in a Promise, so `return await p` is equivalent \
                   to `return p` but adds a microtask. Keep `return await` only \
                   inside a `try` block, where it affects catch semantics.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["async"],
 

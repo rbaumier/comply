@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-prefer-use-transition",
     description: "Replace manual `loading` state with `useTransition` for concurrent-safe async UI.",
     remediation: "Replace `const [loading, setLoading] = useState(false)` + manual setLoading calls with `const [isPending, startTransition] = useTransition()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

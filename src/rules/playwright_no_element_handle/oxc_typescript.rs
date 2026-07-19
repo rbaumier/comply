@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{label}` returns a deprecated ElementHandle — use `page.locator()` instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

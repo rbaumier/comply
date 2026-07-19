@@ -97,7 +97,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Nested `create` for `{key_text}` without `connect` — children may orphan on rollback. Use `connect: {{ id }}` or split into a `$transaction`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

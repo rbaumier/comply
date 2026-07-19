@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-multiple-entrypoint",
     description: "Only one ENTRYPOINT is honored per build stage; later ones override earlier ones.",
     remediation: "Keep a single ENTRYPOINT per stage.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

@@ -45,7 +45,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`cron({ ... })` is missing `name:` — required for stop()/diagnostics.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

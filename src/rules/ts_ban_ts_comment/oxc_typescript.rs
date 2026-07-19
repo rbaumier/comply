@@ -73,7 +73,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Use `@ts-expect-error` instead of `@ts-ignore`, as `@ts-ignore` will do nothing if the following line is error-free.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             } else if let Some(_rest) = stripped.strip_prefix("@ts-nocheck") {
@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Do not use `@ts-nocheck` because it alters compilation errors.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             } else if let Some(rest) = stripped.strip_prefix("@ts-expect-error") {
@@ -97,7 +97,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: "Include a description after `@ts-expect-error` to explain why it is necessary (at least 3 characters).".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

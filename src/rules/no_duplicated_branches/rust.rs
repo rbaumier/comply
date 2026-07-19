@@ -89,7 +89,7 @@ fn check_if_branches(
                 column: 1,
                 rule_id: "no-duplicated-branches".into(),
                 message: "This branch has the same body as the previous branch \u{2014} merge conditions or remove the duplicate.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

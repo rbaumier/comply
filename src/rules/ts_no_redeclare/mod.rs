@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-redeclare",
     description: "Redeclaring a variable in the same scope shadows the previous declaration silently.",
     remediation: "Remove the duplicate declaration or rename the variable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-redeclare"),
     categories: &["typescript"],
 

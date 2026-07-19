@@ -63,7 +63,7 @@ impl TextCheck for Check {
                 column: 1,
                 rule_id: "vue-checked-requires-onchange".into(),
                 message: "`checked` without `@change` or `v-model` renders a frozen input.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

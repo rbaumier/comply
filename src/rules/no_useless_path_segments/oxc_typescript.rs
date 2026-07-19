@@ -45,7 +45,7 @@ fn make_diag(ctx: &CheckCtx, byte_offset: usize, spec: &str) -> Diagnostic {
         message: format!(
             "Import path '{spec}' contains useless `/../` or `/./` segment. Simplify import path."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     }
 }

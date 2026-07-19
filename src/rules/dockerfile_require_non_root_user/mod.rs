@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-require-non-root-user",
     description: "Production Dockerfile must declare a non-root USER.",
     remediation: "Add `USER <non-root>` (and create the user if needed) before CMD/ENTRYPOINT.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

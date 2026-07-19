@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-unnecessary-array-flat-depth",
     description: "Disallow using `1` as the `depth` argument of `Array#flat()`.",
     remediation: "Remove the argument: `.flat()` defaults to depth 1.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

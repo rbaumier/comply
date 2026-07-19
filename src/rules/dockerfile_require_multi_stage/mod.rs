@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-require-multi-stage",
     description: "Dockerfile must use multi-stage builds (`FROM ... AS <name>`).",
     remediation: "Split into `FROM ... AS build` and a runtime stage that `COPY --from=build` the artefacts.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

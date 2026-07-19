@@ -124,7 +124,7 @@ crate::ast_check! { on ["unit"] => |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             format!("Unexpected unknown unit `{unit}`."),
-            Severity::Warning,
+            Severity::Error,
         ));
         return;
     }
@@ -136,7 +136,7 @@ crate::ast_check! { on ["unit"] => |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             format!("Unexpected unknown unit `{unit}`."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

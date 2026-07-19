@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Playwright locator declared but never used — no action or assertion is called on it.",
     remediation: "Either use the locator (call an action like `.click()`, `.fill()`, or an \
                   assertion like `expect(locator).toBeVisible()`), or remove the declaration.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-unused-locators.md",
     ),

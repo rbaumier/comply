@@ -27,7 +27,7 @@ pub const META: RuleMeta = RuleMeta {
                   guaranteed-safe widening casts (`u8` → `u32`), use \
                   `From::from(x)` / `x.into()` instead — explicit, \
                   documents the conversion is total.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

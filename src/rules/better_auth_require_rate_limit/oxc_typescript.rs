@@ -60,7 +60,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Better Auth config is missing `rateLimit` \u{2014} add `rateLimit: { enabled: true }` to protect auth endpoints.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

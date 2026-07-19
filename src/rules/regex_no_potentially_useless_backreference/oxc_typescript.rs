@@ -97,7 +97,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Backreference may be useless \u{2014} some paths do not go through the referenced group.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

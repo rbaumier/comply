@@ -14,7 +14,7 @@ crate::ast_check! { on ["entrypoint_instruction"] => |node, source, ctx, diagnos
                     column: pos.column + 1,
                     rule_id: super::META.id.into(),
                     message: "Multiple ENTRYPOINT instructions in the same stage; only the last is honored.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((node.byte_range().start, node.byte_range().len())),
                 });
                 return;

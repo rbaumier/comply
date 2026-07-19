@@ -375,7 +375,7 @@ impl OxcCheck for Check {
                       nullish fallback, use `??` so legitimate falsy values pass \
                       through."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

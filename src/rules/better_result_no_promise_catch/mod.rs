@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-no-promise-catch",
     description: "Replace .catch() on Promise with Result.tryPromise() in better-result modules.",
     remediation: "Wrap the promise with Result.tryPromise({ try, catch }) instead of chaining .catch().",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

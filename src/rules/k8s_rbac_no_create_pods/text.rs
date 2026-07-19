@@ -19,7 +19,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &rule_map,
                 super::META.id,
                 "RBAC rule grants `create` on `pods`; this enables privilege escalation.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

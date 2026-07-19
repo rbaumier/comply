@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "In a `z.*`/`.refine` call rename `message` to `error` (e.g. \
                   `z.string({ error: '...' })`); in `ctx.addIssue({ ... })` rename `error` to \
                   `message`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

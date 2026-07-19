@@ -25,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
                   `.unwrap_or(String::new())` / `.unwrap_or_else(|| vec![])` — \
                   whatever the default is for this type, make it visible at \
                   the call site.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

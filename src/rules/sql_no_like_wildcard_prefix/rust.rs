@@ -33,7 +33,7 @@ impl AstCheck for Check {
             "`LIKE '%...'` forces a sequential scan — use TSVECTOR + GIN \
              index with `@@` for full-text search."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

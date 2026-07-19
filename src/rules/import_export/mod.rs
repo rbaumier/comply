@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-export",
     description: "No duplicate export names within a module.",
     remediation: "Remove or rename the duplicate export.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/export.md",
     ),

@@ -30,7 +30,7 @@ pub const META: RuleMeta = RuleMeta {
                   dashboard timeline query filtered by user_id, ordered by created_at DESC`) \
                   explaining which query the index supports. Without this note, nobody \
                   dares drop the index even when the underlying query is gone.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

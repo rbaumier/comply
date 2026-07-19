@@ -53,7 +53,7 @@ impl OxcCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: format!("No default export found in `{}`.", imp.specifier),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

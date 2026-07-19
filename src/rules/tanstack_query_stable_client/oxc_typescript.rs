@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`new QueryClient()` inside a component — hoist to module scope or wrap in `useState(() => new QueryClient())`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

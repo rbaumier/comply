@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-branded-id-types",
     description: "Entity IDs in public API signatures must use branded types, not raw string/number.",
     remediation: "Introduce a branded type such as `type OrderId = string & { readonly __brand: 'OrderId' }` and use it instead of `string`/`number` for ID parameters.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api-design"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-branded-type-no-direct-cast",
     description: "Branded types must be constructed through a validator function, not via a direct `as` cast.",
     remediation: "Route the value through the brand's dedicated validator (e.g. `parseUserId(x)`) which returns the branded type after checking invariants.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

@@ -82,7 +82,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Test-file `QueryClient` must set `defaultOptions.queries.retry: false` to keep tests deterministic.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

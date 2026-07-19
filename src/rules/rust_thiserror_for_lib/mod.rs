@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-thiserror-for-lib",
     description: "Library error types should derive `thiserror::Error` instead of manually implementing `Display`.",
     remediation: "Add `#[derive(thiserror::Error)]` and use `#[error(\"...\")]` attributes on enum variants.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

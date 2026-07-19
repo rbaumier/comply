@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-cd-in-run",
     description: "Use WORKDIR instead of `cd` inside a RUN instruction.",
     remediation: "Replace `RUN cd ...` patterns with a WORKDIR directive.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

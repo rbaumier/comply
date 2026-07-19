@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "halstead-complexity",
     description: "Function Halstead volume/difficulty/effort exceeds threshold.",
     remediation: "Split the function into smaller helpers, reduce operator/operand churn, or extract repeated sub-expressions into named bindings.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://en.wikipedia.org/wiki/Halstead_complexity_measures"),
     categories: &["code-quality"],
 

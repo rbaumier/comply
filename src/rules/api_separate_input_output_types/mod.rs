@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-separate-input-output-types",
     description: "The same type must not serve as both request input and response output.",
     remediation: "Split into separate input (CreateXInput) and output (XResponse) types. Server-managed fields (id, createdAt, updatedAt) belong only in the output shape.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api-design"],
 

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-deprecated-media-type",
     description: "Disallow deprecated `@media` types like `tty`, `tv`, `projection`.",
     remediation: "Use `screen`, `print`, `all`, or remove the media type.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-duplicate-in-composite",
     description: "Duplicate types in a union or intersection are redundant.",
     remediation: "Remove the duplicate type from the composite. `A | A` simplifies to `A`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

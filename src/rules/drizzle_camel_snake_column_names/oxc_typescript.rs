@@ -152,7 +152,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Property `{key_name}` is camelCase but its column name `{col_name}` is not snake_case — pass the snake_case database column name as the first argument."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

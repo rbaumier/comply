@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "next-no-img-element",
     description: "Using `<img>` instead of `next/image` disables image optimization.",
     remediation: "Replace `<img>` with `<Image>` from `next/image` to enable lazy loading and automatic resizing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/messages/no-img-element"),
     categories: &["nextjs", "performance"],
 

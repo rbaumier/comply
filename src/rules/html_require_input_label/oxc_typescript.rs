@@ -170,7 +170,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("<{}> element must have an accessible label.", input.name),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

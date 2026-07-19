@@ -33,7 +33,6 @@ const BYTES_PER_LINE_HINT: usize = 120;
 pub(super) fn write_eslint_line(out: &mut String, d: &Diagnostic) {
     let severity = match d.severity {
         Severity::Error => "error",
-        Severity::Warning => "warning",
     };
     // Writing to a String via fmt::Write is infallible.
     writeln!(
@@ -95,7 +94,6 @@ pub fn format_json(diagnostics: &[Diagnostic]) -> Result<String> {
             message: d.message.as_ref(),
             severity: match d.severity {
                 Severity::Error => "error",
-                Severity::Warning => "warning",
             },
         })
         .collect();
@@ -131,14 +129,8 @@ mod tests {
     }
 
     #[test]
-    fn formats_warning_severity_correctly() {
-        let out = format_eslint(&[diag(Severity::Warning)]);
-        assert_eq!(out, "foo.ts:10:5: warning [no-throw] use Result\n");
-    }
-
-    #[test]
     fn multiple_diagnostics_each_on_own_line() {
-        let out = format_eslint(&[diag(Severity::Error), diag(Severity::Warning)]);
+        let out = format_eslint(&[diag(Severity::Error), diag(Severity::Error)]);
         assert_eq!(out.lines().count(), 2);
     }
 

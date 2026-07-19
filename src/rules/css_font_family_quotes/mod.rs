@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-font-family-quotes",
     description: "Multi-word font names in `font-family` must be quoted.",
     remediation: "Wrap the font name in double quotes (e.g. `\"Times New Roman\"`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-array-reverse",
     description: "`Array#reverse()` mutates the array in place.",
     remediation: "Use `.toReversed()` instead — it returns a new array without mutating the original.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

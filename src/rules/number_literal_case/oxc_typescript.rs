@@ -87,7 +87,7 @@ impl OxcCheck for Check {
                     "Invalid number literal casing: `{}` should be `{}`.",
                     raw, fixed
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

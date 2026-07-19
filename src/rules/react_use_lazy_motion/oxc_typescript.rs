@@ -71,7 +71,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Import `m` with `LazyMotion` instead of `motion` — saves ~30kB in bundle size."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

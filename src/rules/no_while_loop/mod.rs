@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-while-loop",
     description: "Bans convertible while/do-while loops.",
     remediation: "Use recursion, Array methods, or generators instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["functional"],
 

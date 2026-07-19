@@ -63,7 +63,7 @@ impl AstCheck for Check {
                 column: 1,
                 rule_id: "migration-needs-rollback".into(),
                 message: "Migration has `up()` but no `down()` / rollback — every migration must be reversible for quick recovery from bad deploys.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

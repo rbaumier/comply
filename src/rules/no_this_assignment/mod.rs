@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use an arrow function instead of capturing `this` in a \
                   variable. Arrow functions lexically bind `this`, making \
                   the alias unnecessary and removing a common source of bugs.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

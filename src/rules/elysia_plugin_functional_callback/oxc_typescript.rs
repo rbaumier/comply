@@ -73,7 +73,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Functional plugin `(app: Elysia) => ...` loses type inference — return a `new Elysia()` instance instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

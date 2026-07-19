@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Prefer `childNode.remove()` over `parentNode.removeChild(childNode)`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

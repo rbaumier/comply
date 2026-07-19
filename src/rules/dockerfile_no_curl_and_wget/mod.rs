@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-curl-and-wget",
     description: "Dockerfile uses both curl and wget; pick one to reduce image size.",
     remediation: "Use either `curl` or `wget` consistently across the Dockerfile.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

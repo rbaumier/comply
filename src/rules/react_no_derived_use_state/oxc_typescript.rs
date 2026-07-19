@@ -145,7 +145,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`useState` initialized from prop `{arg_name}` — derive during render or use `key` prop to reset."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

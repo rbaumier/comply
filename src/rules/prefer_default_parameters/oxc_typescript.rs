@@ -127,7 +127,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Prefer default parameters over reassignment.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

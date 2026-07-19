@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-octal",
     description: "Octal escapes in regex (`\\1`, `\\12`) are ambiguous — they could be backreferences or octal character codes.",
     remediation: "Use named backreferences (`\\k<name>`) or explicit Unicode escapes (`\\u{...}`) instead of bare octal sequences.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["regex"],
 

@@ -15,7 +15,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                     column: pos.column + 1,
                     rule_id: super::META.id.into(),
                     message: "First non-comment instruction must be FROM (or ARG before FROM).".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((c.byte_range().start, c.byte_range().len())),
                 });
                 return;

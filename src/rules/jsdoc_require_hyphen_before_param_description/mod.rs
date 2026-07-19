@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-hyphen-before-param-description",
     description: "Separate the `@param` name from its description with a hyphen.",
     remediation: "Insert ` - ` between the param name and its description: `@param {string} id - the user id`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-hyphen-before-param-description.md",
     ),

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-control-chars",
     description: "Raw control characters in regex are usually an accidental paste.",
     remediation: "Replace the raw control byte with an explicit escape (e.g. `\\x1b`), or remove it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `node:fs`, `node:path`. The `node:` prefix makes it \
                   unambiguous that the import targets a Node.js builtin, \
                   not a user-land package with the same name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

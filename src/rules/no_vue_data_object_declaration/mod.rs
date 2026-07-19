@@ -43,7 +43,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "A Vue component's `data` option was declared as an object instead of a function.",
     remediation: "Declare `data` as a function returning the object (`data() { return { … } }`) \
                   so each component instance gets its own state.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-vue-data-object-declaration/"),
     categories: &["vue"],
 

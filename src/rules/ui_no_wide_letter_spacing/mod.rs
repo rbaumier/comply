@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Inline `letterSpacing` above 0.05em — hurts readability.",
     remediation: "Keep `letterSpacing` at or below 0.05em for body text. Reserve wider tracking \
                   for short uppercase headings only.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

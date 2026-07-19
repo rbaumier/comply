@@ -66,7 +66,7 @@ impl AstCheck for Check {
             message: "`like(col, '%...')` prevents index usage — use \
                       full-text search instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

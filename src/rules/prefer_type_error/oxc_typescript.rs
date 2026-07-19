@@ -130,7 +130,7 @@ impl OxcCheck for Check {
             message: "`new Error()` is too unspecific for a type check. \
                       Use `new TypeError()` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

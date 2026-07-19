@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `\"use no memo\"` directive to opt that file out of memoization.",
     remediation: "Add a `\"use no memo\"` directive at the top of the file (or the component \
                   body) that calls `useForm`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

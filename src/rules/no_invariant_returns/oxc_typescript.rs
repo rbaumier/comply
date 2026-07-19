@@ -140,7 +140,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Function always returns the same literal value \u{2014} consider using a constant instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

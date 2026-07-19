@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-member-ordering",
     description: "Class and interface members should follow a consistent order: signatures, fields, constructors, methods.",
     remediation: "Re-order members: put signatures first, then fields, then constructors, then methods.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/member-ordering"),
     categories: &["typescript"],
 

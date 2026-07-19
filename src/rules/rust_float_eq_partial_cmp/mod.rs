@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   a domain-specific epsilon for measurements. For ordering \
                   use `a.partial_cmp(&b)`. Float `==` matches bit patterns, \
                   not numerical equality, so `0.1 + 0.2 == 0.3` is false.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "correctness"],
 

@@ -13,7 +13,7 @@ crate::ast_check! { on ["onbuild_instruction"] => |node, source, ctx, diagnostic
                     column: pos.column + 1,
                     rule_id: super::META.id.into(),
                     message: "ONBUILD cannot wrap FROM, ONBUILD, or MAINTAINER.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((node.byte_range().start, node.byte_range().len())),
                 });
                 return;

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-require-button-type",
     description: "`<button>` must have an explicit `type` attribute.",
     remediation: "Add `type=\"button\"`, `type=\"submit\"`, or `type=\"reset\"` to the `<button>` element.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["a11y"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-apk-no-cache",
     description: "Use `apk add --no-cache` instead of `apk add`.",
     remediation: "Add `--no-cache` to `apk add` to avoid leaving the apk index in the layer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

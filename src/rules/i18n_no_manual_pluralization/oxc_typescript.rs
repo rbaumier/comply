@@ -45,7 +45,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Use `t('key', { count })` for pluralization — manual ternaries break CLDR plural rules.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

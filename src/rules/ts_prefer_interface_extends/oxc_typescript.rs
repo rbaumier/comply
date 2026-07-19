@@ -163,7 +163,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Prefer `interface {name} extends ...` over `type {name} = A & B` for object composition."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

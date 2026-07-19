@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Async callback passed to a void-return slot — rejections become unhandled.",
     remediation: "Wrap the callback: `setTimeout(() => { void asyncFn(); }, 100)`. \
                   For `.forEach`, switch to `for ... of` with `await` or `Promise.all(arr.map(async ...))`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "async"],
 

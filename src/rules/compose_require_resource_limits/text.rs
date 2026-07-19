@@ -57,7 +57,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
             message: format!(
                 "Service `{name}` does not declare `deploy.resources.limits.memory`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((key.byte_range().start, key.byte_range().len())),
         });
     }

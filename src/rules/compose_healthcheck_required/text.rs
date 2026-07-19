@@ -52,7 +52,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
                 "Service `{name}` does not declare a `healthcheck:`; \
                  orchestrators can't tell whether it's actually serving."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((key.byte_range().start, key.byte_range().len())),
         });
     }

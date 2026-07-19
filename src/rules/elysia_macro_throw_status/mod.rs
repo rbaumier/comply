@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-macro-throw-status",
     description: "Code uses `throw status(...)` — Elysia macros and resolvers expect `return status(...)`.",
     remediation: "Replace `throw status(...)` with `return status(...)` so Elysia tracks the response type.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

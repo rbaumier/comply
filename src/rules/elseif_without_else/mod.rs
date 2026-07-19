@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elseif-without-else",
     description: "`if/else if` chain without a final `else` clause.",
     remediation: "Add a final `else` block to handle all remaining cases explicitly, even if it's just a comment or unreachable assertion.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

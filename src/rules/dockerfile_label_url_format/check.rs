@@ -63,7 +63,7 @@ crate::ast_check! { on ["label_pair"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "URL-typed LABEL value must start with `http://` or `https://`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

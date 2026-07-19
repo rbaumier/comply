@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `isFinite(value)` with `Number.isFinite(value)`. The global `isFinite` \
                   coerces its argument to a number first, so `isFinite('')` is `true`; \
                   `Number.isFinite` does not coerce and is unambiguous.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["suspicious"],
 

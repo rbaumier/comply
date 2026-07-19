@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-component-pascal-case",
     description: "User-defined components in Vue templates must use PascalCase.",
     remediation: "Rename the component tag to PascalCase (e.g. `<MyComponent>`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

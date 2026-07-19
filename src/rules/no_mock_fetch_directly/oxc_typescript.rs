@@ -70,7 +70,7 @@ impl OxcCheck for Check {
                             "Direct mock of `{module}` via `{framework}.mock` — \
                              use MSW to intercept at the network level instead."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -103,7 +103,7 @@ impl OxcCheck for Check {
                         "Reassigning `{left_text}` with `{mock_fn}` — \
                          use MSW to intercept at the network level instead."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

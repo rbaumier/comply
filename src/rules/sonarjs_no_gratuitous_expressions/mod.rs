@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sonarjs-no-gratuitous-expressions",
     description: "Boolean expression that always evaluates to the same value — dead branch or buggy condition.",
     remediation: "Remove the constant branch, or fix the condition to actually depend on a runtime value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/SonarSource/eslint-plugin-sonarjs/blob/master/docs/rules/no-gratuitous-expressions.md"),
     categories: &["code-quality"],
 

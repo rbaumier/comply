@@ -42,7 +42,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Extract the repeated string into a named constant and \
                   reference it everywhere. Reduces typo risk and makes \
                   future changes a single-line edit.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 
@@ -149,7 +149,7 @@ pub(super) fn collect_diagnostics(
                     "String `\"{content}\"` appears {count} times — extract to a constant.",
                     count = nodes.len()
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

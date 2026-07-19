@@ -79,7 +79,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Add `path: ['fieldName']` to `.refine()` options so form errors attach to the correct field.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

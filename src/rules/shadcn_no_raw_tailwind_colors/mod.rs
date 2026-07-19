@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-no-raw-tailwind-colors",
     description: "Raw Tailwind color utilities break shadcn theming — use semantic tokens instead.",
     remediation: "Replace `bg-blue-500`/`text-gray-600` with `bg-primary`/`text-muted-foreground` and the theme variables they resolve to.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn", "tailwind"],
 

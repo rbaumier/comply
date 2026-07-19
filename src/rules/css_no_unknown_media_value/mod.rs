@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-unknown-media-value",
     description: "Disallow unknown values for `prefers-color-scheme` and `orientation`.",
     remediation: "Use a valid value (e.g. `light`, `dark`, `portrait`, `landscape`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

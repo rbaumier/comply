@@ -51,7 +51,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "`<Image source=\"...\">` with a string literal renders nothing — use `{{ uri: '...' }}` or `require(...)`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

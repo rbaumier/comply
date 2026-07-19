@@ -42,7 +42,7 @@ impl OxcCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "Test boots a real server with `.listen()` and uses `fetch()` — prefer `app.handle(new Request(...))`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

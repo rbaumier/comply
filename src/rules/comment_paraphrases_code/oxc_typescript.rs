@@ -123,7 +123,7 @@ impl OxcCheck for Check {
                      explain WHY (what breaks if this is deleted?), not WHAT — or delete \
                      the comment if no consequence comes to mind."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

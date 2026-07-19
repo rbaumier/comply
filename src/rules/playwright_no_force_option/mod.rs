@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   element is not actionable, fix the underlying page state \
                   instead of bypassing the check — forcing clicks masks \
                   real accessibility and timing bugs.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

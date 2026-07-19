@@ -57,7 +57,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: "Parameter property not allowed on TaggedError constructor — assign via super({ ...args, message }).".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

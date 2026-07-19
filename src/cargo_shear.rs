@@ -149,10 +149,7 @@ fn convert_findings(findings: Vec<Finding>, workspace: &Path) -> Result<Vec<Diag
                  (or run `cargo shear --fix`).",
                 finding.message
             ),
-            severity: match finding.severity.as_str() {
-                "error" => Severity::Error,
-                _ => Severity::Warning,
-            },
+            severity: Severity::Error,
             span: None,
         });
     }
@@ -191,7 +188,6 @@ struct ShearReport {
 #[derive(Debug, Deserialize)]
 struct Finding {
     code: String,
-    severity: String,
     message: String,
     /// Optional — `shear/unlinked_files` findings have no file field.
     /// We skip those upstream so the absence is fine.

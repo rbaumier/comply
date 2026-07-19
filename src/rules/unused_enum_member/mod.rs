@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "unused-enum-member",
     description: "Enum member is declared but never referenced in this file.",
     remediation: "Remove the unused member, or reference it where the enum is consumed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["clean-code"],
 

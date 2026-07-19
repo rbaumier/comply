@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-mocks-import",
     description: "Do not import directly from a `__mocks__` directory.",
     remediation: "Let Jest/Vitest auto-resolve mocks, don't import from __mocks__ directly",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

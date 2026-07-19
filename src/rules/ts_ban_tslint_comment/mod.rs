@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-ban-tslint-comment",
     description: "TSLint comments are obsolete — the project has been deprecated in favour of ESLint.",
     remediation: "Remove the `tslint:` comment directive.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/ban-tslint-comment/"),
     categories: &["typescript"],
 

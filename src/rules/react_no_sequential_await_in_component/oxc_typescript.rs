@@ -86,7 +86,7 @@ fn flush_run(
                           serialises fetches. Combine independent awaits with \
                           `Promise.all([...])` to parallelise them."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

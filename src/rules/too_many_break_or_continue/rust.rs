@@ -56,7 +56,7 @@ crate::ast_check! { on ["for_expression", "while_expression", "loop_expression"]
             message: format!(
                 "Loop contains {bc_count} `break`/`continue` statements \u{2014} consider refactoring."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

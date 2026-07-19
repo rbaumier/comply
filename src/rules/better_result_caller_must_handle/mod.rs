@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-caller-must-handle",
     description: "Returned Results must be handled — do not ignore them.",
     remediation: "Assign, match, map, unwrap, or yield* the returned Result.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

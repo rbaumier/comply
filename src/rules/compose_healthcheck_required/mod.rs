@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
                   ships its own `HEALTHCHECK` and you really want to inherit \
                   it, add `healthcheck: { disable: false }` (or any explicit \
                   block) to opt in.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker", "docker-compose"],
 

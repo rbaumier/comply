@@ -117,7 +117,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "`<Avatar>` is missing `<AvatarFallback>` \u{2014} add one so broken images still render gracefully.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

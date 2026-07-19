@@ -33,7 +33,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             column: pos.column + 1,
             rule_id: "arguments-order".into(),
             message: "Arguments appear to be in the wrong order.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

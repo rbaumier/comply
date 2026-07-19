@@ -66,7 +66,7 @@ crate::ast_check! { on ["source_file"] prefilter = ["curl", "wget"] => |node, so
             column: pos.column + 1,
             rule_id: super::META.id.into(),
             message: "Dockerfile uses both curl and wget; pick one to reduce image size.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((second.byte_range().start, second.byte_range().len())),
         });
     }

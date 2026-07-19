@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   and no `content-visibility: auto` hint paints every off-screen item.",
     remediation: "Wrap the list in a virtualizer (`react-window`, `react-virtuoso`) \
                   or set `style={{ contentVisibility: 'auto' }}` on each row.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react", "web-performance"],
 

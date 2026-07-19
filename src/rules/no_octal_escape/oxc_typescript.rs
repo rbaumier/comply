@@ -64,7 +64,7 @@ impl OxcCheck for Check {
                 message: "Don't use deprecated octal escape sequences. Use a hexadecimal \
                           (`\\xA9`) or unicode (`\\u00A9`) escape instead."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

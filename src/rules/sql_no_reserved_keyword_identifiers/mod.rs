@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-reserved-keyword-identifiers",
     description: "PostgreSQL reserved words must not be used as table or column names.",
     remediation: "Rename identifiers like `user`, `order`, `group`, `table` — otherwise every reference requires double-quoting, which leaks into ORMs and breaks silently.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

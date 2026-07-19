@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-truncate-in-app",
     description: "`TRUNCATE` bypasses triggers, FK checks, and row-level audit.",
     remediation: "Use `DELETE FROM table` so triggers, FK cascades and audit logs fire. `TRUNCATE` belongs to ops-only maintenance scripts, not application queries.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

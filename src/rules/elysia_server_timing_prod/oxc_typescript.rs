@@ -70,7 +70,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`serverTiming({ enabled: true })` is unconditional — gate it on an env flag."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

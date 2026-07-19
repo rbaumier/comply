@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Rewrite the comment to explain WHY the code exists, not WHAT it does. \
                   Name the consequence: what breaks if this line is deleted? If you \
                   can't name a consequence, delete the comment instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["comments"],
 

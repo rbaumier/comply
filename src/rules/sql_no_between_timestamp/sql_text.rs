@@ -27,7 +27,7 @@ impl TextCheck for Check {
                 message: "`BETWEEN` with timestamps is inclusive on both \
                           sides — use `>= start AND < end` instead."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

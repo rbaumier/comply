@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-duplicate-properties",
     description: "Disallow duplicated property declarations within the same block.",
     remediation: "Remove the redundant declaration; consecutive duplicates for fallbacks are allowed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

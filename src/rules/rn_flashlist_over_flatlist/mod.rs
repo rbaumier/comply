@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-flashlist-over-flatlist",
     description: "Importing `FlatList` from `react-native` is discouraged; use FlashList.",
     remediation: "Import `FlashList` from `@shopify/flash-list`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

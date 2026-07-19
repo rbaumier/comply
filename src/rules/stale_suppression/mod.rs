@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Delete the suppression comment. If the underlying violation has come \
                   back, the rule will re-fire on its own and you can decide whether to \
                   re-add the suppression with a fresh justification.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["comments", "suppressions"],
 

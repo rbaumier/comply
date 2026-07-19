@@ -43,7 +43,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`server!` non-null assertion is unsafe — `app.server` is undefined until `.listen()` resolves.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

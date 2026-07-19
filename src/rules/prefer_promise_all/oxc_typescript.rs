@@ -71,7 +71,7 @@ fn flush_run(run: &mut Vec<AwaitStmt>, diagnostics: &mut Vec<Diagnostic>, ctx: &
                 column,
                 rule_id: super::META.id.into(),
                 message: "Sequential `await` on independent results — use `Promise.all()` to run them in parallel.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

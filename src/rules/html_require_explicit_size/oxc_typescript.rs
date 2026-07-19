@@ -93,7 +93,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("`<{tag_text}>` is missing {missing} — causes layout shift."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

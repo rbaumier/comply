@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-eden-error-unchecked",
     description: "Eden treaty calls return `{ data, error }` — destructuring only `data` swallows the error path.",
     remediation: "Destructure both `{ data, error }` and check `error` before consuming `data`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-redundant-optional",
     description: "`prop?: Type | undefined` — the `?` already implies `| undefined` (unless tsconfig sets `exactOptionalPropertyTypes`).",
     remediation: "Remove `| undefined` from the type, or remove the `?` from the property name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

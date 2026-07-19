@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-array-index-of",
     description: "Prefer `.indexOf(val)` over `.findIndex(x => x === val)`.",
     remediation: "Replace `.findIndex(x => x === val)` with `.indexOf(val)` for simple equality checks.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

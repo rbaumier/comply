@@ -50,7 +50,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "PUT handler accepts `Partial<...>` — use `.patch(...)` for partial updates so clients keep idempotency guarantees for PUT.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

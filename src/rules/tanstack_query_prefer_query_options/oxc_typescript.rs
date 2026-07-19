@@ -50,7 +50,7 @@ impl OxcCheck for Check {
                                     column,
                                     rule_id: super::META.id.into(),
                                     message: "Extract inline `useQuery` options to a `queryOptions()` factory for reuse and type-safety.".into(),
-                                    severity: Severity::Warning,
+                                    severity: Severity::Error,
                                     span: None,
                                 });
                             }

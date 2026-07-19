@@ -31,7 +31,7 @@ impl TextCheck for Check {
                         "Static element `<{}>` has `@click` without a `role` attribute.",
                         elem.tag
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

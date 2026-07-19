@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Adjacent inline elements without whitespace between them.",
     remediation: "Add a space, `{' '}`, or a wrapper between adjacent inline \
                   elements to ensure they render with visible separation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-adjacent-inline-elements.md",
     ),

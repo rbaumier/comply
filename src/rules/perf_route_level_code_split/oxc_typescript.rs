@@ -130,7 +130,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Static import of route module '{spec}' — wrap it in `React.lazy(() => import('{spec}'))` so the route bundle is split."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

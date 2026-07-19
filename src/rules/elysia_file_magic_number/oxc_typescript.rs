@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`z.file()` only checks the MIME header — verify the magic number with `fileType()`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

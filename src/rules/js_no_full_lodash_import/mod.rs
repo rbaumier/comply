@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Importing from `lodash` pulls the entire library — use a subpath like `lodash/map` or `lodash-es`.",
     remediation: "Replace `import _ from 'lodash'` / `import { map } from 'lodash'` with \
                   `import map from 'lodash/map'` or switch to `lodash-es` (which tree-shakes).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["bundle-size"],
 

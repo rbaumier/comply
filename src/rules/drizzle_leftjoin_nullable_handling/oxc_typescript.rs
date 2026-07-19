@@ -126,7 +126,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.leftJoin(...)` produces nullable joined columns — handle `null` (filter, `??`, or `isNotNull`) before reading the joined fields.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

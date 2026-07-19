@@ -74,7 +74,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Inline function used as `{key_name}` — define it as a named action/guard/service instead."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

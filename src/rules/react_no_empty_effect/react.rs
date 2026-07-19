@@ -46,7 +46,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: "react-no-empty-effect".into(),
         message: "`useEffect` has an empty body — remove it or add effect logic.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -398,7 +398,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
                     files[canonical.file_idx].path.display(),
                     canonical.line,
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: Some(entry.span),
             });
         }

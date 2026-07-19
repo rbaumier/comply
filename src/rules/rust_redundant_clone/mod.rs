@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Move the value instead of cloning it, or borrow it if the \
                   caller still needs access. Clones allocate and copy — \
                   they're never free. Enable `clippy::redundant_clone`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 
@@ -44,7 +44,7 @@ mod tests {
         assert_clippy_rule(
             register(),
             "rust-redundant-clone",
-            Severity::Warning,
+            Severity::Error,
             &["clippy::redundant_clone"],
         );
     }

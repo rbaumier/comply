@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use `{/* comment */}` for JSX comments, not `// comment` or \
                   `/* comment */` as bare text. Without braces, the comment \
                   syntax is rendered as visible text in the DOM.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

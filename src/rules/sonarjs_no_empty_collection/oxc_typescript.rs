@@ -119,7 +119,7 @@ impl OxcCheck for Check {
                             obj.name.as_str(),
                             method
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -138,7 +138,7 @@ impl OxcCheck for Check {
                             "`{}` is provably empty — this `for...of` loop never executes.",
                             obj.name.as_str()
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

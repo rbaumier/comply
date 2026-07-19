@@ -113,7 +113,7 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         format!("`{text}` without justification — add a `//` comment explaining why."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

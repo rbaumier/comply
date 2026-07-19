@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-sensitive-host-mounts",
     description: "Pod mounts a sensitive host path (e.g. /, /etc, /proc); container can compromise the node.",
     remediation: "Avoid mounting system paths from the host; use a dedicated data volume instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

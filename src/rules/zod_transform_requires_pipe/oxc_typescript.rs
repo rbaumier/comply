@@ -216,7 +216,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.transform()` output is not re-validated — chain `.pipe(z.*)` to assert the output schema.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -25,7 +25,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             column: 1,
             rule_id: super::META.id.into(),
             message: "Dockerfile missing HEALTHCHECK — orchestrators can't detect stuck containers.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

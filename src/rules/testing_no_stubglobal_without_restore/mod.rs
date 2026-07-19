@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-no-stubglobal-without-restore",
     description: "stubGlobal/stubEnv without unstubAllGlobals/unstubAllEnvs leaks mocked globals into sibling tests.",
     remediation: "Call vi.unstubAllGlobals() (or vi.unstubAllEnvs()) in afterEach/afterAll — or enable unstubGlobals/unstubEnvs in the Vitest config.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://vitest.dev/api/vi.html#vi-unstuballglobals"),
     categories: &["testing"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-no-webpack-loader-syntax",
     description: "Webpack loader syntax in imports is forbidden.",
     remediation: "Do not use `!` import syntax to configure webpack loaders. Use webpack config instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-webpack-loader-syntax.md",
     ),

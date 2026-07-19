@@ -58,7 +58,7 @@ crate::ast_check! { on ["integer_literal"] => |node, source, ctx, diagnostics|
                 "Invalid number literal casing: `{}` should be `{}`.",
                 raw, fixed
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

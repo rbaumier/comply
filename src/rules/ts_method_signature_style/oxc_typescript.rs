@@ -70,7 +70,7 @@ fn report_method_signatures<'a>(
                 "Shorthand method signature `{name}(...)` is less safe — \
                  use a property signature: `{name}: (...) => ReturnType`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-leaked-interval",
     description: "`setInterval` in `useEffect` without `clearInterval` cleanup keeps firing after unmount.",
     remediation: "Capture the interval id and return a cleanup that calls `clearInterval(id)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

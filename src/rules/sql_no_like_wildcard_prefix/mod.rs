@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-like-wildcard-prefix",
     description: "`LIKE '%...'` prevents index usage — use full-text search instead.",
     remediation: "Replace `LIKE '%term%'` with a TSVECTOR + GIN index and `@@` operator. Leading wildcards force a sequential scan on every row.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

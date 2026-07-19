@@ -91,7 +91,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "array literal as value of JSX prop `{attr_name}` creates a new reference every render — extract to a constant or use `useMemo`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

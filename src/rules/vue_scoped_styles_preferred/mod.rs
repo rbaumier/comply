@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-scoped-styles-preferred",
     description: "`<style>` without `scoped` leaks selectors globally.",
     remediation: "Add `scoped` to the `<style>` tag unless the styles are intentionally global.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

@@ -102,7 +102,7 @@ impl OxcCheck for Check {
                     message: "`setState` inside a high-frequency event listener (mousemove/scroll/...) — \
                              use `useRef` for the transient value and only commit a render when needed."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -139,7 +139,7 @@ impl OxcCheck for Check {
                         message: "`setState` inside a high-frequency JSX handler (onMouseMove/onScroll/...) — \
                                  use `useRef` for the transient value and only commit a render when needed."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;

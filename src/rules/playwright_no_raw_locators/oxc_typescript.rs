@@ -108,7 +108,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "playwright-no-raw-locators".into(),
             message: "Raw CSS selector in `.locator()` — prefer `getByRole`, `getByText`, or other semantic locators.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

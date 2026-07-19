@@ -88,7 +88,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Prefer `RegExp#test()` over `String#match()` in boolean contexts.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

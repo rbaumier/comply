@@ -8,7 +8,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "god-object-field-count",
     description: "Struct has too many fields — consider decomposing.",
     remediation: "Group related fields into sub-structs to reduce complexity.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

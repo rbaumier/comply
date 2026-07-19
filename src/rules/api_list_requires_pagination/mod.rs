@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-list-requires-pagination",
     description: "List endpoints must support pagination to prevent unbounded result sets.",
     remediation: "Add `limit`/`cursor` or `page`/`pageSize` parameters to the handler.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api"],
 

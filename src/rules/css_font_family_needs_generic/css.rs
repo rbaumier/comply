@@ -67,7 +67,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             "Font stack should end with a generic family (e.g. `sans-serif`).".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
         return;
     }
@@ -78,7 +78,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             format!("Font stack ends with `{last}`; add a generic family fallback."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

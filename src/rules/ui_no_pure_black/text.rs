@@ -14,7 +14,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
         message: format!(
             "Pure black (`{label}`) is visually harsh — use a near-black like `#0a0a0a` instead."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((offender.byte_range().start, offender.byte_range().len())),
     });
 }

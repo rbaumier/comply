@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "avoid-re-export-all",
     description: "`export * from '...'` re-exports hide the module's public surface and break tree-shaking.",
     remediation: "Use named exports instead of re-exporting all",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports"],
 

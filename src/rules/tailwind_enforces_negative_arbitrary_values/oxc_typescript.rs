@@ -46,7 +46,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Move the minus inside the brackets (e.g. `top-[-1px]` instead of `-top-[1px]`).".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

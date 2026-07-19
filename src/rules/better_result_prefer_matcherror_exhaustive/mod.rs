@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-prefer-matcherror-exhaustive",
     description: "Prefer matchError over matchErrorPartial when the union is fully enumerable.",
     remediation: "Use matchError({ ... }) for exhaustive matching on the error union.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

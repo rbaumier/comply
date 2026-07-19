@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "require-array-join-separator",
     description: "Enforce using the separator argument with `Array#join()`.",
     remediation: "Pass an explicit separator: `arr.join(',')`. The default is `','` but relying on it harms readability.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

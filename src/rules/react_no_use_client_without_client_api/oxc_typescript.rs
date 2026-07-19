@@ -332,7 +332,7 @@ impl OxcCheck for Check {
             message: "`\"use client\"` directive with no hooks, event handlers, or browser APIs — \
                      remove the directive or justify it with client-only behavior."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

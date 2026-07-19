@@ -72,7 +72,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
                 &inner,
                 super::META.id,
                 "Server Action with mutations must verify authentication before proceeding.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

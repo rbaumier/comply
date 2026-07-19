@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`is_deleted BOOLEAN` loses the deletion time — use `deleted_at TIMESTAMPTZ NULL` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

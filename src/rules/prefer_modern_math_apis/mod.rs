@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   `Math.log(x) * Math.LOG2E` with `Math.log2(x)`, \
                   `Math.log(x) / Math.LN10` with `Math.log10(x)`, \
                   `Math.log(x) * Math.LOG10E` with `Math.log10(x)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

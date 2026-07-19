@@ -55,7 +55,7 @@ impl AstCheck for Check {
             message: "UUIDv4 primary key fragments B-tree indexes — use \
                       UUIDv7 or `BIGINT GENERATED ALWAYS AS IDENTITY`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

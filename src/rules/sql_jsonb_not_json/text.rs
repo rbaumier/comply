@@ -36,7 +36,7 @@ impl TextCheck for Check {
                 message:
                     "`JSON` re-parses on every read. Use `JSONB` for indexable, binary storage."
                         .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

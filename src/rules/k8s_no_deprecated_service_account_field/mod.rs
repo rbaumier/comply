@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-deprecated-service-account-field",
     description: "Pod spec uses the deprecated `serviceAccount` field; use `serviceAccountName`.",
     remediation: "Rename `serviceAccount` to `serviceAccountName` in the pod spec.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
                   `[data-testid=...]` → `getByTestId()`. \
                   Built-in locators are more readable and provide better \
                   error messages.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

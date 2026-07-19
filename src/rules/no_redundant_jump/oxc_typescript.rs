@@ -63,7 +63,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Redundant `{keyword}` \u{2014} execution already falls through here."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

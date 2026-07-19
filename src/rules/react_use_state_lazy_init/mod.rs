@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   `useState(() => expensive())`. Passing a function means \
                   React only calls it once on mount. Bare expressions run \
                   every render and crash in SSR for browser APIs.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "react"],
 

@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   widening, or `u64::try_from(x)?` for fallible narrowing. \
                   The goal is to make every integer conversion explicit and \
                   searchable — `as` hides the intent.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

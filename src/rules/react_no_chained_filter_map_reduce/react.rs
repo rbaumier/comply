@@ -94,7 +94,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             "{len} chained `.filter`/`.map`/`.reduce` calls — collapse into a \
              single pass to avoid intermediate arrays."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

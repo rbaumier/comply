@@ -195,7 +195,7 @@ impl TextCheck for Check {
                     "Import `{spec}` references an npm package not declared in package.json. \
                      Add it to dependencies or devDependencies."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

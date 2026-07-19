@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-yarn-cache-clean",
     description: "`yarn install` must be paired with `yarn cache clean` to shrink the layer.",
     remediation: "Append `&& yarn cache clean` to the same RUN instruction.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

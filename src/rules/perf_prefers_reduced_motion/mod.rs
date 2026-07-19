@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "perf-prefers-reduced-motion",
     description: "CSS with animations or `@keyframes` must guard them with a `prefers-reduced-motion: reduce` media query.",
     remediation: "Add `@media (prefers-reduced-motion: reduce) { ... }` that disables or shortens animations.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["web-performance", "a11y"],
 

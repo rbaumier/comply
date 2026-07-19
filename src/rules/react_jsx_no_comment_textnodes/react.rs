@@ -24,7 +24,7 @@ crate::ast_check! { on ["jsx_text"] => |node, source, ctx, diagnostics|
         message: "Comment as JSX text child will be rendered as \
                   visible text. Use `{/* comment */}` instead."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -73,7 +73,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "The `end` argument is unnecessary \u{2014} `.slice(start)` already goes to the end.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -139,7 +139,7 @@ impl OxcCheck for Check {
                       error-prone — parse it with a schema validator (zod, valibot, …) \
                       instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

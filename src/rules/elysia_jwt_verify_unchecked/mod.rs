@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-jwt-verify-unchecked",
     description: "`jwt.verify(...)` result is used without checking for failure (returns falsy when invalid).",
     remediation: "Check the result: `const payload = await jwt.verify(...); if (!payload) return status(401);`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

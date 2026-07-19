@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add an `@example` block under the description showing a real \
                   call AND its return value: `@example\\n  const r = foo(42);\\n  // => 'forty-two'`. \
                   Examples are the fastest way for callers to understand the API.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "jsdoc"],
 

@@ -17,7 +17,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &pair,
             super::META.id,
             format!("apiVersion `{value}` is deprecated and removed; migrate to a stable group/version."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

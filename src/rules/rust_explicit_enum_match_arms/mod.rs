@@ -81,7 +81,7 @@ pub const META: RuleMeta = RuleMeta {
                   (`Foo::A | Foo::B => …`). The compile error on enum expansion \
                   is the whole point: it forces you to consciously handle each \
                   new case.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

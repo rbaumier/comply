@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-slow-pattern",
     description: "Regex has nested quantifiers that can cause catastrophic backtracking (ReDoS).",
     remediation: "Refactor to avoid nested quantifiers like `(a+)+`, `(a*)*`, `(a+)*`, `(.*)*`. Use atomic groups, possessive quantifiers, or restructure the pattern.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "regex"],
 

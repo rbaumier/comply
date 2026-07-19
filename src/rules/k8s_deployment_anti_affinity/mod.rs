@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-deployment-anti-affinity",
     description: "Deployments with replicas > 1 must declare `spec.template.spec.affinity.podAntiAffinity`.",
     remediation: "Add a podAntiAffinity (preferred or required) so replicas are spread across nodes/zones.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

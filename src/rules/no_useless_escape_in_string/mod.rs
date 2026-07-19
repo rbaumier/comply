@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the backslash: escaping a character that has no special meaning in this \
                   string context has no effect and may confuse a reader. Only the enclosing quote \
                   and special characters need to be escaped.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["suspicious"],
 

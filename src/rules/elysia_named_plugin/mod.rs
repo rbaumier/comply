@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-named-plugin",
     description: "Exported Elysia plugin instance has no `name` — deduplication and tracing degrade.",
     remediation: "Pass `new Elysia({ name: 'plugin-name' })` for plugins. Named plugins are deduplicated and surface in error traces.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance", "elysia"],
 

@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Sequential `db.insert`/`db.update`/`db.delete` calls in the same scope — wrap them in `db.transaction(async (tx) => { ... })` so partial failures roll back.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

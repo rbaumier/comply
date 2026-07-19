@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   vectorize the loop body and eliminate bounds checks. \
                   Enable `clippy::needless_range_loop` and \
                   `clippy::explicit_iter_loop`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 
@@ -54,7 +54,7 @@ mod tests {
         assert_clippy_rule(
             register(),
             "rust-explicit-iter-loop",
-            Severity::Warning,
+            Severity::Error,
             &["clippy::explicit_iter_loop", "clippy::needless_range_loop"],
         );
     }

@@ -62,7 +62,7 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
                       cursor-based pagination: \
                       `WHERE id > :last_id ORDER BY id LIMIT N`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

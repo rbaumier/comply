@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Filter / page / sort state belongs in the URL, not in `useState`.",
     remediation: "Use TanStack Router's `Route.useSearch()` and `navigate({ search })` so \
                   the state survives reloads and is shareable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

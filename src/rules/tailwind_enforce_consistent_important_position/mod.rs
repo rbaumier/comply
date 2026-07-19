@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-enforce-consistent-important-position",
     description: "Mixing `!class` and `class!` for the !important variant is inconsistent and harder to grep for.",
     remediation: "Pick the prefix form (`!text-red-500`) — it's the documented Tailwind v4 syntax — and use it everywhere.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

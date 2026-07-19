@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   rejections become unhandled. Use `for (const x of arr)` with \
                   `await` inside, or `Promise.all(arr.map(async ...))` when you \
                   want parallel + awaited.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["async"],
 

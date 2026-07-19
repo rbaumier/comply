@@ -275,7 +275,7 @@ fn check_expr_for_setter(
                                 "`{setter_name}` called with an expression referencing `{state_name}` — \
                                  use the functional updater: `{setter_name}(prev => ...)`."
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

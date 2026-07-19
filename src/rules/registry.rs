@@ -56,7 +56,7 @@ macro_rules! register_rust_only {
 ///         &node,
 ///         "no-throw-literal",
 ///         "throw an Error instance, not a literal".into(),
-///         Severity::Warning,
+///         Severity::Error,
 ///     ));
 /// }
 /// ```

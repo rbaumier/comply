@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-prefer-once-lock",
     description: "`lazy_static!` and `once_cell` are superseded by `std::sync::OnceLock`/`LazyLock` (Rust 1.70+).",
     remediation: "Replace `lazy_static! { static ref X: T = ... }` with `static X: LazyLock<T> = LazyLock::new(|| ...);`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

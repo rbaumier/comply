@@ -92,7 +92,6 @@ fn collect_plugins(rules: &[RuleEntry<'_>]) -> Vec<String> {
 fn severity_str(severity: Severity) -> &'static str {
     match severity {
         Severity::Error => "error",
-        Severity::Warning => "warn",
     }
 }
 
@@ -115,14 +114,13 @@ mod tests {
     #[test]
     fn severity_maps_to_oxlint_strings() {
         assert_eq!(severity_str(Severity::Error), "error");
-        assert_eq!(severity_str(Severity::Warning), "warn");
     }
 
     #[test]
     fn build_config_emits_rules_and_plugins() {
         let rules: [RuleEntry; 2] = [
             ("typescript/no-explicit-any", Severity::Error, None),
-            ("eqeqeq", Severity::Warning, None),
+            ("eqeqeq", Severity::Error, None),
         ];
         let config = build_config_json(&rules);
         assert_eq!(config["plugins"], json!(["typescript"]));
@@ -130,7 +128,7 @@ mod tests {
             config["rules"]["typescript/no-explicit-any"],
             json!("error")
         );
-        assert_eq!(config["rules"]["eqeqeq"], json!("warn"));
+        assert_eq!(config["rules"]["eqeqeq"], json!("error"));
     }
 
     #[test]

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   delays the response for every request.",
     remediation: "Fire-and-forget the telemetry call (drop the `await`) or schedule it \
                   via `after()` / `waitUntil()` so the response ships first.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

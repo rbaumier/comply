@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsx-filename-extension",
     description: "JSX syntax must live in `.jsx` or `.tsx` files.",
     remediation: "Rename the file to `.jsx` or `.tsx`, or move the JSX out.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-filename-extension.md",
     ),

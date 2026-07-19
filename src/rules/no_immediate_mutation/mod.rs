@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `const arr = [3,1,2].sort()` instead of declaring then \
                   mutating on the next line. This makes the intent clearer \
                   and avoids an intermediate mutable state.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-put-vs-patch",
     description: "PUT handlers with Partial<> payloads should use PATCH instead.",
     remediation: "If the handler accepts fields-provided-only semantics, register it with `.patch(...)`. Keep `.put(...)` for full-resource replacement.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api-design"],
 

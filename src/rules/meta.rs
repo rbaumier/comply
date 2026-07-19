@@ -81,7 +81,7 @@ mod tests {
             id: "test-rule",
             description: "",
             remediation: "",
-            severity: crate::diagnostic::Severity::Warning,
+            severity: crate::diagnostic::Severity::Error,
             doc_url: None,
             categories: &[],
             skip_in_test_dir,

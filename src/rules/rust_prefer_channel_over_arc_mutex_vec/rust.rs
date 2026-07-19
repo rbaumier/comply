@@ -26,7 +26,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "Use `mpsc::channel` instead of `Arc<Mutex<Vec>>` to collect results from concurrent tasks.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

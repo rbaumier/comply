@@ -96,7 +96,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`<img>` with `fetchpriority=\"high\"` must not also set `loading=\"lazy\"` \u{2014} they contradict each other.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -118,7 +118,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Hero-sized `<img>` should declare `fetchpriority=\"high\"` so the browser starts fetching it early.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

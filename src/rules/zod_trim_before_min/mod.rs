@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-trim-before-min",
     description: "`z.string().min(1)` without `.trim()` allows strings of only whitespace.",
     remediation: "Add `.trim()` before `.min(1)`: `z.string().trim().min(1)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

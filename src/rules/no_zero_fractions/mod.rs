@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-zero-fractions",
     description: "Disallow number literals with zero fractions or dangling dots.",
     remediation: "Remove the unnecessary `.0` fraction — write `1` instead of `1.0`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

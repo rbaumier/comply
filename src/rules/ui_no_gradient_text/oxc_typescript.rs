@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Gradient text via `backgroundClip: 'text'` is often inaccessible — use a solid color.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

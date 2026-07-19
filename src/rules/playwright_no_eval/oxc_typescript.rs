@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{prop_name}` runs arbitrary code against the DOM — prefer `locator()` + web-first assertions."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -79,7 +79,7 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
         &node,
         super::META.id,
         format!("Replace manual `{setter}(true/false)` loading state with `useTransition`."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

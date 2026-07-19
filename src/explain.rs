@@ -34,7 +34,6 @@ fn find_rule<'a>(rules: &'a [rules::RuleDef], rule_id: &str) -> Option<&'a RuleM
 fn format_meta(meta: &RuleMeta) -> String {
     let severity = match meta.severity {
         Severity::Error => "error",
-        Severity::Warning => "warning",
     };
     let mut out = format!("[{}] ({severity})\n\n", meta.id);
     out.push_str("Description:\n");
@@ -96,7 +95,7 @@ mod tests {
             id: "test-rule",
             description: "A test rule.",
             remediation: "Fix the test.",
-            severity: Severity::Warning,
+            severity: Severity::Error,
             doc_url: None,
             categories: &[],
             skip_in_test_dir: false,
@@ -104,7 +103,7 @@ mod tests {
         };
         let out = format_meta(&meta);
         assert!(out.contains("[test-rule]"));
-        assert!(out.contains("warning"));
+        assert!(out.contains("error"));
         assert!(out.contains("A test rule."));
         assert!(out.contains("Fix the test."));
     }

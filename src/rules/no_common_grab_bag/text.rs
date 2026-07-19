@@ -37,7 +37,7 @@ impl TextCheck for Check {
                  describes what this module actually owns. `common`/`utils`/\
                  `helpers`/`shared`/`misc` magnetize unrelated code."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

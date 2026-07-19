@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use the full word: `usr` → `user`, `btn` → `button`. \
                   Add project-specific bans via `banned = [\"mgr:manager\"]` \
                   in comply.toml. Editors auto-complete; readers don't.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
 

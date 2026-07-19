@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-invalid-html-attribute",
     description: "Invalid value in HTML `rel` attribute.",
     remediation: "Use a valid `rel` value (`noopener`, `noreferrer`, `stylesheet`, etc.).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue", "html"],
 

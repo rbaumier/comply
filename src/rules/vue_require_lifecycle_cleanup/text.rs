@@ -207,7 +207,7 @@ impl TextCheck for Check {
                         column: 1,
                         rule_id: super::META.id.into(),
                         message: "`addEventListener` in `onMounted` without `removeEventListener` in `onUnmounted` leaks listeners.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                     message: "`return <value>` in a test callback is silently discarded \
                               by vitest. Drop the return or mark the callback async."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

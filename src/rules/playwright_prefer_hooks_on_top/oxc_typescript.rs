@@ -58,7 +58,7 @@ fn check_statements(
                     column,
                     rule_id: super::META.id.into(),
                     message: "Hooks should come before test cases.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

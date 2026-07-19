@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add `{ withTimezone: true }` to every timestamp column. \
                   Bare timestamps are interpreted differently depending \
                   on the server's zone, silently corrupting dates.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "drizzle"],
 

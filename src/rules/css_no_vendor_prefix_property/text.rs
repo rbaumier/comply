@@ -12,7 +12,7 @@ crate::ast_check! { on ["declaration"] prefilter = ["-webkit-", "-moz-", "-ms-",
         &prop,
         super::META.id,
         format!("Vendor-prefixed property `{name}`; remove the prefix and rely on autoprefixer."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

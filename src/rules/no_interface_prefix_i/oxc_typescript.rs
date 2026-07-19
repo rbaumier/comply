@@ -82,7 +82,7 @@ impl OxcCheck for Check {
                 "Interface `{name}` uses the `I` prefix — rename to `{}`.",
                 &name[1..]
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

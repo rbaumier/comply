@@ -51,7 +51,7 @@ impl OxcCheck for Check {
                 "Prefer `.dataset` over `.{}(\u{2026})` for `data-*` attributes.",
                 prop_name
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

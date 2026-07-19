@@ -91,7 +91,7 @@ impl OxcCheck for Check {
             message: "`Promise.reject()` should be called with an `Error` instance, \
                       not a primitive or object literal."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -94,7 +94,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Avoid having conditionals in tests.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

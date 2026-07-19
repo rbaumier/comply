@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-top-level-literals",
     description: "JSON top-level value is a bare literal.",
     remediation: "Wrap the value in an array or object — some JSON parsers only accept an object or array as the root element.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["suspicious"],
 

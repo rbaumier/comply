@@ -37,7 +37,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Parameter typed as `Context` — Elysia infers the context type per-route. Destructure inline instead.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

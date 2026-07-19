@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-no-nullable-return",
     description: "Functions returning T | null/undefined for not-found should return Result<T, NotFoundError>.",
     remediation: "Replace the nullable return with Result<T, NotFoundError>.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

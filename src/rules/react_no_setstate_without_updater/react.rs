@@ -116,7 +116,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "`{setter}` called with an expression referencing `{state}` — \
                  use the functional updater: `{setter}(prev => ...)`."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-dehydrate-no-pending-in-ssr",
     description: "Calling `dehydrate(...)` while `prefetchQuery` is still pending serializes empty state.",
     remediation: "`await` every `prefetchQuery(...)` before `dehydrate(queryClient)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

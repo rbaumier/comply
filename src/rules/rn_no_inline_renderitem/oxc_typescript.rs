@@ -85,7 +85,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Inline function in `renderItem` creates a new reference every render — extract to a stable component or `useCallback`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

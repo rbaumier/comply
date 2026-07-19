@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Don't concatenate `t()` results — use interpolation variables in the translation string instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

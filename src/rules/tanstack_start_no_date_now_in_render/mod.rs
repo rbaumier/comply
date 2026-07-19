@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   hydration mismatches.",
     remediation: "Compute non-deterministic values inside a `useEffect`, a \
                   loader, or a server function.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start", "react"],
 

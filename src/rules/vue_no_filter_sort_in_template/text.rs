@@ -60,7 +60,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                 message: format!(
                     "`v-for` over `.{method}(...)` re-runs on every render — extract to a `computed()`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

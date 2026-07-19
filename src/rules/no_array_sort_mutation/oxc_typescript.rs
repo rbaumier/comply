@@ -58,7 +58,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Use `.toSorted()` instead of `.sort()` — `sort()` mutates the array in place."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

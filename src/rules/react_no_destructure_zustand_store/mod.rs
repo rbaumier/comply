@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   subscribes the component to every state change.",
     remediation: "Use a selector per field: `const x = useStore(s => s.x)` so the \
                   component only re-renders when that slice changes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

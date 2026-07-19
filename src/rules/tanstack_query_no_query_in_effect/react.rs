@@ -86,7 +86,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         message: format!(
             "`{hook_name}` inside `useEffect` — query hooks manage their own lifecycle."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

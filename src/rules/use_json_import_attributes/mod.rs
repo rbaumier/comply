@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-json-import-attributes",
     description: "A default import of a `.json` module is missing the `type: \"json\"` import attribute.",
     remediation: "Add `with { type: \"json\" }` to the import so the runtime parses the module as JSON.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/use-json-import-attributes/"),
     categories: &["imports"],
 

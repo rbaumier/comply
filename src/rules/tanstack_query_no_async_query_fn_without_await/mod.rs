@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`queryFn: async () => fetch(...)` returns an unconsumed Response.",
     remediation: "Await the fetch and parse the body inside the query function: \
                   `queryFn: async () => { const r = await fetch(url); return r.json(); }`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

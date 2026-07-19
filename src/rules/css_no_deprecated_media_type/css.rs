@@ -23,7 +23,7 @@ crate::ast_check! { on ["media_statement"] => |node, source, ctx, diagnostics|
                 &node,
                 super::META.id,
                 format!("Deprecated media type `{name}`; use `screen`, `print`, or `all`."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

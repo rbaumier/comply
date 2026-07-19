@@ -16,7 +16,7 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
             "Comment sentence exceeds {} words. Split it — one idea per sentence.",
             super::MAX_WORDS_PER_SENTENCE
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

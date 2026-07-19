@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Scope the CSS variable to the animated element: \
                   `element.style.setProperty('--x', value)` instead of \
                   `document.documentElement.style.setProperty('--x', value)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-unsafe-declaration-merging",
     description: "Unsafe declaration merging between classes and interfaces.",
     remediation: "Rename one of the declarations so they don't merge.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

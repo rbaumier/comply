@@ -34,7 +34,7 @@ impl AstCheck for Check {
                 format!(
                     "BOOLEAN column `{col}` should start with `is_` or `has_` so call sites read as predicates."
                 ),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

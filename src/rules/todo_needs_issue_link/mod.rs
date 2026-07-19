@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "todo-needs-issue-link",
     description: "TODO/FIXME/HACK comment without an issue reference.",
     remediation: "Add a ticket or URL reference: `// TODO(#1234): ...` or `// TODO(https://...): ...`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

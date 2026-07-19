@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-console-spaces",
     description: "Leading/trailing spaces in `console.log` arguments produce misaligned output.",
     remediation: "Remove the leading or trailing space from the string argument. Use comma-separated arguments for spacing instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

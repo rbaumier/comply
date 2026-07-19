@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-junction-composite-pk",
     description: "Junction tables with 2 FK columns must declare a composite `primaryKey`.",
     remediation: "Add `primaryKey({ columns: [t.aId, t.bId] })` in the table options callback so the junction table has a real composite primary key.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle"],
 

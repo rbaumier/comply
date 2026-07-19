@@ -46,7 +46,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Duplicate specifier `{local_name}` in the same import — remove the redundant entry."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((s.span.start as usize, (s.span.end - s.span.start) as usize)),
                 });
             }

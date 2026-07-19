@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-prefers-reduced-motion",
     description: "CSS declaring animation or transition must provide a `@media (prefers-reduced-motion: reduce)` branch.",
     remediation: "Wrap motion-sensitive declarations in `@media (prefers-reduced-motion: reduce) { ... }` that disables them.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui", "a11y"],
 

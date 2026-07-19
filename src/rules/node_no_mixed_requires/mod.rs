@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-no-mixed-requires",
     description: "`require` calls should not be mixed with regular variable declarations.",
     remediation: "Separate `require()` declarations from non-require variable declarations.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/no-mixed-requires.md",
     ),

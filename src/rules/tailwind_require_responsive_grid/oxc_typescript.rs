@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`grid-cols-2+` without a mobile-first fallback. Prefer `grid-cols-1 md:grid-cols-N` so the grid collapses on small screens.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

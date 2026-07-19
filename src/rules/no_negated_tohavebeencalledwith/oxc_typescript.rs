@@ -65,7 +65,7 @@ impl OxcCheck for Check {
                 "`not.{}(...)` passes whenever the mock was called with any other arguments, so it never fails. Use `expect(fn).not.toHaveBeenCalled()` or assert over `fn.mock.calls`.",
                 member.property.name.as_str()
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

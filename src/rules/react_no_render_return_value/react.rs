@@ -36,7 +36,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: "react-no-render-return-value".into(),
         message: "Do not use the return value of `ReactDOM.render()`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer using `String`, `Number`, `BigInt`, `Boolean`, and `Symbol` directly.",
     remediation: "Pass the coercion function directly instead of wrapping it: \
                   `.map(Number)` instead of `.map(x => Number(x))`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

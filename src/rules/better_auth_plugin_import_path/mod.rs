@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-auth-plugin-import-path",
     description: "Importing from `better-auth/plugins` barrel prevents tree-shaking.",
     remediation: "Import from the plugin's specific path: `better-auth/plugins/two-factor`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://www.better-auth.com/docs/plugins"),
     categories: &["better-auth", "imports"],
 

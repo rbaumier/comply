@@ -21,7 +21,7 @@ crate::ast_check! { on ["run_instruction"] prefilter = ["apk add"] => |node, sou
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "Use `apk add --no-cache` to avoid leaving the apk index in the layer.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

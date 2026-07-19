@@ -69,7 +69,7 @@ impl OxcCheck for Check {
                     "The `{op} {{}}` fallback is unnecessary — spreading \
                      `undefined`/`null` in an object literal is a no-op."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

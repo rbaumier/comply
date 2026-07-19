@@ -105,7 +105,7 @@ impl OxcCheck for Check {
                     "Storage key `{key}` has no `:vN` version suffix \u{2014} bumping the \
                      version lets you migrate or drop old entries when the shape changes."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

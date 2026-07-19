@@ -43,7 +43,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: "Expected `import` instead of `require()`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -81,7 +81,7 @@ fn check_module_exports_in_expr(
                         column,
                         rule_id: super::META.id.into(),
                         message: "Expected `export` or `export default` instead of `module.exports`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

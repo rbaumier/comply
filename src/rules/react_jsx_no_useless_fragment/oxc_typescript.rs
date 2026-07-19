@@ -103,7 +103,7 @@ impl OxcCheck for Check {
                         message: "Unnecessary fragment \u{2014} a fragment wrapping zero or one \
                                   child adds no value."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -128,7 +128,7 @@ impl OxcCheck for Check {
                         message: "Unnecessary fragment \u{2014} a fragment wrapping zero or one \
                                   child adds no value."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

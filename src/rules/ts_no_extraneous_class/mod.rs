@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-extraneous-class",
     description: "Classes with only static members or an empty body should be plain objects or modules.",
     remediation: "Use a module/namespace, plain object, or standalone functions instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-extraneous-class/"),
     categories: &["typescript"],
 

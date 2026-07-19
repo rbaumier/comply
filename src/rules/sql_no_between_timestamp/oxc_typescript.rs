@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`BETWEEN` with timestamps is inclusive on both sides — use `>= start AND < end` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

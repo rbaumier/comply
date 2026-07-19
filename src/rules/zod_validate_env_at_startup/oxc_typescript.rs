@@ -73,7 +73,7 @@ impl OxcCheck for Check {
                  the typed result.",
                 var_name,
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

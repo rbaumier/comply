@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Use `<Script>` from `next/script` instead of a synchronous `<script src>` tag."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

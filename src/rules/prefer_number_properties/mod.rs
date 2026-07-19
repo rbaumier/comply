@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace global `isNaN()`, `isFinite()`, `parseInt()`, `parseFloat()`, `NaN`, \
                   and `Infinity` with their `Number.*` equivalents. The `Number` methods are \
                   stricter (no implicit coercion) and the properties are unambiguous.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

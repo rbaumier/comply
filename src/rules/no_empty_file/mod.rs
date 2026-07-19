@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-empty-file",
     description: "Empty files are not allowed — they add noise without value.",
     remediation: "Add meaningful content or delete the file.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-latest-tag",
     description: "FROM image must pin a version tag; `:latest` and untagged images drift silently.",
     remediation: "Replace `:latest` (or missing tag) with a pinned version such as `node:22.12-alpine3.20`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

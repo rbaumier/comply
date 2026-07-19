@@ -58,7 +58,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Empty capturing group `()` in regex \u{2014} add a pattern or remove it."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

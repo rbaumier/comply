@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-vendor-prefix-media",
     description: "Vendor-prefixed media features are unnecessary with modern autoprefixer tooling.",
     remediation: "Remove the vendor prefix from the media feature.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

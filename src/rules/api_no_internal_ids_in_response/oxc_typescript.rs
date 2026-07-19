@@ -86,7 +86,7 @@ fn check_members(
                 message: format!(
                     "Response field `{name}` looks internal — rename to its public form or drop it from the DTO."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -116,7 +116,7 @@ fn check_object_type(
                 message: format!(
                     "Response field `{name}` looks internal — rename to its public form or drop it from the DTO."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

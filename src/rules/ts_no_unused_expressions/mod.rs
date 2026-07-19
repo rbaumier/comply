@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-unused-expressions",
     description: "Expression statements that produce a value but discard it are likely mistakes.",
     remediation: "Assign the result to a variable, use it as a condition, or remove the statement.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-unused-expressions"),
     categories: &["typescript"],
 

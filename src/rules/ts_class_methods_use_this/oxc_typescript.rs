@@ -123,7 +123,7 @@ impl OxcCheck for Check {
                     "Method `{name}` does not use `this` — make it `static` \
                      or extract to a standalone function."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

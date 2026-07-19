@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add a `sizes` attribute, e.g. `sizes=\"(max-width: 768px) 100vw, 50vw\"`. \
                   Without `sizes`, `next/image` falls back to `100vw` and serves the largest \
                   image in the `srcset`, blowing the LCP budget on smaller viewports.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["nextjs"],
 

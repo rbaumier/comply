@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-drop-all-caps",
     description: "Containers must drop ALL Linux capabilities (securityContext.capabilities.drop includes ALL).",
     remediation: "Add `securityContext: { capabilities: { drop: [\"ALL\"] } }` to each container.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

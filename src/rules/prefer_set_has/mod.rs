@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `.includes()`. `Array#includes()` is O(n) per call; \
                   `Set#has()` is O(1). This matters when the check is inside \
                   a loop or called repeatedly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

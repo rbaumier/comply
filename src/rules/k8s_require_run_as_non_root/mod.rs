@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-run-as-non-root",
     description: "Containers must set securityContext.runAsNonRoot: true.",
     remediation: "Add `securityContext: { runAsNonRoot: true }` at the pod or container level.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

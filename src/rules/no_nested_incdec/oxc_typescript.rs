@@ -69,7 +69,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`++`/`--` inside an expression — separate into its own statement for clarity."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -176,7 +176,7 @@ impl OxcCheck for Check {
                       hang forever. Wrap with `withTimeout(..., 5_000)` \
                       or pass `{ signal: AbortSignal.timeout(5_000) }`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

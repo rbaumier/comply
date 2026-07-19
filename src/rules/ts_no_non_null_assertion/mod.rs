@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-non-null-assertion",
     description: "Non-null assertions (`value!`) suppress compiler checks and can hide real nullability bugs.",
     remediation: "Narrow the type with a check (`if (value)`), use optional chaining (`value?.x`), or rework the types so the value is known to be non-null.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-non-null-assertion/"),
     categories: &["typescript"],
 

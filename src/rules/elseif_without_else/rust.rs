@@ -93,7 +93,7 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
         message: "`if/else if` chain without a final `else` \
                   \u{2014} add an `else` block to handle remaining cases."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

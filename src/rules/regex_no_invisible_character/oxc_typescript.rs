@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Invisible Unicode character in regex \u{2014} use an explicit `\\u{...}` escape instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

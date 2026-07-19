@@ -42,7 +42,7 @@ impl TextCheck for Check {
                         "`<{}>` elements must have a `<track kind=\"captions\">` child for accessibility.",
                         elem.tag
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

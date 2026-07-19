@@ -161,7 +161,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Repeated identical pattern in regex \u{2014} use a quantifier like `a{3}` or `\\d{4}`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -58,7 +58,7 @@ impl OxcCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "`export {}` is unnecessary — the file already has other exports."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

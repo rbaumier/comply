@@ -44,7 +44,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             column: 1,
             rule_id: super::META.id.into(),
             message: "Dockerfile must drop to a non-root USER before CMD.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

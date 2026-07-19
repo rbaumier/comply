@@ -75,7 +75,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Do not add spaces between braces: `{text}` -> `{{}}`.",),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -58,7 +58,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`db.select()` with no projection fetches every column — pass `{ col: table.col, ... }` to scope the read.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

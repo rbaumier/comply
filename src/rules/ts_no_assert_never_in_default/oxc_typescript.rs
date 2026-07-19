@@ -78,7 +78,7 @@ impl OxcCheck for Check {
                           union variant will pass the type-checker but hit this throw at runtime. \
                           Use `assertNever(x)` or `const _: never = x` instead."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             break;

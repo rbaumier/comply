@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-iframe-missing-sandbox",
     description: "`<iframe>` without a `sandbox` attribute is a security risk.",
     remediation: "Add a `sandbox` attribute to restrict the iframe capabilities.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue", "security"],
 

@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{name}()` inside route middleware blocks navigation — fetch in the page's `setup()` instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((call.span.start as usize, (call.span.end - call.span.start) as usize)),
         });
     }

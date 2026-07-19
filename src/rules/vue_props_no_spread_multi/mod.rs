@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-props-no-spread-multi",
     description: "Same `v-bind` spread applied multiple times on a Vue element.",
     remediation: "Remove the duplicate spread.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

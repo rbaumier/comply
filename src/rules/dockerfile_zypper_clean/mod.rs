@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-zypper-clean",
     description: "`zypper install` must be paired with `zypper clean` to shrink the layer.",
     remediation: "Append `&& zypper clean` to the same RUN as `zypper install`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

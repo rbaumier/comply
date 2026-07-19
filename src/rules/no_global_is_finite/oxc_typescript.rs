@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             message: "Use `Number.isFinite` instead of the global `isFinite`. The global coerces \
                       its argument; `Number.isFinite` does not."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-unchecked-json-parse",
     description: "`JSON.parse()` returns `any` — validate it before use.",
     remediation: "Pipe the result through a Zod schema (`.safeParse` / `.parse`) or a type guard before using it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "security"],
 

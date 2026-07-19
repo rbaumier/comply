@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-legacy-features",
     description: "Regex uses legacy RegExp static properties like `RegExp.$1` or `RegExp.lastMatch`.",
     remediation: "Avoid legacy RegExp static properties. Use capturing groups and match results instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-legacy-features.html"),
     categories: &["regex"],
 

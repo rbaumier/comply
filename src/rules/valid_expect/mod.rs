@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "valid-expect",
     description: "`expect()` must be called with at least one argument.",
     remediation: "Pass the value under test to `expect(value)` before the matcher.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jest-community/eslint-plugin-jest/blob/main/docs/rules/valid-expect.md",
     ),

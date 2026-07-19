@@ -23,7 +23,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &pair,
                 super::META.id,
                 "Secret has populated data/stringData in source; use sealed/external secrets instead.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

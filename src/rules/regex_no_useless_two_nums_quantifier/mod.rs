@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-useless-two-nums-quantifier",
     description: "Quantifier `{n,n}` is equivalent to `{n}` — the range is redundant.",
     remediation: "Simplify `{3,3}` to `{3}`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["regex"],
 

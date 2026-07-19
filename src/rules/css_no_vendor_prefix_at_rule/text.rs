@@ -12,7 +12,7 @@ crate::ast_check! { on ["at_rule", "keyframes_statement"] prefilter = ["@-webkit
         &kw,
         super::META.id,
         format!("Vendor-prefixed at-rule `{text}`; remove the prefix and rely on autoprefixer."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

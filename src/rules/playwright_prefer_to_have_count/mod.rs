@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "playwright-prefer-to-have-count",
     description: "Prefer `expect(locator).toHaveCount(n)` over `expect(await locator.count()).toBe(n)`.",
     remediation: "Use expect(locator).toHaveCount(n) for web-first assertion",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-to-have-count.md",
     ),

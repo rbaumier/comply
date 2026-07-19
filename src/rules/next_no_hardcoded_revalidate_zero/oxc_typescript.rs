@@ -73,7 +73,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Replace `export const revalidate = 0` with `export const dynamic = 'force-dynamic'`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

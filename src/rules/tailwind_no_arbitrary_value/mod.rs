@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-arbitrary-value",
     description: "Arbitrary values `[…]` bypass design system tokens — each one is a small drift away from the design.",
     remediation: "Replace the arbitrary value with the matching design token. Add a custom token in `tailwind.config.ts` if the value is genuinely needed in multiple places.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

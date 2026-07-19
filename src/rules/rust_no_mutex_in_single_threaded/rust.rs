@@ -161,7 +161,7 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
             "`{base}<T>` without `Arc<{base}<T>>` locks atomically for no cross-thread sharing. \
              Use `RefCell<T>` for single-threaded interior mutability, or wrap in `Arc` if threads are actually involved."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

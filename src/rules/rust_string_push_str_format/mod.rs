@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   context). `format!` allocates a `String` whose only \
                   purpose is to be copied into `s`; `write!` writes \
                   directly into `s` and avoids the round-trip allocation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "performance"],
 

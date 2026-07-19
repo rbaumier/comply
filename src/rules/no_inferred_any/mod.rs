@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-inferred-any",
     description: "Detect likely untyped patterns that infer `any`.",
     remediation: "Add an explicit type annotation or use `as T` / `satisfies T` after `JSON.parse()` and `.json()` calls. Avoid `const x: any =` — use a concrete type or `unknown`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

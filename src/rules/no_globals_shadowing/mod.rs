@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-globals-shadowing",
     description: "Local variable shadows a well-known global identifier.",
     remediation: "Rename the local variable to avoid shadowing `console`, `window`, `document`, `process`, `global`, `globalThis`, `setTimeout`, or `setInterval`. Shadowing globals makes code confusing and can break runtime behavior.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

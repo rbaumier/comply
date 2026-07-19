@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   inside the `{ }` block of the case clause. Placing it \
                   outside creates an inconsistent style where the block looks \
                   complete but the terminator dangles after the closing brace.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

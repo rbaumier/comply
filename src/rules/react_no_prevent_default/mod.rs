@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   `onWheel`, `onTouchStart`, `onTouchMove`) is a no-op.",
     remediation: "Remove the `preventDefault()` call. If you actually need to cancel the event, \
                   attach the listener manually via `addEventListener(name, handler, { passive: false })`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

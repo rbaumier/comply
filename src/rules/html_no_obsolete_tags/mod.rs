@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-no-obsolete-tags",
     description: "Obsolete HTML tags (center, font, marquee, blink, strike, big, tt) and presentational attributes (align, bgcolor, border on non-table elements) should be replaced by CSS.",
     remediation: "Use CSS instead of obsolete HTML tags",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

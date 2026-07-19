@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-hashbang",
     description: "Files with a hashbang (`#!`) must use the correct format.",
     remediation: "Ensure the hashbang line is `#!/usr/bin/env node` and only present in executable files.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/hashbang.md",
     ),

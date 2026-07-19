@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
                   for `assert_eq!(x, false)`. The eq-form is noisier and \
                   produces a worse failure message (it shows `false != true` \
                   instead of just the failed condition).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

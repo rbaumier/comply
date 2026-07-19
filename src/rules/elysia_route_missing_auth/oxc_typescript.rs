@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Sensitive route appears to have no auth guard — add `beforeHandle` or wrap it in `.guard({ auth: ... })`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

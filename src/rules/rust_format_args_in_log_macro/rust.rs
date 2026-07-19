@@ -58,7 +58,7 @@ impl AstCheck for Check {
                  Pass the format args directly to `{last_segment}!` — log \
                  macros accept the same grammar as `format!`."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

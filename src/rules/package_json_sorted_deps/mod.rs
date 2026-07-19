@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Unsorted dependencies in package.json cause needless merge conflicts.",
     remediation: "Sort dependency keys alphabetically in each section \
                   (dependencies, devDependencies, peerDependencies).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["package-json"],
 

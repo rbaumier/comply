@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-deprecated",
     description: "Deprecated React APIs should not be used.",
     remediation: "Replace the deprecated API with its modern equivalent.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-deprecated.md",
     ),

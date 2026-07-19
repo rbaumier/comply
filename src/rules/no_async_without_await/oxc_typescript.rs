@@ -927,7 +927,7 @@ impl OxcCheck for Check {
                 message: "`async` function never awaits — drop the `async` keyword \
                           or add the `await` that justifies it."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

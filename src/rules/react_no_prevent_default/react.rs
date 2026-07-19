@@ -65,7 +65,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         message: format!(
             "`preventDefault()` inside `{attr_name}` is a no-op — React attaches this listener as passive."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

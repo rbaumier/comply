@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                 "Don't `fetch('{literal}')` your own app. Call a `createServerFn` \
                  instead for typed, round-trip-free access."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

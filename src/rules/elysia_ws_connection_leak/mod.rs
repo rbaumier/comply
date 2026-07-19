@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-ws-connection-leak",
     description: "WebSocket `open` adds the socket to a Set but `error`/`close` doesn't remove it — the Set leaks dead sockets.",
     remediation: "Mirror every `.add(ws)` in `open` with a `.delete(ws)` in both `close` and `error` handlers.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

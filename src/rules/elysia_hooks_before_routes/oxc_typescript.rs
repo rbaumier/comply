@@ -85,7 +85,7 @@ impl OxcCheck for Check {
                         "`.{}(...)` chained after route definitions — Elysia hooks only apply to routes registered after them.",
                         name
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

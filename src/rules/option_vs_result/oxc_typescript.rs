@@ -128,7 +128,7 @@ impl OxcCheck for Check {
                     message: "Function named `find*`/`get*` returns `null`/`undefined` — \
                               consider using an Option type to make absence explicit."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -163,7 +163,7 @@ impl OxcCheck for Check {
                         message: "Function named `find*`/`get*` returns `null`/`undefined` — \
                                   consider using an Option type to make absence explicit."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

@@ -74,7 +74,7 @@ impl OxcCheck for Check {
             message: format!(
                 "List item component `{ident_name}` should be wrapped in `React.memo(...)`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

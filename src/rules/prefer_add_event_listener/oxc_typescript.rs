@@ -123,7 +123,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Prefer `addEventListener('{event_name}', handler)` over `.{prop_name} = handler`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

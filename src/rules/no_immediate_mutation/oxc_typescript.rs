@@ -118,7 +118,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "no-immediate-mutation".into(),
                     message: "Immediate mutation after variable assignment \u{2014} chain onto the initialiser instead.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

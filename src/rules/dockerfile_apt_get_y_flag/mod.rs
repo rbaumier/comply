@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-apt-get-y-flag",
     description: "`apt-get install` must run non-interactively (`-y`).",
     remediation: "Add `-y` (or `--yes`) to apt-get install.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

@@ -31,7 +31,7 @@ crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "COPY with relative destination requires a prior WORKDIR.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

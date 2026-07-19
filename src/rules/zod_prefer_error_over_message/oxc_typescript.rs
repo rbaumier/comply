@@ -79,7 +79,7 @@ fn flag_add_issue(call: &CallExpression, ctx: &CheckCtx, diagnostics: &mut Vec<D
             message: "Zod v4 reads `message` (not `error`) inside `ctx.addIssue(...)`; \
                       an `error:` key is silently dropped. Use `message: '...'`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }
@@ -139,7 +139,7 @@ impl OxcCheck for Check {
                 message: "Zod v4 renamed `message` to `error`. Use `error: '...'` instead of \
                           `message: '...'` in this `z.*` call."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -23,7 +23,7 @@ crate::ast_check! { on ["run_instruction"] prefilter = ["yarn install", "yarn ad
         column: 1,
         rule_id: super::META.id.into(),
         message: "pnpm/yarn install must pass `--frozen-lockfile` (or `--immutable`) in Dockerfiles.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Disallow useless fallback when spreading in object literals.",
     remediation: "Remove the `|| {}` or `?? {}` fallback — spreading \
                   `undefined`/`null` is already a no-op in object literals.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

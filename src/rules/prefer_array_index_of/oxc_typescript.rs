@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Prefer `.indexOf(val)` over `.findIndex(x => x === val)`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -115,7 +115,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Regex flag has no effect on this pattern \u{2014} remove it.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

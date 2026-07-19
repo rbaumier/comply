@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   iterables. `for…of`, spread, `yield*`, `new Set(…)`, \
                   `Array.from(…)`, and `Object.fromEntries(…)` all work \
                   directly on iterators.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

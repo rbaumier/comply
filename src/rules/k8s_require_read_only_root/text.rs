@@ -21,7 +21,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &container,
                 super::META.id,
                 "Container must set securityContext.readOnlyRootFilesystem: true.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `fileURLToPath(import.meta.url)` with `import.meta.filename` \
                   and `dirname(fileURLToPath(import.meta.url))` with `import.meta.dirname`. \
                   Node.js 21.2+ and Bun support these properties natively.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

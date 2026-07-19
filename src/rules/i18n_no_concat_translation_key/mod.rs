@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-no-concat-translation-key",
     description: "Dynamic `t()` keys built with concatenation or template literals can't be statically extracted.",
     remediation: "Use full static key strings: `t('section.home')` instead of `t('section.' + name)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

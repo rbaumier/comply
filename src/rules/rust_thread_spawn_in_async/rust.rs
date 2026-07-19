@@ -58,7 +58,7 @@ impl AstCheck for Check {
                  Use `tokio::spawn` for futures, or \
                  `tokio::task::spawn_blocking` for sync CPU work."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

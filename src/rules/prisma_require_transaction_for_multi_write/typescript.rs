@@ -69,7 +69,7 @@ impl TextCheck for Check {
             message: format!(
                 "{count} Prisma write operations in this file without `$transaction(...)` — wrap them so partial failures don't leave inconsistent state."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

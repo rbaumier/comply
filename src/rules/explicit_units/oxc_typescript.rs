@@ -502,7 +502,7 @@ fn check_name(name: &str, offset: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
              add an explicit unit suffix. Try `{name}Ms`, \
              `{name}Bytes`, `{name}Count`, or similar."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

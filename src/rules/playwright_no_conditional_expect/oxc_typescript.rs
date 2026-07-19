@@ -76,7 +76,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "playwright-no-conditional-expect".into(),
             message: "`expect()` inside a conditional may silently skip — assert unconditionally.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

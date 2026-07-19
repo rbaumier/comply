@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ban-dependencies",
     description: "Bans imports of legacy or heavy dependencies (lodash, moment, underscore).",
     remediation: "Use native alternatives or lighter libraries (date-fns, es-toolkit).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/nicolo-ribaudo/eslint-plugin-e18e"),
     categories: &["imports", "performance"],
 

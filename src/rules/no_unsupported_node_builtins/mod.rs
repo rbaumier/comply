@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-unsupported-node-builtins",
     description: "Node.js API not available in the minimum version declared in `engines.node`.",
     remediation: "Either bump the minimum Node.js version in `engines.node`, or use a polyfill.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/no-unsupported-features/node-builtins.md",
     ),

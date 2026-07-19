@@ -235,7 +235,7 @@ impl OxcCheck for Check {
                         column: 1,
                         rule_id: super::META.id.into(),
                         message: "`@yields` is documented but the function does not yield — remove the tag.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 } else if is_gen && yields_in_body && !has_yields_tag {
@@ -245,7 +245,7 @@ impl OxcCheck for Check {
                         column: 1,
                         rule_id: super::META.id.into(),
                         message: "Function yields but JSDoc is missing `@yields` — document what it yields.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

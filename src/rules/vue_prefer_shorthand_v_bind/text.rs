@@ -35,7 +35,7 @@ crate::ast_check! { on ["directive_attribute"] prefilter = ["v-bind"] => |node, 
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "Use the `:` shorthand instead of longhand `v-bind:`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

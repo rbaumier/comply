@@ -58,7 +58,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`transform` accesses `body` but no `body:` schema is declared \u{2014} declare one so the body is validated before mutation.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

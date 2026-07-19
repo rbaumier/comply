@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-hover-gated-media-query",
     description: "`:hover` rules that move/transform should be gated by `@media (hover: hover) and (pointer: fine)`.",
     remediation: "Wrap the `:hover { transform/scale … }` declaration in `@media (hover: hover) and (pointer: fine) { ... }`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

@@ -75,7 +75,7 @@ impl Check {
             message: "Em-dash/en-dash in user-facing JSX copy reads as AI-generated \
                       prose \u{2014} use a plain hyphen or rewrite the sentence."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

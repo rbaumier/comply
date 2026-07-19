@@ -150,7 +150,7 @@ fn flush_run(run: &mut Vec<AwaitStmt>, diagnostics: &mut Vec<Diagnostic>, path: 
                           serialises fetches. Combine independent awaits with \
                           `Promise.all([...])` to parallelise them."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

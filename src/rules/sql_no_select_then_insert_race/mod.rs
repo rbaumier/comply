@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-select-then-insert-race",
     description: "Sequential SELECT + INSERT on the same key is a TOCTOU race.",
     remediation: "Use `INSERT ... ON CONFLICT (key) DO NOTHING` (or `DO UPDATE`) in a single statement. Two round-trips let concurrent writers insert between the SELECT and INSERT.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

@@ -99,7 +99,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `Array(n).fill(value)` instead of `Array.from({length: n}, () => value)`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-consistent-generic-constructors",
     description: "Generic type arguments should be on the constructor, not the variable annotation.",
     remediation: "Move the type argument from the type annotation to the constructor: `new Map<K, V>()` instead of `const m: Map<K, V> = new Map()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/consistent-generic-constructors/"),
     categories: &["typescript"],
 

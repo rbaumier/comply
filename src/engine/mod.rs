@@ -449,7 +449,7 @@ fn dispatch_with_lang(
         if !meta.applies_to(&file_ctx, path, config) {
             continue;
         }
-        let mut produced = match backend {
+        let produced = match backend {
             Backend::Text(check) => {
                 if let Some(f) = pf
                     && !source_matches_prefilter(source, f)
@@ -465,11 +465,6 @@ fn dispatch_with_lang(
             | Backend::TypeAware => Vec::new(),
             Backend::TreeSitter(_) | Backend::Oxc(_) => continue,
         };
-        if let Some(sev) = config.severity_for(meta.id) {
-            for d in &mut produced {
-                d.severity = sev;
-            }
-        }
         diagnostics.extend(produced);
     }
 
@@ -493,7 +488,7 @@ fn dispatch_with_lang(
         // leaves it untouched — `AssertUnwindSafe` is sound here.
         let oxc_ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::oxc_helpers::with_oxc_parse(source, path, |semantic| {
-                run_oxc_checks(ld, semantic, &ctx, config, &oxc_pre, worker, &mut diagnostics);
+                run_oxc_checks(ld, semantic, &ctx, &oxc_pre, worker, &mut diagnostics);
             });
         }));
         if oxc_ran.is_err() {
@@ -654,7 +649,7 @@ mod tests {
             column: col,
             rule_id: rule_id.into(),
             message: rule_id.into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }
     }

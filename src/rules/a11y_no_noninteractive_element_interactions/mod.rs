@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-no-noninteractive-element-interactions",
     description: "Flag non-interactive elements with event handlers but no `role` attribute.",
     remediation: "Add a `role` attribute to indicate the element's interactive purpose, or use a native interactive element like `<button>`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

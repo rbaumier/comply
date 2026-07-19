@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-triple-slash-reference",
     description: "Triple-slash `path` references to source modules are legacy — use ES `import`.",
     remediation: "Replace `/// <reference path=\"./mod.ts\" />` with an ES `import` declaration. (`types`/`lib` references and `path` references to `.d.ts` declaration files have no ESM equivalent and are not flagged.)",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/triple-slash-reference"),
     categories: &["typescript"],
 

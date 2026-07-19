@@ -39,7 +39,7 @@ fn check_body(body: &FunctionBody, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnos
         column,
         rule_id: super::META.id.into(),
         message: "Function body is wrapped in a single `if` — invert it as a guard clause with an early return.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

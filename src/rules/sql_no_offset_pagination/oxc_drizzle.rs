@@ -42,7 +42,7 @@ impl OxcCheck for Check {
                       pagination with `.where(gt(col, cursor)).limit(N)` \
                       instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

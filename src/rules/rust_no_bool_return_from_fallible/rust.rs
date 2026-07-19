@@ -218,7 +218,7 @@ impl AstCheck for Check {
                  the operation failed. Use `Result<(), MyError>` \
                  if there's no success payload."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

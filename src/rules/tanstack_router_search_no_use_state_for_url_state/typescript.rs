@@ -105,7 +105,7 @@ impl TextCheck for Check {
                     message: "`useState` for URL-shaped state — use TanStack Router \
                               `Route.useSearch()` so reloads and shares preserve it."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

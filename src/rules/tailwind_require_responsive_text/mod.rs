@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-require-responsive-text",
     description: "Headings with `text-4xl+` must also declare a responsive size variant.",
     remediation: "Scale the heading down on mobile, e.g. `text-2xl md:text-4xl` instead of just `text-4xl`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-default-service-account",
     description: "Pods must set serviceAccountName; the `default` account has no safe RBAC scope.",
     remediation: "Create a dedicated ServiceAccount and reference it via `spec.serviceAccountName`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

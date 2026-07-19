@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-define-model-over-modelvalue",
     description: "`defineProps<{ modelValue }>` + `update:modelValue` is superseded by `defineModel` in Vue 3.4+.",
     remediation: "Replace the `modelValue` prop and `update:modelValue` emit with `const model = defineModel()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

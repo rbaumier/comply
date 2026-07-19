@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Both sides select a primary key — use `UNION ALL` to skip the dedup sort.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

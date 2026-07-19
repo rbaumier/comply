@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-require-closing-tags",
     description: "Non-void HTML tags must be closed with a matching closing tag.",
     remediation: "Close HTML tag properly",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

@@ -84,7 +84,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "useTranslation() must only run inside a React component. Use the `i18n.t()` singleton here.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

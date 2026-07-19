@@ -63,7 +63,7 @@ match node.kind() {
                 message: format!(
                     "`{obj_str}.{prop_str}` is deprecated. Replace it with its modern equivalent."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -88,7 +88,7 @@ match node.kind() {
                      `componentDidMount`, `getDerivedStateFromProps`, \
                      `getSnapshotBeforeUpdate`) or prefix with `UNSAFE_`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

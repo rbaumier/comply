@@ -96,7 +96,7 @@ crate::ast_check! { on ["block"] => |node, source, ctx, diagnostics|
                 decl,
                 super::META.id,
                 format!("Shorthand `{shorthand}` overrides a longhand declared above."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

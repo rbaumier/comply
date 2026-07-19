@@ -86,7 +86,7 @@ crate::ast_check! { on ["try_expression"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "Add `.context(\"description\")` before `?` to give this error actionable context.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

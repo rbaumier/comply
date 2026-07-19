@@ -89,7 +89,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.findFirst()` without `where:` returns an arbitrary row — pass a filter to scope the query.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

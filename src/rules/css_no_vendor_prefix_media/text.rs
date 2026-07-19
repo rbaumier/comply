@@ -22,7 +22,7 @@ crate::ast_check! { on ["media_statement"] prefilter = ["-webkit-", "-moz-", "-m
         &node,
         super::META.id,
         format!("Vendor-prefixed media feature using `{prefix}`; remove the prefix and rely on autoprefixer."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

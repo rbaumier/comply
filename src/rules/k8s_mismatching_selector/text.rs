@@ -58,7 +58,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &selector,
             super::META.id,
             "Selector matchLabels do not match spec.template.metadata.labels; pods will not be selected.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

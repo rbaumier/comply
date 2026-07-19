@@ -64,7 +64,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Spreading an {label} literal in {container} is unnecessary."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

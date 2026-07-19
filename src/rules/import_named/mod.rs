@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Named import must match a named export in the target module.",
     remediation: "Check that the imported name is actually exported by the source module, \
                   or correct the import name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/named.md",
     ),

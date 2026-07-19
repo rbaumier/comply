@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "require-post-message-target-origin",
     description: "`postMessage()` called without the `targetOrigin` argument.",
     remediation: "Always provide a `targetOrigin` argument (e.g. `self.location.origin` or `'*'`) to `postMessage()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

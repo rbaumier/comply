@@ -100,7 +100,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`{prop_text}` is not a valid XState state node property."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

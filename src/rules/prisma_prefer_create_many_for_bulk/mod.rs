@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prisma-prefer-create-many-for-bulk",
     description: "Calling `prisma.<model>.create` inside a loop fires N round-trips — use `createMany`.",
     remediation: "Build the array of inputs first, then call `createMany({ data: inputs })`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["prisma", "performance"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-exit-duration-shorter-enter",
     description: "The `exit` transition of a `motion.*` component should be at most as long as the enter transition.",
     remediation: "Lower the exit `duration` (or raise the enter `duration`) so the element dismisses as fast as or faster than it appears.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

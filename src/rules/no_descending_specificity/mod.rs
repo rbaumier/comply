@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-descending-specificity",
     description: "Disallow a lower specificity selector from coming after a higher specificity selector.",
     remediation: "Reorder the rules so the higher-specificity selector comes after the one it overrides.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://developer.mozilla.org/en-US/docs/Web/CSS/Specificity"),
     categories: &["css"],
 

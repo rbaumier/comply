@@ -27,7 +27,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "migration-needs-lock-timeout",
     description: "DDL migration without `SET lock_timeout` risks write queue pileups.",
     remediation: "Add `SET lock_timeout = '5s';` at the top of every DDL migration. Without it, an ALTER TABLE on a busy table queues all writes behind the lock indefinitely.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "migrations"],
 

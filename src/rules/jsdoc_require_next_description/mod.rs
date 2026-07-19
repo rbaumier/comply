@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-next-description",
     description: "Each @next tag must have a description.",
     remediation: "Add prose after the @next type (e.g. `@next {T} - what the next call receives`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-next-description.md",
     ),

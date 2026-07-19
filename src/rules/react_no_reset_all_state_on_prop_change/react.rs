@@ -74,7 +74,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         format!(
             "Effect resets {setter_count} states when dependency changes — use `key={{dep}}` on the component instead."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

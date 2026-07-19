@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`.refine()` without an error message produces unhelpful validation errors.",
     remediation: "Add `{ error: 'descriptive error' }` as the second argument to `.refine()` \
                   (Zod v4 renamed the `message` param to `error`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

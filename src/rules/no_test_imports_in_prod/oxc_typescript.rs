@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Production file imports test/mock module `{module}` \u{2014} move shared helpers out of the test file."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((range_start, range_len)),
         });
     }

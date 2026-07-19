@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Reassigning `obj.method = vi.fn()`/`jest.fn()` replaces the original implementation \
          and is harder to restore than a spy.",
     remediation: "Use vi.spyOn(obj, 'method') instead of reassigning to vi.fn()",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

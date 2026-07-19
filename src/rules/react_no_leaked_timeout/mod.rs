@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-leaked-timeout",
     description: "`setTimeout` in `useEffect` without `clearTimeout` cleanup may fire after unmount.",
     remediation: "Capture the timeout id and return a cleanup that calls `clearTimeout(id)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

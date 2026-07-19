@@ -17,7 +17,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
                 value,
                 super::META.id,
                 format!("Custom property `{txt}` must be wrapped in `var()`."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

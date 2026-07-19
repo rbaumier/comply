@@ -102,7 +102,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`onSubmit` handler does not call `preventDefault()` \u{2014} the browser will perform a full-page submit and reset the form.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

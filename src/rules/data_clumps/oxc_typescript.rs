@@ -347,7 +347,7 @@ impl OxcCheck for Check {
                 column: 1,
                 rule_id: super::META.id.into(),
                 message,
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             })
             .collect()

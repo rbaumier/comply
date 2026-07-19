@@ -16,7 +16,7 @@ crate::ast_check! { on ["cmd_instruction"] => |node, source, ctx, diagnostics|
                     column: pos.column + 1,
                     rule_id: super::META.id.into(),
                     message: "Multiple CMD instructions in the same stage; only the last is honored.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((node.byte_range().start, node.byte_range().len())),
                 });
                 return;

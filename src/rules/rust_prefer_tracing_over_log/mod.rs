@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   which `log` does not. The two crates can interoperate via \
                   `tracing-log` if you must support an external dependency \
                   that emits through `log`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "observability"],
 

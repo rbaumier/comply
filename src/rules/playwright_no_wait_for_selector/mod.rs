@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`page.waitForSelector()` is discouraged — use web-first assertions.",
     remediation: "Replace `waitForSelector` with a locator-based assertion \
                   like `await expect(page.locator(…)).toBeVisible()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-wait-for-selector.md",
     ),

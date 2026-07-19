@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/check-property-names",
     description: "`@property` names must be unique inside a `@typedef` block.",
     remediation: "Rename or remove duplicated `@property` entries so every property declared on the typedef has a unique name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/check-property-names.md",
     ),

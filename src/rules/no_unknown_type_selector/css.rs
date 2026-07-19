@@ -155,7 +155,7 @@ crate::ast_check! { on ["tag_name"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         format!("Unknown type selector `{name}`."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

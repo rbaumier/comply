@@ -35,7 +35,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: "Import from `@react-navigation/stack` is forbidden — use Expo Router.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -52,7 +52,7 @@ impl OxcCheck for Check {
                             rule_id: super::META.id.into(),
                             message: "`createStackNavigator` is forbidden — migrate to Expo Router."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

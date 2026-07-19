@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer `String#replaceAll()` over `String#replace()` with a global regex.",
     remediation: "Replace `.replace(/pattern/g, replacement)` with `.replaceAll('pattern', replacement)`. \
                   `replaceAll()` is clearer in intent and avoids regex escaping pitfalls.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

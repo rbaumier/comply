@@ -25,7 +25,7 @@ crate::ast_check! { on ["stream"] prefilter = ["apiVersion"] => |node, source, c
                 manifest,
                 super::META.id,
                 "Deployment should be paired with a NetworkPolicy to restrict traffic.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

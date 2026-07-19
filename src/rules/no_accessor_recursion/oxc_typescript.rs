@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "no-accessor-recursion".into(),
                     message: "Recursive access to `this` within getter causes infinite recursion.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -70,7 +70,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "no-accessor-recursion".into(),
                     message: "Recursive access to `this` within setter causes infinite recursion.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

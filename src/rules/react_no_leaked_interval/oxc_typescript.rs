@@ -39,7 +39,7 @@ impl OxcCheck for Check {
                 message: "`setInterval` in `useEffect` without `clearInterval` cleanup — \
                           the interval keeps firing after unmount."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

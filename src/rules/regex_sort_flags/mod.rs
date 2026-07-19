@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-sort-flags",
     description: "Regex flags should be alphabetically sorted for consistency (`dgimsvy`).",
     remediation: "Reorder the flags alphabetically: e.g. `/pattern/ig` → `/pattern/gi`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["regex"],
 

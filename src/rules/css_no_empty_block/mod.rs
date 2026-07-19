@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-empty-block",
     description: "Disallow empty declaration blocks.",
     remediation: "Remove the empty rule or add at least one declaration.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-html-import-uppercase",
     description: "Files using `@elysiajs/html` must import `Html` (uppercase) for the JSX factory.",
     remediation: "Import `{ Html }` from `@elysiajs/html` so JSX is transformed correctly: `import { Html } from '@elysiajs/html'`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

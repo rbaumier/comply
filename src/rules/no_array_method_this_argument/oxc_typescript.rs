@@ -98,7 +98,7 @@ impl OxcCheck for Check {
                 "Do not use the `this` argument in `Array#{}()` — use `.bind()` or an arrow function instead.",
                 method_name
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

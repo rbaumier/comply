@@ -59,7 +59,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Production code should not import devDependencies.",
     remediation: "Move the package from `devDependencies` to `dependencies` in `package.json`, \
                   or move this code to a test file.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/no-extraneous-import.md",
     ),

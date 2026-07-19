@@ -122,7 +122,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         &name_node,
         super::META.id,
         format!("Unknown CSS function `{name}`."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

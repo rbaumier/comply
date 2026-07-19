@@ -90,7 +90,7 @@ impl OxcCheck for Check {
                             rule_id: super::META.id.into(),
                             message: "TaggedError constructor super() must spread args (e.g. `super({ ...args, message })`)."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

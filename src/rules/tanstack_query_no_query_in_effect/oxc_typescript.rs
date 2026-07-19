@@ -106,7 +106,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{hook_name}` inside `useEffect` — query hooks manage their own lifecycle."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

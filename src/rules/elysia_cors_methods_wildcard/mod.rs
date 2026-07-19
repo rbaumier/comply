@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-cors-methods-wildcard",
     description: "`cors()` with `credentials: true` but no explicit `methods` allows every HTTP verb.",
     remediation: "Set `methods: ['GET', 'POST', ...]` explicitly when `credentials: true` so non-listed verbs are rejected.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

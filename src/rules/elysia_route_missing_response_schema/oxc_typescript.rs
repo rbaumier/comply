@@ -55,7 +55,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Route validates input but has no `response:` schema \u{2014} Eden/OpenAPI clients lose the success type.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

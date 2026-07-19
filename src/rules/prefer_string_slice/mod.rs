@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer `String#slice()` over `String#substr()` and `String#substring()`.",
     remediation: "Replace `.substring()` / `.substr()` with `.slice()`. \
                   `.slice()` has clearer negative-index semantics and is the modern standard.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

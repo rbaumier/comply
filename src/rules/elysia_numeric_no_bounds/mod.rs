@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-numeric-no-bounds",
     description: "`t.Number()` / `t.Numeric()` is declared without `minimum` or `maximum` bounds.",
     remediation: "Add at least `{ minimum: 1 }` (IDs) or `{ minimum: 0, maximum: 100 }` (percentages) so the schema rejects out-of-range values.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["validation", "elysia"],
 

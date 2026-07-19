@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   boundary, e.g. `const User = z.object({ name: z.string(), age: \
                   z.number() }); User.parse(data)`. A single `typeof x === 'string'` \
                   narrowing is fine — this targets multi-property shape checks.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

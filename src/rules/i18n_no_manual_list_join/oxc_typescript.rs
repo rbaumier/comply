@@ -337,7 +337,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Manual list join leaks English separators. Use `Intl.ListFormat` so commas and `and` translate.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

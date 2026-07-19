@@ -11,7 +11,7 @@ crate::ast_check! { on ["run_instruction"] prefilter = ["yarn install"] => |node
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`yarn install` must be paired with `yarn cache clean` in the same RUN.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

@@ -146,7 +146,7 @@ impl AstCheck for Check {
                       quietly mirrors theirs. List the names explicitly: \
                       `pub use foo::{Bar, Baz};`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

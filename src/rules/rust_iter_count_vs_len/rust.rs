@@ -65,7 +65,7 @@ impl AstCheck for Check {
             "`.iter().count()` walks the whole collection. Use `.len()` \
              directly on the collection (O(1) vs O(n))."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

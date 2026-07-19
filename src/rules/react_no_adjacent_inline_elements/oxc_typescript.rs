@@ -79,7 +79,7 @@ impl OxcCheck for Check {
                         message: "Adjacent inline elements without whitespace — \
                                   add `{' '}` or a wrapper."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

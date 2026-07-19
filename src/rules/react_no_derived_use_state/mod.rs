@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the `useState` and compute the value inline during render, \
                   or use the `key` prop on the component to reset state when the prop \
                   changes. Copying props into state causes stale values.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

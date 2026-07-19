@@ -107,7 +107,7 @@ impl OxcCheck for Check {
                         "`{key_name}: \"{raw}\"` ({ms}ms) \u{2014} durations above 1s feel sluggish and block \
                          interaction."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

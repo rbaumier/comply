@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-array-some",
     description: "Prefer `.some(…)` over `.filter(…).length` checks.",
     remediation: "Replace `.filter(…).length > 0` with `.some(…)` — it short-circuits.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

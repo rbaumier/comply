@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`{o}.{p}` is deprecated. Replace it with its modern equivalent."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -89,7 +89,7 @@ impl OxcCheck for Check {
                          `componentDidMount`, `getDerivedStateFromProps`, \
                          `getSnapshotBeforeUpdate`) or prefix with `UNSAFE_`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use `.len()` directly on the collection — `Vec`, slices, \
                   `VecDeque`, `String`, `HashMap`, and `HashSet` all expose \
                   it in O(1). `.count()` consumes an iterator linearly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

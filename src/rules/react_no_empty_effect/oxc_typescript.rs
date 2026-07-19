@@ -69,7 +69,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`useEffect` has an empty body \u{2014} remove it or add effect logic.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

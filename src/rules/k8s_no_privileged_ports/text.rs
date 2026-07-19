@@ -19,7 +19,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &cp_pair,
                     super::META.id,
                     "Container binds a privileged port (<1024); use a high port and expose via a Service.".into(),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

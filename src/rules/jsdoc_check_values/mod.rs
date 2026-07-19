@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/check-values",
     description: "`@version`, `@since`, `@license` must have a valid value.",
     remediation: "Give `@version` / `@since` a semver-ish string (e.g. `1.2.3`). Give `@license` a non-empty SPDX identifier (e.g. `MIT`). Remove the tag if you don't have a value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/check-values.md",
     ),

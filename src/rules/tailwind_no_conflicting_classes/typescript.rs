@@ -77,7 +77,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     "Conflicting `{prefix}` classes: {} — keep only one.",
                     members.join(", "),
                 ),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

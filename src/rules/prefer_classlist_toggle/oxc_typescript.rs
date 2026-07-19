@@ -44,7 +44,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "prefer-classlist-toggle".into(),
                             message: "Prefer `classList.toggle('class', condition)` over conditional `classList.add/remove`.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "prefer-classlist-toggle".into(),
                             message: "Prefer `classList.toggle('class', condition)` over conditional `classList.add/remove`.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -97,7 +97,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: "prefer-classlist-toggle".into(),
                         message: "Prefer `classList.toggle('class', condition)` over conditional `classList.add/remove`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

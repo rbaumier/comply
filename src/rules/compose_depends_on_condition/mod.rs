@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "compose-depends-on-condition",
     description: "`depends_on:` must use the long form with `condition: service_healthy` (or `_completed_successfully`).",
     remediation: "Rewrite `depends_on: [db]` as a map where each dependency declares `condition:`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker", "docker-compose"],
 

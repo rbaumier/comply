@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "next-no-html-link-for-pages",
     description: "Using `<a href=\"/internal-route\">` causes a full page reload.",
     remediation: "Use `<Link>` from `next/link` for internal navigation to keep client-side routing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/messages/no-html-link-for-pages"),
     categories: &["nextjs", "performance"],
 

@@ -270,7 +270,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Avoid using `as` to narrow types; use a type predicate or `in`/`typeof` check.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-undefined-argument",
     description: "Passing `undefined` as a function argument is pointless.",
     remediation: "Omit the argument instead of passing `undefined` explicitly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-animate-presence-requires-exit",
     description: "`<motion.*>` rendered inside `<AnimatePresence>` must define an `exit` prop to animate on unmount.",
     remediation: "Add `exit={{ ... }}` that mirrors the `initial` prop so the component animates out.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

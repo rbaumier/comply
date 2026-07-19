@@ -33,7 +33,7 @@ impl AstCheck for Check {
             &node,
             super::META.id,
             "`is_deleted BOOLEAN` loses the deletion time — use `deleted_at TIMESTAMPTZ NULL` instead.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

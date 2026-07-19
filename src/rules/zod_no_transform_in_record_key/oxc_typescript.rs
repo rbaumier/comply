@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.transform()` in a `z.record()` key schema mutates object keys after validation — drop the transform or move it to the value schema.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

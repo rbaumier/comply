@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-non-null-asserted-nullish-coalescing",
     description: "`x! ?? y` is contradictory — `!` asserts non-null, `??` handles null.",
     remediation: "Remove the `!` (let `??` do its job) or remove the `??` (if the value is never null).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

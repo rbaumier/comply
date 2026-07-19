@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-includes",
     description: "Prefer `.includes(x)` over `.indexOf(x) !== -1`.",
     remediation: "Replace `.indexOf(x) !== -1` or `.indexOf(x) >= 0` with `.includes(x)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

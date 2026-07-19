@@ -133,7 +133,7 @@ impl OxcCheck for Check {
                             message: "Member is out of order — expected: signatures, \
                                       fields, constructors, methods."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     } else {
@@ -162,7 +162,7 @@ impl OxcCheck for Check {
                             message: "Member is out of order — expected: signatures, \
                                       fields, constructors, methods."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     } else {

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   behavior is the same (everything accepted) but the \
                   TypeScript type is `unknown`, forcing downstream code \
                   to narrow before using the value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "zod"],
 

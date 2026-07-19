@@ -74,7 +74,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "GET handler has no pagination — add `limit`/`cursor` or `page`/`pageSize` to prevent unbounded queries.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

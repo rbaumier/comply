@@ -121,7 +121,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "elysia-service-return-not-throw".into(),
             message: "`throw` in Elysia code breaks typed error propagation — return `status(code, message)` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

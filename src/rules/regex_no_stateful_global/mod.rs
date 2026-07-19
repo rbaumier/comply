@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-stateful-global",
     description: "Global regex used with `.test()` or `.exec()` is stateful via `lastIndex`.",
     remediation: "Remove the `g` flag if using `.test()` or `.exec()` repeatedly, or create the regex inside the loop. The `g` flag makes `lastIndex` persist across calls, causing alternating true/false results.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

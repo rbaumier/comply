@@ -107,7 +107,7 @@ impl AstCheck for Check {
                  equality. Use `(a - b).abs() < EPSILON` with a \
                  domain-appropriate epsilon, or `partial_cmp` for ordering."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

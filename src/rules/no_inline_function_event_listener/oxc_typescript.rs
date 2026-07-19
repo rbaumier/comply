@@ -282,7 +282,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Inline function passed to addEventListener cannot be removed — extract to a named function for proper cleanup.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

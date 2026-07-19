@@ -61,7 +61,7 @@ impl OxcCheck for Check {
                  `POST /api/orders` creates, `GET /api/orders/:id` reads, \
                  `PATCH /api/orders/:id` updates, `DELETE /api/orders/:id` removes."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

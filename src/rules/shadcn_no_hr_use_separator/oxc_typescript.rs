@@ -35,7 +35,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "shadcn-no-hr-use-separator".into(),
             message: "Use the shadcn `<Separator />` component instead of a raw `<hr />`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

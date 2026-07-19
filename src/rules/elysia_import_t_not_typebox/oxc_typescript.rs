@@ -42,7 +42,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Import `t` from `elysia` instead of `Type` from `@sinclair/typebox` — Elysia ships augmented validators.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

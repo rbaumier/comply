@@ -17,7 +17,7 @@ fn report(span_start: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>, ms
         column,
         rule_id: super::META.id.into(),
         message: msg.into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsx-ensure-booleans",
     description: "Left-hand side of `{x && <Jsx />}` must be an unambiguous boolean.",
     remediation: "Coerce with `!!x`, compare (`x > 0`, `x != null`), or use a ternary `cond ? <Jsx /> : null`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

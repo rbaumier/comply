@@ -89,7 +89,7 @@ impl OxcCheck for Check {
                      remove it or replace it with a constant.",
                     param.name
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
                   T if there's no payload). A bool tells the caller \
                   something failed but not why — they can't handle the \
                   error specifically, only choose to give up or retry blindly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

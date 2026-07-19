@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the leading `./` from the first argument of `new URL()`: \
                   use `new URL('file.js', base)` instead of `new URL('./file.js', base)`. \
                   The `./` is redundant in URL resolution.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-no-manual-zindex-overlays",
     description: "Do not set `z-*` on shadcn overlay primitives — they own the stacking order.",
     remediation: "Remove the `z-*` utility; if a layering issue remains, adjust the stacking of surrounding non-overlay elements instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn"],
 

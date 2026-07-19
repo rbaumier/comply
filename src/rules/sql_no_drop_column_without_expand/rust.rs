@@ -30,7 +30,7 @@ impl AstCheck for Check {
                 &node,
                 super::META.id,
                 "DROP COLUMN without a prior deprecation release breaks running deploys — deprecate first, drop later.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
         diagnostics

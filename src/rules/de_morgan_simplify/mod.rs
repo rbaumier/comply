@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "de-morgan-simplify",
     description: "Apply De Morgan's law: `!(a && b)` is `!a || !b`, `!(a || b)` is `!a && !b`.",
     remediation: "Distribute the negation using De Morgan's law. `!(a && b)` becomes `!a || !b` and `!(a || b)` becomes `!a && !b`. The expanded form is easier to reason about.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

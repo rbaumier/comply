@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-cors-allowed-headers-wildcard",
     description: "`cors({ credentials: true })` with wildcard or omitted `allowedHeaders` — browsers reject the preflight.",
     remediation: "List the explicit headers your API accepts (e.g. `allowedHeaders: ['content-type', 'authorization']`). Wildcards are invalid when `credentials: true`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Build a `Map` (or object index) from the array before the loop: \
                   `const map = new Map(items.map(i => [i.id, i]))`, \
                   then use `map.get(key)` inside the loop.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

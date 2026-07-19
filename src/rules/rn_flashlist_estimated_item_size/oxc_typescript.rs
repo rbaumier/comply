@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`<FlashList>` is missing `estimatedItemSize` — required for performance."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

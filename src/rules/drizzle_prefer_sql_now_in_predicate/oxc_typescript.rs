@@ -95,7 +95,7 @@ impl OxcCheck for Check {
                 "`{}(...)` compares a column against the app server's clock (`new Date()` / `Date.now()`) \u{2014} use `` sql`now()` `` (or `` sql`CURRENT_DATE` ``) so the comparison uses the database clock.",
                 callee.name.as_str()
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

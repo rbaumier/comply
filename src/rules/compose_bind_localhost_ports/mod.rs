@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "compose-bind-localhost-ports",
     description: "Database/cache service ports must bind on `127.0.0.1:`.",
     remediation: "Prefix the published port with `127.0.0.1:`, e.g. `127.0.0.1:5432:5432`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker", "docker-compose"],
 

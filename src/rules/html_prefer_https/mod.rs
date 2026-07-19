@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-prefer-https",
     description: "HTML `href`, `src`, and `action` attributes should use `https://` instead of `http://`.",
     remediation: "Use https:// instead of http://",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

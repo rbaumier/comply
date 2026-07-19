@@ -54,7 +54,7 @@ impl OxcCheck for Check {
                                 column: 1,
                                 rule_id: super::META.id.into(),
                                 message: "@yields tag is missing a description — document what each yielded value represents.".into(),
-                                severity: Severity::Warning,
+                                severity: Severity::Error,
                                 span: None,
                             });
                         }

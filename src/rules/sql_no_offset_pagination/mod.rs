@@ -62,7 +62,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `LIMIT N OFFSET M` with cursor-based pagination: \
                   `WHERE id > :last_id ORDER BY id LIMIT N`. OFFSET scans \
                   and discards M rows every time.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

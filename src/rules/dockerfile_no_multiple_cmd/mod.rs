@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-multiple-cmd",
     description: "Only one CMD is honored per build stage; later CMDs override earlier ones.",
     remediation: "Keep a single CMD per stage; combine the arguments into one CMD.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-type-guard",
     description: "Functions named `isX` returning `boolean` with `typeof`/`instanceof` should use type predicates.",
     remediation: "Change the return type from `: boolean` to `: x is Type` to enable type narrowing at call sites.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

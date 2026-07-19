@@ -46,7 +46,7 @@ impl OxcCheck for Check {
                 "Prefer `String#{}()` over `String#{}()`.",
                 replacement, method
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

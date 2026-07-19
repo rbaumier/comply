@@ -132,7 +132,7 @@ fn check_body(body: &oxc_ast::ast::FunctionBody, ctx: &CheckCtx, diagnostics: &m
                 message: "`await` on a log/analytics/track call after a main mutation blocks the response — \
                           drop the `await` or use `after()`/`waitUntil()`."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -60,7 +60,7 @@ crate::ast_check! { on ["macro_invocation", "generic_type"] => |node, source, ct
                 &node,
                 super::META.id,
                 msg.into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
         return;
@@ -75,7 +75,7 @@ crate::ast_check! { on ["macro_invocation", "generic_type"] => |node, source, ct
                 &node,
                 super::META.id,
                 msg.into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

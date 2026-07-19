@@ -76,7 +76,7 @@ crate::ast_check! { on ["start_tag", "self_closing_tag"] prefilter = ["v-memo"] 
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`v-memo=\"[]\"` without `v-for` never re-renders; use `v-once` instead.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

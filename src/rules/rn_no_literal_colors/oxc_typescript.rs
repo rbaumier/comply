@@ -152,7 +152,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Color literal in a React Native style — move it to a named constant or theme variable.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

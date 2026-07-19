@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "ts-no-restricted-types".into(),
                             message: msg.to_string(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

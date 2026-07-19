@@ -143,7 +143,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 "`await` on a log/analytics/track call after a main mutation blocks the response — \
                  drop the `await` or use `after()`/`waitUntil()`."
                     .into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

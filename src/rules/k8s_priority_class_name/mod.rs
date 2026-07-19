@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-priority-class-name",
     description: "Workloads should declare a priorityClassName for scheduling predictability.",
     remediation: "Add `priorityClassName` to the pod spec.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

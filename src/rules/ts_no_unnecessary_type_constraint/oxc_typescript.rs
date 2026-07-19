@@ -51,7 +51,7 @@ impl OxcCheck for Check {
                 "Unnecessary `extends {keyword}` constraint — \
                  all types already extend `{keyword}`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

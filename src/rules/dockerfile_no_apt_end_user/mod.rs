@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-apt-end-user",
     description: "Use `apt-get` instead of the end-user `apt` command.",
     remediation: "Replace `apt` with `apt-get` (or `apt-cache`) inside Dockerfile RUNs.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

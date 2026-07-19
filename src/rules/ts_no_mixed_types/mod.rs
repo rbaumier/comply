@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-mixed-types",
     description: "Interfaces and type aliases should not mix property signatures with method signatures.",
     remediation: "Use consistent signatures: either all properties or all methods.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

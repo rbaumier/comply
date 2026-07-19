@@ -76,7 +76,7 @@ impl OxcCheck for Check {
                             message:
                                 "`@returns` is missing a description — explain what the return value represents."
                                     .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

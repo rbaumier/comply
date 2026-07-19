@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-duplicate-imports",
     description: "Multiple import statements from the same module — merge them.",
     remediation: "Combine all imports from the same module into a single import statement.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports"],
 

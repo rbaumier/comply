@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-magic-numbers",
     description: "Magic numbers in TS/JS make code harder to understand — use named constants instead.",
     remediation: "Extract the number into a named `const`. TS enums, numeric literal types, `readonly` properties, and common values (0, 1, -1) are allowed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-magic-numbers"),
     categories: &["code-quality"],
 

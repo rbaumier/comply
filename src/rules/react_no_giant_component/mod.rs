@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Extract distinct sections (header, body, sidebar, etc.) \
                   into their own components. Large components are harder to \
                   test, review, and reason about.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

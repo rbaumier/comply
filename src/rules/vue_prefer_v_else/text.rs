@@ -25,7 +25,7 @@ impl TextCheck for Check {
                     message: format!(
                         "Replace `v-if=\"{next_cond}\"` with `v-else` since the previous element uses `v-if=\"{cur_cond}\"`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

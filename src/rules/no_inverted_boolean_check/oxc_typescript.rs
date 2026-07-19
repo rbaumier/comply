@@ -55,7 +55,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`!a === b` negates `a` before comparing — use `a !== b` or `!(a === b)`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

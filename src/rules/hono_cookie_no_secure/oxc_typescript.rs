@@ -63,7 +63,7 @@ impl OxcCheck for Check {
             message: "`setCookie()` without `secure: true` — cookie may be \
                       sent over unencrypted HTTP."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

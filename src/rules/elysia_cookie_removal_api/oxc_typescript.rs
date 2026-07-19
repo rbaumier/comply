@@ -45,7 +45,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("`{left_text} = {right_text}` does not clear the cookie — call `cookie.<name>.remove()` instead."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -68,7 +68,7 @@ impl TextCheck for Check {
                                 message: format!(
                                     "`{attr}` uses insecure `http://`. Use https:// instead."
                                 ),
-                                severity: Severity::Warning,
+                                severity: Severity::Error,
                                 span: None,
                             });
                         }

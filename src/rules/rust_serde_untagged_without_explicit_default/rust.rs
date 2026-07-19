@@ -131,7 +131,7 @@ fn check_field_decls(
             "`Option<T>` field in a `#[serde(untagged)]` variant must \
              carry `#[serde(default)]` to make matching deterministic."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }
@@ -158,7 +158,7 @@ fn check_ordered_fields(
             "`Option<T>` field in a `#[serde(untagged)]` tuple variant \
              must carry `#[serde(default)]` to make matching deterministic."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

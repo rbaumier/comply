@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-no-path-concat",
     description: "String concatenation with `__dirname` / `__filename` is platform-dependent.",
     remediation: "Use `path.join()` or `path.resolve()` instead of string concatenation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["node"],
 

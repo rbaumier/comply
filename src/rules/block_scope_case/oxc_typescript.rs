@@ -35,7 +35,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: "block-scope-case".into(),
                         message: "Lexical declaration in `case` clause leaks into sibling cases — wrap the body in `{ ... }`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: Some((span.start as usize, (span.end - span.start) as usize)),
                     });
                     return;
@@ -50,7 +50,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: "block-scope-case".into(),
                         message: "Lexical declaration in `case` clause leaks into sibling cases — wrap the body in `{ ... }`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: Some((span.start as usize, (span.end - span.start) as usize)),
                     });
                     return;

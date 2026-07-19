@@ -301,7 +301,7 @@ impl OxcCheck for Check {
                 message: "Layout reads (e.g. `offsetWidth`, `getBoundingClientRect`) interleaved \
                          with `.style.*` writes force sync layout. Batch reads first, writes second."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

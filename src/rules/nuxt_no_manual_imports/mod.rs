@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "nuxt-no-manual-imports",
     description: "Nuxt auto-imports composables — manual imports are redundant.",
     remediation: "Remove the import; Nuxt auto-imports `useRuntimeConfig`, `useState`, etc.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["nuxt"],
 

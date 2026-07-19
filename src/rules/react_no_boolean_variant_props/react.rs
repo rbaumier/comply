@@ -133,7 +133,7 @@ crate::ast_check! { on ["function_declaration", "arrow_function", "function_expr
             "{count} boolean variant props on this component — collapse into a single \
              `variant: '...' | '...'` union to eliminate mutually-exclusive invalid states."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

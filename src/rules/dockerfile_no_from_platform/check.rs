@@ -15,7 +15,7 @@ crate::ast_check! { on ["from_instruction"] prefilter = ["--platform"] => |node,
                 column: pos.column + 1,
                 rule_id: super::META.id.into(),
                 message: "Avoid `--platform` on FROM; it breaks multi-arch builds.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: Some((child.byte_range().start, child.byte_range().len())),
             });
             return;

@@ -51,7 +51,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.derive(async ...)` body never awaits — handlers receive a Promise and must explicitly await it. Drop `async` or add an `await`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

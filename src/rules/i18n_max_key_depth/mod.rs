@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-max-key-depth",
     description: "t() key nests more than 2 levels deep.",
     remediation: "Flatten the key — locale files read better with at most two nesting levels (`domain.key`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

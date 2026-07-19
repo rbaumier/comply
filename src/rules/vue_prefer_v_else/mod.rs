@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-prefer-v-else",
     description: "Consecutive `v-if=\"X\"` and `v-if=\"!X\"` should use `v-else`.",
     remediation: "Replace the second `v-if=\"!X\"` with `v-else`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

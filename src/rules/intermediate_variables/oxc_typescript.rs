@@ -78,7 +78,7 @@ impl OxcCheck for Check {
             column: col,
             rule_id: super::META.id.into(),
             message: "`if` condition chains three or more boolean operands \u{2014} extract parts into named local variables.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

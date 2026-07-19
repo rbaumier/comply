@@ -45,7 +45,7 @@ impl OxcCheck for Check {
                           matching `removeEventListener` cleanup — listeners leak on \
                           unmount and re-mount."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

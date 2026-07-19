@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-document-cookie",
     description: "Do not use `document.cookie` directly.",
     remediation: "Use a cookie library (e.g. `js-cookie`, `cookie`) instead of raw `document.cookie` access. Direct cookie manipulation is error-prone and hard to maintain.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

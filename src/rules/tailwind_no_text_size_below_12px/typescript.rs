@@ -69,7 +69,7 @@ impl TextCheck for Check {
                     message: format!(
                         "`text-[{value}]` is below 12px — use `text-xs` or larger for accessibility."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

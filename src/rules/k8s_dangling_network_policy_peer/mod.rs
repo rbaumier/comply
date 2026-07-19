@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-dangling-network-policy-peer",
     description: "NetworkPolicy ingress/egress peer podSelectors must match at least one workload's pod template labels.",
     remediation: "Align the peer podSelector with a workload's pod template labels, or remove the dangling rule.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

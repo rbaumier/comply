@@ -63,7 +63,7 @@ impl OxcCheck for Check {
                     message:
                         "IIFE with parenthesized arrow function body is considered unreadable."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

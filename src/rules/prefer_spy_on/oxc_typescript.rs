@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                 "Reassigning `{obj_text}.{prop_text}` with `{framework}.fn()` replaces the \
                  original implementation — use `{framework}.spyOn({obj_text}, '{prop_text}')` instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

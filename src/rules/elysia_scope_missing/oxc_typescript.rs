@@ -89,7 +89,7 @@ impl OxcCheck for Check {
                 "`{}` in an exported plugin without a scope — hooks default to `local` and won't propagate to the parent app.",
                 prop_text
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

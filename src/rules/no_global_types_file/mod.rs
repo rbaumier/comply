@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-global-types-file",
     description: "Forbids global `types.ts` files at project root or shared locations.",
     remediation: "Colocate types with the code that uses them, or use domain-specific type files.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["architecture"],
 

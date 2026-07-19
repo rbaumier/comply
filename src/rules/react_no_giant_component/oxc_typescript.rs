@@ -91,7 +91,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Component `{name}` is {line_count} lines — break into smaller focused components."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

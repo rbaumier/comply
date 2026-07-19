@@ -45,7 +45,7 @@ impl TextCheck for Check {
                     message: format!(
                         "Non-interactive element should not have interactive `role=\"{role}\"`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

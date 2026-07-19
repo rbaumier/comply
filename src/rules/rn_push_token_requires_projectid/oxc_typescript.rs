@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`getExpoPushTokenAsync` must be called with `{ projectId }` — required by EAS.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

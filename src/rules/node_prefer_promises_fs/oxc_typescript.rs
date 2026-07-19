@@ -93,7 +93,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Use `fs.promises.{method}()` instead of callback-based `fs.{method}()`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

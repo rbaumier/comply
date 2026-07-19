@@ -8,7 +8,7 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
         &node,
         super::META.id,
         "Comment narrates history (`was`, `previously`, `refactored`, `rewritten`). Describe current behaviour — history lives in git log.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

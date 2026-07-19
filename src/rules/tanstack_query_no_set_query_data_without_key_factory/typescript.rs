@@ -74,7 +74,7 @@ impl TextCheck for Check {
                     message: "`setQueryData` uses an inline array key — \
                               extract a query key factory so cache writes are findable."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

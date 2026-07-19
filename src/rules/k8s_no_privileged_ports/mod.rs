@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-privileged-ports",
     description: "Container binds a privileged port (<1024); requires NET_BIND_SERVICE or root.",
     remediation: "Bind to a high port (>=1024) and use a Service to expose port 80/443.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

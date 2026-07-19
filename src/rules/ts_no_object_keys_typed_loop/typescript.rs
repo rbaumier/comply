@@ -70,7 +70,7 @@ impl TextCheck for Check {
                              to `any`. Use `Object.entries({ident})` or cast: \
                              `(Object.keys({ident}) as Array<keyof typeof {ident}>){method}(...)`."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

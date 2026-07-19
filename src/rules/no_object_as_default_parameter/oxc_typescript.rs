@@ -54,7 +54,7 @@ fn check_params(params: &FormalParameters, ctx: &CheckCtx, diagnostics: &mut Vec
             column,
             rule_id: super::META.id.into(),
             message,
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

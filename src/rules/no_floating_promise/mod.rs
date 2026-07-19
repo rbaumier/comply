@@ -24,7 +24,7 @@ pub const META: RuleMeta = RuleMeta {
                   intentionally ignore it. An unhandled rejection becomes an \
                   `UnhandledPromiseRejection` warning — and in Node 15+, crashes \
                   the process.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["async"],
 

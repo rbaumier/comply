@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-array-fill",
     description: "Prefer `Array(n).fill(v)` over `Array.from({length: n}, () => v)` for constant fills.",
     remediation: "Use `Array(n).fill(value)` for simpler constant array initialization.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/fill",
     ),

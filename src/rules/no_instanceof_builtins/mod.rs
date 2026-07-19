@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use `Array.isArray(x)` instead of `x instanceof Array`. \
                   For errors, check the `name` property or use `Error.isError()`. \
                   `instanceof` breaks across iframes, VMs, and module boundaries.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

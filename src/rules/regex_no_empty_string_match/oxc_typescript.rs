@@ -375,7 +375,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "regex-no-empty-string-match".into(),
             message: "Regex can match the empty string in `.split()` or `.replace()` \u{2014} this may cause unexpected results.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

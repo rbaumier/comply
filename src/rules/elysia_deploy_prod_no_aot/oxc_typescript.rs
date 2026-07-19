@@ -86,7 +86,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`new Elysia({ ... })` does not set `aot` — for production deployments, set `aot: true` to enable ahead-of-time compilation.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`<Image fill />` without `sizes` \u{2014} the browser downloads the largest image. Add a `sizes` prop.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

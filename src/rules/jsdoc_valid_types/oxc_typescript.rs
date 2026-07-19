@@ -126,7 +126,7 @@ impl OxcCheck for Check {
                                 "`@{}` has an invalid type expression: {reason}",
                                 tag.name
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

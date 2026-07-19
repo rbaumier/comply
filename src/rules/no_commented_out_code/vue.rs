@@ -87,7 +87,7 @@ fn lint_script_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut 
             message: "This comment looks like commented-out code — \
                       delete it. Git history preserves the original."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -65,7 +65,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Non-interactive element `<{tag}>` has an event handler without a `role` attribute."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

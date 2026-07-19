@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "HTML entities like `&apos;`, `&quot;`, `&amp;`, `&gt;` are noise in JSX — React encodes raw characters automatically.",
     remediation: "Replace the entity with the raw character: `&apos;` -> `'`, `&quot;` -> `\"`, `&amp;` -> `&`, `&gt;` -> `>`. \
                   `&lt;` (for a literal `<`) and `&nbsp;` (non-breaking space) are kept as legitimate.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

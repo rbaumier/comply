@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "`{name}` disables the test — re-enable or remove it."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "`{obj_name}.skip(...)` disables the test — re-enable or remove it."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

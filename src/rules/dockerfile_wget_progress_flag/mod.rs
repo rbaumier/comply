@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-wget-progress-flag",
     description: "`wget` without `--progress` flag produces excessively bloated build logs.",
     remediation: "Add `--progress=dot:giga` or `--no-verbose` to `wget` invocations.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

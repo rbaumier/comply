@@ -53,7 +53,7 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
              `indextree`, `slotmap`) where nodes are indices into a single \
              `Vec<T>`."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

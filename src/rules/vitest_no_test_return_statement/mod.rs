@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vitest-no-test-return-statement",
     description: "Returning a non-Promise value from a test callback is silently discarded.",
     remediation: "Drop the `return`. If you need a Promise, mark the callback `async` and `await` the value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/veritem/eslint-plugin-vitest/blob/main/docs/rules/no-test-return-statement.md"),
     categories: &["testing", "vitest"],
 

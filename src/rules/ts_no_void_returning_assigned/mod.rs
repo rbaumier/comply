@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Storing the return value of a known void function — the variable is always `undefined`.",
     remediation: "Drop the assignment, or — if you wanted the side-effect's return — call the right \
                   function (e.g. `.map` instead of `.forEach`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

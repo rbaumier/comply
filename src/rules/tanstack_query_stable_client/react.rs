@@ -110,7 +110,7 @@ crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: "`new QueryClient()` inside a component — hoist to module scope or wrap in `useState(() => new QueryClient())`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

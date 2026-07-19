@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-leaked-resize-observer",
     description: "`new ResizeObserver(...)` in `useEffect` without `.disconnect()` cleanup keeps observing after unmount.",
     remediation: "Capture the observer reference and return a cleanup that calls `.disconnect()` on it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

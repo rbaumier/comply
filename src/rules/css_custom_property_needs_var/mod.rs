@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-custom-property-needs-var",
     description: "Custom properties must be referenced via `var()`.",
     remediation: "Wrap the `--name` in `var(--name)` to read its value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

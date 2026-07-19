@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-host-ipc",
     description: "Pod spec sets `hostIPC: true`; sharing the host IPC namespace is unsafe.",
     remediation: "Remove `hostIPC: true` from the pod spec.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

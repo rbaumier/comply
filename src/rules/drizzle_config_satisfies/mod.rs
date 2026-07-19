@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-config-satisfies",
     description: "`drizzle.config.ts` should use `satisfies Config` instead of `: Config` annotations.",
     remediation: "Replace `const config: Config = { ... }` with `export default { ... } satisfies Config` so Drizzle kit narrows the config type without widening.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle"],
 

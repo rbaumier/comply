@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`test.slow()` without arguments marks the test as always slow \u{2014} optimize it or use the conditional form `test.slow(condition, reason)`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

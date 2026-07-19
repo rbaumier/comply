@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-no-aria-hidden-body",
     description: "`aria-hidden=\"true\"` must not be applied to the `<body>` element.",
     remediation: "Remove `aria-hidden` from `<body>`; scope the attribute to the specific subtree you want to hide.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["a11y"],
 

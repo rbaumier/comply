@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-copy-after-install",
     description: "`COPY . .` must not precede the dependency install step; copy the lockfile and install first.",
     remediation: "Copy `package.json` + lockfile, run install, then `COPY . .` so source edits don't invalidate the deps layer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

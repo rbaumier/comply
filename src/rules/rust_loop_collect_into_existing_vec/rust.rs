@@ -180,7 +180,7 @@ impl AstCheck for Check {
             "`for x in src { dst.push(...); }` is `dst.extend(src.into_iter().map(...))`. \
              `extend` reserves capacity from `size_hint`; the loop reallocates per element."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             message: "`setCookie()` without `sameSite` or with \
                       `sameSite: 'None'` — vulnerable to CSRF."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-useless-assertions",
     description: "Regex contains an assertion that is always true or always false, making it useless.",
     remediation: "Remove the useless assertion or restructure the pattern so the assertion is meaningful.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-useless-assertions.html",
     ),

@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   optional (missing input → default). Remove the `.optional()` \
                   call — combining the two makes the schema accept `undefined` \
                   without applying the default, which is almost never intended.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

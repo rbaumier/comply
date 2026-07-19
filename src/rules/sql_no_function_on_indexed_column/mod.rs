@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-function-on-indexed-column",
     description: "Wrapping a column in a function inside WHERE kills index sargability.",
     remediation: "Avoid `WHERE date_trunc('day', created_at) = ...` / `WHERE LOWER(email) = ...`. Store the normalized form, or add a functional index.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

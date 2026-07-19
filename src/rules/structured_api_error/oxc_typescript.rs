@@ -119,7 +119,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Bare `new Error()` in route handler \u{2014} use a structured error with `{ type, code, status, detail }`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

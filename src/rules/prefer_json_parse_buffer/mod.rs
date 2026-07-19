@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `fs.readFileSync()` when the result is passed to `JSON.parse()`. \
                   `JSON.parse()` accepts a `Buffer` directly, which avoids an \
                   intermediate string allocation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

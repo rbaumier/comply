@@ -60,7 +60,7 @@ impl OxcCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "Layout exports `metadata` but not `viewport` \u{2014} add a `viewport` export with `width: 'device-width'` so nested pages inherit it.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

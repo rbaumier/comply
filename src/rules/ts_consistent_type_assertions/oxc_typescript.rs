@@ -37,7 +37,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Use `as {type_text}` instead of `<{type_text}>`.",),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

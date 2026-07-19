@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-undefined-assignment",
     description: "Assigning `undefined` explicitly is unnecessary.",
     remediation: "Use `let x;` instead of `let x = undefined;`, or use `delete obj.prop` instead of `obj.prop = undefined`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

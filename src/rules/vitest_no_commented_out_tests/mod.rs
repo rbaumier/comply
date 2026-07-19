@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vitest-no-commented-out-tests",
     description: "Commented-out `test(...)` / `it(...)` / `describe(...)` is dead code with mock value.",
     remediation: "Delete the commented test, or move it back behind `.skip` if it's a known-failing case worth tracking.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing", "vitest"],
 

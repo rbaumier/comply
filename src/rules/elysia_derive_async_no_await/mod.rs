@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-derive-async-no-await",
     description: "`.derive(async () => ...)` whose body never `await`s — the async wrapper makes the derived value a Promise that handlers must explicitly await.",
     remediation: "Either drop the `async` keyword or `await` the work inside `.derive(...)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

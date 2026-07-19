@@ -85,7 +85,7 @@ impl TextCheck for Check {
                 column: 1,
                 rule_id: "vue-self-closing-comp".into(),
                 message: format!("`<{tag}></{tag}>` has no children — use `<{tag} />` instead."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

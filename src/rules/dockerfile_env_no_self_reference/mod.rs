@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-env-no-self-reference",
     description: "Within a single ENV, a value referencing a sibling key sees the OLD value.",
     remediation: "Split into separate ENV instructions so each reference resolves to the new value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

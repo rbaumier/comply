@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-restricted-classes",
     description: "User-configured blocklist of Tailwind classes — typically used to ban legacy spacing tokens, ad-hoc colors, or deprecated utility names.",
     remediation: "Use the project-approved equivalent. If the class is needed for a one-off, escape via the project's design-token override mechanism.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

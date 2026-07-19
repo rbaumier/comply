@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-no-hr-use-separator",
     description: "Raw `<hr>` bypasses shadcn theming — use the `<Separator />` component.",
     remediation: "Replace `<hr />` with `<Separator />` (or `<Separator orientation=\"vertical\" />`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn"],
 

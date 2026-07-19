@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-leftjoin-nullable-handling",
     description: "`.leftJoin(...)` returns rows whose joined columns can be `null`, but the destructured result is consumed without a null check.",
     remediation: "Filter out rows whose joined entity is null, or treat the joined fields as nullable in the consumer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "drizzle", "database"],
 

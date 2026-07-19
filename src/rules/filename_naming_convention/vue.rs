@@ -70,7 +70,7 @@ impl TextCheck for Check {
             message: format!(
                 "Vue SFC `{file_name}` should use PascalCase (e.g. `UserProfile.vue`) or kebab-case (e.g. `user-profile.vue`)."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-vendor-prefix-selector",
     description: "Vendor-prefixed CSS selectors are unnecessary with modern autoprefixer tooling.",
     remediation: "Remove the vendor prefix from the selector.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

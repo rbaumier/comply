@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-no-number-schema-with-int",
     description: "Use `z.int()` instead of `z.number().int()` in Zod v4+.",
     remediation: "Use z.int() instead of z.number().int() in Zod v4+",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

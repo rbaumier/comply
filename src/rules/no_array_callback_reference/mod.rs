@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-array-callback-reference",
     description: "Do not pass a function reference directly to an array iterator method.",
     remediation: "Wrap the callback: `.map(x => parseInt(x))` instead of `.map(parseInt)`. Passing a function reference exposes it to unexpected extra arguments (element, index, array).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

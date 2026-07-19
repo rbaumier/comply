@@ -494,7 +494,7 @@ fn collect_format_macros_in(
                           throwaway `String`. Use `write!(f, \"...\", \
                           ...)` to stream directly into the formatter."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

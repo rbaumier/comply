@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-route-version-prefix",
     description: "API routes must start with a version prefix (/v1/, /v2/, …).",
     remediation: "Prefix the route path with a version segment, e.g. `/v1/users`. If routes are mounted on a versioned sub-router, disable this rule for that file.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api-design"],
 

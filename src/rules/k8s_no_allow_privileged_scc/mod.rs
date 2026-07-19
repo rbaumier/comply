@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-allow-privileged-scc",
     description: "OpenShift SecurityContextConstraints must not set allowPrivilegedContainer: true.",
     remediation: "Set `allowPrivilegedContainer: false` on the SecurityContextConstraints, or remove the field.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

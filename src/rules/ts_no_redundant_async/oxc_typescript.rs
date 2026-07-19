@@ -91,7 +91,7 @@ fn make_diag(ctx: &CheckCtx, line: usize, column: usize) -> Diagnostic {
         message: "Redundant `async`/`await`: this function only does `return await expr` \
                   with no try/catch — drop `async` and `await` and return the promise directly."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     }
 }

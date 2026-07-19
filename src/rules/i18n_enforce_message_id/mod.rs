@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-enforce-message-id",
     description: "`<FormattedMessage>` / `formatMessage` without an explicit `id` produces non-deterministic keys at build time and breaks translation tooling.",
     remediation: "Add an explicit `id` prop (or `id` property to the descriptor object). Hashing on `defaultMessage` only is fragile to whitespace edits.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://formatjs.io/docs/tooling/linter#enforce-id"),
     categories: &["i18n"],
 

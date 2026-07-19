@@ -78,7 +78,7 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
             &value,
             super::META.id,
             format!("Use `Vec::with_capacity(...)` instead of `Vec::new()` when `{var_name}` is populated in a for-loop."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

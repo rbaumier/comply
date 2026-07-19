@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-use-cache-mount",
     description: "Package manager RUN steps must use `--mount=type=cache`.",
     remediation: "Prefix the RUN with `--mount=type=cache,target=<cache-dir>` for the tool in use (npm, pnpm, pip, apt).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

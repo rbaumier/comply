@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Rename the file to describe what it actually owns. \
                   `common`/`utils`/`helpers`/`shared`/`misc` are magnet names \
                   that attract unrelated code over time.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

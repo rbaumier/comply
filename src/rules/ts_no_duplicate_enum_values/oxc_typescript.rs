@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: format!("Duplicate enum member value `{val}`."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             } else {

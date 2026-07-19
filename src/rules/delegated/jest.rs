@@ -48,7 +48,7 @@ fn consistent_test_it() -> RuleDef {
         remediation: "Pick one form for this file and convert the others to match: use `it(...)` \
                       everywhere, or `test(...)` everywhere. Mixing `it(...)` and `test(...)` in \
                       the same file makes the test output read inconsistently.",
-        severity: Severity::Warning,
+        severity: Severity::Error,
         doc_url: None,
         categories: &["jest"],
         skip_in_test_dir: false,
@@ -188,7 +188,7 @@ mod tests {
             column: 1,
             rule_id: "jest-consistent-test-it".into(),
             message: "Enforce `test` and `it` usage conventions".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }
     }

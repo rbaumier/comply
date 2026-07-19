@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-promise-reject",
     description: "`Promise.reject()` makes error handling harder — prefer returning error values or throwing typed errors.",
     remediation: "Return a Result type, throw a typed error, or use `Promise.resolve()` with an error discriminant.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["functional"],
 

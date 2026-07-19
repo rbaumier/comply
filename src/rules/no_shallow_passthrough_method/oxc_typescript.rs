@@ -203,7 +203,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Method is a pure pass-through — forwards the same arguments with no added logic. Inline the call or remove the indirection.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

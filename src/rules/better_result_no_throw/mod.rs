@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-no-throw",
     description: "In modules importing better-result, throw is forbidden for domain/infra errors.",
     remediation: "Return Result.err(new TaggedError(...)) instead of throwing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

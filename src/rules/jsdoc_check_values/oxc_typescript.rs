@@ -67,7 +67,7 @@ impl OxcCheck for Check {
                                         "`@{}` value `{}` is not a semver-ish string (expected e.g. `1.2.3`).",
                                         tag.name, body
                                     ),
-                                    severity: Severity::Warning,
+                                    severity: Severity::Error,
                                     span: None,
                                 });
                             }
@@ -83,7 +83,7 @@ impl OxcCheck for Check {
                                     message:
                                         "`@license` tag has no value — add an SPDX identifier like `MIT`."
                                             .into(),
-                                    severity: Severity::Warning,
+                                    severity: Severity::Error,
                                     span: None,
                                 });
                             }

@@ -42,7 +42,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Prefer `String#slice()` over `String#{method}()`."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

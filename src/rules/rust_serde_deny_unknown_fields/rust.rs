@@ -196,7 +196,7 @@ impl AstCheck for Check {
                  fields will be silently dropped. Add the attribute \
                  to catch unknown keys at parse time."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

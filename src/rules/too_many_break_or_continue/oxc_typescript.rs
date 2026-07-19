@@ -104,7 +104,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Loop contains {bc_count} `break`/`continue` statements — consider refactoring."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

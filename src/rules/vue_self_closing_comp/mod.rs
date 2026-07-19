@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-self-closing-comp",
     description: "Components without children should use self-closing syntax in Vue templates.",
     remediation: "Replace `<Foo></Foo>` with `<Foo />`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

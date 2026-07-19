@@ -134,7 +134,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["clone"] => |node, sourc
         &node,
         super::META.id,
         format!("`{obj_name}.clone()` — use `Arc::clone(&{obj_name})` to signal a cheap ref-count bump."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

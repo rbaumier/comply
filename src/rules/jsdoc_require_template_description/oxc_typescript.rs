@@ -62,7 +62,7 @@ impl OxcCheck for Check {
                             column: 1,
                             rule_id: super::META.id.into(),
                             message: "@template tag is missing a description — document the type parameter.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

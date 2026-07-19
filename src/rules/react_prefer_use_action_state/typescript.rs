@@ -58,7 +58,7 @@ impl TextCheck for Check {
                       the React 19 `useActionState` hook collapses all three into one. \
                       `const [state, dispatch, pending] = useActionState(action, initial);`"
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   Tree-shakeable icon/component libraries (lucide-react, \
                   @heroicons/react, @phosphor-icons/react, react-icons) are \
                   exempt.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react", "imports"],
 

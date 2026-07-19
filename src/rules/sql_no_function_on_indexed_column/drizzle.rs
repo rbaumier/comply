@@ -47,7 +47,7 @@ impl AstCheck for Check {
                       usage — store the normalized form or add a functional \
                       index."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-qwik-loader-location",
     description: "Qwik loader/action functions must be in a route boundary file, exported with a `use*` name, and given an inline arrow function.",
     remediation: "Declare route loaders in an `index`/`layout`/`plugin` file under `src/routes`, export them with a `use*` name, and pass an inline arrow function.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://qwik.dev/docs/route-loader/"),
     categories: &["qwik"],
 

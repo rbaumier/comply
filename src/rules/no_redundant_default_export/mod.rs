@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "A default export references the same symbol as a named export.",
     remediation: "Remove either the default export or the named export so each \
                   symbol has a single canonical import path.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["complexity"],
 

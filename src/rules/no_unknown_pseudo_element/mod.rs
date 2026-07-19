@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-unknown-pseudo-element",
     description: "Disallow unknown CSS pseudo-element selectors.",
     remediation: "Use a known pseudo-element, a vendor-prefixed (`-webkit-`/`-moz-`/…) selector, or add the name to the rule's `ignore` list.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://developer.mozilla.org/en-US/docs/Web/CSS/Pseudo-elements"),
     categories: &["css"],
 

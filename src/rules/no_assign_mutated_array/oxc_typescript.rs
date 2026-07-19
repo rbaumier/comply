@@ -144,7 +144,7 @@ impl OxcCheck for Check {
                             "Assigning result of `.{method}()` — mutating method returns the same array. \
                              Use `toSorted()`, `toReversed()`, or spread before mutating: `[...arr].{method}(...)`."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -162,7 +162,7 @@ impl OxcCheck for Check {
                         "Assigning result of `.{method}()` — mutating method returns the same array. \
                          Use `toSorted()`, `toReversed()`, or spread before mutating: `[...arr].{method}(...)`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

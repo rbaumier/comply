@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-shell-utils-in-run",
     description: "Interactive/system tools (ssh, vim, top, kill, ...) do not belong in a RUN.",
     remediation: "Remove these commands from the Dockerfile; configure tooling outside of image build.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

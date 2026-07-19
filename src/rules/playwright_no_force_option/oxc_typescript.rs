@@ -87,7 +87,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "playwright-no-force-option".into(),
                             message: "`force: true` bypasses actionability checks — fix the underlying page state instead.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         return;

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-static-regex",
     description: "Regex literals inside functions are recompiled on each call.",
     remediation: "Hoist the regex to module scope or use a constant.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/nicolo-ribaudo/eslint-plugin-e18e"),
     categories: &["performance"],
 

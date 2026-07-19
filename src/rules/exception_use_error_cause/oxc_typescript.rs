@@ -104,7 +104,7 @@ impl OxcCheck for Check {
                 "`throw new {ctor_name}(...)` inside catch drops the original \
                  stack trace — pass `{{ cause: e }}` as the second argument."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

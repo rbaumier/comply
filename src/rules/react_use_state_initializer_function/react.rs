@@ -38,7 +38,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             "Pass a lazy initializer `() => expr` to `useState` to avoid recomputing on every render.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

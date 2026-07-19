@@ -82,7 +82,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`{local_name}` is imported then re-exported. Use `export … from \"…\"` to re-export it directly."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((span.start as usize, span.size() as usize)),
                 });
             }

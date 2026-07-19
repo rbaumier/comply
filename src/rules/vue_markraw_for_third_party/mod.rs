@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   walk its entire internal state with Proxies — that breaks libraries \
                   and murders performance. Wrap the instance: \
                   `chart.value = markRaw(new Chart(...))`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

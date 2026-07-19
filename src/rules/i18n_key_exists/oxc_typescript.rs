@@ -44,7 +44,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "t() key is malformed (consecutive/leading/trailing dots, empty segment, or non-alphanumeric character) — it cannot resolve to a locale entry.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -149,7 +149,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Duplicate character in regex character class \u{2014} remove the redundant character.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

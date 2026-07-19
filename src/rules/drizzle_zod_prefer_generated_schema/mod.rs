@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-zod-prefer-generated-schema",
     description: "Manual `z.object({})` in a Drizzle schema file duplicates column definitions.",
     remediation: "Use `createInsertSchema`/`createSelectSchema` from `drizzle-zod` to generate Zod schemas from the table definition.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://orm.drizzle.team/docs/zod"),
     categories: &["drizzle", "zod"],
 

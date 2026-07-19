@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "JWT config is missing `exp` \u{2014} tokens will never expire.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

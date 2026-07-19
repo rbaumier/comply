@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-min-hit-area-44",
     description: "Interactive elements (button, a, input) should have a tap target of at least 44×44 CSS pixels.",
     remediation: "Avoid utility classes that force a small size (h-3/w-3/h-4/w-4); pad the element so its hit area is ≥ 44px.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui", "a11y"],
 

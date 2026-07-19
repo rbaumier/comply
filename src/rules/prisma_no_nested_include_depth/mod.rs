@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prisma-no-nested-include-depth",
     description: "Deeply nested `include:` (>3 levels) creates huge join queries that are slow and hard to reason about.",
     remediation: "Split the query into multiple targeted reads, or denormalise the columns you actually need with `select`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["prisma", "performance"],
 

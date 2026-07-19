@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Template literals should not inherit indentation from surrounding code.",
     remediation: "Strip the common leading whitespace from the template literal \
                   content, or use a dedent/stripIndent helper.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

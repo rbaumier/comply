@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-property",
     description: "`@typedef` / `@interface` blocks for object types must declare at least one `@property`.",
     remediation: "Add `@property {Type} name - description` entries for each field of the typedef, or change the typedef's type to a non-object type.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-property.md",
     ),

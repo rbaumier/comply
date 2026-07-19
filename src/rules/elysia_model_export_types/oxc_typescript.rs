@@ -43,7 +43,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Module exports a `t.Object(...)` schema but no `typeof X.static` type — consumers cannot annotate variables with the model type.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

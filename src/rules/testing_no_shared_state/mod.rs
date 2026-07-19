@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-no-shared-state",
     description: "Top-level let/var mutated across test() blocks without being reset in beforeEach — tests become order-dependent.",
     remediation: "Move the variable inside each test, or reset it in beforeEach(). Prefer fresh state per test over shared mutable state.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

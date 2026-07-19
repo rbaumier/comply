@@ -88,7 +88,7 @@ impl OxcCheck for Check {
                       focus ring — use `overflow-clip` or move clipping to a wrapper \
                       without focusable children."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

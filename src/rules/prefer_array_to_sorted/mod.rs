@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-array-to-sorted",
     description: "Prefer `arr.toSorted()` over `[...arr].sort()`.",
     remediation: "Replace `[...arr].sort()` or `arr.slice().sort()` with `arr.toSorted()` (ES2023).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/toSorted",
     ),

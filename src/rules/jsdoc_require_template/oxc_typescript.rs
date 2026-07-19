@@ -195,7 +195,7 @@ impl OxcCheck for Check {
                     message:
                         "Generic signature has no `@template` tag \u{2014} document each type parameter."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

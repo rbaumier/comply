@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-exported-imports",
     description: "An imported binding is re-exported with a plain `export` instead of `export ... from`.",
     remediation: "Re-export the binding directly with `export { Name } from '...'` so the intent to re-export is explicit.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-exported-imports/"),
     categories: &["imports"],
 

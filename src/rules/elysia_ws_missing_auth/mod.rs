@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-ws-missing-auth",
     description: "Elysia `.ws()` route declared without a `beforeHandle` guard.",
     remediation: "Add `beforeHandle` to authenticate the upgrade request before accepting the WebSocket connection.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

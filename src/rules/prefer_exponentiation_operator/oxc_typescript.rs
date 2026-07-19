@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "prefer-exponentiation-operator".into(),
             message: "Use `x ** y` instead of `Math.pow(x, y)` (ES2016).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-yum-y-flag",
     description: "`yum install` must pass `-y` to run non-interactively in builds.",
     remediation: "Add `-y` to your `yum install` command.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

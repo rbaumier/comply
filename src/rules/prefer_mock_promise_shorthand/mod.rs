@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-mock-promise-shorthand",
     description: "Prefer `.mockResolvedValue(x)` / `.mockRejectedValue(x)` over `.mockImplementation(() => Promise.resolve/reject(x))`.",
     remediation: "Use mockResolvedValue/mockRejectedValue instead",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/prefer-mock-promise-shorthand.md",
     ),

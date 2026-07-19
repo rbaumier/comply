@@ -79,7 +79,7 @@ impl OxcCheck for Check {
                  use the full word '{full}'. Editors auto-complete; \
                  readers don't."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

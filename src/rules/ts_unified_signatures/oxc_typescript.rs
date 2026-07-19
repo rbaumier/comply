@@ -293,7 +293,7 @@ fn collect_signatures<'a>(
                     "{display_name} can be unified into a single signature \
                      with a union or optional parameter."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

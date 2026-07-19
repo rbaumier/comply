@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
                   `export const getUser = cache(async (id) => { ... });`. Without \
                   `cache`, two Server Components that both call `getUser(1)` in the \
                   same render issue two separate network requests.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react.dev/reference/react/cache"),
     categories: &["react"],
 

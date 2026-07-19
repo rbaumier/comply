@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-one-iteration-loop",
     description: "Loop body always exits on the first iteration.",
     remediation: "Remove the loop — it is equivalent to the body running once. If a loop is intended, ensure the exit statement is guarded by a condition.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://sonarsource.github.io/rspec/#/rspec/S1751"),
     categories: &["code-quality"],
 

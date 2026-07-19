@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Simple if/else assignment can be a ternary expression.",
     remediation: "Replace `if (c) { x = a; } else { x = b; }` with \
                   `x = c ? a : b;`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

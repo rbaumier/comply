@@ -42,7 +42,7 @@ impl OxcCheck for Check {
             message: format!(
                 "JSX found in `.{ext}` file \u{2014} rename the file to `.{ext}x` or move the JSX out."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

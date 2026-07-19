@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
                   consumers can't redirect, configure, or capture it. \
                   Use `tracing::warn!` / `tracing::error!` so the \
                   consumer's subscriber controls the output.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

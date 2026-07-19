@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-prefer-sql-now-in-predicate",
     description: "Flag a bare `new Date()` / `Date.now()` passed to a Drizzle filter operator (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`between`).",
     remediation: "Compare against the database clock with `` sql`now()` `` (or `` sql`CURRENT_DATE` `` for date-only) instead of the app server's `new Date()` / `Date.now()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle"],
 

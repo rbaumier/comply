@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-apt-clean-lists",
     description: "`apt-get install` must clean `/var/lib/apt/lists/*` in the same RUN layer.",
     remediation: "Append `&& rm -rf /var/lib/apt/lists/*` to the RUN that runs apt-get install.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

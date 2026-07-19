@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-deprecated-property-value",
     description: "Disallow deprecated keyword values in CSS declarations.",
     remediation: "Replace the deprecated keyword with the modern equivalent.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

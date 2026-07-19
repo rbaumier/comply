@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-enforce-logical-properties",
     description: "Physical directional spacing (`ml-`, `mr-`, `pl-`, `pr-`) doesn't flip in RTL — prefer logical (`ms-`, `me-`, `ps-`, `pe-`).",
     remediation: "Replace `ml-4` with `ms-4`, `pr-2` with `pe-2`, etc. The logical pair flips automatically when the writing direction is RTL.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://tailwindcss.com/docs/margin#using-logical-properties"),
     categories: &["tailwind", "internationalization"],
 

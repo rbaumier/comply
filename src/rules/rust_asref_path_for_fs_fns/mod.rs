@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
                   `&str`, `String`, `&Path` or `PathBuf` without \
                   converting. Matches `std::fs` conventions and \
                   avoids needless allocations at the call site.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

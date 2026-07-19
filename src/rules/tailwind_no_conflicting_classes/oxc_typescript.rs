@@ -61,7 +61,7 @@ impl OxcCheck for Check {
                         "Conflicting `{prefix}` classes: {} — keep only one.",
                         members.join(", "),
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

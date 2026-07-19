@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-service-return-not-throw",
     description: "`throw` in an Elysia service breaks typed error propagation — return `status(...)` instead.",
     remediation: "Return `status(code, message)` instead of throwing — Elysia convention for typed error propagation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "elysia"],
 

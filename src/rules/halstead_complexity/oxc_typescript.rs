@@ -124,7 +124,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Halstead {metric} is {value:.0} (threshold {threshold:.0}). Split this function or reduce operator/operand churn."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

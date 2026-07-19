@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   form leaves the key type implicit and makes migrations painful.",
     remediation: "Pass both arguments explicitly: `z.record(z.string(), valueSchema)`. \
                   Use a branded or enum key schema when you want a narrower key type.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

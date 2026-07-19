@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Import from `better-auth/plugins` barrel prevents tree-shaking — use a specific path like `better-auth/plugins/two-factor`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

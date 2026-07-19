@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vitest-no-disabled-tests",
     description: "Disabled tests (`xtest`, `xit`, `xdescribe`, `.skip`) silently erode coverage.",
     remediation: "Re-enable the test, fix the underlying issue, or delete it if it's no longer relevant.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/vitest-dev/eslint-plugin-vitest/blob/main/docs/rules/no-disabled-tests.md",
     ),

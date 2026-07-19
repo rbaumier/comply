@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-no-parse-in-render",
     description: "`schema.parse()` in a render path re-validates every render and throws on bad data.",
     remediation: "Validate at the data fetch boundary (`queryFn`, server action) or in `useMemo`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod", "react", "performance"],
 

@@ -29,7 +29,7 @@ impl TextCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "DDL without `SET lock_timeout` — add `SET lock_timeout = '5s';` at the top to prevent write queue pileups.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

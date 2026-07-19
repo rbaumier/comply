@@ -577,7 +577,7 @@ impl TextCheck for Check {
             column: 1,
             rule_id: "filename-naming-convention".into(),
             message: format!("Filename `{file_name}` does not match naming convention."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

@@ -797,7 +797,7 @@ impl OxcCheck for Check {
                 "Indexing `{obj_name}` (declared `as const`) with an arbitrary key widens the result \
                  to a unioned type and skips the narrow lookup. Cast: `{obj_name}[k as keyof typeof {obj_name}]`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

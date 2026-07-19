@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "perf-route-level-code-split",
     description: "Route components must be imported via `React.lazy()` / dynamic `import()`, not a static `import`.",
     remediation: "Replace `import Foo from './pages/Foo'` with `const Foo = React.lazy(() => import('./pages/Foo'))`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["web-performance", "react"],
 

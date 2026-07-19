@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Custom error class belongs in the matching `*.model.ts` so `.error({ ... })` mapping stays co-located with the schema.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

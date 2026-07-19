@@ -31,7 +31,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Import from a framework-specific path (`better-auth/react`, `/vue`, `/svelte`, `/solid`) instead of `better-auth/client`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

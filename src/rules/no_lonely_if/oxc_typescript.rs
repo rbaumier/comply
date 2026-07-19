@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             message: "Unexpected `if` as the only statement in an `else` block \
                       — use `else if` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

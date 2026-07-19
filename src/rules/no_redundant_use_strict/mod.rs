@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-redundant-use-strict",
     description: "Redundant `\"use strict\"` directive.",
     remediation: "Remove the directive. ES modules and class bodies are always in strict mode, and an enclosing `\"use strict\"` already covers any nested scope, so the directive has no effect.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["suspicious"],
 

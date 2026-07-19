@@ -54,7 +54,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "justify-inaction",
     description: "Empty catch/else/match-arm/loop block without an explaining comment inside.",
     remediation: "Add a comment inside the empty block explaining why the inaction is intentional, or remove the block if it is redundant.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

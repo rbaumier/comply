@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-no-abstract-roles",
     description: "Abstract WAI-ARIA roles must not be used on DOM elements.",
     remediation: "Replace the abstract role with a concrete role from the WAI-ARIA specification.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["a11y"],
 

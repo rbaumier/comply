@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Left-hand side of `&&` before JSX is not a boolean — coerce with `!!` or use a comparison to avoid rendering `0`/`\"\"`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

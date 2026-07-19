@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Mutation-named server functions must use `method: 'POST'`.",
     remediation: "Pass `{ method: 'POST' }` to `createServerFn` when the fn \
                   performs create/update/delete/login/logout side effects.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start"],
 

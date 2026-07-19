@@ -462,7 +462,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Do not pass function `{name}` directly to `.{method_name}(…)` — use `(…) => {name}(…)` instead."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -491,7 +491,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Do not pass `{text}` directly to `.{method_name}(…)` — wrap it in an arrow function."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

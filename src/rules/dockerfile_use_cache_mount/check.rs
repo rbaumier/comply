@@ -32,7 +32,7 @@ crate::ast_check! { on ["run_instruction"] prefilter = ["npm ci", "npm install",
         column: 1,
         rule_id: super::META.id.into(),
         message: "Package-manager RUN step should use `--mount=type=cache` for faster rebuilds.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

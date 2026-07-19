@@ -12,7 +12,7 @@ crate::ast_check! { on ["run_instruction"] prefilter = ["pip install", "pip3 ins
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`pip install` must pass `--no-cache-dir` in Dockerfiles.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "redundant-type-aliases",
     description: "`type X = Y` where Y is a single type adds no structure — it's just renaming.",
     remediation: "Use the original type directly, or add structure (union, intersection, generics) to justify the alias.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                         message: "Unexpected negated condition — swap the if/else branches \
                                   and remove the negation."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -85,7 +85,7 @@ impl OxcCheck for Check {
                         message: "Unexpected negated condition — swap the ternary arms \
                                   and remove the negation."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

@@ -222,7 +222,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Mocking internal module '{path}' couples tests to implementation details — mock boundaries, not internals."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

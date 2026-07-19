@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Use destructured variables over properties.",
     remediation: "A property was already destructured from this object — destructure \
                   this property too instead of accessing it via dot notation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

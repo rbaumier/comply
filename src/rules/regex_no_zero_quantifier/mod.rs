@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-zero-quantifier",
     description: "Quantifier `{0}` or `{0,0}` matches nothing — the pattern is likely a mistake.",
     remediation: "Remove the quantified sub-expression or fix the quantifier.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["regex"],
 

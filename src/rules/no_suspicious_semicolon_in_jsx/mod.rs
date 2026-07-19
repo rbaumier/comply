@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "A semicolon immediately after a closing or self-closing tag is rendered as literal text and is usually a typo.",
     remediation: "Remove the semicolon, or move it inside a JSX expression container \
                   (`{';'}`) if the character is intended to be shown.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

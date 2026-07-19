@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "no-while-loop".into(),
             message: format!("`{loop_type}` loop — prefer recursion or higher-order functions."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

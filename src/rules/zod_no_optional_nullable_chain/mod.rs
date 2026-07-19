@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-no-optional-nullable-chain",
     description: "`.optional().nullable()` should be written as `.nullish()` for clarity.",
     remediation: "Replace `.optional().nullable()` or `.nullable().optional()` with `.nullish()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

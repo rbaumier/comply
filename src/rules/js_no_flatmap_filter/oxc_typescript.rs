@@ -81,7 +81,7 @@ impl OxcCheck for Check {
             message: "`.flatMap().filter()` iterates twice — return `[]` from the `flatMap` \
                       callback to filter and transform in a single pass."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

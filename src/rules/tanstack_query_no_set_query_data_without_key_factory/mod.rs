@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-no-set-query-data-without-key-factory",
     description: "`setQueryData` with an inline array key is invisible to refactors.",
     remediation: "Use a query key factory: `setQueryData(userKeys.detail(id), data)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "arguments-order",
     description: "Detects call sites where argument names suggest wrong order.",
     remediation: "Check argument order matches parameter order in the function signature.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

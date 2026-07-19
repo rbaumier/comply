@@ -35,7 +35,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: "`<script src>` without `defer` or `async` blocks HTML parsing — add `defer` or `async`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-disable-autovacuum",
     description: "Disabling autovacuum on a table causes bloat and XID wraparound.",
     remediation: "Do not set `autovacuum_enabled = false`. If the default is too aggressive, tune `autovacuum_vacuum_scale_factor` / `autovacuum_vacuum_threshold` instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

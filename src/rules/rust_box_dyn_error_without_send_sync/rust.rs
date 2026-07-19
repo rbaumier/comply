@@ -109,7 +109,7 @@ impl AstCheck for Check {
                  cross thread boundaries. Add `+ Send + Sync + 'static` or \
                  use `anyhow::Error`."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

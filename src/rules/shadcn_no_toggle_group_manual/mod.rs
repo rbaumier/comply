@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-no-toggle-group-manual",
     description: "Manual `.map()` → `<Button variant={selected === x ? ... : ...}>` is a toggle group in disguise.",
     remediation: "Replace with `<ToggleGroup value={selected}>` + `<ToggleGroupItem value=\"x\">`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn"],
 

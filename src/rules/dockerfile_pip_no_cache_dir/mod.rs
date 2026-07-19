@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-pip-no-cache-dir",
     description: "`pip install` must pass `--no-cache-dir` in Dockerfiles.",
     remediation: "Add `--no-cache-dir` to your `pip install` command.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Component has 4 or more `useState` calls — likely related state.",
     remediation: "Combine related state into a single `useReducer` to keep \
                   transitions consistent and reduce re-renders.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

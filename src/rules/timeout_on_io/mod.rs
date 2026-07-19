@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Wrap the I/O call with `withTimeout(call, 5_000)` or pass \
                   `{ signal: AbortSignal.timeout(5_000) }`. Default \
                   timeouts: 5s for DB, 10s for external APIs, 30s for file ops.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api"],
 

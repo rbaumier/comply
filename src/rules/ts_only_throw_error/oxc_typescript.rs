@@ -55,7 +55,7 @@ impl OxcCheck for Check {
             message: "Only throw `Error` instances \u{2014} primitives and plain objects \
                       lose stack traces and break `instanceof` checks."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

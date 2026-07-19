@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "perf-no-google-fonts-link",
     description: "Avoid loading fonts from `fonts.googleapis.com`; self-host them instead.",
     remediation: "Download the font files and serve them from your own origin with a `@font-face` declaration.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["web-performance"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-writable-host-mount",
     description: "Pod uses a hostPath volume; mount it as readOnly or remove the host mount entirely.",
     remediation: "Avoid hostPath volumes; if required, mark the corresponding volumeMount as `readOnly: true`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Inline `transitionDuration`/`animationDuration` above 1s — feels sluggish.",
     remediation: "Keep UI transitions under 1s (typically 150-400ms). Long durations block \
                   interaction and harm perceived performance.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

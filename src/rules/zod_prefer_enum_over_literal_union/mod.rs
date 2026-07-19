@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-prefer-enum-over-literal-union",
     description: "`z.union([z.literal('a'), z.literal('b')])` with only string literals should use `z.enum([...])`.",
     remediation: "Use z.enum(['a', 'b']) instead of z.union with literals",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

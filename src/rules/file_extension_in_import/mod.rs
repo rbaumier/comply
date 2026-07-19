@@ -24,7 +24,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "file-extension-in-import",
     description: "Relative imports should include a file extension for ESM compatibility.",
     remediation: "Add the appropriate file extension to the import path (e.g. `.js`, `.ts`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/file-extension-in-import.md",
     ),

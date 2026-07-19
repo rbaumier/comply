@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-consistent-type-specifier-style",
     description: "Type-only imports should use top-level `import type` syntax.",
     remediation: "Use `import type { Foo }` instead of `import { type Foo }`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/consistent-type-specifier-style.md",
     ),

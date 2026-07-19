@@ -39,7 +39,7 @@ impl OxcCheck for Check {
                      allowed \u{2014} add specifiers, use a side-effect import, or \
                      remove the statement."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

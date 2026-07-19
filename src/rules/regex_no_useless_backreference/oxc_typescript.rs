@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             message:
                 "Backreference always resolves to the empty string \u{2014} it references itself or a forward group."
                     .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

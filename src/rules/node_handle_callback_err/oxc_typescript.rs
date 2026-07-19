@@ -146,7 +146,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Callback error parameter `{param_name}` is declared but never used — handle the error."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

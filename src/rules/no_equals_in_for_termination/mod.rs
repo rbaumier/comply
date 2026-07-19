@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-equals-in-for-termination",
     description: "`for` loop uses `==` or `===` in the termination condition.",
     remediation: "Use `<`, `<=`, `>`, or `>=` instead. Equality checks in `for` termination either never execute the body or loop forever if the counter skips the target value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

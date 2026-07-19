@@ -154,7 +154,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`useMemo` wrapping a trivially cheap expression — memo overhead exceeds the computation.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

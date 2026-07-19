@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   not a Promise of one) or add the `await` that justifies it. An \
                   `async` function that never awaits forces callers to unwrap a \
                   Promise for no reason.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["async"],
 

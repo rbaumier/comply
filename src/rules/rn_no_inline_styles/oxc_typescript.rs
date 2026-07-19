@@ -42,7 +42,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Inline style object allocates on every render — use `StyleSheet.create` or `useMemo`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

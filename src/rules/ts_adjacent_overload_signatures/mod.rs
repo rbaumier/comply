@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-adjacent-overload-signatures",
     description: "Function overload signatures must be consecutive for readability.",
     remediation: "Move all overload signatures for the same function name next to each other.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/adjacent-overload-signatures/"),
     categories: &["typescript"],
 

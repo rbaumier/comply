@@ -88,7 +88,7 @@ impl AstCheck for Check {
                      directly. Top-level format helpers are shorter, \
                      faster, and tree-shakeable."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -101,7 +101,7 @@ impl AstCheck for Check {
                 column: pos.column + 1,
                 rule_id: "zod-prefer-top-level-format".into(),
                 message: "`z.number().int()` — use `z.int()` directly.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-unnecessary-parameter-property-assignment",
     description: "Assigning `this.x = x` in a constructor is redundant when `x` is already a parameter property.",
     remediation: "Remove the redundant assignment — the parameter property already handles it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://typescript-eslint.io/rules/no-unnecessary-parameter-property-assignment/",
     ),

@@ -21,7 +21,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &kind_pair,
             super::META.id,
             "Job must set spec.ttlSecondsAfterFinished for cleanup.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
         return;
     };
@@ -32,7 +32,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &kind_pair,
             super::META.id,
             "Job must set spec.ttlSecondsAfterFinished for cleanup.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

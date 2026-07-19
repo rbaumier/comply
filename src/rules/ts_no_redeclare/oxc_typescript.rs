@@ -190,7 +190,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "ts-no-redeclare".into(),
                     message: format!("`{name}` is already defined."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

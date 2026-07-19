@@ -126,7 +126,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: chk.message.into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }
@@ -167,7 +167,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Prefer `Number.NaN` over global `NaN`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

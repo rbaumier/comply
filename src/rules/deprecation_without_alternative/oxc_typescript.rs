@@ -93,7 +93,7 @@ impl OxcCheck for Check {
                 message: "`@deprecated` without a migration message — \
                           add text after the tag explaining what to use instead."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

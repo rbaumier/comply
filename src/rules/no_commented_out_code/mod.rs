@@ -95,7 +95,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Commented-out code is unreviewable, unreachable, and rots.",
     remediation: "Delete the commented-out code. Git history preserves the \
                   original if you need to recover it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["comments"],
 

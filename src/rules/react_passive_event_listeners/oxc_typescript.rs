@@ -113,7 +113,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Add `{{ passive: true }}` to `addEventListener('{event_name}', ...)` to avoid jank."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

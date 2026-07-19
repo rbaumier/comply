@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-start-no-server-import-in-isomorphic-entry",
     description: "Server-only packages (`@sentry/node`, `node:*`, `bun:*`, `pg`) statically imported in a TanStack Start isomorphic entry ship Node code into the client bundle.",
     remediation: "Move the import behind an `if (import.meta.env.SSR)`-gated dynamic `import()`, or relocate it to a server-only module.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

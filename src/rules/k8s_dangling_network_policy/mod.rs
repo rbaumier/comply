@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-dangling-network-policy",
     description: "NetworkPolicy.spec.podSelector.matchLabels must match at least one workload's pod template labels.",
     remediation: "Align the NetworkPolicy podSelector with a workload's pod template labels, or remove the unused NetworkPolicy.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

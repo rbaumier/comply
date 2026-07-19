@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   inject a clock so the test can advance time deterministically. \
                   Tokio offers `tokio::time::pause()` + `advance(d)` for the \
                   latter.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "testing"],
 

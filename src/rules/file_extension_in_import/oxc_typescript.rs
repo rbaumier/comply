@@ -197,7 +197,7 @@ fn check_specifier(
         message: format!(
             "Relative import `{spec}` is missing a file extension. Add an explicit extension (e.g. `.js`, `.ts`) for ESM compatibility.",
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

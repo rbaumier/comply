@@ -40,7 +40,7 @@ impl OxcCheck for Check {
                                 column,
                                 rule_id: super::META.id.into(),
                                 message: "Importing `Animated` from 'react-native' — use 'react-native-reanimated' instead.".into(),
-                                severity: Severity::Warning,
+                                severity: Severity::Error,
                                 span: None,
                             });
                             return;
@@ -59,7 +59,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "`Animated.{prop_name}` is the legacy JS-thread API — use react-native-reanimated."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -76,7 +76,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "`Animated.{prop_name}` is the legacy JS-thread API — use react-native-reanimated."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

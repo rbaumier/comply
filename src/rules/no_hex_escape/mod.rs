@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-hex-escape",
     description: "Enforce the use of Unicode escapes instead of hexadecimal escapes.",
     remediation: "Replace `\\x41` with `\\u0041` — Unicode escapes are more consistent and readable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

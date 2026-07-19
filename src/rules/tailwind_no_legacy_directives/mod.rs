@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-legacy-directives",
     description: "Forbid `@tailwind base/components/utilities` (v3 syntax).",
     remediation: "Replace the three `@tailwind` directives with a single `@import \"tailwindcss\";` at the top of your entry stylesheet (Tailwind v4).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   `redirect('/x')` from `next/navigation`, or `router.push('/x')` from \
                   `useRouter()`. `window.location` triggers a full page reload, dropping the \
                   React tree and Next.js cache.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["nextjs"],
 

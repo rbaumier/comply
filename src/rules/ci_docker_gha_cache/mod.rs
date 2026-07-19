@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   rebuilds every layer from scratch on each run, burning CI minutes.",
     remediation: "Add `cache-from: type=gha` and `cache-to: type=gha,mode=max` to the \
                   step's `with:` block.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ci-cd"],
 

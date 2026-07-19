@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-code-point",
     description: "Prefer `String#codePointAt()` over `String#charCodeAt()` and `String.fromCodePoint()` over `String.fromCharCode()`.",
     remediation: "Use `codePointAt()` instead of `charCodeAt()` and `String.fromCodePoint()` instead of `String.fromCharCode()`. The code-point variants handle full Unicode (including astral symbols) correctly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

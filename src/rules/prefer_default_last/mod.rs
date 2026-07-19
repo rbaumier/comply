@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-default-last",
     description: "`default` clause in switch should be the last clause.",
     remediation: "Move the `default:` clause to the end of the switch statement for readability.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

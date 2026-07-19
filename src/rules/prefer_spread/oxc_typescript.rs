@@ -175,7 +175,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Prefer the spread operator over `Array.from(...)`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -203,7 +203,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Prefer the spread operator over `Array#concat(...)`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -231,7 +231,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Prefer the spread operator over `Array#slice()`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

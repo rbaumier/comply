@@ -191,7 +191,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Component `{tag}` is not PascalCase — rename to PascalCase."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

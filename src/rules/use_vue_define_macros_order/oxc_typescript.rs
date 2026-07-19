@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("`{name}` macro is out of order — order the `<script setup>` macros as configured."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

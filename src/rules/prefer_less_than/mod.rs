@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-less-than",
     description: "Prefer `<` / `<=` over `>` / `>=` for readability.",
     remediation: "Prefer `<` over `>` for readability",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

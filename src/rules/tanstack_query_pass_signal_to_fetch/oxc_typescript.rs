@@ -63,7 +63,7 @@ impl OxcCheck for Check {
                 message: "`queryFn` destructures `{ signal }` but does not pass it to `fetch`. \
                          Forward it: `fetch(url, { signal })` so cancellation aborts the request."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         } else if let Some(param_name) = single_identifier_param(&arrow.params.items) {
@@ -79,7 +79,7 @@ impl OxcCheck for Check {
                 message: "`queryFn` receives the query context but does not pass its `signal` to `fetch`. \
                          Forward it: `fetch(url, { signal: ctx.signal })` so cancellation aborts the request."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

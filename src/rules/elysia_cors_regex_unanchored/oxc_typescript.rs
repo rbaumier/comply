@@ -61,7 +61,7 @@ impl OxcCheck for Check {
                                     column,
                                     rule_id: super::META.id.into(),
                                     message: "CORS origin regex is not anchored with `$` — may match unintended origins.".into(),
-                                    severity: Severity::Warning,
+                                    severity: Severity::Error,
                                     span: None,
                                 });
                             }

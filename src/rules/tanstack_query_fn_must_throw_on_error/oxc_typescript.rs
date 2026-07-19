@@ -64,7 +64,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`queryFn` with `fetch()` must check `res.ok` and throw on error so TanStack Query can retry.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-optional-chain",
     description: "`a && a.b && a.b.c` is verbose and order-sensitive — `a?.b?.c` reads better and short-circuits the same way.",
     remediation: "Use optional chaining `?.` for property and call access on possibly-nullish values.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/prefer-optional-chain/"),
     categories: &["typescript"],
 

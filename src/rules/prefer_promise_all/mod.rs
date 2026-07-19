@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-promise-all",
     description: "Sequential `await` on independent async calls creates an unnecessary waterfall.",
     remediation: "Wrap independent calls in `Promise.all([...])` to run them concurrently.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "code-quality"],
 

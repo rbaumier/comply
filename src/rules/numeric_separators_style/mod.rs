@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "numeric-separators-style",
     description: "Enforce the style of numeric separators by correctly grouping digits.",
     remediation: "Add underscores to group digits: `1000000` → `1_000_000`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

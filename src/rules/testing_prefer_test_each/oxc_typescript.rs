@@ -233,7 +233,7 @@ fn push(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span_start: u32, kind
         message: format!(
             "`{kind}` wraps a `test` / `it` call — replace the loop with `test.each(cases)(...)` so each row is a separate named case."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

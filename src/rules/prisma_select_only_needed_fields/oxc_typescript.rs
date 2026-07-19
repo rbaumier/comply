@@ -87,7 +87,7 @@ impl OxcCheck for Check {
                 rule_id: super::META.id.into(),
                 message: "`findMany()` without `select` fetches every column — add `select: { ... }` for the fields you need."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -106,7 +106,7 @@ impl OxcCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "`findMany()` is missing `select`/`include` — fetches every column."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

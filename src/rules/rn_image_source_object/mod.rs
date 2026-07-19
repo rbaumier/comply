@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-image-source-object",
     description: "`<Image source=\"url\">` is invalid — source must be `{ uri }` or `require()`.",
     remediation: "Use `source={{ uri: 'https://...' }}` or `source={require('./img.png')}`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

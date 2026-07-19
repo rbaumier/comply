@@ -91,7 +91,7 @@ impl OxcCheck for Check {
             message: "`useSession` cookie config must set `httpOnly: true` to prevent \
                       JavaScript access to the session cookie."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

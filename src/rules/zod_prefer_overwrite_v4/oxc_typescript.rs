@@ -99,7 +99,7 @@ impl OxcCheck for Check {
             message: "`.transform()` returns the same-shape value as its input — \
                       use `.overwrite()` (Zod v4) to keep the input type intact."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

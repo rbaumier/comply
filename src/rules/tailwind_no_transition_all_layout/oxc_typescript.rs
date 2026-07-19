@@ -76,7 +76,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`transition-all` combined with layout utilities (w-/h-/top-/left-/\u{2026}) triggers layout on every frame. Use `transition-transform` + `translate-*` or `transition-opacity` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

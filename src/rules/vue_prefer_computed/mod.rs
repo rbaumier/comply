@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "A `watch(src, () => { target.value = fn(src.value) })` pattern is a \
                   derived value — use `const target = computed(() => fn(src.value))` \
                   instead. `computed()` is lazy, cached, and cannot desync.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

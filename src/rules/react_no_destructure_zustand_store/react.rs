@@ -45,7 +45,7 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
              (e.g. `{name}(s => s.field)`) so the component re-renders \
              only when that slice changes."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

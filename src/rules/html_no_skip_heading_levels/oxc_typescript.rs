@@ -74,7 +74,7 @@ impl OxcCheck for Check {
                         "Heading level h{level} skips from h{max_seen}. Use h{} instead.",
                         max_seen + 1
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

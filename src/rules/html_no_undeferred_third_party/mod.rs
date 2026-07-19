@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Third-party `<script>` without `defer`/`async` blocks parsing.",
     remediation: "Add `defer` or `async` to external `<script>` tags, or load \
                   them via `next/script` with `strategy=\"lazyOnload\"`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

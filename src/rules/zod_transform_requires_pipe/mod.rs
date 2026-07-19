@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-transform-requires-pipe",
     description: "`.transform()` returns an untyped value — follow with `.pipe(z.*)` to re-validate.",
     remediation: "Chain `.pipe(z.string())` (or the appropriate schema) after `.transform()` so the transformed value is validated.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-function-type",
     description: "An interface with only a call signature should be a function type.",
     remediation: "Replace `interface Fn { (): T }` with `type Fn = () => T`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/prefer-function-type/"),
     categories: &["typescript"],
 

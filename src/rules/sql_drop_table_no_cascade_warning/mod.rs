@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-drop-table-no-cascade-warning",
     description: "`DROP TABLE` without `IF EXISTS` fails noisily on rerun, and `DROP TABLE ... CASCADE` silently destroys dependent objects.",
     remediation: "Add `IF EXISTS` so reruns are idempotent. Avoid `CASCADE` — drop dependents explicitly so the migration documents what gets removed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql", "migrations"],
 

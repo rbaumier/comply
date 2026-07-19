@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             message: "Don't redirect to an auth route from `useEffect`. Move the guard to \
                      `beforeLoad` and `throw redirect({ to: '/login' })` on the route."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

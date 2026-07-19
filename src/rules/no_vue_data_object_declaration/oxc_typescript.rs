@@ -128,7 +128,7 @@ fn report(span_start: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>) {
         message: "`data` is declared as an object — declare it as a function returning the object \
                   so each component instance gets its own state."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

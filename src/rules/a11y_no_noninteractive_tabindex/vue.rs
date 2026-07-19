@@ -31,7 +31,7 @@ impl TextCheck for Check {
                             "Non-interactive element `<{}>` should not have `tabindex`.",
                             elem.tag
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

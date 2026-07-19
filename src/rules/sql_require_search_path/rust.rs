@@ -82,7 +82,7 @@ impl AstCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Migration must `SET search_path = pg_catalog, public;` (or use schema-qualified names) to prevent identifier hijacking.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((byte_start, byte_len)),
         });
     }

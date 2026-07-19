@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "duplicate-export",
     description: "Same symbol is re-exported by multiple barrel files, creating ambiguous import paths.",
     remediation: "Remove the duplicate re-export from one of the barrels so each symbol has a single canonical import path.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports", "code-quality"],
 

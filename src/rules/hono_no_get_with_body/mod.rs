@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "hono-no-get-with-body",
     description: "GET and HEAD requests do not have a body — calling `c.req.json()` / `text()` / `parseBody()` / `formData()` is a bug.",
     remediation: "Use query parameters or path parameters for GET/HEAD routes. Move body-consuming logic to POST/PUT/PATCH.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["hono", "correctness"],
 

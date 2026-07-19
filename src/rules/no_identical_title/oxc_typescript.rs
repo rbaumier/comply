@@ -123,7 +123,7 @@ fn check_statements(
                 message: format!(
                     "Duplicate {kind} title {title:?} in the same scope — use a unique title."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "TODO/FIXME with an expiration date that has passed should be resolved.",
     remediation: "Resolve the TODO/FIXME — the expiration date has passed. \
                   Either complete the task or update the date.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

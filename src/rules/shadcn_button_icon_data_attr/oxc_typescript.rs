@@ -135,7 +135,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Icon inside `<Button>` uses `mr-2`/`ml-2` — replace with `data-icon=\"inline-start\"` or `data-icon=\"inline-end\"`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 continue;
@@ -155,7 +155,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Icon child of `<Button>` is missing a `data-icon` attribute — add `data-icon=\"inline-start\"` or `data-icon=\"inline-end\"`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

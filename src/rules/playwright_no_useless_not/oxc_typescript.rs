@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "playwright-no-useless-not".into(),
             message: format!("Unexpected usage of not.{matcher_name}(). Use {inverse}() instead."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

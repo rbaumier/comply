@@ -183,7 +183,7 @@ impl OxcCheck for Check {
             message: "Function declared inside a loop captures the loop variable by \
                       reference and may read a stale value. Move it outside."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

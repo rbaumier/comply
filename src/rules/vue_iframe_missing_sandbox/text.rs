@@ -28,7 +28,7 @@ impl TextCheck for Check {
                               the parent page. Add `sandbox` to restrict its \
                               capabilities."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

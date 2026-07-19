@@ -89,7 +89,7 @@ impl TextCheck for Check {
                         column: 1,
                         rule_id: "comment-prose-quality".into(),
                         message: format!("Weasel word `{weasel}` in comment — be specific."),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     break; // One weasel diagnostic per line.
@@ -107,7 +107,7 @@ impl TextCheck for Check {
                         message: format!(
                             "Passive voice `{passive}` in comment — use active voice."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     break;
@@ -141,7 +141,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "comment-prose-quality".into(),
                     message: format!("Lexical illusion: `{first}` repeated across lines."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

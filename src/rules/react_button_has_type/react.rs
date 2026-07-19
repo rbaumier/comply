@@ -54,7 +54,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
                       defaults to `submit`, which may cause unexpected \
                       form submissions."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

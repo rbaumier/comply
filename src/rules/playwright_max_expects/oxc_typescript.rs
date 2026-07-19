@@ -117,7 +117,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Too many assertion calls ({count}) — maximum allowed is {max_expects}."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

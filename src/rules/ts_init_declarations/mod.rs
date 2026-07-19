@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-init-declarations",
     description: "Variables should be initialized at declaration — uninitialized declarations are error-prone.",
     remediation: "Add an initializer to the variable declaration, or use `declare` for ambient contexts.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/init-declarations"),
     categories: &["typescript"],
 

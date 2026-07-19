@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-useradd-low-uid",
     description: "`useradd` without `-l` flag and high UID creates an excessively large image due to sparse `/var/log/lastlog`.",
     remediation: "Add `-l` flag to `useradd` or use a low UID (below 65534).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

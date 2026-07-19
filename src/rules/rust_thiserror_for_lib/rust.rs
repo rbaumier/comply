@@ -85,7 +85,7 @@ crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "Use `#[derive(thiserror::Error)]` for library error types — avoids boilerplate `Display` impls.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

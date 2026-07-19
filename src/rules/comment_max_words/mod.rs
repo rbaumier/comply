@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "comment-max-words",
     description: "Comment sentence exceeds 25 words.",
     remediation: "Split long comment sentences — one idea per sentence keeps the intent scannable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-no-positive-tabindex",
     description: "HTML `tabindex` attribute must not be positive — it breaks natural tab order.",
     remediation: "Use `tabindex=\"0\"` (or `-1`) and rely on document order for focus sequence.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["a11y"],
 

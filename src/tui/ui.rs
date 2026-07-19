@@ -147,7 +147,6 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             let diag_line = diag.line;
             let sev_style = match diag.severity {
                 Severity::Error => Style::default().fg(Color::Red),
-                Severity::Warning => Style::default().fg(Color::Yellow),
             };
             let rule_id = diag.rule_id.clone();
             let message = diag.message.clone();
@@ -285,25 +284,13 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             let mut lines: Vec<Line<'_>> = Vec::new();
 
             if let Some(info) = app.current_group_info() {
-                if let Some((total, errors, warnings)) = info.summary {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{} violations", total),
-                            Style::default()
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw("  "),
-                        Span::styled(
-                            format!("{} errors", errors),
-                            Style::default().fg(Color::Red),
-                        ),
-                        Span::raw("  "),
-                        Span::styled(
-                            format!("{} warnings", warnings),
-                            Style::default().fg(Color::Yellow),
-                        ),
-                    ]));
+                if let Some(total) = info.summary {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("{} violations", total),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    )]));
                 }
                 lines.push(Line::from(""));
 
@@ -373,9 +360,7 @@ fn build_row_line<'a>(app: &'a App, row_index: usize, width: u16) -> Line<'a> {
             let summary_text = match summary {
                 Some(s) => match app.view_mode {
                     ViewMode::All => String::new(),
-                    ViewMode::ByFile => {
-                        format!("  {} ({} err, {} warn)", s.total, s.errors, s.warnings)
-                    }
+                    ViewMode::ByFile => format!("  {}", s.total),
                     ViewMode::ByRule => format!("  {} across {} files", s.total, s.file_count),
                 },
                 None => String::new(),
@@ -395,7 +380,6 @@ fn build_row_line<'a>(app: &'a App, row_index: usize, width: u16) -> Line<'a> {
             let diag = &app.diagnostics[*index];
             let (icon, sev_style) = match diag.severity {
                 Severity::Error => ("✖", Style::default().fg(Color::Red)),
-                Severity::Warning => ("⚠", Style::default().fg(Color::Yellow)),
             };
             let indent = if app.view_mode == ViewMode::All {
                 ""

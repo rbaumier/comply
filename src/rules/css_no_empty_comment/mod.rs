@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-empty-comment",
     description: "Disallow empty CSS comments.",
     remediation: "Remove the empty comment or add meaningful text.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-excessive-selector-classes",
     description: "Limit the number of class selectors in a single CSS selector.",
     remediation: "Reduce the number of chained class selectors, or split the selector into simpler selectors.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-excessive-selector-classes/"),
     categories: &["css"],
 

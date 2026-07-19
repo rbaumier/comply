@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-no-display-none-exit",
     description: "`display: none` can't be animated; a class/state that toggles it blocks the exit transition.",
     remediation: "Pair `display: none` with `opacity: 0` and `transform: translate...` (or use `visibility`) so the exit can be animated.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

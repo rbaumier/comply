@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-set-status-after-return",
     description: "`set.status = ...` written after a `return` is dead code — Elysia has already serialized the response.",
     remediation: "Set `set.status` before the `return` statement that emits the response body.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

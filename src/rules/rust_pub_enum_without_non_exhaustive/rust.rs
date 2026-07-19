@@ -130,7 +130,7 @@ impl AstCheck for Check {
                  a new variant later becomes a SemVer-breaking change. \
                  Add the attribute to keep the API future-proof."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

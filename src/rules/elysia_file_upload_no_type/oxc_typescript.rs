@@ -50,7 +50,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`t.File`/`t.Files` without `type` constraint — any MIME type is accepted.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

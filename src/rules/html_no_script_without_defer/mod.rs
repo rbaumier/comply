@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   scripts, or `async` (runs as soon as it loads) for independent scripts. \
                   Without either, the browser stops parsing HTML to fetch and execute the \
                   script, delaying First Contentful Paint.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

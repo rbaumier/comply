@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-process-exit",
     description: "`process.exit()` terminates abruptly — throw an error instead.",
     remediation: "Replace `process.exit()` with `throw new Error(...)`. Only use `process.exit()` in CLI entry points.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -45,7 +45,7 @@ impl TextCheck for Check {
                           declare a shared lint policy (clippy/rust/rustdoc) \
                           so member crates can inherit it."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -76,7 +76,7 @@ impl TextCheck for Check {
                               add `[lints]` and `workspace = true` to share the \
                               workspace's lint policy."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

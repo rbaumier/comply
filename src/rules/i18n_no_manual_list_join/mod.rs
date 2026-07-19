@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-no-manual-list-join",
     description: "Array joined with a locale-specific separator instead of Intl.ListFormat.",
     remediation: "Use `new Intl.ListFormat(locale, { type: 'conjunction' }).format(list)` so separators translate.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

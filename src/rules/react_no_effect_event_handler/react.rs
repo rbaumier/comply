@@ -100,7 +100,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         message: format!(
             "`useEffect` simulating an event handler — `{test_name}` change should be handled where it is set."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

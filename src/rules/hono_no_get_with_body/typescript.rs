@@ -97,7 +97,7 @@ impl TextCheck for Check {
                     "{verb} handler reads the request body via `{}` — {verb} requests have no body.",
                     call.trim_end_matches('(')
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             })
             .collect()

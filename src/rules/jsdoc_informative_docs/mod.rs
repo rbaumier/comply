@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc-informative-docs",
     description: "JSDoc description merely repeats the name of the symbol without adding useful information.",
     remediation: "Rewrite the JSDoc to explain *why* or *how* the symbol works, not just restate its name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/informative-docs.md",
     ),

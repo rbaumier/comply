@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Hooks add implicit shared state between tests.",
     remediation: "Replace hooks with explicit helper functions called in each \
                   test body.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-hooks.md",
     ),

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-require-healthcheck",
     description: "Production Dockerfile must declare a HEALTHCHECK.",
     remediation: "Add `HEALTHCHECK --interval=30s CMD curl -f http://localhost:PORT/health || exit 1`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

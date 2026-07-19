@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-drop-column-without-expand",
     description: "`DROP COLUMN` without a prior deprecation release breaks running deploys.",
     remediation: "Mark the column unused in a previous release (stop writing/reading it from the app), ship, *then* `DROP COLUMN` in a later migration. Dropping live columns invalidates cached query plans in every connected client.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

@@ -28,7 +28,7 @@ pub const META: RuleMeta = RuleMeta {
                   function accomplishes. `data` → `parsedOrder`, `temp` \
                   → name the actual intermediate, `processOrder` → \
                   `fulfillOrder`, `doPayment` → `chargeCustomer`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
 

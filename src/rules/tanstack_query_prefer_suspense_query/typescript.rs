@@ -80,7 +80,7 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
         message: "`useQuery` with an `if (isPending|isLoading) return …` guard \
                   should use `useSuspenseQuery` and a `<Suspense>` boundary — \
                   `data` will be guaranteed defined.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

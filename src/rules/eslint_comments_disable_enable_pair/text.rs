@@ -73,7 +73,7 @@ impl TextCheck for Check {
                     message: "`/* eslint-disable */` block has no matching `/* eslint-enable */` \
                               — the rule stays disabled for the rest of the file."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

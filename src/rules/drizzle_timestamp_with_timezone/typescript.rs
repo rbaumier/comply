@@ -96,7 +96,7 @@ impl AstCheck for Check {
                       — ambiguous across time zones. Always use \
                       `timestamp('col', { withTimezone: true })`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

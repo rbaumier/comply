@@ -11,7 +11,7 @@ crate::ast_check! { on ["run_instruction"] prefilter = ["yum install"] => |node,
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`yum install` must pass `-y` to run non-interactively.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

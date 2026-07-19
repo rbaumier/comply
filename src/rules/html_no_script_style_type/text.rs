@@ -36,7 +36,7 @@ impl TextCheck for Check {
                         message:
                             "Redundant `type` attribute: this is the default and can be omitted."
                                 .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     search_from = match_start + pattern.len();

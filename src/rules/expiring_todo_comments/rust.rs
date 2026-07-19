@@ -11,7 +11,7 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
             &node,
             super::META.id,
             diag_msg,
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

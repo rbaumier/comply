@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             message: "`z.object({...}).strict()` is deprecated in Zod v4 — \
                       use `z.strictObject({...})` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

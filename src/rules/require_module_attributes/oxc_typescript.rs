@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                 "{stmt_type} statement has an empty `with {{}}` clause \u{2014} \
                  add the required attributes or remove the clause."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

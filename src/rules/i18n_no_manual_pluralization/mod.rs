@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-no-manual-pluralization",
     description: "Manual `count === 1 ? singular : plural` ignores CLDR plural rules for non-English languages.",
     remediation: "Use `t('key', { count })` — i18next applies CLDR plural rules automatically.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

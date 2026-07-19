@@ -86,7 +86,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
                     message: format!(
                         "Invalid `rel` value `{token}` on `<{tag}>`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

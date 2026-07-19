@@ -80,7 +80,7 @@ crate::ast_check! { on ["feature_query", "parenthesized_value"] => |node, source
         &name_node,
         super::META.id,
         format!("Unknown media feature `{name}`."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

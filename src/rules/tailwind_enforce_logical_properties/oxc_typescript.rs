@@ -58,7 +58,7 @@ impl OxcCheck for Check {
                 "Physical directional spacing — prefer the logical equivalent \
                  (e.g. `{logical_hint}…`) so the layout flips correctly in RTL."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

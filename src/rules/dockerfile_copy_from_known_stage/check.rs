@@ -60,7 +60,7 @@ crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: format!("`--from={target}` does not match any known build stage."),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((highlight.byte_range().start, highlight.byte_range().len())),
     });
 }

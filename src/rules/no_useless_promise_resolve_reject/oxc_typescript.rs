@@ -95,7 +95,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Unnecessary `Promise.{prop}()` in async function — {replacement}."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

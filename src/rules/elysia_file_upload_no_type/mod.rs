@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-file-upload-no-type",
     description: "`t.File()` / `t.Files()` without `type` constraint — accepts any file type.",
     remediation: "Set `type: ['image/png', 'image/jpeg']` (or another allowlist) on file upload schemas.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

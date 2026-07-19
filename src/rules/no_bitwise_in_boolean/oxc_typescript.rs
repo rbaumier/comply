@@ -223,7 +223,7 @@ impl OxcCheck for Check {
             column: col,
             rule_id: super::META.id.into(),
             message: "Bitwise operator in boolean context — did you mean `&&` or `||`?".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

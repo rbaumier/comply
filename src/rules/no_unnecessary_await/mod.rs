@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the unnecessary `await` — literals, arrays, functions, \
                   and other non-thenable values resolve synchronously and the \
                   `await` just adds confusion.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

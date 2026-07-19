@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-dynamic-delete",
     description: "Using `delete` on a computed key is error-prone — use `Map` or `Set` instead.",
     remediation: "Remove the dynamic `delete` and use a `Map`/`Set`, or delete a static key.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-dynamic-delete/"),
     categories: &["typescript"],
 

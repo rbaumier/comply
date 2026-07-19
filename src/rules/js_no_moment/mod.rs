@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "moment.js is 300kB+ — use `date-fns`, `dayjs`, or `Temporal` instead.",
     remediation: "Replace `moment` with a smaller library (`date-fns`, `dayjs`) or the \
                   native `Temporal` API.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["bundle-size"],
 

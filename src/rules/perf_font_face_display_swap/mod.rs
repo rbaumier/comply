@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "perf-font-face-display-swap",
     description: "Every `@font-face` block must declare `font-display: swap`.",
     remediation: "Add `font-display: swap;` inside the `@font-face` rule.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["web-performance"],
 

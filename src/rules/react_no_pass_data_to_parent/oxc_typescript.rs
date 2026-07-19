@@ -111,7 +111,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Effect only calls `{func_name}` to pass data to parent \u{2014} lift state to avoid the extra render cycle."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -70,7 +70,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Prefer `String#replaceAll()` over `String#replace()` with a global regex."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

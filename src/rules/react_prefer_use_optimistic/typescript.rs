@@ -245,7 +245,7 @@ impl TextCheck for Check {
                         "Rolling back state in a `catch` is the manual optimistic-update pattern \
                               — `useOptimistic` handles rollback for you and is race-safe."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-no-empty-custom-schema",
     description: "`z.custom()` without a validator function accepts any value.",
     remediation: "Provide a validator function to z.custom()",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

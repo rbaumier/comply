@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`Route.useSearch()` without `validateSearch:` in the route config accepts untyped search params.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             }];
         }

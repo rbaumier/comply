@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-empty-effect",
     description: "`useEffect` called with an empty callback body does nothing.",
     remediation: "Remove empty useEffect or add effect logic",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

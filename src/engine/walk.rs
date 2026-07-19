@@ -104,16 +104,11 @@ pub(super) fn run_multiplexed_walk(
         }
     });
 
-    for (i, (meta, check)) in ld.multiplexed.iter().enumerate() {
+    for (i, (_, check)) in ld.multiplexed.iter().enumerate() {
         if !enabled[i] {
             continue;
         }
         check.finish(ctx, states[i].take(), &mut per_rule_diags[i]);
-        if let Some(sev) = config.severity_for(meta.id) {
-            for d in &mut per_rule_diags[i] {
-                d.severity = sev;
-            }
-        }
         diagnostics.append(&mut per_rule_diags[i]);
     }
 }
@@ -138,12 +133,7 @@ pub(super) fn run_legacy_checks(
         {
             continue;
         }
-        let mut produced = check.check(ctx, tree);
-        if let Some(sev) = config.severity_for(meta.id) {
-            for d in &mut produced {
-                d.severity = sev;
-            }
-        }
+        let produced = check.check(ctx, tree);
         diagnostics.extend(produced);
     }
 }

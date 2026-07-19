@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-prefer-channel-over-arc-mutex-vec",
     description: "`Arc<Mutex<Vec<` for collecting task results adds contention. Use `mpsc::channel` instead.",
     remediation: "Use `let (tx, rx) = mpsc::channel(); ... tx.send(result); let results: Vec<_> = rx.iter().collect();`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

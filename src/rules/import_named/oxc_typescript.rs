@@ -144,7 +144,7 @@ impl OxcCheck for Check {
                         "`{}` is not exported by `{}`.",
                         imp.imported_name, imp.specifier
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

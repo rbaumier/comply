@@ -51,7 +51,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `next/head` (pages) or the metadata API (app) instead of a raw `<head>` element.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((span_start, span_len)),
         });
     }

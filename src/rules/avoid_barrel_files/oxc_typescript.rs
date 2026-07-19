@@ -75,7 +75,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Barrel file — {reexport_count} re-exports and no other code. Import directly from source modules."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

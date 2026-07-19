@@ -124,7 +124,7 @@ impl TextCheck for Check {
                 message: format!(
                     "`include:` is nested {depth} levels deep — keep nesting at or below {max_depth} to avoid huge join queries."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             })
             .collect()

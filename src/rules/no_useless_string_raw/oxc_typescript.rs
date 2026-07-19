@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`String.raw` is useless when the template has no backslash escape.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

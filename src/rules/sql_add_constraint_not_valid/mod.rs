@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-add-constraint-not-valid",
     description: "ALTER TABLE ADD CONSTRAINT must use NOT VALID then a separate VALIDATE.",
     remediation: "Split the migration: first `ALTER TABLE t ADD CONSTRAINT ... NOT VALID`, then in a later step `ALTER TABLE t VALIDATE CONSTRAINT ...`. Otherwise the ADD takes an AccessExclusiveLock while scanning the whole table.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

@@ -49,7 +49,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`createInsertSchema(table)` must chain `.omit({ id: true, createdAt: true, ... })` so API consumers don't submit DB-generated columns.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -65,7 +65,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`createInsertSchema(table).omit(...)` must drop the generated `id` column at minimum.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -216,14 +216,6 @@ fn escape_cell(s: &str) -> String {
 fn severity_str(s: Severity) -> &'static str {
     match s {
         Severity::Error => "error",
-        Severity::Warning => "warning",
-    }
-}
-
-fn severity_emoji(s: Severity) -> &'static str {
-    match s {
-        Severity::Error => "❌",
-        Severity::Warning => "⚠️",
     }
 }
 
@@ -290,14 +282,13 @@ fn markdown_string(rules: &[rules::RuleDef]) -> String {
     for (cat, group) in &by_category {
         writeln!(out, "## {cat}").unwrap();
         writeln!(out).unwrap();
-        writeln!(out, "| Rule | Severity | Description | Remediation |").unwrap();
-        writeln!(out, "|------|----------|-------------|-------------|").unwrap();
+        writeln!(out, "| Rule | Description | Remediation |").unwrap();
+        writeln!(out, "|------|-------------|-------------|").unwrap();
         for rule in group {
             let id = rule.meta.id;
-            let sev = severity_emoji(rule.meta.severity);
             let desc = escape_cell(rule.meta.description);
             let remediation = escape_cell(rule.meta.remediation);
-            writeln!(out, "| `{id}` | {sev} | {desc} | {remediation} |").unwrap();
+            writeln!(out, "| `{id}` | {desc} | {remediation} |").unwrap();
         }
         writeln!(out).unwrap();
     }

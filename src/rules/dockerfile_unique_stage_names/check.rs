@@ -28,7 +28,7 @@ crate::ast_check! { on ["from_instruction"] => |node, source, ctx, diagnostics|
                         column: pos.column + 1,
                         rule_id: super::META.id.into(),
                         message: format!("Stage alias `{alias}` is already defined earlier."),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: Some((node.byte_range().start, node.byte_range().len())),
                     });
                     return;

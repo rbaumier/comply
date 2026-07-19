@@ -60,7 +60,7 @@ crate::ast_check! { on ["return_expression", "continue_expression"] => |node, _s
         message: format!(
             "Redundant `{keyword}` \u{2014} execution already falls through here."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -130,7 +130,7 @@ impl TextCheck for Check {
                     "dependency `{dep}` is declared in package.json but never imported. \
                      Remove it, or add an import if it's actually needed."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

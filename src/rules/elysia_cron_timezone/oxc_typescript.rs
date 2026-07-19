@@ -74,7 +74,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("`timezone: '{tz}'` is not an IANA identifier — use `America/Los_Angeles` style instead."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

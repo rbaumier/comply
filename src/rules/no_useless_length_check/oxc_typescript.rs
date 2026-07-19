@@ -97,7 +97,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: super::META.id.into(),
                             message: "The non-empty check is useless as `Array#some()` returns `false` for an empty array.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         return;
@@ -116,7 +116,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: super::META.id.into(),
                             message: "The empty check is useless as `Array#every()` returns `true` for an empty array.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

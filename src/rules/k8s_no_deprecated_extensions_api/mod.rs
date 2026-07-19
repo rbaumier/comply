@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-deprecated-extensions-api",
     description: "Manifests must not use the removed `extensions/v1beta*` apiVersion.",
     remediation: "Migrate to `apps/v1` (Deployment/DaemonSet/ReplicaSet), `networking.k8s.io/v1` (Ingress/NetworkPolicy), or `policy/v1` (PodSecurityPolicy successors).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

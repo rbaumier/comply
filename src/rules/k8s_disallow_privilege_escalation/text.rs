@@ -19,7 +19,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &container,
                 super::META.id,
                 "Container must set securityContext.allowPrivilegeEscalation: false.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

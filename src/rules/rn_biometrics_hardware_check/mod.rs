@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-biometrics-hardware-check",
     description: "`authenticateAsync` must be preceded by `hasHardwareAsync` / `isEnrolledAsync`.",
     remediation: "Await both checks before calling `LocalAuthentication.authenticateAsync()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

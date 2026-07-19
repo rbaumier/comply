@@ -38,7 +38,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`LIKE '%...'` forces a sequential scan — use TSVECTOR + GIN \
                       index with `@@` for full-text search.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -77,7 +77,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 &node,
                 super::META.id,
                 format!("Deprecated Tailwind class `{base}` — use `{replacement}` instead."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

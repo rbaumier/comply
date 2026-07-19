@@ -198,7 +198,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "Type `{name}` mixes server-managed fields ({joined}) with other fields; split into separate input/output types so clients don't own server-assigned values."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -225,7 +225,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "Type `{name}` mixes server-managed fields ({joined}) with other fields; split into separate input/output types so clients don't own server-assigned values."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

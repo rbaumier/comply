@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Explicit `any` disables type checking — use `unknown` or a precise type.",
     remediation: "Replace `any` with `unknown` (when the value's shape is unknown — forces narrowing at use site), \
                   or with a precise type / generic when known.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-explicit-any/"),
     categories: &["typescript"],
 

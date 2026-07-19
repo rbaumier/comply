@@ -15,7 +15,7 @@ pub fn register_all() -> Vec<RuleDef> {
                               plain string literal (`prop=\"text\"`, not `prop={\"text\"}`). \
                               Unnecessary braces add noise; keep them only where an expression \
                               actually needs them.",
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 doc_url: None,
                 categories: &["react"],
                 skip_in_test_dir: false,
@@ -31,7 +31,7 @@ pub fn register_all() -> Vec<RuleDef> {
                 remediation: "Add the missing values to the `useEffect`/`useCallback`/`useMemo` \
                               dependency array, or remove the value from the hook body. Stale \
                               dependencies cause the hook to read outdated props or state.",
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 doc_url: None,
                 categories: &["react"],
                 skip_in_test_dir: false,

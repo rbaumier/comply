@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-no-amd",
     description: "AMD `require` and `define` calls are forbidden.",
     remediation: "Use ES module `import` instead of AMD `require([...], fn)` or `define([...], fn)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-amd.md",
     ),

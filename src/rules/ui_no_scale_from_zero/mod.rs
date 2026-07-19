@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Inline `transform: scale(0)` causes subpixel rendering blur and makes elements \
                   appear from nowhere.",
     remediation: "Use `scale(0.95)` with `opacity: 0` for a smoother, more natural entrance.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

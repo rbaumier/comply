@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-useless-flag",
     description: "Regex flag has no effect because the pattern does not contain anything that would be affected by it.",
     remediation: "Remove the unnecessary flag from the regex.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-useless-flag.html"),
     categories: &["regex"],
 

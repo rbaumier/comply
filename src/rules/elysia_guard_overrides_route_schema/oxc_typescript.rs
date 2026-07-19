@@ -95,7 +95,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: "Route inside `.guard({ body: ... })` redeclares `body:` — the inner schema silently overrides the guard.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;

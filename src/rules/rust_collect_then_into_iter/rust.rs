@@ -97,7 +97,7 @@ impl AstCheck for Check {
                  `Vec` for nothing. Drop both calls — the preceding chain \
                  is already an iterator."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

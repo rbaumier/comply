@@ -94,7 +94,7 @@ fn inspect_catch(
             "The catch parameter `{name}` should be named `{}`.",
             super::EXPECTED
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             message: "`z.record(valueSchema)` with a single argument is removed in Zod v4 — \
                       pass the key schema explicitly: `z.record(z.string(), valueSchema)`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

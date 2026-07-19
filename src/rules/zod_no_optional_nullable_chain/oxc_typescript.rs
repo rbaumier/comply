@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Replace `.optional().nullable()` with `.nullish()` for clearer intent."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

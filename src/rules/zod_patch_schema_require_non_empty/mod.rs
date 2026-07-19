@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add a `.refine(o => Object.keys(o).length >= 1, { error: \"At least \
                   one field required\" })` guard so the schema rejects an empty body, \
                   or make at least one field required.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

@@ -76,7 +76,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Deprecated `{handler_name}` handler must set `Deprecation` and `Sunset` response headers so clients can detect the deprecation at runtime."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

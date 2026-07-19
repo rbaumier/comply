@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-scope-missing",
     description: "Plugin defines lifecycle hooks but no scope — hooks won't propagate to the parent app.",
     remediation: "Add `as: 'global'` or `as: 'scoped'` to the hook (or call `.as('scoped')` on the plugin) so hooks apply to the consumer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

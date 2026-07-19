@@ -35,7 +35,7 @@ impl AstCheck for Check {
             super::META.id,
             "Disabling autovacuum causes bloat and XID wraparound — tune thresholds instead."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

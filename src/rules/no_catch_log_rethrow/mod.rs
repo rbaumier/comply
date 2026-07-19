@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   top-level handler which already logs it, so the local log just \
                   produces duplicate stack traces. Catch only when you add value: \
                   wrap with context, recover, translate.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["error-handling"],
 

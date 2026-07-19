@@ -78,7 +78,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`json()`/`jsonb()` without `.$type<T>()` \u{2014} the column will infer as `unknown`. Chain `.$type<T>()` to preserve the payload shape.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

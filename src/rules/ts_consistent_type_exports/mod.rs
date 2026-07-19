@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-consistent-type-exports",
     description: "Type-only exports should use `export type` rather than `export`.",
     remediation: "Replace `export { Foo }` with `export type { Foo }` when only types are re-exported.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/consistent-type-exports/"),
     categories: &["typescript"],
 

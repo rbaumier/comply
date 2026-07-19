@@ -97,7 +97,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`<img src=\"...jpg|.png|.jpeg\">` should offer a WebP/AVIF alternative via `<picture>` or `srcset`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

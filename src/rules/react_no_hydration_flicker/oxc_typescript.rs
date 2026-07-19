@@ -137,7 +137,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`useEffect(setState, [])` on mount causes a hydration flash — use `useSyncExternalStore` or `suppressHydrationWarning`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

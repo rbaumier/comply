@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`useSession({ cookie })` must set `httpOnly: true`.",
     remediation: "Add `httpOnly: true` to the cookie config so session cookies \
                   cannot be read from JavaScript (XSS mitigation).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start"],
 

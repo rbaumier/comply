@@ -42,7 +42,7 @@ impl TextCheck for Check {
                                 "`{marker}` without a rule list disables every rule. \
                                  Name the rules explicitly."
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

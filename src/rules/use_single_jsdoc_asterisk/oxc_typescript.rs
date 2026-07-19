@@ -138,7 +138,7 @@ impl Check {
             column,
             rule_id: super::META.id.into(),
             message: "JSDoc comment line should start with a single asterisk.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         })
     }

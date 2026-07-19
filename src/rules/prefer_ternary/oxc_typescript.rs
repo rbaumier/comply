@@ -95,7 +95,7 @@ impl OxcCheck for Check {
                         lhs = cons_lhs.trim(),
                         op = op_str,
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 let _ = op_display;
@@ -115,7 +115,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: "prefer-ternary".into(),
                 message: "This `if` statement can be replaced by `return cond ? a : b;`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

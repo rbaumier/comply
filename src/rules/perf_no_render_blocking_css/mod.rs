@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "perf-no-render-blocking-css",
     description: "`<link rel=\"stylesheet\">` without a `media` attribute blocks first paint.",
     remediation: "Add a `media` attribute (e.g. `media=\"print\" onLoad=\"this.media='all'\"`) or inline critical CSS.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["web-performance"],
 

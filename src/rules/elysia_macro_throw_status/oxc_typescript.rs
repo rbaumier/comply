@@ -37,7 +37,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `return status(...)` instead of `throw status(...)` so Elysia tracks the response type.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

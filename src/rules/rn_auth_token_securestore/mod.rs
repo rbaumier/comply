@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-auth-token-securestore",
     description: "Auth tokens must not be written to AsyncStorage (unencrypted).",
     remediation: "Use `expo-secure-store` (`SecureStore.setItemAsync`) for tokens.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native", "security"],
 

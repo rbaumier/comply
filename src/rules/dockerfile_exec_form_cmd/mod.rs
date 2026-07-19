@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-exec-form-cmd",
     description: "CMD/ENTRYPOINT must use exec form `[\"bin\",\"arg\"]`, not shell form.",
     remediation: "Rewrite `CMD bin arg` as `CMD [\"bin\", \"arg\"]` so the container receives SIGTERM directly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

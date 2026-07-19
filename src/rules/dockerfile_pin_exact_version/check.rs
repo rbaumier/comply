@@ -44,7 +44,7 @@ crate::ast_check! { on ["from_instruction"] => |node, source, ctx, diagnostics|
             column: pos.column + 1,
             rule_id: super::META.id.into(),
             message: "FROM tag pins only a major version; pin a precise version such as `22.12-alpine3.20`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((node.byte_range().start, node.byte_range().len())),
         });
     }

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   default object literal. `function f({ timeout = 1000 } = {})` \
                   is clearer and avoids the all-or-nothing replacement problem \
                   when a caller passes a partial object.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

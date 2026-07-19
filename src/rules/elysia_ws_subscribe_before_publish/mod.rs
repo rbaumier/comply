@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-ws-subscribe-before-publish",
     description: "WebSocket calls `.publish()` without subscribing the client to the topic first.",
     remediation: "Call `ws.subscribe('topic')` in the `open` handler before publishing to that topic from `message`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

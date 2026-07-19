@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the empty case that falls through to `default` — \
                   it has no effect since `default` already handles all \
                   unmatched values.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

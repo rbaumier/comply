@@ -33,7 +33,7 @@ impl AstCheck for Check {
             "Use `pg_advisory_xact_lock()` instead of `pg_advisory_lock()` — \
              it releases automatically at transaction end."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

@@ -22,7 +22,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &kind_pair,
             super::META.id,
             "PodDisruptionBudget must set spec.unhealthyPodEvictionPolicy.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
         return;
     };
@@ -33,7 +33,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &kind_pair,
             super::META.id,
             "PodDisruptionBudget must set spec.unhealthyPodEvictionPolicy.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

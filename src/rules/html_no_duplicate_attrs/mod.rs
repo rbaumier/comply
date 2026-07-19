@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-no-duplicate-attrs",
     description: "HTML elements must not declare the same attribute twice.",
     remediation: "Remove duplicate attribute",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

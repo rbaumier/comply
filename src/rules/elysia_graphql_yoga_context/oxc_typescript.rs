@@ -52,7 +52,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`yoga({ context })` without a `useContext` placeholder — resolvers will not see the context.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

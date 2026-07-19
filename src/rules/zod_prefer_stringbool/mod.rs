@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   and query strings.",
     remediation: "Use `z.stringbool()` (Zod v4) to parse `\"true\"/\"false\"/\"1\"/\"0\"` \
                   robustly, or write an explicit `.transform()` with allowed values.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

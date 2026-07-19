@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `parent.removeChild(child)` with `child.remove()`. \
                   The modern `.remove()` API is simpler and doesn't require \
                   a reference to the parent node.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

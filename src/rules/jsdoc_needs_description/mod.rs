@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc-needs-description",
     description: "JSDoc block has tags but no description.",
     remediation: "Add a prose description to the JSDoc block. Tags alone don't explain what the function does or why.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "jsdoc"],
 

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-unknown-media-feature",
     description: "Disallow unknown media features in `@media` queries.",
     remediation: "Use a standard media feature (e.g. `min-width`, `prefers-color-scheme`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

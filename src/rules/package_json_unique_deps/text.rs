@@ -92,7 +92,7 @@ impl TextCheck for Check {
                 message: format!(
                     "`{pkg}` appears in both `dependencies` and `devDependencies` — pick one."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             })
             .collect()

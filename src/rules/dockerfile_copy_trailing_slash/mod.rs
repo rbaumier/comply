@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-copy-trailing-slash",
     description: "COPY destination must end with `/` when multiple sources are given.",
     remediation: "Append `/` to the COPY destination when copying multiple sources.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

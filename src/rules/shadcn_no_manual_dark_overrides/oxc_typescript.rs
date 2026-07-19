@@ -117,7 +117,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Manual `dark:` color override paired with a light counterpart \u{2014} use a shadcn semantic token (e.g. `bg-background`, `text-foreground`) so theming stays DRY.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

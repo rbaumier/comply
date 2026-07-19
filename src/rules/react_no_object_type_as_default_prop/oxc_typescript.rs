@@ -85,7 +85,7 @@ fn check_function_params(
                       reference every render, breaking `React.memo`. Move \
                       the default to a module-level constant."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

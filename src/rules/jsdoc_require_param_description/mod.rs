@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-param-description",
     description: "Every `@param` tag must have a description.",
     remediation: "Add a description after the parameter name: `@param {string} x - what x represents`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-param-description.md",
     ),

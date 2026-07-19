@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-no-array-root-response",
     description: "API endpoints must not return a root-level JSON array — wrap in an object for extensibility.",
     remediation: "Return `{ data: [...], total: n }` instead of a bare array.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api"],
 

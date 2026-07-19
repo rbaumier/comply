@@ -27,7 +27,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: "Wrap the store in `storeToRefs()` when destructuring to preserve reactivity.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

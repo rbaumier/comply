@@ -83,7 +83,7 @@ impl OxcCheck for Check {
                     "`useSession` password literal is only {inner_len} chars; must be \
                      at least {min_len}. Prefer reading from an env var."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;

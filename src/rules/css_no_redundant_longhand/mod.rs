@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-redundant-longhand",
     description: "Use the shorthand property when all longhands are present.",
     remediation: "Replace the four longhand declarations with a single shorthand.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

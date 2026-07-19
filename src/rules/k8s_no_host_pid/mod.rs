@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-host-pid",
     description: "Pod spec sets `hostPID: true`; sharing the host PID namespace is unsafe.",
     remediation: "Remove `hostPID: true` from the pod spec.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

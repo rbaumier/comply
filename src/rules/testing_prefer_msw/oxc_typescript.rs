@@ -23,7 +23,7 @@ fn push(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span_start: u32) {
         column,
         rule_id: super::META.id.into(),
         message: "Mocking the HTTP client directly is brittle — use MSW to intercept network requests at the handler level.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

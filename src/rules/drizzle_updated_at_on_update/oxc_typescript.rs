@@ -110,7 +110,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`updatedAt` must chain `.$onUpdate(() => new Date())` so the column is refreshed on every update.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

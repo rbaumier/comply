@@ -1843,7 +1843,7 @@ fn report(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span_start: u32, ro
         message: format!(
             "{kind} `{root}` (declared with `const`) — build a new value instead of mutating."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

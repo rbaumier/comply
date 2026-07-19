@@ -141,7 +141,7 @@ crate::ast_check! { on ["program"] => |node, source, ctx, diagnostics|
         "`\"use client\"` directive with no hooks, event handlers, or browser APIs — \
          remove the directive or justify it with client-only behavior."
             .into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-test-retry-false",
     description: "In test files, `new QueryClient` must disable retries to keep tests fast and deterministic.",
     remediation: "Set `defaultOptions: { queries: { retry: false } }` when instantiating `QueryClient` inside a test.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://tanstack.com/query/v5/docs/react/guides/testing"),
     categories: &["tanstack-query"],
 

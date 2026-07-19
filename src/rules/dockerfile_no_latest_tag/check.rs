@@ -51,7 +51,7 @@ crate::ast_check! { on ["from_instruction"] => |node, source, ctx, diagnostics|
             column: pos.column + 1,
             rule_id: super::META.id.into(),
             message: "FROM image uses `:latest` or no tag; pin an explicit version.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((node.byte_range().start, node.byte_range().len())),
         });
     }

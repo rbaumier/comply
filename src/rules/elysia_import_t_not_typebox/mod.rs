@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-import-t-not-typebox",
     description: "TypeBox imported directly in an Elysia file — Elysia's `t` is the augmented public surface.",
     remediation: "Import `t` from `elysia` instead of `Type` from `@sinclair/typebox` — Elysia's `t` includes augmented validators.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["type-safety", "elysia"],
 

@@ -75,7 +75,7 @@ impl OxcCheck for Check {
                 rule_id: super::META.id.into(),
                 message: "Third-party `<script>` without `defer` or `async` blocks HTML parsing."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

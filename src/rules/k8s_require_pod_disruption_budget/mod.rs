@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-pod-disruption-budget",
     description: "Each Deployment/StatefulSet should have an accompanying PodDisruptionBudget.",
     remediation: "Author a PodDisruptionBudget (minAvailable or maxUnavailable) targeting this workload.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

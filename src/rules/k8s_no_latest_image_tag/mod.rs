@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-latest-image-tag",
     description: "Container images must not use `:latest` or omit a tag.",
     remediation: "Pin the image to a specific tag (e.g. `nginx:1.25.3`) or a digest (`@sha256:...`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

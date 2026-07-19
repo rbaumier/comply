@@ -22,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "React-specific JSX prop used in a non-React framework.",
     remediation: "Replace the React-specific prop with its DOM-native form \
                   (`className` → `class`, `htmlFor` → `for`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-react-specific-props/"),
     categories: &["react"],
 

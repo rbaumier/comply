@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   if you need a transform). `extend` consults the iterator's \
                   `size_hint` and reserves capacity in one allocation; the \
                   loop form re-grows the `Vec` once per element.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "performance"],
 

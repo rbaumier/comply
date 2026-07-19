@@ -44,7 +44,7 @@ crate::ast_check! { on ["block_mapping_pair"] prefilter = ["pg_isready"] => |nod
         message: "postgres service is missing `--health-cmd pg_isready` \
                   — downstream steps can race db startup."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-job-ttl-required",
     description: "Job manifests must set `spec.ttlSecondsAfterFinished` so completed Jobs are garbage-collected.",
     remediation: "Add `spec.ttlSecondsAfterFinished: <seconds>` to the Job (e.g. 3600 for one hour).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

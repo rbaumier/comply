@@ -154,7 +154,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         message: format!(
             "`useState` initialized from prop `{arg_name}` — derive during render or use `key` prop to reset."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

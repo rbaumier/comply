@@ -59,7 +59,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Elysia `.listen()` without SIGTERM/SIGINT handler — in-flight requests will be dropped on shutdown.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

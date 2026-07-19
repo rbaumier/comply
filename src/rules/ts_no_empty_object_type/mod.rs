@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`{}` as a type matches any non-nullish value — it almost never means what you think.",
     remediation: "Use `Record<string, never>` for an empty object, `object` for any object, \
                   or `unknown` for any value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   setup to `beforeEach`, and write one assertion path per \
                   test. Logic in tests hides which branch actually ran, \
                   making failures hard to diagnose.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

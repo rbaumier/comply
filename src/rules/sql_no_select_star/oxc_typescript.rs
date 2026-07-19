@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`SELECT *` wastes bandwidth — list columns explicitly so the \
                       API contract is visible and covering indexes can work.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

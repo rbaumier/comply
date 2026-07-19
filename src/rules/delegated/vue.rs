@@ -13,7 +13,7 @@ pub fn register_all() -> Vec<RuleDef> {
                           other compiler macros) from `vue`. The Vue compiler injects them \
                           automatically inside `<script setup>`; importing them is redundant \
                           and breaks the macro transform.",
-            severity: Severity::Warning,
+            severity: Severity::Error,
             doc_url: None,
             categories: &["vue"],
             skip_in_test_dir: false,

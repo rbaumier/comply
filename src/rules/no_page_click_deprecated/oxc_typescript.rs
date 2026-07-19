@@ -57,7 +57,7 @@ impl OxcCheck for Check {
                 "Deprecated Playwright method `page.{method}()` — use \
                  `page.locator(selector).{method}()` instead.",
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -45,7 +45,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`apollo({ enablePlayground: true })` is unconditional — gate it on a non-production env flag.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

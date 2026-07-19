@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Rename to convey the predicate: `ready` → `isReady` (TS) or \
                   `is_ready` (Rust). Use the positive form only — prefer \
                   `!isReady` over `isNotReady`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
 

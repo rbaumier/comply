@@ -97,7 +97,7 @@ fn make_diagnostic(ctx: &CheckCtx, offset: u32) -> Diagnostic {
         column,
         rule_id: super::META.id.into(),
         message: MESSAGE.into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     }
 }

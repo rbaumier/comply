@@ -27,7 +27,7 @@ crate::ast_check! { on ["rule_set"] prefilter = ["border-radius"] => |node, sour
                     column: pos.column + 1,
                     rule_id: super::META.id.into(),
                     message: "Nested `border-radius` should use `calc(parent-radius - parent-padding)` to stay concentric.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((radius_node.byte_range().start, radius_node.byte_range().len())),
                 });
                 return;

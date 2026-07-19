@@ -100,7 +100,7 @@ impl OxcCheck for Check {
             message: format!(
                 "React component `{name}` should be a `function` declaration, not an arrow function."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

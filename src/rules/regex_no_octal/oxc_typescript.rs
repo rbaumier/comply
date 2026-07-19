@@ -110,7 +110,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Octal escape in regex is ambiguous \u{2014} use a named backreference or Unicode escape instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

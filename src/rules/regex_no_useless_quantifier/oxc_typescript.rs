@@ -163,7 +163,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Useless quantifier \u{2014} it can only match once or matches an empty element.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -23,7 +23,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &type_pair,
             super::META.id,
             format!("Service type `{type_value}` exposes pods outside the cluster; use ClusterIP + Ingress/Gateway instead."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

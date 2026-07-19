@@ -111,7 +111,7 @@ impl OxcCheck for Check {
                 "`{func_text}` depends on a possibly-undefined value (optional chain or `!` assertion in queryFn) but has no `enabled`. \
                  Add `enabled: !!dependency` to gate the request."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Move the inner component outside the parent component. Defining a \
                   component inside render means React sees a brand-new type on every \
                   render, destroying the entire subtree's DOM nodes and state.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

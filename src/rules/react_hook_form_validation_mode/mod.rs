@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `mode: \"onTouched\"` shows errors only after a field is touched, and \
                   `reValidateMode: \"onChange\"` clears them as the user fixes them.",
     remediation: "Pass `{ mode: \"onTouched\", reValidateMode: \"onChange\" }` to `useForm`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react-hook-form.com/docs/useform"),
     categories: &["react"],
     skip_in_test_dir: true,

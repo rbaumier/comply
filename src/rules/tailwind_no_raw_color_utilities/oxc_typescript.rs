@@ -92,7 +92,7 @@ impl OxcCheck for Check {
                     message: "Raw palette color utility in className — use semantic tokens \
                               (bg-background, text-foreground, bg-primary, …)."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-default-param-last",
     description: "Default parameters should be last to allow callers to omit them positionally.",
     remediation: "Move parameters with default values to the end of the parameter list.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/default-param-last/"),
     categories: &["typescript"],
 

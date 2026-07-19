@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-prefer-select-columns",
     description: "`db.select()` with no argument fetches every column — list explicitly the columns you actually need.",
     remediation: "Pass a column projection: `db.select({ id: users.id, email: users.email })`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance", "drizzle", "database"],
 

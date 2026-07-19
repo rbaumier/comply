@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-array-index-key",
     description: "Array index used as `:key` in `v-for` breaks on reorder.",
     remediation: "Use a stable id from the data as the key instead of the loop index.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

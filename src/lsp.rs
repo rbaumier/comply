@@ -254,7 +254,6 @@ fn comply_to_lsp_diagnostic(d: &ComplyDiagnostic) -> LspDiagnostic {
         },
         severity: Some(match d.severity {
             Severity::Error => DiagnosticSeverity::ERROR,
-            Severity::Warning => DiagnosticSeverity::WARNING,
         }),
         code: Some(tower_lsp::lsp_types::NumberOrString::String(
             d.rule_id.clone().into_owned(),
@@ -294,7 +293,7 @@ mod tests {
             column: 0,
             rule_id: "x".into(),
             message: "y".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         };
         let lsp = comply_to_lsp_diagnostic(&d);

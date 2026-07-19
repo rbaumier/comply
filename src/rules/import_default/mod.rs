@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-default",
     description: "Default import requires the target module to have a default export.",
     remediation: "Use a named import instead, or add a default export to the target module.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/default.md",
     ),

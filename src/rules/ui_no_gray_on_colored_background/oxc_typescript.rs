@@ -138,7 +138,7 @@ impl OxcCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "Gray text on colored background — low contrast, hard to read."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

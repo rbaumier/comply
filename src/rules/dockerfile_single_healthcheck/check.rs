@@ -14,7 +14,7 @@ crate::ast_check! { on ["healthcheck_instruction"] => |node, source, ctx, diagno
                 column: pos.column + 1,
                 rule_id: super::META.id.into(),
                 message: "Multiple HEALTHCHECK instructions found; only the last one takes effect.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: Some((node.byte_range().start, node.byte_range().len())),
             });
             return;

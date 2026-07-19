@@ -88,7 +88,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Serverless `new Pool()` must set `max: 1` — each invocation has its own pool, >1 multiplies DB connections with concurrency.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

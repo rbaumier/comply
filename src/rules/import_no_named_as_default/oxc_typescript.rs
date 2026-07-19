@@ -97,7 +97,7 @@ impl OxcCheck for Check {
                         "`{}` is a named export of `{}` — did you mean `import {{ {} }} from '{}'`?",
                         imp.local_name, imp.specifier, imp.local_name, imp.specifier
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

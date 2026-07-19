@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   silently as the implementation changes and surprise downstream \
                   consumers. Return types are handled by \
                   `ts-explicit-function-return-type`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/explicit-module-boundary-types/"),
     categories: &["typescript"],
 

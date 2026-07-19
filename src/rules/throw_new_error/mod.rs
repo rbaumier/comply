@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `throw Error(...)` with `throw new Error(...)`. \
                   Calling Error without `new` is valid but inconsistent and \
                   can confuse readers about whether a new instance is created.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -81,7 +81,7 @@ impl AstCheck for Check {
                  Without it, a caller who forgets `.build()` gets a \
                  silent no-op."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

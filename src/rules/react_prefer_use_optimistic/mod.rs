@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Manual try/catch rollback of state — use `useOptimistic` for cleaner, race-safe code.",
     remediation: "Switch to `const [optimistic, addOptimistic] = useOptimistic(state, reducer);` \
                   and call `addOptimistic(...)` before the action — React handles rollback.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react.dev/reference/react/useOptimistic"),
     categories: &["react"],
 

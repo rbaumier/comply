@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-incorrect-string-concat",
     description: "Suspicious string concatenation with a number variable.",
     remediation: "Use explicit conversion: `\"text\" + String(num)` or template literals: `\\`text${num}\\``.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

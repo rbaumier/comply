@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-concentric-border-radius",
     description: "A child with `border-radius` inside a rounded + padded parent should use `calc(parent-radius - parent-padding)`.",
     remediation: "Express the child radius via `calc(var(--radius) - var(--padding))` to stay concentric.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

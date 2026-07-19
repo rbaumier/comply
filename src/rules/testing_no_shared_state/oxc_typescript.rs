@@ -126,7 +126,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Top-level '{name}' is mutated inside test() without being reset in beforeEach — tests become order-dependent."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-no-space-x-y",
     description: "`space-x-*` / `space-y-*` produce brittle layouts — use flex/grid + gap-* instead.",
     remediation: "Replace `space-x-2` with `flex gap-2` and `space-y-4` with `flex flex-col gap-4`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn", "tailwind"],
 

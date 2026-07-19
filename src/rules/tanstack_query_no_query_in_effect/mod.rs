@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "TanStack Query hook called inside `useEffect`.",
     remediation: "Call `useQuery` at the top level of the component — it \
                   manages its own subscriptions, refetching, and cleanup.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-query"],
 

@@ -123,7 +123,7 @@ impl OxcCheck for Check {
                       Use `Record<string, never>` for an empty object, \
                       or `object` / `unknown`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

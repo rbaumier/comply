@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-apt-no-recommends",
     description: "Use `--no-install-recommends` with apt-get install.",
     remediation: "Add `--no-install-recommends` to apt-get install to keep the image small.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

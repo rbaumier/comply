@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-response-envelope-consistency",
     description: "Mixing `{ data: ... }` envelopes with raw returns forces every client to branch.",
     remediation: "Pick one shape for the file (envelope or raw) and apply it to every response.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api-design"],
 

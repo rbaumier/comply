@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prisma-no-nested-create-without-connect",
     description: "Nested `create` inside another `create` writes related rows that may become orphans on rollback.",
     remediation: "Use `connect: { id }` for existing relations and create children in a `$transaction`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["prisma"],
 

@@ -32,7 +32,7 @@ crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
         message: format!(
             "`formState.{property}` bypasses React Hook Form proxy tracking — destructure it: `const {{ {property} }} = formState;`."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

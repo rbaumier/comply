@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-probe-port-exists",
     description: "Probe port must match a port declared by the container.",
     remediation: "Ensure livenessProbe/readinessProbe/startupProbe targets a port listed in `ports`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

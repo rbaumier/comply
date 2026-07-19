@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-filter-sort-in-template",
     description: "`v-for` over `.filter()`/`.sort()` re-runs on every render.",
     remediation: "Extract to a `computed()` so the derived list is cached until its inputs change.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

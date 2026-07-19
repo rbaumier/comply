@@ -49,7 +49,7 @@ impl OxcCheck for Check {
                       closest matching token, or define a new token in \
                       `tailwind.config.ts`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

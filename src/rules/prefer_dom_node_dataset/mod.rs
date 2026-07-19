@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `.setAttribute('data-foo', v)` with `.dataset.foo = v` and \
                   `.getAttribute('data-foo')` with `.dataset.foo`. The `dataset` API \
                   is cleaner and avoids string-based attribute manipulation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

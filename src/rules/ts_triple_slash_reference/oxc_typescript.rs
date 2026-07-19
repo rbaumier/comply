@@ -62,7 +62,7 @@ impl OxcCheck for Check {
                 message: "Triple-slash `path` reference directive is legacy — \
                           use ES `import` instead."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

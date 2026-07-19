@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add a message indicating what to use instead: \
                   `#[deprecated(note = \"Use X instead\")]` in Rust, \
                   or text after `@deprecated` in JSDoc.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

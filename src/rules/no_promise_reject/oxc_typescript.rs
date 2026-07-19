@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`Promise.reject()` — prefer returning error values or throwing typed errors."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

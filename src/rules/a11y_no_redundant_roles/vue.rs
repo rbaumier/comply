@@ -43,7 +43,7 @@ impl TextCheck for Check {
                             message: format!(
                                 "`<{tag}>` has implicit role `{redundant_role}` — `role=\"{role}\"` is redundant."
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         break;

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add a unit suffix: `delay` → `delayMs`, `size` → \
                   `sizeBytes`, `timeout` → `timeoutMs`. Ambiguous units cause \
                   real bugs — setTimeout(delay) expects ms.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
 

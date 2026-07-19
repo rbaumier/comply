@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-camel-snake-column-names",
     description: "TS property should be camelCase while the column string argument should be snake_case.",
     remediation: "Keep the TS property name camelCase and pass the snake_case database column name as the first string argument to `varchar`/`text`/`integer`/etc.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle"],
 

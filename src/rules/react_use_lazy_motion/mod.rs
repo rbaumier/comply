@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   smaller bundle.",
     remediation: "Wrap your tree in `<LazyMotion features={domAnimation}>` and replace \
                   `motion.div` with `m.div` to lazy-load animation features.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["bundle-size"],
 

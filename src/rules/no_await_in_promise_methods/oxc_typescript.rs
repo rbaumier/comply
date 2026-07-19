@@ -64,7 +64,7 @@ impl OxcCheck for Check {
                     "Promise in `Promise.{method_name}()` should not be awaited \
                      — this serializes the calls."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Convert a 4+ branch if/else-if chain into a `switch` \
                   statement. Switch makes the discriminant obvious and \
                   lets TypeScript warn on missing cases for union types.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

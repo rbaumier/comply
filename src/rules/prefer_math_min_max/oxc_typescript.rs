@@ -92,7 +92,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Prefer `Math.{method}({left_text}, {right_text})` over this ternary."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "screaming-snake-for-constants",
     description: "Top-level constant not in `SCREAMING_SNAKE_CASE`.",
     remediation: "Rename the constant to use `SCREAMING_SNAKE_CASE`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
 

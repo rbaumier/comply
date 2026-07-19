@@ -92,7 +92,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Function `{func_name}` references mutable top-level state `{var_name}`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

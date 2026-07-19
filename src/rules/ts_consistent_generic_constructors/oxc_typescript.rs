@@ -77,7 +77,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Generic type arguments should be specified on the constructor, not the type annotation.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

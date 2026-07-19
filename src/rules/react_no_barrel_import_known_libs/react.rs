@@ -79,7 +79,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
              import from a subpath (e.g. `{import_path}/<name>`) for \
              tree-shaking."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

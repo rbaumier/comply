@@ -44,7 +44,7 @@ impl OxcCheck for Check {
                 rule_id: super::META.id.into(),
                 message: "Cookie config has no explicit `sameSite` — set `'lax'` or `'strict'`."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

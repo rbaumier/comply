@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-no-nullable-variant-fields",
     description: "Interfaces must not encode state via clusters of optional fields; use discriminated unions.",
     remediation: "Replace the optional cluster with a `status: 'cancelled'; cancelReason: string; cancelledAt: string` variant in a discriminated union.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api-design"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-decorate-uses-request-data",
     description: "`.decorate(...)` runs at boot — calling `Date.now()` or `Math.random()` there freezes a value across all requests.",
     remediation: "Move per-request values to `.derive(...)` so they are computed for each request.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

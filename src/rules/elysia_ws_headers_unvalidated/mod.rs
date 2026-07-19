@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-ws-headers-unvalidated",
     description: "WebSocket route reads request headers in `beforeHandle` but does not declare a header schema.",
     remediation: "Add a `headers` (TypeBox) schema so Elysia validates the upgrade request headers before invoking `beforeHandle`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

@@ -40,7 +40,7 @@ impl AstCheck for Check {
             "`SELECT *` wastes bandwidth — list columns explicitly so the \
              API contract is visible and covering indexes can work."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

@@ -51,7 +51,7 @@ impl OxcCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: "`jwt.verify(...)` result is used without a falsy check — invalid tokens are not rejected.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

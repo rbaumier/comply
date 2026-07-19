@@ -75,7 +75,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`<link rel=\"stylesheet\">` — import CSS directly so Next.js can bundle and optimize it.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

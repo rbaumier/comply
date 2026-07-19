@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-display-name",
     description: "React components must have a display name.",
     remediation: "Name the function, assign it to a named variable before exporting, or set `displayName`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/display-name.md",
     ),

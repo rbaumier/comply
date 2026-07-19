@@ -60,7 +60,7 @@ impl OxcCheck for Check {
             message:
                 "Backslash followed by non-special character is an identity escape \u{2014} likely a mistake."
                     .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

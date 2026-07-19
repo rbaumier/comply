@@ -59,7 +59,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Import from `{module_path}` matches restricted pattern `{matched}`. See comply.toml for the restriction list."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

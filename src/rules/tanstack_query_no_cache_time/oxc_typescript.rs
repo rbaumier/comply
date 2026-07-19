@@ -98,7 +98,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`cacheTime` was renamed to `gcTime` in TanStack Query v5.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-deprecated-classes",
     description: "Deprecated Tailwind v2/v3 utility classes should be replaced by their v3/v4 equivalents.",
     remediation: "Replace the deprecated utility with the listed replacement (e.g. `flex-grow-0` → `grow-0`, `overflow-ellipsis` → `text-ellipsis`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://tailwindcss.com/docs/upgrade-guide"),
     categories: &["tailwind"],
 

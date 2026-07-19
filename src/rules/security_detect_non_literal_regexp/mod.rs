@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "security-detect-non-literal-regexp",
     description: "`new RegExp(<dynamic>)` lets user input drive a regex — ReDoS / regex injection risk.",
     remediation: "Compile the regex from a static literal, or escape the user input first (no built-in helper — `s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/eslint-community/eslint-plugin-security/blob/main/docs/rules/detect-non-literal-regexp.md"),
     categories: &["security"],
 

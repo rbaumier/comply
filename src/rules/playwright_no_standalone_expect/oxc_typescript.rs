@@ -194,7 +194,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Expect must be inside of a test block.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

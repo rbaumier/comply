@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-cookie-no-samesite",
     description: "Cookie config is missing an explicit `sameSite` — defaults are inconsistent across browsers.",
     remediation: "Set `sameSite: 'lax'` (or `'strict'` for sensitive cookies) explicitly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "elysia"],
 

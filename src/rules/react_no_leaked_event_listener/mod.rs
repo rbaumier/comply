@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-leaked-event-listener",
     description: "`addEventListener` in `useEffect` without a `removeEventListener` cleanup leaks across re-renders.",
     remediation: "Return a cleanup function from the effect that calls `removeEventListener` on the same target with the same listener and capture flag.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

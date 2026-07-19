@@ -228,7 +228,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "prefer-global-this".into(),
             message: format!("Prefer `globalThis` over `{name}`. Replace `{name}.` with `globalThis.`."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

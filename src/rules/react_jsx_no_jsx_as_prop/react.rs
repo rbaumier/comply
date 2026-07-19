@@ -60,7 +60,7 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
         message: format!(
             "{kind_label} as value of JSX prop `{attr_name}` creates a new element every render — extract to a variable or `useMemo`."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

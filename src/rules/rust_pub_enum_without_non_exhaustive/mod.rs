@@ -24,7 +24,7 @@ pub const META: RuleMeta = RuleMeta {
                   crates will need a wildcard `_ => …` arm to match it, \
                   which means future-you can add variants without \
                   releasing a major version.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

@@ -85,7 +85,7 @@ crate::ast_check! { on ["at_rule"] => |node, source, ctx, diagnostics|
         format!(
             "Unexpected unknown at-rule `@{name}`. It is not a standard CSS at-rule."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

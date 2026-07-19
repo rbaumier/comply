@@ -86,7 +86,7 @@ crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, sourc
                 &generic,
                 super::META.id,
                 format!("`Mutex<{prim}>` — prefer `{atomic}` for lock-free access."),
-                Severity::Warning,
+                Severity::Error,
             ));
             return;
         }

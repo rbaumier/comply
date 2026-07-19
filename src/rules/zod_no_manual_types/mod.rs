@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   validation guarantees.",
     remediation: "Derive the type with `type T = z.infer<typeof Schema>` so the \
                   type always matches the schema.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

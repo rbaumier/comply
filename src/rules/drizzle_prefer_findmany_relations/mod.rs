@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-prefer-findmany-relations",
     description: "Prefer `db.query.X.findMany({ with })` over manual `.leftJoin` / `.innerJoin` chains when relations are defined.",
     remediation: "Use the relational query API (`db.query.X.findMany({ with: { ... } })`) instead of assembling the result manually with `.leftJoin` / `.innerJoin`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle"],
 

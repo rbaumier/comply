@@ -59,7 +59,7 @@ impl AstCheck for Check {
             "`s.push_str(&format!(...))` allocates a throwaway `String`. \
              Use `write!(s, \"...\")` to format directly into the buffer."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

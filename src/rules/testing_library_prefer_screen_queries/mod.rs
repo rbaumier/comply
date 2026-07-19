@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-library-prefer-screen-queries",
     description: "Destructuring `getBy*` / `findBy*` from `render(...)` is the legacy form — prefer `screen.getBy*` for stable refactoring.",
     remediation: "Stop destructuring from `render(...)` — call `render(<UI/>)` for its side effect and use `screen.getBy*` / `screen.findBy*` everywhere.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/testing-library/eslint-plugin-testing-library/blob/main/docs/rules/prefer-screen-queries.md"),
     categories: &["testing", "testing-library"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-duplicate-props",
     description: "Duplicate attributes on a Vue template element — the last one silently wins.",
     remediation: "Remove the duplicate attribute.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

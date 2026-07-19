@@ -179,7 +179,7 @@ impl OxcCheck for Check {
                       `Promise.withResolvers()` to get `{ promise, resolve, reject }` \
                       without an executor closure."
                 .to_string(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

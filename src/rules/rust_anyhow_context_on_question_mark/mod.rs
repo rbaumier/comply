@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-anyhow-context-on-question-mark",
     description: "`?` without `.context()` produces bare error messages with no callsite information.",
     remediation: "Chain `.context(\"what you were doing\")` before `?` so errors carry actionable context.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

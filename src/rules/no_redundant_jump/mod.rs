@@ -29,7 +29,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-redundant-jump",
     description: "Redundant `return;` at end of function or `continue;` at end of loop body.",
     remediation: "Remove the redundant `return;` or `continue;` \u{2014} execution already falls through naturally.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

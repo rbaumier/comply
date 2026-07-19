@@ -129,7 +129,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: message.to_string(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((import.span.start as usize, import.span.size() as usize)),
         });
     }

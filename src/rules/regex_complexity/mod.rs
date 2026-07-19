@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-complexity",
     description: "Regex pattern is overly complex (score > 20).",
     remediation: "Break the regex into smaller named patterns or use a parser. Complex regex is hard to read, test, and maintain.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

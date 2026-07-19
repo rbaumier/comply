@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-json-no-nesting",
     description: "Translation file uses nested objects — use flat keys instead.",
     remediation: "Flatten keys: `{\"a\": {\"b\": \"x\"}}` → `{\"a.b\": \"x\"}` for easier searching.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

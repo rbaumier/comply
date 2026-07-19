@@ -79,7 +79,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Prefer using one of the equality matchers instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

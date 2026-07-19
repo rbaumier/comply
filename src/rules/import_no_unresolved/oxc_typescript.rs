@@ -132,7 +132,7 @@ impl OxcCheck for Check {
                     "Unable to resolve import path `{}` — file does not exist.",
                     imp.specifier
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

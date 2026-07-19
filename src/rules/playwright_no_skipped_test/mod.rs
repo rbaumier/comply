@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Skipped tests silently erode coverage.",
     remediation: "Remove the `.skip()` annotation, fix the test, or delete it \
                   if it's no longer relevant.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-skipped-test.md",
     ),

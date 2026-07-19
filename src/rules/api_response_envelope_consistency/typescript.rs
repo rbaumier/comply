@@ -172,7 +172,7 @@ impl TextCheck for Check {
                     rule_id: super::META.id.into(),
                     message: "Response shape disagrees with other returns in this file — pick one envelope and stick to it."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

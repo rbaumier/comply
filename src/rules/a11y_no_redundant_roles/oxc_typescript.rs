@@ -87,7 +87,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "The element `<{tag}>` has an implicit role of `{pair_role}`. Setting `role=\"{pair_role}\"` is redundant."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;
@@ -104,7 +104,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "The element `<a>` with `href` has an implicit role of `link`. Setting `role=\"link\"` is redundant.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

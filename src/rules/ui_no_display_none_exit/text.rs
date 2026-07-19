@@ -62,7 +62,7 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
             message: format!(
                 "`{sel}` exits via `display: none` alone — pair with `opacity: 0` + `transform` so the exit can be animated."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((node.byte_range().start, node.byte_range().len())),
         });
     }

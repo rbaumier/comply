@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`z.object({...}).strict()` is deprecated in Zod v4 — the strictness \
                   is a top-level factory, not a chained modifier.",
     remediation: "Replace `z.object({...}).strict()` with `z.strictObject({...})`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

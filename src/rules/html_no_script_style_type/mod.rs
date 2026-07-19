@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-no-script-style-type",
     description: "`<script type=\"text/javascript\">` and `<style type=\"text/css\">` use default values that can be omitted.",
     remediation: "Remove unnecessary type attribute from script/style tags",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

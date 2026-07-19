@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-cron-timezone",
     description: "Cron `timezone` must be in IANA format (e.g. `America/Los_Angeles`); abbreviations like `PST` are unreliable.",
     remediation: "Use the IANA tz identifier — `America/Los_Angeles`, `Europe/Paris`, etc. Abbreviations are ambiguous around DST.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

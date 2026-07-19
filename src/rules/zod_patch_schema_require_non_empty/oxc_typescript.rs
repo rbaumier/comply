@@ -176,7 +176,7 @@ impl OxcCheck for Check {
                  or require at least one field.",
                 ident.name.as_str()
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

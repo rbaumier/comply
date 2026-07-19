@@ -19,7 +19,7 @@ crate::ast_check! { on ["pseudo_class_selector", "pseudo_element_selector"] => |
         &node,
         super::META.id,
         format!("Vendor-prefixed selector `{text}`; remove the prefix."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

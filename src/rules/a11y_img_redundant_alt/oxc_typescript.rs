@@ -69,7 +69,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "`alt` text should not contain words like \"image\", \"picture\", or \"photo\" \u{2014} describe the content instead.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

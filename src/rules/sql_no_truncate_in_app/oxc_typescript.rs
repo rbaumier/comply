@@ -43,7 +43,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`TRUNCATE` bypasses triggers and audit — use `DELETE FROM` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

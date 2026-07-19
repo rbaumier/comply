@@ -27,7 +27,7 @@ crate::ast_check! { on ["env_instruction"] => |node, source, ctx, diagnostics|
                     message: format!(
                         "ENV `{key}` references `${prev}` defined in the same instruction; the reference resolves to the OLD value. Split into separate ENVs."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((pair.byte_range().start, pair.byte_range().len())),
                 });
                 break;

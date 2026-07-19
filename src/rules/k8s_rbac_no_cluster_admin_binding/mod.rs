@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-rbac-no-cluster-admin-binding",
     description: "RoleBinding/ClusterRoleBinding must not bind to the `cluster-admin` role.",
     remediation: "Bind to a role with the minimum permissions required instead of `cluster-admin`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

@@ -22,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "pure-by-default",
     description: "Function references top-level mutable state.",
     remediation: "Pass the state as a parameter instead of referencing a top-level `let`/`var`. This makes the function pure and easier to test.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

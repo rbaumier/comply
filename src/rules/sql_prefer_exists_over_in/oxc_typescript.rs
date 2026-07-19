@@ -38,7 +38,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`IN (SELECT ...)` materializes the entire subquery — \
                       use `EXISTS (SELECT 1 ...)` which short-circuits on first match.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

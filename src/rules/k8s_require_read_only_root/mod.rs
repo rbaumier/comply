@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-read-only-root",
     description: "Containers must set securityContext.readOnlyRootFilesystem: true.",
     remediation: "Add `securityContext: { readOnlyRootFilesystem: true }` to each container.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

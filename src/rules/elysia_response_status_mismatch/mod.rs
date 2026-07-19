@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-response-status-mismatch",
     description: "Handler returns a status code that is not declared in the route's `response:` schema.",
     remediation: "Add the status key (e.g. `404: t.Object({ message: t.String() })`) to the route's `response:` map.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

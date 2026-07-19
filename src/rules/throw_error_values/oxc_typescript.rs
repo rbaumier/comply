@@ -51,7 +51,7 @@ impl OxcCheck for Check {
             message: "Throw an `Error` instance, not a primitive or plain object — \
                       non-Error throws lose stack traces and break `instanceof` checks."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

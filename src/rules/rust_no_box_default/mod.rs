@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   The two are equivalent at runtime, but the latter is \
                   one allocation step instead of two and reads as the \
                   obvious idiom. Enforced by `clippy::box_default`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 
@@ -52,7 +52,7 @@ mod tests {
         assert_clippy_rule(
             register(),
             "rust-no-box-default",
-            Severity::Warning,
+            Severity::Error,
             &["clippy::box_default"],
         );
     }

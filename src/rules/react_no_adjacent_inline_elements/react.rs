@@ -66,7 +66,7 @@ crate::ast_check! { on ["jsx_element", "jsx_fragment"] => |node, source, ctx, di
                     message: "Adjacent inline elements without whitespace — \
                               add `{' '}` or a wrapper."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

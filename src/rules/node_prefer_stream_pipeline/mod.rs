@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-prefer-stream-pipeline",
     description: "`stream.pipe()` chains leak resources on error — `pipeline()` cleans them up.",
     remediation: "Replace `a.pipe(b).pipe(c)` with `await pipeline(a, b, c)` from `node:stream/promises`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://nodejs.org/api/stream.html#streampipelinesource-transforms-destination-callback",
     ),

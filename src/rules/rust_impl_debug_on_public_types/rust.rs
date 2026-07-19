@@ -242,7 +242,7 @@ impl AstCheck for Check {
                  failure messages, can't see it in `{{:?}}` output. \
                  Add `#[derive(Debug)]` or implement `Debug` by hand."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

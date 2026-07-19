@@ -83,7 +83,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Animation/transition without `motion-reduce:*` — users with `prefers-reduced-motion: reduce` will still see the animation.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

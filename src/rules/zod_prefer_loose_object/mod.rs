@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`z.object({...}).passthrough()` is replaced by the top-level \
                   `z.looseObject(...)` factory in Zod v4.",
     remediation: "Replace `z.object({...}).passthrough()` with `z.looseObject({...})`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

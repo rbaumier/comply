@@ -64,7 +64,7 @@ impl OxcCheck for Check {
                     "Server function `{name}` is named like a mutation but does not \
                      declare `method: 'POST'`. Mutations should not be GET-accessible."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

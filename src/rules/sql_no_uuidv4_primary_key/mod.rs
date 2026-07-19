@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-uuidv4-primary-key",
     description: "UUIDv4 primary keys fragment B-tree indexes and bloat storage.",
     remediation: "Use UUIDv7 (time-ordered) for globally-unique keys, or `BIGINT GENERATED ALWAYS AS IDENTITY` for local sequential keys. Avoid `gen_random_uuid()` / `uuid_generate_v4()` on primary keys.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

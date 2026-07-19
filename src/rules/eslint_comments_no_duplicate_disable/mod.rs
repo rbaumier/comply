@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "eslint-comments-no-duplicate-disable",
     description: "Disabling the same rule twice (or more) in one comment is a typo, not extra suppression.",
     remediation: "Remove the duplicate rule id. If you really want to express \"this is here on purpose\", add a justification comment after `--`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://eslint-community.github.io/eslint-plugin-eslint-comments/rules/no-duplicate-disable.html"),
     categories: &["lint-comments"],
 

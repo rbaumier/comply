@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-rbac-no-create-pods",
     description: "RBAC rules must not grant `create` on `pods`; this enables privilege escalation.",
     remediation: "Remove `create` from verbs for `pods` resources, or scope to a controller resource.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

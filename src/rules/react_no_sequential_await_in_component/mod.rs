@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   `const [user, posts] = await Promise.all([getUser(id), getPosts(id)])`. \
                   Server Components block rendering on each await, so chaining \
                   two fetches doubles the latency.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://react.dev/reference/rsc/server-components#async-components-with-server-components",
     ),

@@ -84,7 +84,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
             message: format!(
                 "Port `{host_port}` exposed on all interfaces; bind it on `127.0.0.1:` instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((scalar_node.byte_range().start, scalar_node.byte_range().len())),
         });
     }

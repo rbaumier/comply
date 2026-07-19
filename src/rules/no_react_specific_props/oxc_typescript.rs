@@ -67,7 +67,7 @@ impl OxcCheck for Check {
                 "`{react_prop}` is a React-specific prop not supported by non-React \
                  frameworks. Use `{native_prop}` instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

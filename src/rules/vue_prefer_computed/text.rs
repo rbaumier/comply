@@ -130,7 +130,7 @@ impl TextCheck for Check {
                     message: "This watcher only writes to a `.value` — use `computed()` \
                               for a lazy, cached derived value that can't desync."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

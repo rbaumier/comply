@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-redundant-clsx",
     description: "`clsx()` / `cn()` called with a single static string is redundant.",
     remediation: "Remove clsx/cn wrapper when using single static string",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

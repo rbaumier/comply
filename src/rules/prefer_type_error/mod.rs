@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "When throwing inside an `if` that performs a type check \
                   (typeof, instanceof, Array.isArray, etc.), use `new TypeError()` \
                   instead of `new Error()` to signal the caller passed a wrong type.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Unused catch binding `{param_name}`. Remove it: use `catch {{ … }}` instead of `catch ({param_name}) {{ … }}`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

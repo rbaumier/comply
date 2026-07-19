@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use the direct matcher instead of negating: \
                   `toBeHidden` instead of `not.toBeVisible`, \
                   `toBeDisabled` instead of `not.toBeEnabled`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-useless-not.md",
     ),

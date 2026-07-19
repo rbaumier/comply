@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-classlist-toggle",
     description: "Prefer `Element#classList.toggle()` over conditional `add`/`remove`.",
     remediation: "Replace `if (c) el.classList.add('x') else el.classList.remove('x')` with `el.classList.toggle('x', c)`. The `toggle` method with a force argument is cleaner and avoids conditional branching.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

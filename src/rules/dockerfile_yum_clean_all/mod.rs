@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-yum-clean-all",
     description: "`yum install` must be paired with `yum clean all` to shrink the image layer.",
     remediation: "Append `&& yum clean all` to the same RUN instruction as `yum install`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

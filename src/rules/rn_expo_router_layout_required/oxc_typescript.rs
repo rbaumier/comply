@@ -70,7 +70,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Directory imports `expo-router` but is missing a `_layout` file.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

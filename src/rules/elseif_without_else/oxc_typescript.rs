@@ -77,7 +77,7 @@ impl OxcCheck for Check {
             message: "`if/else if` chain without a final `else` \
                       — add an `else` block to handle remaining cases."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

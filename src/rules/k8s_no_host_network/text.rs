@@ -14,7 +14,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &pair,
             super::META.id,
             "Pod spec sets `hostNetwork: true`; remove to isolate the network namespace.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

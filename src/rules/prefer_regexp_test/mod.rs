@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-regexp-test",
     description: "Prefer `RegExp#test()` over `String#match()` in boolean contexts.",
     remediation: "Use `/pattern/.test(str)` instead of `str.match(/pattern/)` when only a boolean result is needed. `test()` is faster because it stops at the first match.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

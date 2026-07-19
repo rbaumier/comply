@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "elysia-deploy-no-health".into(),
             message: "Elysia server exposes `.listen()` without a `/health` endpoint — orchestrators lack a liveness probe.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   preceding iterator chain already produces an iterator. \
                   Materialising into `Vec` only to re-iterate allocates \
                   a heap buffer for nothing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

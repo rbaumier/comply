@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-called-exactly-once-with",
     description: "Prefer `toHaveBeenCalledExactlyOnceWith(args)` over separate `toHaveBeenCalledTimes(1)` + `toHaveBeenCalledWith(args)` assertions.",
     remediation: "Use toHaveBeenCalledExactlyOnceWith(args) instead of separate assertions",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://vitest.dev/api/expect.html#tohavebeencalledexactlyoncewith"),
     categories: &["testing"],
 

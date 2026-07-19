@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-sync-scripts",
     description: "External `<script src>` must set `async` or `defer` to avoid blocking parsing.",
     remediation: "Add `async` (order-independent) or `defer` (order-preserving) to the `<script>`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

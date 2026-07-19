@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-const-enum",
     description: "`const enum` declarations are inlined and incompatible with isolatedModules.",
     remediation: "Use regular enum or union types instead of const enum",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://www.typescriptlang.org/docs/handbook/enums.html#const-enums"),
     categories: &["typescript"],
 

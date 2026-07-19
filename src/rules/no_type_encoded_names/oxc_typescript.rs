@@ -54,7 +54,7 @@ impl OxcCheck for Check {
                  obsolete. Remove the prefix; TypeScript's type checker already \
                  knows the type."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

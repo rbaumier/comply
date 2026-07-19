@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   empty strings — catastrophic for money/price/amount/currency fields.",
     remediation: "Parse the input explicitly: `z.string().regex(/^\\d+(\\.\\d{1,2})?$/)\
                   .transform(Number)`, and reject anything else with a clear error.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

@@ -28,7 +28,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-solid-destructured-props",
     description: "Solid component props must not be destructured — it breaks reactivity.",
     remediation: "Keep the single `props` parameter and access fields with `props.foo`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://biomejs.dev/linter/rules/no-solid-destructured-props/",
     ),

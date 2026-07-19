@@ -43,7 +43,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "intermediate-variables",
     description: "`if` condition chains three or more boolean operands.",
     remediation: "Extract parts of the condition into named local variables so the `if` reads as one or two high-level checks.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

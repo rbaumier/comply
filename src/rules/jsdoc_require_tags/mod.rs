@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-tags",
     description: "Exported function JSDoc must document parameters and return when relevant.",
     remediation: "Add `@param` tags for each parameter and `@returns` for non-void return values.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-tags.md",
     ),

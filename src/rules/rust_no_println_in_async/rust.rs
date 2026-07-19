@@ -71,7 +71,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
              Use `tracing::info!` / `tracing::warn!` instead — non-blocking, \
              filterable, span-aware."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

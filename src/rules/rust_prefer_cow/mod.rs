@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-prefer-cow",
     description: "Public functions taking an owned `String` force callers to allocate — prefer `Cow<'_, str>` or `&str`.",
     remediation: "Change `pub fn foo(s: String)` to `pub fn foo(s: impl Into<Cow<'_, str>>)` when the function only sometimes needs ownership, or to `&str` when it never does.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "performance"],
 

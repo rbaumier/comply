@@ -41,7 +41,7 @@ impl TextCheck for Check {
                                 "Prefer `{suggested}` over `<{} role=\"{role}\">` for semantic HTML.",
                                 elem.tag
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

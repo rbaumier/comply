@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "nuxt-no-blocking-data-fetch",
     description: "Data fetching inside `defineNuxtRouteMiddleware` blocks navigation.",
     remediation: "Move the fetch into the page's `setup()` via `useFetch`/`useAsyncData`, or fall back to a server route.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://nuxt.com/docs/guide/directory-structure/middleware"),
     categories: &["nuxt", "performance"],
 

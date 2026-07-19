@@ -77,7 +77,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "ScrollTrigger `markers: true` is unguarded \u{2014} wrap with `process.env.NODE_ENV !== \"production\"` so debug overlays stay out of prod.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

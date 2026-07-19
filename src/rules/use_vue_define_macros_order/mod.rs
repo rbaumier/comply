@@ -56,7 +56,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Order the compiler macros as configured (default \
                   `defineModel`, `defineProps`, `defineEmits`) and place them \
                   before any non-macro statements.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/use-vue-define-macros-order/"),
     categories: &["vue"],
 

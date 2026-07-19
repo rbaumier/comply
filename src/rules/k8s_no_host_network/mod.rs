@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-host-network",
     description: "Pod spec sets `hostNetwork: true`; sharing the host network namespace is unsafe.",
     remediation: "Remove `hostNetwork: true` from the pod spec.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

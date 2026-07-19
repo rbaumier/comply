@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-require-responsive-grid",
     description: "`grid-cols-2+` without a responsive variant compresses on mobile.",
     remediation: "Use `grid-cols-1 md:grid-cols-3` (mobile-first) instead of `grid-cols-3`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

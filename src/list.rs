@@ -29,7 +29,6 @@ fn print_human(rules: &[rules::RuleDef]) {
     for meta in sorted {
         let severity = match meta.severity {
             Severity::Error => "error  ",
-            Severity::Warning => "warning",
         };
         println!("  {severity}  {:<40}  {}", meta.id, meta.description);
     }
@@ -48,7 +47,6 @@ fn print_json(rules: &[rules::RuleDef]) -> Result<()> {
                 "remediation": m.remediation,
                 "severity": match m.severity {
                     Severity::Error => "error",
-                    Severity::Warning => "warning",
                 },
                 "docUrl": m.doc_url,
             })

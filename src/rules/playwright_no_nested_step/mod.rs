@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "playwright-no-nested-step",
     description: "Nested `test.step()` calls make test flow hard to follow.",
     remediation: "Flatten steps so they are sequential instead of nested.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-nested-step.md",
     ),

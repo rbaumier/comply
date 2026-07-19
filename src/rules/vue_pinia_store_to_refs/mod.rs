@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-pinia-store-to-refs",
     description: "Destructuring a Pinia store without `storeToRefs()` loses reactivity.",
     remediation: "Use `const { count } = storeToRefs(useCounterStore())` to preserve reactivity.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

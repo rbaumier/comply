@@ -66,7 +66,7 @@ impl AstCheck for Check {
             message: "`inArray(col, subquery)` — prefer `exists()` which \
                       short-circuits on first match."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

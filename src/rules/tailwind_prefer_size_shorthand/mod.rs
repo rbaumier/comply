@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-prefer-size-shorthand",
     description: "`w-X h-X` with equal values can be written as `size-X`.",
     remediation: "Replace `w-4 h-4` with `size-4` (Tailwind v3.4+).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

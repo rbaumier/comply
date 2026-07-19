@@ -194,7 +194,7 @@ impl OxcCheck for Check {
                     message: "`return undefined` is redundant — drop the `undefined` \
                               and let the implicit return take over."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -212,7 +212,7 @@ impl OxcCheck for Check {
                     message: "Explicit `= undefined` is redundant — `let x;` is already \
                               undefined."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -11,7 +11,7 @@ crate::ast_check! { on ["color_value"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         format!("Invalid hex color `{text}`; expected 3, 4, 6, or 8 hex digits."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

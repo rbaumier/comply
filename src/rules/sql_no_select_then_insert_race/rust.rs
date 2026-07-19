@@ -94,7 +94,7 @@ impl AstCheck for Check {
                     message: format!(
                         "SELECT then INSERT on `{sel_table}` is a TOCTOU race — use `INSERT ... ON CONFLICT`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((ins.byte_start, ins.byte_len)),
                 });
                 break;

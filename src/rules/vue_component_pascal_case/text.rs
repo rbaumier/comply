@@ -403,7 +403,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "vue-component-pascal-case".into(),
                     message: format!("Component `<{}>` should use PascalCase.", elem.tag),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

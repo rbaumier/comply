@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-disallow-privilege-escalation",
     description: "Containers must set securityContext.allowPrivilegeEscalation: false.",
     remediation: "Add `securityContext: { allowPrivilegeEscalation: false }` to each container.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

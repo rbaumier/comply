@@ -107,7 +107,7 @@ impl OxcCheck for Check {
             message: "`forwardRef(...)` is deprecated in React 19 — accept `ref` \
                       as a regular prop on the component."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

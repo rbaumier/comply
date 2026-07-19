@@ -51,7 +51,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use a status-keyed response: `response: { 200: t.Object({...}), 4xx: ... }` so error shapes are typed.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

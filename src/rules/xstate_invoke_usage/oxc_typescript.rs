@@ -70,7 +70,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`invoke` must be an object or array of objects — got `{kind_label}`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -114,7 +114,7 @@ fn validate_invoke_object(
                     "`{key}` is not a valid `invoke` property (allowed: {}).",
                     VALID_INVOKE_PROPS.join(", ")
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -127,7 +127,7 @@ fn validate_invoke_object(
             column,
             rule_id: super::META.id.into(),
             message: "`invoke` object is missing required `src` property.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

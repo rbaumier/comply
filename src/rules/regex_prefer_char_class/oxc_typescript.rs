@@ -115,7 +115,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Single-character alternation \u{2014} use a character class like `[abc]` instead of `a|b|c`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

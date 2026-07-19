@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `Array.from(iter, mapFn)` instead of `[...iter].map(mapFn)`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -56,7 +56,7 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         message: format!(
             "Prefer `{suggested}` over `{op}` for readability \u{2014} swap operands and use `{suggested}`."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -57,7 +57,7 @@ impl OxcCheck for Check {
                          documents the prefix form (`!class`). Use it everywhere for \
                          consistency."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-push-token-requires-projectid",
     description: "`getExpoPushTokenAsync` must be called with `{ projectId }`.",
     remediation: "Pass `{ projectId: Constants.expoConfig.extra.eas.projectId }`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

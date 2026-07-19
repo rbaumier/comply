@@ -45,7 +45,7 @@ crate::ast_check! { on ["block", "field_declaration_list", "declaration_list", "
         column: pos.column + 1,
         rule_id: "empty-brace-spaces".into(),
         message: format!("Do not add spaces between braces: `{text}` -> `{{}}`.",),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

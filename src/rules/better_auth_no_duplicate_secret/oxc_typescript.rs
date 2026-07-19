@@ -63,7 +63,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`secret` duplicates `BETTER_AUTH_SECRET` \u{2014} remove it and use the env var.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

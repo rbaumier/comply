@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsx-fragments",
     description: "Prefer the short fragment syntax `<>...</>` over `<React.Fragment>`.",
     remediation: "Replace `<React.Fragment>` / `<Fragment>` with `<>...</>` (unless a `key` prop is required).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-fragments.md",
     ),

@@ -74,7 +74,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Route path declares `:param` but options have no `params:` schema — path params are unvalidated.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

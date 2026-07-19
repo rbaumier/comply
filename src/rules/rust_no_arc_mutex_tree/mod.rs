@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
                   `generational-arena`). Nodes become indices into a single \
                   `Vec<T>`, which is cheaper, cache-friendly, and makes \
                   cycles trivially representable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

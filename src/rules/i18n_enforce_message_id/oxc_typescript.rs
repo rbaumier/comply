@@ -53,7 +53,7 @@ impl OxcCheck for Check {
                       it the build hashes on `defaultMessage`, which breaks on \
                       whitespace edits."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

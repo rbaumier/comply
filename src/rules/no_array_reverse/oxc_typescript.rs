@@ -71,7 +71,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`Array#reverse()` mutates in place — use `.toReversed()` to avoid mutation."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

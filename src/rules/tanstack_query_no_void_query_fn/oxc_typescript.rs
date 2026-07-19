@@ -131,7 +131,7 @@ impl OxcCheck for Check {
                           be undefined. Return the response value, or switch to \
                           `useMutation` if a side effect is the goal."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

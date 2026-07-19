@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-history-in-comments",
     description: "Comment narrates history rather than describing current behaviour.",
     remediation: "Keep comments about what the code does now. Put history in git log or commit messages.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

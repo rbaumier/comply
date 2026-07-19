@@ -100,7 +100,7 @@ impl OxcCheck for Check {
                 "`{display}(async ...)` ignores the returned promise. Wrap with \
                  `() => {{ void asyncFn(); }}` or refactor `.forEach` into a `for ... of` with `await`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

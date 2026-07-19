@@ -97,7 +97,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "regex-optimal-lookaround-quantifier".into(),
             message: "Quantifier at the edge of a lookaround is misleading \u{2014} it should match a constant number of times.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

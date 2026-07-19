@@ -95,7 +95,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "max-nested-callbacks",
             "max-nested-callbacks",
-            Severity::Warning,
+            Severity::Error,
             "Deeply nested callbacks are unreadable.",
             "Flatten nested callbacks by extracting named functions or \
              switching to async/await. Past three levels the control flow \
@@ -130,7 +130,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "no-sequences",
             "no-sequences",
-            Severity::Warning,
+            Severity::Error,
             "The comma operator hides multiple expressions in one.",
             "Split comma-separated expressions into separate statements. \
              The comma operator evaluates each and returns the last, which \
@@ -139,7 +139,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "no-extra-label",
             "no-extra-label",
-            Severity::Warning,
+            Severity::Error,
             "A label on a loop with no nested target is useless.",
             "Remove the label when `break`/`continue` would target the same \
              loop anyway. Labels only earn their keep when breaking out of \
@@ -182,7 +182,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "no-div-regex",
             "no-div-regex",
-            Severity::Warning,
+            Severity::Error,
             "A regex starting with `/=` reads like a division.",
             "Escape the leading equals sign as `/\\=.../`. A bare `/=` at \
              the start of a regex literal is easy to misread as the `/=` \
@@ -191,7 +191,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "no-lone-blocks",
             "no-lone-blocks",
-            Severity::Warning,
+            Severity::Error,
             "A standalone block with no block-scoped declarations is dead \
              structure.",
             "Remove the redundant `{ }`. A bare block only matters when it \
@@ -209,7 +209,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "no-multi-assign",
             "no-multi-assign",
-            Severity::Warning,
+            Severity::Error,
             "Chained assignments hide what is being set.",
             "Split `a = b = c` into separate statements. Chained assignment \
              obscures which variables are declared and which are mutated.",
@@ -244,7 +244,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "no-useless-rename",
             "no-useless-rename",
-            Severity::Warning,
+            Severity::Error,
             "Renaming a binding to the same name is redundant.",
             "Simplify `{ foo: foo }` to `{ foo }` in imports, exports, and \
              destructuring. Renaming a binding to itself is pure noise.",
@@ -252,7 +252,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "vars-on-top",
             "vars-on-top",
-            Severity::Warning,
+            Severity::Error,
             "`var` declarations should sit at the top of their scope.",
             "Move `var` declarations to the top of the function so the code \
              matches their hoisted semantics — or better, switch to \
@@ -261,7 +261,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "no-multi-str",
             "no-multi-str",
-            Severity::Warning,
+            Severity::Error,
             "Escaping a newline to span a string is error-prone.",
             "Use a template literal or string concatenation instead of a \
              `\\` line continuation. A trailing space after the backslash \
@@ -270,7 +270,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "operator-assignment",
             "operator-assignment",
-            Severity::Warning,
+            Severity::Error,
             "Prefer compound assignment operators.",
             "Replace `x = x + 1` with `x += 1`, and likewise for the other \
              operators. Shorthand states the intent and avoids repeating \
@@ -405,7 +405,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "yoda",
             "yoda",
-            Severity::Warning,
+            Severity::Error,
             "Yoda conditions read backwards.",
             "Write `value === 'literal'`, not `'literal' === value`. \
              Putting the variable first reads naturally.",
@@ -413,7 +413,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "object-shorthand",
             "object-shorthand",
-            Severity::Warning,
+            Severity::Error,
             "Use shorthand for object properties and methods.",
             "Write `{ foo }` instead of `{ foo: foo }` and `{ method() {} \
              }` instead of `{ method: function () {} }`. Shorthand is the \
@@ -431,7 +431,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "no-extra-boolean-cast",
             "no-extra-boolean-cast",
-            Severity::Warning,
+            Severity::Error,
             "Redundant boolean casts add noise.",
             "Drop the extra `!!` or `Boolean()` in a context that already \
              coerces to boolean, such as an `if` condition. It is pure \
@@ -440,7 +440,7 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "symbol-description",
             "symbol-description",
-            Severity::Warning,
+            Severity::Error,
             "Every `Symbol()` should carry a description.",
             "Pass a description to `Symbol('...')`. The description is the \
              only thing that identifies a symbol when debugging.",

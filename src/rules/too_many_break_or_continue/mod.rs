@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "too-many-break-or-continue",
     description: "Loop contains 2+ `break`/`continue` statements — consider refactoring.",
     remediation: "Extract the loop body into a function, use early returns, or restructure the logic. Multiple break/continue statements make loops hard to follow and often indicate the loop is doing too much.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

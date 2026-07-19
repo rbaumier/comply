@@ -37,7 +37,7 @@ impl TextCheck for Check {
                             "Duplicate attribute `{name}` on `<{tag}>`.",
                             tag = elem.tag
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 } else {

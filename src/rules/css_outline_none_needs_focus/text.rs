@@ -27,7 +27,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
                 &node,
                 super::META.id,
                 "`outline` removed outside `:focus` — keyboard users lose the focus indicator.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
             return;
         }

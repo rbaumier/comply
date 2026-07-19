@@ -94,7 +94,7 @@ crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics
             column: 1,
             rule_id: super::META.id.into(),
             message: format!("Service `{name}` does not declare `cap_drop: [ALL]`."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((key.byte_range().start, key.byte_range().len())),
         });
     }

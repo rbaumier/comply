@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-deploy-no-health",
     description: "Elysia server exposes `.listen()` without a `/health` endpoint — load balancers and orchestrators have no liveness signal.",
     remediation: "Add `.get('/health', () => ({ status: 'ok' }))` (or similar) so platforms can probe readiness.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["deployment", "elysia"],
 

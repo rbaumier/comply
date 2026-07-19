@@ -156,7 +156,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`useEffect` with empty deps sets state — initialize it in `useState(...)` directly instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

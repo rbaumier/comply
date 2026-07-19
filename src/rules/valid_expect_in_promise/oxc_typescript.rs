@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Promise `.{prop}()` with `expect()` inside must be returned or awaited."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

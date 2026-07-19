@@ -69,7 +69,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Prefer `{suggested}` over `{op}` for readability — swap operands and use `{suggested}`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

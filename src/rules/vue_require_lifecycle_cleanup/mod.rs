@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-require-lifecycle-cleanup",
     description: "`onMounted` with `addEventListener` must have a matching `onUnmounted` with `removeEventListener`.",
     remediation: "Add `onUnmounted(() => element.removeEventListener(...))` to clean up.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

@@ -14,7 +14,7 @@ crate::ast_check! { on ["at_rule"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "Legacy `@tailwind` directive — replace the three `@tailwind base/components/utilities` lines with a single `@import \"tailwindcss\";` (Tailwind v4).".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Server functions should throw `notFound()` rather than a generic Error.",
     remediation: "Replace `throw new Error('not found')` with `throw notFound()` \
                   so the router renders the proper 404 boundary.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start"],
 

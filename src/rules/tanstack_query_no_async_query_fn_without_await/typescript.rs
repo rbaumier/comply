@@ -170,7 +170,7 @@ impl TextCheck for Check {
                     message: "`queryFn: async` returns `fetch(...)` without `await` — \
                               the query resolves with an unconsumed Response."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

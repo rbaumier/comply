@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-invalid-media-query",
     description: "Disallow malformed `@media` queries.",
     remediation: "Fix the `@media` syntax (e.g. add the missing feature or parenthesis).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

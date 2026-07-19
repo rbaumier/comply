@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-catch-returns-tagged",
     description: "The catch of Result.tryPromise must return a TaggedError, not a raw Error/string.",
     remediation: "Return a TaggedError subclass instance from the catch handler.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

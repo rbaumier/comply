@@ -35,7 +35,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "prefer-dom-node-text-content".into(),
             message: "Prefer `.textContent` over `.innerText`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

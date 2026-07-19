@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "god-module",
     description: "Module is imported by a large fraction of the project — centralisation smell.",
     remediation: "Split the module into smaller, focused ones so importers only pull in what they need. High fan-in modules are rebuild and merge-conflict bottlenecks.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "imports"],
 

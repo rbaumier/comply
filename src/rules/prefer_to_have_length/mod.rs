@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-to-have-length",
     description: "Use `toHaveLength(n)` instead of asserting on `.length` with `toBe`/`toEqual`.",
     remediation: "Use expect(x).toHaveLength(n) instead",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://jestjs.io/docs/expect#tohavelengthnumber"),
     categories: &["testing"],
 

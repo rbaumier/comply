@@ -71,7 +71,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Prefer matchError (exhaustive) over matchErrorPartial when the union is fully enumerable.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

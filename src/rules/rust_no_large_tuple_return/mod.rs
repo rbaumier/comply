@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   where `Result` is a named struct holding the same fields. \
                   Tuples force positional reasoning at every call site and \
                   make refactors impossible.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

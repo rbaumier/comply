@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-dangling-service-monitor",
     description: "ServiceMonitor.spec.selector.matchLabels must match at least one workload in the namespace.",
     remediation: "Align the ServiceMonitor selector with a Service/workload that exists in the namespace, or remove the ServiceMonitor.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

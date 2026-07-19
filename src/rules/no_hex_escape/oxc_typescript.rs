@@ -73,7 +73,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Use Unicode escape `\\u00{hex}` instead of hex escape `\\x{hex}`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -102,7 +102,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "Use Unicode escape `\\u00{hex}` instead of hex escape `\\x{hex}`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

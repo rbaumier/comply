@@ -92,7 +92,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Nested function calls have depth {depth} (max: {max}) \u{2014} extract intermediate variables."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

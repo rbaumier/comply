@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-useless-constructor",
     description: "Empty constructors that only call `super()` are unnecessary.",
     remediation: "Remove the constructor — the default behaviour is identical.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-useless-constructor/"),
     categories: &["typescript"],
 

@@ -53,7 +53,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`onError` handler doesn't branch on `'VALIDATION'` \u{2014} schema errors will surface as generic 500s.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

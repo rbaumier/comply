@@ -45,7 +45,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Arrow function in `.derive`/`.resolve` \u{2014} OpenTelemetry spans will be unnamed; use a named function.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-logical-operator-over-ternary",
     description: "Prefer `||`/`??` over a ternary that repeats the test in a branch.",
     remediation: "Replace `foo ? foo : bar` with `foo || bar` (or `foo ?? bar`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

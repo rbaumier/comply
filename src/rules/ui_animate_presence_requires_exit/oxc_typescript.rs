@@ -92,7 +92,7 @@ impl OxcCheck for Check {
             message: format!(
                 "<{tag}> inside <AnimatePresence> is missing an `exit` prop — it will vanish without animating out."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

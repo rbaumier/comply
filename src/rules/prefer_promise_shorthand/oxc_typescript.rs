@@ -109,7 +109,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`new Promise` wrapping a single resolve/reject — use `Promise.resolve()`/`Promise.reject()` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

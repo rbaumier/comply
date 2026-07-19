@@ -63,7 +63,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Static element `<{tag}>` has `onClick` without a `role` attribute."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

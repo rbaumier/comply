@@ -47,7 +47,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`mapResponse` is on the hot path \u{2014} synchronous `gzipSync` / `deflateSync` blocks the event loop. Use the async `zlib/promises` variants.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

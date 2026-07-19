@@ -67,7 +67,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`<script src>` without `defer` or `async` blocks HTML parsing \u{2014} add `defer` or `async`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

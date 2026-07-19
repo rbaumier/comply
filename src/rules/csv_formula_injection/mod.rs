@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "csv-formula-injection",
     description: "Flags a dynamic CSV cell built without a formula-escape (OWASP CSV/formula injection).",
     remediation: "Wrap dynamic cells in a formula-escape helper (e.g. `escapeCsv`) that neutralizes a leading `=`, `+`, `-`, or `@` before joining the row.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://owasp.org/www-community/attacks/CSV_Injection"),
     categories: &["security"],
 

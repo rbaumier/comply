@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Classes use `constructor()`, not `new()`. Interfaces use `new()`, not `constructor()`.",
     remediation: "In a class, rename `new` to `constructor`. In an interface, use `new(): Type` \
                   instead of `constructor(): Type`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

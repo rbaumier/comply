@@ -210,7 +210,7 @@ impl OxcCheck for Check {
             message: "`.sort(...)[0]` / `.sort(...)[length-1]` picks an extremum via O(n log n) work — \
                       use `Math.min` / `Math.max` or a single-pass fold."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

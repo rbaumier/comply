@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                  strings. Parse explicitly with a regex + `.transform(Number)`.",
                 key_text.trim_matches(|c: char| c == '"' || c == '\''),
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

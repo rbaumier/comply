@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   and doing arithmetic reintroduces IEEE-754 rounding on money.",
     remediation: "Keep the string and compute with a decimal library (`new Decimal(order.amount)`) \
                   or do the arithmetic in SQL.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://orm.drizzle.team/docs/column-types/pg#numeric"),
     categories: &["drizzle", "database"],
 

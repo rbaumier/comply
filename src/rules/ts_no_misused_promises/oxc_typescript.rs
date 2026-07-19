@@ -77,7 +77,7 @@ impl OxcCheck for Check {
             message: "Async callback passed to a void-returning slot — the returned \
                       Promise is dropped and errors disappear silently."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

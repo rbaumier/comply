@@ -114,7 +114,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Named capturing group `{name}` is never referenced \u{2014} use `.groups.{name}` or convert to `(?:...)`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

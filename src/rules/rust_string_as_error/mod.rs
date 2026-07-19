@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   the boilerplate) and use it as the `E` parameter. \
                   String errors prevent callers from pattern-matching \
                   failure modes and lose all structured context.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

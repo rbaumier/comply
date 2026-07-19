@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-obscure-range",
     description: "Character class ranges like `[A-z]` include unwanted chars (`[\\]^_\\``). Use `[A-Za-z]` instead.",
     remediation: "Replace obscure ranges with explicit ones: `[A-Za-z]`, `[a-zA-Z0-9]`, etc.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["regex"],
 

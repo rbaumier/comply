@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
                   `Display` (or the requested formatter) on each argument. \
                   The extra `.to_string()` allocates a `String` only to \
                   hand it back to the same trait.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

@@ -62,7 +62,7 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
             message: "`BETWEEN` with timestamps is inclusive on both \
                       sides — use `>= start AND < end` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

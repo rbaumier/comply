@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-require-title",
     description: "HTML documents must declare a `<title>` element inside `<head>`.",
     remediation: "Add <title> element inside <head>",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

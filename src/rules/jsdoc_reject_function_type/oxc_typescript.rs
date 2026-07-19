@@ -79,7 +79,7 @@ impl OxcCheck for Check {
                         column: abs_col,
                         rule_id: super::META.id.into(),
                         message: "JSDoc uses bare `Function` type \u{2014} provide a specific function signature instead.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

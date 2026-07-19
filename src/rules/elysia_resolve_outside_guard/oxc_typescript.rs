@@ -179,7 +179,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`.resolve()` is used outside `.guard()` — derived values leak to every route in the chain.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

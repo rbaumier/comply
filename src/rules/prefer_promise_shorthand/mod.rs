@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-promise-shorthand",
     description: "`new Promise` wrapping a single `resolve`/`reject` call — use `Promise.resolve`/`Promise.reject` instead.",
     remediation: "Replace `new Promise((resolve) => resolve(x))` with `Promise.resolve(x)` and `new Promise((_, reject) => reject(x))` with `Promise.reject(x)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

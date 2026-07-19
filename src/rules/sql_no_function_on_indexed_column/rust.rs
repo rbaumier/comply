@@ -36,7 +36,7 @@ impl AstCheck for Check {
             format!(
                 "`{func}` in WHERE defeats the index — normalize the column or add a functional index."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

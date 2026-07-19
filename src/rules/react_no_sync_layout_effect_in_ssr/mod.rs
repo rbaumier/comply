@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`useLayoutEffect` in a non-client file emits a server-rendering warning.",
     remediation: "Add `\"use client\"` at the top of the file, or replace `useLayoutEffect` with \
                   `useEffect` (or the cross-environment `useIsomorphicLayoutEffect` pattern).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react.dev/reference/react/useLayoutEffect#caveats"),
     categories: &["react"],
 

@@ -117,7 +117,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use Nuxt's auto-imported `useRouter()` / `useRoute()` instead of importing `vue-router`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((import.span.start as usize, (import.span.end - import.span.start) as usize)),
         });
     }

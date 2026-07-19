@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "nuxt-no-head-in-setup",
     description: "Setting `head` via component options bypasses the typed `useHead()` composable.",
     remediation: "Call `useHead({ title, meta, link })` from `<script setup>` or inside `setup()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://nuxt.com/docs/getting-started/seo-meta"),
     categories: &["nuxt", "seo"],
 

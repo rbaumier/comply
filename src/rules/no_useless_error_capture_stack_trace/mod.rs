@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   automatically via `super()`. (Keep the two-argument \
                   `Error.captureStackTrace(this, constructorOpt)` form — it \
                   trims constructor frames from the trace.)",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

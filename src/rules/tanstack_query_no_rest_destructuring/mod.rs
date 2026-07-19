@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Rest destructuring on a TanStack Query result subscribes to every field.",
     remediation: "Destructure only the fields you actually need (e.g. `data`, \
                   `isLoading`) instead of using `...rest`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-query"],
 

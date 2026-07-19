@@ -113,7 +113,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("`<{tag}>` should set `loading=\"lazy\"` to defer off-screen loads."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

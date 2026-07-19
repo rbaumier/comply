@@ -142,7 +142,7 @@ impl OxcCheck for Check {
                     message:
                         "catch handler should return a TaggedError, not a raw Error/string/object."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

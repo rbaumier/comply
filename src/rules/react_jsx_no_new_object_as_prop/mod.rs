@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-jsx-no-new-object-as-prop",
     description: "Object literals passed directly as JSX props create a new reference every render.",
     remediation: "Extract object to a constant or use useMemo",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

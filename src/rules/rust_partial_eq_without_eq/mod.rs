@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   be proven — a float (`f32`/`f64`), an imported/unknown type, or \
                   a generic type parameter — leaves the type exempt, since adding \
                   `Eq` would not compile.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

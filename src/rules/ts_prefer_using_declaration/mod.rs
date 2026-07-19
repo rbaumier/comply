@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-using-declaration",
     description: "try/finally with a single cleanup call is replaceable by `using` / `await using` (TS 5.2+).",
     remediation: "Declare the resource with `using res = ...` and let the runtime call dispose.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html"),
     categories: &["typescript"],
 

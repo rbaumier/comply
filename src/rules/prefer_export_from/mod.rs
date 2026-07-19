@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `export { x } from './m';`. Direct re-export is shorter, \
                   avoids a binding in the local scope, and makes the re-export \
                   intent explicit.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
     skip_in_test_dir: false,

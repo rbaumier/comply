@@ -50,7 +50,7 @@ impl OxcCheck for Check {
                     "`new {observer}(...)` in `useEffect` without `.disconnect()` cleanup — \
                      the observer outlives the component and prevents GC of its target."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

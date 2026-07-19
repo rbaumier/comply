@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `window.`, `self.`, or `global.` with `globalThis.`. \
                   `globalThis` is the standard cross-platform way to access the \
                   global object in any JS environment.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

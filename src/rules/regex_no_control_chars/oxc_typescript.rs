@@ -64,7 +64,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Raw control character in regex \u{2014} likely an accidental paste; use an explicit escape (e.g. `\\x1b`) if intended."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

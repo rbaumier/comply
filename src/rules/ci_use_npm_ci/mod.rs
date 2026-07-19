@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   reproducibility. CI must use `npm ci` to install exactly what the \
                   lockfile describes.",
     remediation: "Replace `run: npm install` with `run: npm ci` in the workflow.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ci-cd"],
 

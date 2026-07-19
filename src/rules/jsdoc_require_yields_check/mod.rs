@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-yields-check",
     description: "`@yields` must match what the function actually yields.",
     remediation: "Either remove a `@yields` tag from a non-yielding function, or add a `yield` to a function documented with `@yields`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-yields-check.md",
     ),

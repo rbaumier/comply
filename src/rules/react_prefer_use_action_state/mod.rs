@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-prefer-use-action-state",
     description: "Manual `useState` + `useTransition` + form action is reinventing `useActionState`.",
     remediation: "Replace the trio with `const [state, dispatch, pending] = useActionState(action, initial);`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react.dev/reference/react/useActionState"),
     categories: &["react"],
 

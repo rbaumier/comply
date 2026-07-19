@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-auth-require-secure-cookies",
     description: "Better Auth config missing `useSecureCookies: true` — session cookies transmitted over HTTP.",
     remediation: "Add `advanced: { useSecureCookies: true }` to your Better Auth config for production.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://www.better-auth.com/docs/concepts/cookies"),
     categories: &["security", "better-auth"],
 

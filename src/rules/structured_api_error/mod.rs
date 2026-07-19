@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "structured-api-error",
     description: "Bare `new Error()` in route handlers — use structured errors.",
     remediation: "Replace `new Error(\"message\")` with a structured error containing `{ type, code, status, detail }`. Bare Error messages are not machine-parseable and lack HTTP status context.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api"],
 

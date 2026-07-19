@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-render-return-value",
     description: "Do not use the return value of `ReactDOM.render()`.",
     remediation: "Call `ReactDOM.render()` as a statement; attach refs via `ref` callbacks instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-render-return-value.md",
     ),

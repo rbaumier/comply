@@ -49,7 +49,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         "`localStorage` access outside a `try`/`catch` — throws in private-browsing mode, \
          SSR, or on quota errors. Wrap in `try { ... } catch { ... }`."
             .into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

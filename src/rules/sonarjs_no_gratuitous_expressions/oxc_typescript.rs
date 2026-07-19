@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             message: "Condition is a compile-time constant — one branch is dead. \
                       Remove it, or fix the condition to depend on runtime state."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "public-static-readonly",
     description: "`public static` fields without `readonly` allow accidental mutation.",
     remediation: "Add `readonly` to `public static` fields: `public static readonly X = ...`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

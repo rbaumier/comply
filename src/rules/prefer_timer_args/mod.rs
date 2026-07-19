@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-timer-args",
     description: "Prefer `setTimeout(fn, delay, arg)` over `setTimeout(() => fn(arg), delay)`.",
     remediation: "Pass arguments directly to setTimeout/setInterval: `setTimeout(fn, delay, arg1, arg2)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["e18e", "modernization"],
 

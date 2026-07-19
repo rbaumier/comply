@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Same object spread multiple times on a JSX element.",
     remediation: "Remove the duplicate spread. Spreading the same identifier \
                   twice is likely a copy-paste mistake.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-props-no-spread-multi.md",
     ),

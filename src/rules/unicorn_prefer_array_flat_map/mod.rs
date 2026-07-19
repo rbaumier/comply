@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "unicorn-prefer-array-flat-map",
     description: "`.map(fn).flat()` walks the array twice — `.flatMap(fn)` does it once.",
     remediation: "Replace `xs.map(fn).flat()` with `xs.flatMap(fn)`. Same shape, half the work.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/prefer-array-flat-map.md"),
     categories: &["code-quality"],
 

@@ -84,7 +84,7 @@ crate::ast_check! { on ["selectors"] => |node, source, ctx, diagnostics|
                 "Expected this selector to have no more than {max} class {}, but found {count}.",
                 selector_label(max)
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

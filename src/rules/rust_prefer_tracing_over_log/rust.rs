@@ -82,7 +82,7 @@ impl AstCheck for Check {
                       structured fields and span context across `async` \
                       boundaries; `log` does not."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

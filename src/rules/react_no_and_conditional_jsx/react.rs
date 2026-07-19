@@ -56,7 +56,7 @@ impl AstCheck for Check {
                       is falsy-but-not-false. Use a ternary: \
                       `{expr ? <X /> : null}`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

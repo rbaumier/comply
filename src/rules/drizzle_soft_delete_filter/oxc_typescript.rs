@@ -128,7 +128,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`.{name}(...)` on a soft-deletable table without `isNull(t.deletedAt)` \u{2014} add the filter or use a dedicated non-deleted helper."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                       React Compiler memoizes the form proxy incorrectly \u{2014} add \
                       `\"use no memo\"` to opt this file out."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

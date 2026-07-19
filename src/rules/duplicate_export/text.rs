@@ -287,7 +287,7 @@ impl TextCheck for Check {
                      Pick a single canonical barrel to avoid ambiguous import paths.",
                     name, barrel_list
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

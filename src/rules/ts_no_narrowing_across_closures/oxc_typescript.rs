@@ -259,7 +259,7 @@ fn visit_expr(
                 message: format!(
                     "Variable `{name}` loses its narrowing inside this callback; capture it in a local const first."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

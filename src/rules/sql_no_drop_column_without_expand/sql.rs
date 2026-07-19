@@ -23,7 +23,7 @@ impl TextCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "`DROP COLUMN` without a prior deprecation release breaks running deploys — mark the column unused in a previous release, then drop in a later migration.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

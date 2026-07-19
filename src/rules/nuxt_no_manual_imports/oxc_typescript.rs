@@ -69,7 +69,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Nuxt auto-imports composables from `#imports`/`#app` — drop the explicit import.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((start, len)),
         });
     }

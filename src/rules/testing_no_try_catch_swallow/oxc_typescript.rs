@@ -68,7 +68,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Empty catch in a test masks the errors the test is meant to surface \u{2014} assert with expect(...).toThrow(...) instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

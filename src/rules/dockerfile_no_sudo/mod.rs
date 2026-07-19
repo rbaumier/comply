@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-sudo",
     description: "Do not use `sudo` inside a Dockerfile RUN.",
     remediation: "Remove `sudo` and switch users via `USER` if needed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

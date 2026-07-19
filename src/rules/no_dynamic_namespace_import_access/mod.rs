@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   tree shaking and increases bundle size.",
     remediation: "Use a static property access (`ns.member`) or a named import instead of a \
                   computed access (`ns[expr]`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-dynamic-namespace-import-access/"),
     categories: &["performance", "imports"],
 

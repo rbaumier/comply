@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`CREATE INDEX` without `CONCURRENTLY` locks the table. \
                       Use `CREATE INDEX CONCURRENTLY` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

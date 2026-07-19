@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Arrow functions and `.bind()` in JSX props create a new reference every render.",
     remediation: "Hoist the handler to a stable reference — `useCallback`, a class method, \
                   or a module-level function — so memoized children don't re-render needlessly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-no-bind.md",
     ),

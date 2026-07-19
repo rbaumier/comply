@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "playwright-require-top-level-describe",
     description: "Bare `test(...)` at module top makes reports harder to scan — wrap related tests in `test.describe(...)`.",
     remediation: "Group tests in a `test.describe(\"<feature>\", () => { ... })` block. Each `test()` lives inside one describe.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/require-top-level-describe.md"),
     categories: &["testing", "playwright"],
 

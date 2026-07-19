@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `.appendChild(x)` with `.append(x)`. \
                   `.append()` accepts multiple arguments, strings, and \
                   never returns the appended node (avoiding subtle misuse).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

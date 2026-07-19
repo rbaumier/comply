@@ -75,7 +75,7 @@ impl OxcCheck for Check {
                 message: "Useless case in switch statement — it falls through \
                           to `default` with no own code."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
 

@@ -121,7 +121,7 @@ impl OxcCheck for Check {
             rule_id: "no-try-statements".into(),
             message: "`try` block \u{2014} prefer Result types or explicit error handling."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

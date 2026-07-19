@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Use `Object.hasOwn(obj, key)` instead of `obj.hasOwnProperty(key)` (ES2022)."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

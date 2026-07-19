@@ -67,7 +67,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Inline snapshot spans {line_count} lines (max: {max}) \u{2014} narrow the assertion."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

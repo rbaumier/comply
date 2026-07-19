@@ -59,7 +59,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Prefer `.some(\u{2026})` over `.filter(\u{2026}).length` check \u{2014} `.some()` short-circuits.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

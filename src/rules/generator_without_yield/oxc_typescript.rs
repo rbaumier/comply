@@ -197,7 +197,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Generator function does not contain a `yield` — add one or use a regular function."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

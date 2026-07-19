@@ -81,7 +81,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Route handler passed by reference loses Elysia's type inference. Wrap in an inline arrow function.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

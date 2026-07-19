@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-from-platform",
     description: "Avoid pinning `--platform` on FROM; it breaks multi-arch builds.",
     remediation: "Remove `--platform=...` and let BuildKit pick the platform via build args.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

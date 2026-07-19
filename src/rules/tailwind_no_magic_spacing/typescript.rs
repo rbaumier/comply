@@ -97,7 +97,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                         "`{}{value}]` uses {n}px which is not a multiple of 4 — stick to the design-token spacing scale.",
                         prefix.trim_end_matches('[')
                     ),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
                 break;
             }

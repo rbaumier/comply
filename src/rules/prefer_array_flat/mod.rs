@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-array-flat",
     description: "Prefer `.flat()` over legacy array flattening techniques.",
     remediation: "Replace `[].concat(…arr)` or `.reduce((a,b) => a.concat(b), [])` with `.flat()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -62,7 +62,7 @@ impl AstCheck for Check {
             "`.map(|x| x.clone())` — use `.cloned()` (or `.copied()` for \
              `Copy` types) for clearer intent."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

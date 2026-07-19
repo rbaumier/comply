@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   npm/pnpm silently picks one, which surprises consumers.",
     remediation: "Keep each package in exactly one section. Production deps go in \
                   `dependencies`; build-only tools go in `devDependencies`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["package-json"],
 

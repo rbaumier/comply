@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-hpa-min-three-replicas",
     description: "HorizontalPodAutoscaler minReplicas must be at least 3 to survive node drains.",
     remediation: "Set `spec.minReplicas: 3` (or higher) on the HorizontalPodAutoscaler.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

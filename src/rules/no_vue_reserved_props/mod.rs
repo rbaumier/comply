@@ -43,7 +43,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "A Vue-reserved name (`key` or `ref`) was declared as a component prop.",
     remediation: "Rename the prop: Vue reserves `key` and `ref` for template binding, so they \
                   cannot be used as prop names.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/no-vue-reserved-props/"),
     categories: &["vue"],
 

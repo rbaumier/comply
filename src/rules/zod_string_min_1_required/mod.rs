@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-string-min-1-required",
     description: "Bare `z.string()` without length constraints accepts empty strings.",
     remediation: "Add `.min(1)` or `.trim().min(1)` to reject empty strings.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

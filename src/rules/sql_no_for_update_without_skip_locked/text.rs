@@ -28,7 +28,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "sql-no-for-update-without-skip-locked".into(),
                     message: "`SELECT FOR UPDATE` without `SKIP LOCKED` or `NOWAIT` serializes every worker. Add `SKIP LOCKED` for queues or `NOWAIT` to fail fast.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

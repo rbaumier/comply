@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-nullable-requires-comment",
     description: "Nullable columns must have a `--` comment explaining why NULL is allowed.",
     remediation: "Add a `-- reason: <why this can be NULL>` comment on the preceding line.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

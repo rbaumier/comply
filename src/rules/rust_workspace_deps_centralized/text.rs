@@ -73,7 +73,7 @@ impl TextCheck for Check {
                 message: "dependency pinned in a member crate — use `{ workspace = true }` \
                           and declare the version in `[workspace.dependencies]`."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`.find()` / `.filter()` called inside a `.map()` callback or `for` loop \
                   turns an O(n) pass into O(n²).",
     remediation: "Build a `Map`/lookup index once, then look up inside the loop.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react", "code-quality"],
 

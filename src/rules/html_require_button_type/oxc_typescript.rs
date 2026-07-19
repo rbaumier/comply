@@ -57,7 +57,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`<button>` is missing an explicit `type` attribute (defaults to `submit` inside forms).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

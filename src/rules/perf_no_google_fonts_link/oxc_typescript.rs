@@ -56,7 +56,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "Avoid loading fonts from `fonts.googleapis.com` — self-host them to cut a third-party handshake.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

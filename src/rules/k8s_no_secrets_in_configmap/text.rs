@@ -38,7 +38,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &child,
                     super::META.id,
                     format!("ConfigMap key `{key}` looks like a secret; move it to a Secret."),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

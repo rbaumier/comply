@@ -51,7 +51,7 @@ crate::ast_check! { on ["keyframes_statement"] => |node, source, ctx, diagnostic
                 &kb,
                 super::META.id,
                 format!("Duplicate keyframe selector `{sel}`."),
-                Severity::Warning,
+                Severity::Error,
             ));
         } else {
             seen.push(sel);

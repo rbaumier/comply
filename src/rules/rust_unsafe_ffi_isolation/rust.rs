@@ -247,7 +247,7 @@ crate::ast_check! { on ["foreign_mod_item"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "Isolate `extern \"C\"` inside `mod sys { ... }` or `mod ffi { ... }`.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-transform-no-schema",
     description: "`transform` mutates `body` without a declared `body:` schema — input is unchecked.",
     remediation: "Declare a `body:` schema for the route or scope before transforming the body, so Elysia validates the shape before mutation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

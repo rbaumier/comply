@@ -147,7 +147,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         "`.find`/`.filter` inside a `.map` or loop — O(n²). \
          Build a `Map` once and look up inside the loop."
             .into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

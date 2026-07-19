@@ -141,7 +141,7 @@ impl OxcCheck for Check {
                  Simple arithmetic reduces like `(sum, n) => sum + n` are allowed.",
                 method
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

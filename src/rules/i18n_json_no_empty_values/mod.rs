@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-json-no-empty-values",
     description: "Translation value is empty.",
     remediation: "Add the missing translation or remove the key if it's not needed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

@@ -306,7 +306,7 @@ impl OxcCheck for Check {
                     "Invalid group length in numeric value: `{}` should be `{}`.",
                     raw, formatted
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   Then `type UserId = z.infer<typeof userId>` produces a \
                   nominal type so a `PostId` cannot be passed where a \
                   `UserId` is expected.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

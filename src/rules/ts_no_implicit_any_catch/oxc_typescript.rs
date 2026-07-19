@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             message: "catch binding has no type annotation — it defaults to `any`. \
                       Use `catch (e: unknown)` and narrow the value explicitly."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

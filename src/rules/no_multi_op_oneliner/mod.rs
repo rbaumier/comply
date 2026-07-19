@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Extract intermediate named variables. Each step of the \
                   expression should have a name that says what it represents \
                   — `activeItems`, `prices`, `subtotal`, `total`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

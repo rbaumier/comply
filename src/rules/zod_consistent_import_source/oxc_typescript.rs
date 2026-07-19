@@ -51,7 +51,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Import from '{src_value}' uses a non-standard zod subpath. Use consistent import source for zod."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

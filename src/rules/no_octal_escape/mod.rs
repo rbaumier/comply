@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Disallow octal escape sequences in string literals.",
     remediation: "Octal escape sequences are deprecated since ECMAScript 5. Replace the escape with \
                   a hexadecimal (`\\xA9`) or unicode (`\\u00A9`) escape.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["suspicious"],
 

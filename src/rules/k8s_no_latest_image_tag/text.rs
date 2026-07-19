@@ -25,7 +25,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &image_pair,
                 super::META.id,
                 "Container image uses `:latest` or omits a tag; pin an explicit version or digest.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

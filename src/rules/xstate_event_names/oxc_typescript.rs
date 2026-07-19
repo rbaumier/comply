@@ -101,7 +101,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Event name `{event_name}` should be SCREAMING_SNAKE_CASE (e.g. `FETCH_DATA`)."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

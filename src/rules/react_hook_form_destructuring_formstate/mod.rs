@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-hook-form-destructuring-formstate",
     description: "Accessing `formState.xxx` without destructuring defeats React Hook Form proxy tracking.",
     remediation: "Destructure the needed fields up front: `const { isValid, errors } = formState;`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react-hook-form.com/docs/useform/formstate"),
     categories: &["react"],
 

@@ -93,7 +93,7 @@ impl TextCheck for Check {
                     "`{name}` looks like filter/pagination state — store it in the URL \
                      (`useUrlSearchParams` or router query) so it survives reloads and is shareable."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

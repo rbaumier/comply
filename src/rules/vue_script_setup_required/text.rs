@@ -26,7 +26,7 @@ impl TextCheck for Check {
                     message:
                         "Use `<script setup>` instead of `<script>` with a `setup()` function."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 break;

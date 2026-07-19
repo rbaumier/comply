@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "compose-require-resource-limits",
     description: "Each service must declare `deploy.resources.limits.memory`.",
     remediation: "Add a `deploy.resources.limits.memory` entry (e.g. `memory: 512M`) to every service.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker", "docker-compose"],
 

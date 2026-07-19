@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Place children between the opening and closing tags instead of \
                   passing them as a `children` prop. This is more readable and \
                   idiomatic.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/no-children-prop.md",
     ),

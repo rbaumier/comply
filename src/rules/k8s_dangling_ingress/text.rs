@@ -33,7 +33,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     format!(
                         "Ingress backend references Service/{name} in namespace {namespace}, but no such Service exists in the project."
                     ),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

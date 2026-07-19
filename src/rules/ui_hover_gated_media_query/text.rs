@@ -33,7 +33,7 @@ crate::ast_check! { on ["rule_set"] prefilter = [":hover"] => |node, source, ctx
             "`:hover` with motion (`{}`) is not gated by `@media (hover: hover) and (pointer: fine)` — touch devices will stick in the hovered state.",
             sel_text.trim()
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

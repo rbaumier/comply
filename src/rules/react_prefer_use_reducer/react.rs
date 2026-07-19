@@ -99,7 +99,7 @@ crate::ast_check! { on ["function_declaration", "arrow_function"] => |node, sour
         message: format!(
             "Component `{name}` has {count} `useState` calls — consider `useReducer` for related state."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

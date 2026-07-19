@@ -156,7 +156,7 @@ impl OxcCheck for Check {
             message: "Redundant `return await` outside a try block — drop the \
                       `await` and return the promise directly."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

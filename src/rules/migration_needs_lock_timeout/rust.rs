@@ -81,7 +81,7 @@ impl AstCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "DDL without `SET lock_timeout` — add `SET lock_timeout = '5s';` at the top to prevent write queue pileups.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: Some((byte_start, byte_len)),
             });
         }

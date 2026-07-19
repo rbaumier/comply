@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-no-string-route-names",
     description: "`navigation.navigate('Name', ...)` bypasses Expo Router's typed paths.",
     remediation: "Use `router.push('/typed/path')` from expo-router instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                  import from a subpath (e.g. `{import_path}/<name>`) for \
                  tree-shaking."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

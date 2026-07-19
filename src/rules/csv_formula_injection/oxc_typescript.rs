@@ -87,7 +87,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Dynamic CSV cell is joined into a row without a formula-escape — wrap it (e.g. `escapeCsv(...)`) to neutralize a leading `=`/`+`/`-`/`@`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

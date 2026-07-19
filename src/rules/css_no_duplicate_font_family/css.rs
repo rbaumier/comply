@@ -54,7 +54,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
                 anchor,
                 super::META.id,
                 format!("Duplicate font `{name}` in font-family list."),
-                Severity::Warning,
+                Severity::Error,
             ));
         } else {
             seen.push(normalized);

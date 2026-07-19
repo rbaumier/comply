@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   lockfile never invalidates — stale caches break reproducibility.",
     remediation: "Include `${{ hashFiles('**/package-lock.json') }}` (or the pnpm/yarn \
                   equivalent) in the cache `key:`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ci-cd"],
 

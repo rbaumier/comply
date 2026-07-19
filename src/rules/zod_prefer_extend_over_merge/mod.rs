@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`.merge()` is removed in Zod v4 — `.extend()` is the canonical \
                   way to augment an object schema.",
     remediation: "Replace `A.merge(B)` with `A.extend(B.shape)` (or inline the fields).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

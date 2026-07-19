@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-avatar-requires-fallback",
     description: "`<Avatar>` must contain an `<AvatarFallback>` so broken images degrade gracefully.",
     remediation: "Add an `<AvatarFallback>` child (initials, icon, or empty circle) alongside `<AvatarImage>`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn", "a11y"],
 

@@ -64,7 +64,7 @@ impl OxcCheck for Check {
             message: "`.find`/`.filter` inside a `.map` or loop — O(n\u{b2}). \
                       Build a `Map` once and look up inside the loop."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

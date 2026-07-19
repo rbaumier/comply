@@ -115,7 +115,7 @@ impl OxcCheck for Check {
                 "{len} chained `.filter`/`.map`/`.reduce` calls — collapse into a \
                  single pass to avoid intermediate arrays."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

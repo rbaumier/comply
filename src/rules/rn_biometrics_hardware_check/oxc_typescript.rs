@@ -121,7 +121,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`authenticateAsync` without `hasHardwareAsync` / `isEnrolledAsync` (in that order) \u{2014} the call can fail on devices without biometrics.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

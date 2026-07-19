@@ -59,7 +59,7 @@ impl TextCheck for Check {
                         message:
                             "The use of `quickfix.biome` is deprecated; use `source.fixAll.biome` instead."
                                 .to_string(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   call. Vitest with `@testing-library/react` runs cleanup \
                   automatically after each test. Manual cleanup causes \
                   double cleanup which can mask unmount bugs.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

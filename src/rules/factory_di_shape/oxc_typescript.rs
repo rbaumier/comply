@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                          use a single deps object: \
                          `createService({{ db, cache, logger }})`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-destructuring-assignment",
     description: "Consecutive property accesses on the same object can be destructured.",
     remediation: "Use destructuring: `const { x, y } = obj;` instead of separate `const x = obj.x; const y = obj.y;` declarations. Destructuring is more concise and makes the intent clear.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

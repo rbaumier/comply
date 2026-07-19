@@ -42,7 +42,7 @@ impl AstCheck for Check {
                       recompiled every render. Hoist to a module-level \
                       `const` so it compiles once."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

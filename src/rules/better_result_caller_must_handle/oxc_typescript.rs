@@ -72,7 +72,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Returned Result from `{callee_text}(...)` is ignored \u{2014} assign, match, map, unwrap, or yield* it."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

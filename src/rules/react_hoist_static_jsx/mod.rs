@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
                   element tree on every render wastes reconciler work and \
                   prevents `shouldComponentUpdate`/`React.memo` short-circuits \
                   in consumers.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

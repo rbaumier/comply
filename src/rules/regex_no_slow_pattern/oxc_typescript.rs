@@ -110,7 +110,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Nested quantifier detected \u{2014} this pattern can cause catastrophic backtracking (ReDoS).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-narrowing-across-closures",
     description: "Narrowed variables lose their refinement inside `setTimeout`/`.then`/event handler callbacks.",
     remediation: "Assign the narrowed value to a `const` inside the current scope, then reference the const from the callback.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

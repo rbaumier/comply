@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-resource-limits",
     description: "Each container must define resources.limits.cpu and resources.limits.memory.",
     remediation: "Add `resources.limits.cpu` and `resources.limits.memory` under each container.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

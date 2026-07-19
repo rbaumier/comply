@@ -16,7 +16,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &pair,
                 super::META.id,
                 "Container runs as privileged; this disables container isolation.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

@@ -98,7 +98,7 @@ impl TextCheck for Check {
                     message: format!(
                         "Nested objects detected — flatten keys like `\"{first}\": \"...\"` instead"
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }];
             }
@@ -133,7 +133,7 @@ impl TextCheck for Check {
                 "Nested objects detected: {} — use flat keys like `\"errors.notFound\"` instead",
                 keys_str
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

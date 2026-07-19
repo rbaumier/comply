@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-alias-methods",
     description: "Jest/Vitest alias matchers should be replaced by their canonical form.",
     remediation: "Use canonical matcher name",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://jestjs.io/docs/expect"),
     categories: &["testing"],
 

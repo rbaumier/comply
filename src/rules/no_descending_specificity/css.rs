@@ -214,7 +214,7 @@ crate::ast_check! { on ["stylesheet"] => |node, source, ctx, diagnostics|
                             "Descending specificity selector found. This selector specificity is {spec}; \
                              an earlier selector with the same tail has higher specificity {prev}."
                         ),
-                        Severity::Warning,
+                        Severity::Error,
                     ));
                 }
                 Some(_) => {}

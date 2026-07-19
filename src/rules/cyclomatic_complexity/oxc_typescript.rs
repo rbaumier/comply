@@ -98,7 +98,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Function `{name}` has a cyclomatic complexity of {complexity} (max: {threshold}).",
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

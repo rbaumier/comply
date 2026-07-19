@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Disallow empty catch blocks that silently swallow errors.",
     remediation: "Handle the error explicitly — log it, rethrow, or add a comment \
                   explaining why swallowing is intentional.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

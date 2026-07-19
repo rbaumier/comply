@@ -288,7 +288,7 @@ fn diag(ctx: &CheckCtx, span: Span, message: String) -> Diagnostic {
         column,
         rule_id: super::META.id.into(),
         message,
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((span.start as usize, span.size() as usize)),
     }
 }

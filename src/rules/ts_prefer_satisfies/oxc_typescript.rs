@@ -163,7 +163,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`as Type` on a literal widens the inferred type — use `satisfies Type` to validate without widening.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

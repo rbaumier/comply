@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the `useMemo` wrapper and compute the value inline. \
                   Memoizing primitives, simple property access, or basic arithmetic \
                   costs more than the computation itself.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

@@ -84,7 +84,7 @@ impl OxcCheck for Check {
             message: "`useSession` cookie config must set `sameSite` to `'lax'` or `'strict'` \
                       to mitigate CSRF attacks."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

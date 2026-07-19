@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`<script src>` blocks parsing — add `async` or `defer`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -18,7 +18,7 @@ crate::ast_check! { on ["expose_instruction"] => |node, source, ctx, diagnostics
                 column: pos.column + 1,
                 rule_id: super::META.id.into(),
                 message: format!("`{port_str}` is not a valid port number (0..=65535)."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: Some((child.byte_range().start, child.byte_range().len())),
             });
         }

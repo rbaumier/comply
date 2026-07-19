@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Gradient text (`background-clip: text` + gradient) is hard to read and often inaccessible.",
     remediation: "Use a solid text color for readability. If the gradient is \
                   essential for branding, ensure WCAG contrast ratio is met.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

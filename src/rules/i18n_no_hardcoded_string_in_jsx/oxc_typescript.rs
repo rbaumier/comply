@@ -70,7 +70,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: format!("Hardcoded string \"{value}\" in JSX — wrap with `t()`."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

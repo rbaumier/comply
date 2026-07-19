@@ -38,7 +38,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Empty string literal in v-flag character class is unexpected.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -44,7 +44,7 @@ impl OxcCheck for Check {
             message: "`x! ?? y` is contradictory — the `!` asserts non-null \
                       while `??` handles null. Remove the `!`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

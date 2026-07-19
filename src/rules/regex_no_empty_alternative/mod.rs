@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-empty-alternative",
     description: "Empty alternative in regex matches empty string and is likely a mistake.",
     remediation: "Remove the leading, trailing, or consecutive `|` in the regex pattern.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

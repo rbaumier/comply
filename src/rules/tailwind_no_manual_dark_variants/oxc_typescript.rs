@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Manual `dark:` variant with a raw palette color — use a semantic token (bg-background, text-foreground, …) that already resolves per theme.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

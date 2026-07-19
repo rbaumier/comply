@@ -73,7 +73,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Prefer `.{shorthand}(x)` over `.mockImplementation(() => Promise.{kind}(x))`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

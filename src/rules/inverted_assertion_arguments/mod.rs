@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "inverted-assertion-arguments",
     description: "Expected and actual arguments in assertion are inverted.",
     remediation: "Use `expect(variable).toBe(literal)` — the expected value goes in the matcher, not in `expect()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

@@ -93,7 +93,7 @@ mod tests {
                 column: 0,
                 rule_id: "test-flag-catch".into(),
                 message: "found catch".into(),
-                severity: crate::diagnostic::Severity::Warning,
+                severity: crate::diagnostic::Severity::Error,
                 span: None,
             });
         }
@@ -154,7 +154,7 @@ mod tests {
                     column: 0,
                     rule_id: "test-count-decls".into(),
                     message: format!("{count} declarations"),
-                    severity: crate::diagnostic::Severity::Warning,
+                    severity: crate::diagnostic::Severity::Error,
                     span: None,
                 }]
             } else {

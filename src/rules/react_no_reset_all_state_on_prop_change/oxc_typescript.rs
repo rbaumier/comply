@@ -109,7 +109,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Effect resets {setter_count} states when dependency changes — use `key={{dep}}` on the component instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

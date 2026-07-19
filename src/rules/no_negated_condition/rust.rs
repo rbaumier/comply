@@ -48,7 +48,7 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
             message: "Unexpected negated condition \u{2014} swap the if/else branches \
                       and remove the negation."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

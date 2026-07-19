@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-mutable-exports",
     description: "Mutable export binding (`let`/`var`) — use `const` instead, unless paired with an exported companion setter.",
     remediation: "Change `export let` or `export var` to `export const`. Mutable exports are confusing to consumers and hard to reason about. A binding mutated through an exported setter function (e.g. `export function set_x(v) { x = v }`) is exempt — that is a controlled, intentional mutation point.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports"],
 

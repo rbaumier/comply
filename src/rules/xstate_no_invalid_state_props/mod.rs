@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "xstate-no-invalid-state-props",
     description: "Unknown property on an XState state node — likely a typo or misplaced config.",
     remediation: "Use only valid XState state node properties",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://stately.ai/docs/state-nodes"),
     categories: &["xstate"],
 

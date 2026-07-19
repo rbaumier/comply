@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use `useSyncExternalStore` with `getServerSnapshot` for SSR-safe \
                   external state, or add `suppressHydrationWarning` if the mismatch \
                   is intentional (e.g. timestamps, viewport size).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

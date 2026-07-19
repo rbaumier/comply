@@ -59,7 +59,7 @@ impl TextCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "Migration mixes DDL (CREATE/ALTER/DROP TABLE) with DML (INSERT/UPDATE/DELETE) — split schema and data changes into separate migrations.".to_string(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

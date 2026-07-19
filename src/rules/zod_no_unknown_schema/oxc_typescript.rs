@@ -57,7 +57,7 @@ impl OxcCheck for Check {
                       validation. Replace it with a concrete schema describing \
                       the expected shape."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

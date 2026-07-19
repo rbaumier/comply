@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`z-index` value above 100 — use a structured layering system instead.",
     remediation: "Define z-index layers as named constants (e.g. `Z_MODAL = 50`, \
                   `Z_TOOLTIP = 60`) and keep values under 100.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

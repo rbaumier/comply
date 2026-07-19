@@ -50,7 +50,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                         format!(
                             "{ref_key} references {resource_kind} \"{name}\" which does not exist in namespace {namespace}."
                         ),
-                        Severity::Warning,
+                        Severity::Error,
                     ));
                 }
             }

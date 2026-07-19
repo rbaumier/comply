@@ -71,7 +71,7 @@ impl TextCheck for Check {
                     "package `{name}` is in `dependencies` but every import is `import type`. \
                      Move it to `devDependencies` — it's only needed at build time."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

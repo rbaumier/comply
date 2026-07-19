@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-vendor-prefix-value",
     description: "Vendor-prefixed CSS values are unnecessary with modern autoprefixer tooling.",
     remediation: "Remove the vendor prefix from the value and rely on autoprefixer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

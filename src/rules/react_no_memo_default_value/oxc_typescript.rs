@@ -97,7 +97,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Default `{kind}` value inside `memo(...)` creates a new reference every render — extract to a module-level constant."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-secret-in-env-literal",
     description: "Sensitive env vars (PASSWORD, TOKEN, SECRET, API_KEY) must not use a literal `value:`.",
     remediation: "Reference a Secret via `valueFrom.secretKeyRef`, or mount the secret as a file.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

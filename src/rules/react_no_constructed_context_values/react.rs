@@ -50,7 +50,7 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
                       a new reference is created every render, causing all \
                       consumers to re-render. Memoize with `useMemo`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -45,7 +45,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Prefer `{test_text} || {alternate_text}` (or `??`) over `{test_text} ? {test_text} : {alternate_text}`."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                             "Prefer `{alternate_text} || {consequent_text}` (or `??`) over \
                              `!{alternate_text} ? {consequent_text} : {alternate_text}`."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

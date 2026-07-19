@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-tag-matches-classname",
     description: "The string passed to TaggedError('X') must match the class name X.",
     remediation: "Rename the tag or the class so they match exactly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

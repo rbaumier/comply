@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-prefer-query-options",
     description: "Inline `queryKey`/`queryFn` objects should be extracted to `queryOptions()` factories for reuse.",
     remediation: "Use `queryOptions({ queryKey: [...], queryFn: ... })` and import the factory where needed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

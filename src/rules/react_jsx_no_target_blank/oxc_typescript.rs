@@ -107,7 +107,7 @@ impl OxcCheck for Check {
                       allows the opened page to access `window.opener`. \
                       Add `rel=\"noopener\"`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

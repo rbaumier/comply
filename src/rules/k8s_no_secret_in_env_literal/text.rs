@@ -29,7 +29,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &name_pair,
                     super::META.id,
                     format!("Env var `{name}` looks like a secret; use valueFrom.secretKeyRef instead of a literal value."),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

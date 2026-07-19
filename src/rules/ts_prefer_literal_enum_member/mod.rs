@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-literal-enum-member",
     description: "Enum members should be initialized with literal values, not computed expressions.",
     remediation: "Replace the computed expression with a literal string or number value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

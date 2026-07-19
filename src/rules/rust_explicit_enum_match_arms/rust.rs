@@ -321,7 +321,7 @@ impl AstCheck for Check {
                           a compile error at this `match`, forcing a decision instead of \
                           silently falling through."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: Some((arm.start_byte(), arm.end_byte() - arm.start_byte())),
             });
         }

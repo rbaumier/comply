@@ -219,7 +219,7 @@ impl OxcCheck for Check {
                     "Line has {ops} chained operations — extract intermediate \
                      named bindings so each step's purpose is visible."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

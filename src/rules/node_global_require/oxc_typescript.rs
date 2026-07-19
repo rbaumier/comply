@@ -232,7 +232,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Unexpected `require()`. Move it to the top-level module scope.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

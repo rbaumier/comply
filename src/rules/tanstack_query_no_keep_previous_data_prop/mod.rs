@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-no-keep-previous-data-prop",
     description: "`keepPreviousData: true` was replaced by `placeholderData: keepPreviousData` in v5.",
     remediation: "Import `keepPreviousData` from `@tanstack/react-query` and use `placeholderData: keepPreviousData`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5"),
     categories: &["tanstack"],
 

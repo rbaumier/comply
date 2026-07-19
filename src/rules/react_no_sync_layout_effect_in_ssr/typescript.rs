@@ -193,7 +193,7 @@ impl TextCheck for Check {
                         rule_id: super::META.id.into(),
                         message: "`useLayoutEffect` in a non-client file logs a server-rendering warning. \
                                   Add `\"use client\"` to the file, or use `useEffect`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

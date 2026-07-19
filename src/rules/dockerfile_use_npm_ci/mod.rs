@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-use-npm-ci",
     description: "`npm install` is non-deterministic in images; use `npm ci`.",
     remediation: "Replace `RUN npm install` with `RUN npm ci`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

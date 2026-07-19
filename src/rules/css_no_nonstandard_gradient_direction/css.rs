@@ -19,7 +19,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             &first_value,
             super::META.id,
             format!("Bare direction `{first}`; use `to {first}` for the standard syntax."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

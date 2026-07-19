@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-duplicate-imports",
     description: "Duplicate `@import` rules load the same stylesheet twice, wasting bandwidth.",
     remediation: "Remove the duplicate `@import`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

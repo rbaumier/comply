@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `x = x || 'default'` / `x = x ?? 'default'` in the \
                   function body with a default parameter value `function f(x = 'default')`. \
                   Default parameters are clearer and avoid subtle bugs with falsy values.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

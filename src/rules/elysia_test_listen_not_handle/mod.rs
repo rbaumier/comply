@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-test-listen-not-handle",
     description: "Elysia test boots a real server with `.listen()` and uses `fetch()` instead of `app.handle(new Request(...))`.",
     remediation: "Drive the app in tests with `app.handle(new Request(...))` — no port binding, faster, deterministic.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing", "elysia"],
 

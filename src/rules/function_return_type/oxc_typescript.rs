@@ -102,7 +102,7 @@ fn check_return_types(
         column,
         rule_id: super::META.id.into(),
         message: format!("Function returns inconsistent types: {:?}", return_types),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     })
 }

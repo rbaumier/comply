@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-empty-type-parameters",
     description: "Type aliases and interfaces must not declare an empty type-parameter list `<>`.",
     remediation: "Remove the empty `<>`, or add a type parameter such as `<T>`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["complexity"],
 

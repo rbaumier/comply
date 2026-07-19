@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Merge consecutive calls to the same method on the same receiver \
                   into a single call with multiple arguments. For example, \
                   `arr.push(a); arr.push(b);` becomes `arr.push(a, b);`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

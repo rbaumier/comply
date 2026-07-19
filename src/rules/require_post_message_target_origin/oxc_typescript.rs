@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`postMessage()` called without `targetOrigin` \u{2014} provide an explicit origin.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-dnf-clean-all",
     description: "`dnf install` must be paired with `dnf clean all` to shrink the image layer.",
     remediation: "Append `&& dnf clean all` to the same RUN as `dnf install`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

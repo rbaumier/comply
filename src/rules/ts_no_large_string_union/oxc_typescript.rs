@@ -87,7 +87,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "String-literal union has {count} members (>{max}); consider a branded string or enum."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

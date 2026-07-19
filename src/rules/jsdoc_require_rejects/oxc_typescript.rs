@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: "Async function may reject — document it with `@rejects {ErrorType} when ...`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

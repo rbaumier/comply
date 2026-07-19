@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-multiple-spaces",
     description: "Multiple consecutive spaces in regex are hard to read and count.",
     remediation: "Use a quantifier: ` {2}` or `\\s{2,}` instead of multiple spaces.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "regex"],
 

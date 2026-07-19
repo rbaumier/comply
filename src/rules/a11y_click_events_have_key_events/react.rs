@@ -25,7 +25,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
             column: pos.column + 1,
             rule_id: "a11y-click-events-have-key-events".into(),
             message: "Element has `onClick` without a corresponding keyboard event handler (`onKeyDown`/`onKeyUp`/`onKeyPress`).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

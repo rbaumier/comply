@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
                   root `Cargo.toml`, then reference it from member crates with \
                   `foo = { workspace = true }`. Keeps versions in lockstep and \
                   makes bumps a one-file change.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

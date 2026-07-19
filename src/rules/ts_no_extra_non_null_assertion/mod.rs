@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-extra-non-null-assertion",
     description: "Extra non-null assertions (`!!`) are redundant and confusing.",
     remediation: "Remove the extra `!` — a single non-null assertion is sufficient.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

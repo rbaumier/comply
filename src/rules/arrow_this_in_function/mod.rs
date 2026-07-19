@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
                   and is likely a bug.",
     remediation: "Arrow functions don't bind their own `this`, use regular \
                   function or ensure nested in function context",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

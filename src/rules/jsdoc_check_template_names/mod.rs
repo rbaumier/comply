@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/check-template-names",
     description: "`@template` names must be referenced somewhere in the block.",
     remediation: "Use the declared type parameter inside a `@param` / `@returns` / `@type` tag, or remove the `@template` declaration.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/check-template-names.md",
     ),

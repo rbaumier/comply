@@ -27,7 +27,7 @@ fn check_members(types: &oxc_allocator::Vec<'_, TSType<'_>>, source: &str, ctx: 
                 column,
                 rule_id: super::META.id.into(),
                 message: "Duplicate type in composite — remove the repeated member.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return; // one diagnostic per composite

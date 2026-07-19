@@ -22,7 +22,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: "`COPY .` requires `.dockerignore` to exclude `.env*`, `.git`, `node_modules`, `*.pem`, `id_rsa`, `.npmrc`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 break; // One reminder per file is enough.

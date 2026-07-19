@@ -63,7 +63,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
                 message: format!(
                     "The element `<{tag}>` has an implicit role of `{pair_role}`. Setting `role=\"{pair_role}\"` is redundant."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -79,7 +79,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
             column: pos.column + 1,
             rule_id: "a11y-no-redundant-roles".into(),
             message: "The element `<a>` with `href` has an implicit role of `link`. Setting `role=\"link\"` is redundant.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

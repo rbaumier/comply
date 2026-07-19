@@ -60,7 +60,7 @@ fn find_render_calls(
                         message: format!(
                             "Inline render function `{name}()` — extract to a component for proper reconciliation."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;

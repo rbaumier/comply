@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-deprecated-at-rule",
     description: "Deprecated CSS at-rules should not be used.",
     remediation: "Replace the deprecated at-rule with its modern equivalent.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

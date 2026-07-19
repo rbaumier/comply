@@ -94,7 +94,7 @@ impl OxcCheck for Check {
                 message: "`fetch(...)` in `useEffect` without an AbortController signal — \
                           requests cannot be cancelled if the component unmounts mid-flight."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

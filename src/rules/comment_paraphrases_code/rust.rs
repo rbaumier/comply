@@ -67,7 +67,7 @@ impl AstCheck for Check {
                 "Comment above `{name}` paraphrases the function name. Rewrite to \
                  explain WHY, not WHAT — or delete the comment."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

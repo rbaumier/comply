@@ -39,7 +39,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Inside Result.gen, use `yield* Result.await(...)` instead of `await`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -61,7 +61,7 @@ impl OxcCheck for Check {
                         message: "Zod schema built inside a loop body — hoist it outside the \
                                   loop so it is only constructed once."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;
@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                                       handler — hoist it to module scope so it is only \
                                       constructed once."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -100,7 +100,7 @@ impl OxcCheck for Check {
                                       handler — hoist it to module scope so it is only \
                                       constructed once."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

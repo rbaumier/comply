@@ -163,7 +163,7 @@ fn diagnostic(ctx: &CheckCtx, entry: &Entry, message: String) -> Diagnostic {
         column: 1,
         rule_id: super::META.id.into(),
         message,
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((entry.byte_offset, entry.name.len() + 2)),
     }
 }

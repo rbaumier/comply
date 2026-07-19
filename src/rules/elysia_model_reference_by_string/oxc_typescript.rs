@@ -89,7 +89,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("`{key_name}: {val_name}` references an imported schema directly — register it with `.model({{ ... }})` and pass a string key for cross-route reuse."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

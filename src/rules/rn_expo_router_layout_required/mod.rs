@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-expo-router-layout-required",
     description: "Directories that import `expo-router` must contain a `_layout` file.",
     remediation: "Add `_layout.tsx` (or `.ts` / `.jsx` / `.js`) to the directory.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

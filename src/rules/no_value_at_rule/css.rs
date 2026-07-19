@@ -24,7 +24,7 @@ crate::ast_check! { on ["stylesheet"] => |node, source, ctx, diagnostics|
             &kid,
             super::META.id,
             "Unexpected `@value` at-rule. Use a CSS custom property instead.".to_string(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

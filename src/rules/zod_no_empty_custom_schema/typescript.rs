@@ -25,7 +25,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["z.custom", "zod.custom"
         column: pos.column + 1,
         rule_id: "zod-no-empty-custom-schema".into(),
         message: "`z.custom()` without a validator function performs no runtime check — provide a validator function to z.custom().".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

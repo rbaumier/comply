@@ -59,7 +59,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "In modules importing better-result, throw is forbidden \u{2014} return Result.err(...) instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

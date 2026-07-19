@@ -59,7 +59,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Unexpected use of page.waitForTimeout(); prefer web-first assertions."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

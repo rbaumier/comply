@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                 message: "Top-level `test(...)` — wrap in `test.describe(\"<feature>\", \
                           () => { ... })` so reports group related cases."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

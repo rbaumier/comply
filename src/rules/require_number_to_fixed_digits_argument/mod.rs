@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "require-number-to-fixed-digits-argument",
     description: "Enforce using the digits argument with `Number#toFixed()`.",
     remediation: "Pass an explicit digits argument: `num.toFixed(0)`. The default is `0` but relying on it harms readability.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

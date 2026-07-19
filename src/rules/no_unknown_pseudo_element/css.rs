@@ -193,7 +193,7 @@ crate::ast_check! { on ["pseudo_element_selector"] => |node, source, ctx, diagno
         &node,
         super::META.id,
         format!("Unexpected unknown pseudo-element `{name}`."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

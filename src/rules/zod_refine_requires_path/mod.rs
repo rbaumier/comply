@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-refine-requires-path",
     description: "`z.object().refine()` without `path:` attaches the error to the whole object, not a specific field.",
     remediation: "Add `path: ['fieldName']` to the refine options so form errors appear on the correct field.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

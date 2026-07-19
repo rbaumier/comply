@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-click-events-have-key-events",
     description: "Elements with `onClick` must also have a keyboard event handler.",
     remediation: "Add `onKeyDown`, `onKeyUp`, or `onKeyPress` alongside `onClick` for keyboard accessibility.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

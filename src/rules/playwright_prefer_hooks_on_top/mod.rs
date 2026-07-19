@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "playwright-prefer-hooks-on-top",
     description: "Hooks should come before any test cases.",
     remediation: "Move hooks above the first `test()` / `it()` call.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-hooks-on-top.md",
     ),

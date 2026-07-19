@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-inferrable-types",
     description: "Explicit types on variables initialized with literals are redundant — TypeScript infers them.",
     remediation: "Remove the type annotation and let TypeScript infer the type.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

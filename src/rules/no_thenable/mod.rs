@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Rename the `then` method/property. Objects with a `then` \
                   method are treated as thenables by `await` and \
                   `Promise.resolve()`, causing unexpected behavior.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`memo(Component)` with default `[]` / `{}` parameters re-renders every time.",
     remediation: "Extract default values to a module-level constant so the \
                   reference is stable across renders.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

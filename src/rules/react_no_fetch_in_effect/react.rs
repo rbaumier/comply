@@ -90,7 +90,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: "`fetch()` in `useEffect` — use a data-fetching library (react-query, SWR) or a server component.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

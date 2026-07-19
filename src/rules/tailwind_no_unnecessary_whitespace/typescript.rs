@@ -66,7 +66,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             "Unnecessary whitespace in class string — collapse consecutive spaces.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

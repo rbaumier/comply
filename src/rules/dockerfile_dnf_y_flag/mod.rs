@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-dnf-y-flag",
     description: "`dnf install` must pass `-y` to run non-interactively in builds.",
     remediation: "Add `-y` to your `dnf install` command.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

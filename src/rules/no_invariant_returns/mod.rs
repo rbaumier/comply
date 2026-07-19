@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-invariant-returns",
     description: "Function always returns the same literal value.",
     remediation: "If the return value never varies, the function likely has dead logic or should be a constant.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

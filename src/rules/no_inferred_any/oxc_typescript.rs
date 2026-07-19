@@ -71,7 +71,7 @@ impl OxcCheck for Check {
                         rule_id: super::META.id.into(),
                         message: "Explicit `any` annotation — use a concrete type or `unknown`."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -110,7 +110,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: message.into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

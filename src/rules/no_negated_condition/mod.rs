@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Disallow negated conditions with an else branch.",
     remediation: "Swap the if/else branches (or ternary arms) and remove the negation \
                   for clearer intent.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

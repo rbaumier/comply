@@ -123,7 +123,7 @@ impl Check {
             column,
             rule_id: super::META.id.into(),
             message: "Redundant `\"use strict\"` directive.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((
                 directive.span.start as usize,
                 (directive.span.end - directive.span.start) as usize,

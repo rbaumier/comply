@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-no-target-blank",
     description: "Opening links in a new tab without `rel=noopener` is a security risk.",
     remediation: "Add `rel=noopener` (or `rel=noreferrer`) when using `target=_blank`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue", "security"],
 

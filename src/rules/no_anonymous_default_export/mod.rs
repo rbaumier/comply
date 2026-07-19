@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Name the exported function or class. Anonymous default \
                   exports break refactoring tools, produce unhelpful stack \
                   traces, and make `import` auto-complete less useful.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

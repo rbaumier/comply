@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-keyframe-no-important",
     description: "Disallow `!important` inside `@keyframes` declarations.",
     remediation: "Remove `!important` — browsers ignore it inside keyframes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

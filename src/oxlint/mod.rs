@@ -32,7 +32,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
 use crate::project::ProjectCtx;
 use crate::rules::meta::RuleMeta;
-use schema::{OxlintDiag, OxlintOutput, OxlintSeverity};
+use schema::{OxlintDiag, OxlintOutput};
 
 /// Max files per oxlint invocation. Conservative chunk size to avoid ARG_MAX.
 const FILES_PER_BATCH: usize = 500;
@@ -514,13 +514,7 @@ fn into_diagnostic(
 
     let (rule_id, severity) = match remap.get(&oxlint_code) {
         Some(meta) => (std::borrow::Cow::Borrowed(meta.id), meta.severity),
-        None => (
-            std::borrow::Cow::Owned(oxlint_code),
-            match d.severity {
-                OxlintSeverity::Warning | OxlintSeverity::Advice => Severity::Warning,
-                OxlintSeverity::Error => Severity::Error,
-            },
-        ),
+        None => (std::borrow::Cow::Owned(oxlint_code), Severity::Error),
     };
 
     Some(Diagnostic {

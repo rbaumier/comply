@@ -77,7 +77,7 @@ impl AstCheck for Check {
                       forever on a slow peer. Wrap with \
                       `tokio::time::timeout(Duration::from_secs(5), ...)`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

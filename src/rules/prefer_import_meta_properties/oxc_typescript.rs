@@ -54,7 +54,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: "prefer-import-meta-properties".into(),
                 message: "Use `import.meta.dirname` instead of `path.dirname(fileURLToPath(import.meta.url))`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: "prefer-import-meta-properties".into(),
                 message: "Use `import.meta.dirname` instead of `dirname(fileURLToPath(import.meta.url))`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -92,7 +92,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: "prefer-import-meta-properties".into(),
                 message: "Use `import.meta.filename` instead of `fileURLToPath(import.meta.url)`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

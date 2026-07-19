@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`fromTypes('src/...')` reads source at runtime — gate it behind a NODE_ENV check or pre-build the spec.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

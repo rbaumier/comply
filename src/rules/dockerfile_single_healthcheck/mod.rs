@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-single-healthcheck",
     description: "Only one HEALTHCHECK should appear per image.",
     remediation: "Remove duplicate HEALTHCHECK instructions; only the last one is effective.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

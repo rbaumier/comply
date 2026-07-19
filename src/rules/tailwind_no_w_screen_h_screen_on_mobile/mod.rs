@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-w-screen-h-screen-on-mobile",
     description: "`w-screen` / `h-screen` cause layout jumps when the mobile URL bar collapses.",
     remediation: "Use `w-full` / `min-h-dvh` (dynamic viewport units) instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "mobile"],
 

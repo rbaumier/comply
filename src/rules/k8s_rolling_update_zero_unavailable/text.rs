@@ -27,7 +27,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &pair_node,
                     super::META.id,
                     "strategy.rollingUpdate.maxUnavailable must be 0 to avoid downtime.".into(),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }
@@ -37,7 +37,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &node,
                 super::META.id,
                 "Deployment must set strategy.rollingUpdate.maxUnavailable: 0 (default is 25%).".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

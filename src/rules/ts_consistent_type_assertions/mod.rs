@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-consistent-type-assertions",
     description: "Enforce consistent type assertion style (`as T` vs `<T>`).",
     remediation: "Use `as T` syntax instead of angle-bracket `<T>` assertions for consistency.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/consistent-type-assertions/"),
     categories: &["typescript"],
 

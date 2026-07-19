@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add a descriptive string message as the first argument to the Error \
                   constructor (or second for AggregateError, third for SuppressedError). \
                   Empty strings and non-string literals are also flagged.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

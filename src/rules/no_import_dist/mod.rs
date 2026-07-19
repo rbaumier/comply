@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-import-dist",
     description: "Imports should not target `dist/` build output directories.",
     remediation: "Import from package entry point, not dist/",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports"],
 

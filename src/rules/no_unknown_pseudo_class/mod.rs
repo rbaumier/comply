@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-unknown-pseudo-class",
     description: "Disallow unknown CSS pseudo-class selectors.",
     remediation: "Use a known pseudo-class, a vendor-prefixed or custom (`--`) selector, or add the name to the rule's `ignore` list.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://developer.mozilla.org/en-US/docs/Web/CSS/Pseudo-classes"),
     categories: &["css"],
 

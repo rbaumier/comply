@@ -57,7 +57,7 @@ crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
             message: "Unnecessary fragment — a fragment wrapping zero or one \
                       child adds no value."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

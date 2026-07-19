@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-trivially-nested-assertion",
     description: "Lookaround assertion is trivially nested inside another lookaround of the same kind.",
     remediation: "Merge the nested lookaround into its parent or simplify the structure.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-trivially-nested-assertion.html",
     ),

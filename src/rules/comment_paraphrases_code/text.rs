@@ -56,7 +56,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "comment-paraphrases-code".into(),
                     message: format!("Comment above `{fn_name}` paraphrases the function name."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "consistent-template-literal-escape",
     description: "Use `\\${` instead of `$\\{` to escape in template literals.",
     remediation: "Escape the dollar sign (`\\${`) rather than the opening brace (`$\\{`) or both (`\\$\\{`). This is the consistent way to prevent expression interpolation in template literals.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

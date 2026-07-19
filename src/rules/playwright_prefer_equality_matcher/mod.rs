@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "playwright-prefer-equality-matcher",
     description: "Use an equality matcher instead of `expect(a === b).toBe(true)`.",
     remediation: "Replace with `expect(a).toBe(b)` or `expect(a).toEqual(b)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/prefer-equality-matcher.md",
     ),

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "playwright-no-duplicate-slow",
     description: "`test.slow()` should only be called once per test.",
     remediation: "Remove the duplicate `test.slow()` call.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

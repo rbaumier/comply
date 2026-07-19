@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-graphql-yoga-context",
     description: "`yoga({ context })` without a `useContext` placeholder will not propagate the context into resolvers.",
     remediation: "Define a `useContext` GraphQL placeholder (or wire the context through a plugin) so resolvers can read the value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

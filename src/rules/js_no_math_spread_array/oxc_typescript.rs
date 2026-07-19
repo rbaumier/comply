@@ -79,7 +79,7 @@ impl OxcCheck for Check {
                 "`Math.{method}(...array)` overflows the stack on large arrays — \
                  use `reduce` or a for-loop instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

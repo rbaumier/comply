@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-template-description",
     description: "Each @template tag must have a description.",
     remediation: "Add a description after the type parameter (e.g. `@template T - the element type`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-template-description.md",
     ),

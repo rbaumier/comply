@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
                   then use `isDefined(x)` / `!isDefined(x)`. It narrows to \
                   `NonNullable<T>` (e.g. `arr.filter(isDefined)`). No autofix — the \
                   helper's name and location are project-specific.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

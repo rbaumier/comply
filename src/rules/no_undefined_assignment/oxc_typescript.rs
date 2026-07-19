@@ -100,7 +100,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Do not assign `undefined` \u{2014} use `let x;` or `delete obj.prop` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

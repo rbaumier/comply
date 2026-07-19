@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "xstate-no-invalid-conditional-action",
     description: "XState `choose(...)` branches must declare both a `guard`/`cond` and `actions` property.",
     remediation: "choose() branches must have guard/cond and actions properties",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://stately.ai/docs/actions#choose-action"),
     categories: &["xstate"],
 

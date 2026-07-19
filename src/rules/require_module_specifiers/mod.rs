@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Re-export statements with empty specifier lists (`export {} from 'x'`) \
                   are not allowed.",
     remediation: "Add specifiers to the re-export, or remove the statement entirely.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use top-level `await` directly instead of wrapping in an async IIFE \
                   or defining an async function and immediately calling it. \
                   Top-level await is supported in ESM.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

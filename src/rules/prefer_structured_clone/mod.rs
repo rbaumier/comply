@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `JSON.parse(JSON.stringify(x))` with `structuredClone(x)`. \
                   `structuredClone` handles circular references, typed arrays, and \
                   other values that JSON serialization silently drops or corrupts.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

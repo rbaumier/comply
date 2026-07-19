@@ -64,7 +64,7 @@ impl OxcCheck for Check {
                     "Unnecessary single-character class `{}` \u{2014} use the character directly (or escape it).",
                     snippet,
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tanstack-query-no-enabled-true",
     description: "`enabled: true` is the default in TanStack Query and should be omitted.",
     remediation: "Remove `enabled: true` — queries are enabled by default.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack"],
 

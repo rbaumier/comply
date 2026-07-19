@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-multi-statement-tx",
     description: "Sequential `db.insert`/`db.update`/`db.delete` in the same scope should run inside `db.transaction`.",
     remediation: "Wrap related mutating calls in `await db.transaction(async (tx) => { ... })` so partial failures roll back.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle"],
 

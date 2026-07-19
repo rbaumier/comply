@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-concise-arrow-body",
     description: "Arrow function body contains a single `return` statement — use concise body form.",
     remediation: "Replace `() => { return expr }` with `() => expr` (wrap object literals in parens: `() => ({...})`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

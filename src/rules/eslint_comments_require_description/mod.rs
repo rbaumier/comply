@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "eslint-comments-require-description",
     description: "`// eslint-disable-*` without a justification accumulates as silent tech debt.",
     remediation: "Add a justification after `--`: `// eslint-disable-next-line rule-id -- reason`. Same convention as comply's `// comply-ignore: rule — reason`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://eslint-community.github.io/eslint-plugin-eslint-comments/rules/require-description.html"),
     categories: &["lint-comments"],
 

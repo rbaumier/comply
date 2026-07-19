@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-simple-number-keys",
     description: "Disallow number literal object member names which are not base 10 or use an underscore separator.",
     remediation: "Write the object member name as a plain base-10 number (e.g. `16` instead of `0x10`, `1000` instead of `1_000`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["complexity"],
 

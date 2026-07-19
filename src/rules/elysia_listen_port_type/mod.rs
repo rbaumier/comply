@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-listen-port-type",
     description: "`process.env.PORT` is a string — `.listen()` expects a number.",
     remediation: "Wrap with `Number(process.env.PORT)`, `parseInt(process.env.PORT, 10)`, or default with `?? 3000`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

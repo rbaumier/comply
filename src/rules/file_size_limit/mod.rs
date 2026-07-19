@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "file-size-limit",
     description: "Source file exceeds the recommended line count.",
     remediation: "Split the file into smaller, focused modules.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

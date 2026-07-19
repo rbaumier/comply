@@ -101,7 +101,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "`createServerFn` without `.input()` validation accepts unvalidated data at the RPC boundary.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

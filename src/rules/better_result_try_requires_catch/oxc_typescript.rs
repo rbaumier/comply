@@ -44,7 +44,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("{callee_text} must receive an object with `try` and `catch`."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -85,7 +85,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("{callee_text} must include both `try` and `catch` keys."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

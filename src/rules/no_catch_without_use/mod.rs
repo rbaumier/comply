@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "If you don't need the error, use bare `catch { ... }` (ES2019). \
                   If you do need it, log/rethrow/return it so the binding pays \
                   rent. An unused catch binding hides error information.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["error-handling"],
 

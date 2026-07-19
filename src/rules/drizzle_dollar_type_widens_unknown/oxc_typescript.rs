@@ -63,7 +63,7 @@ impl OxcCheck for Check {
                 "`.$type<{}>()` widens the column type away — pass a concrete type instead.",
                 inner
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

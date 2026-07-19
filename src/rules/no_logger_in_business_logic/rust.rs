@@ -93,7 +93,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
         message: format!(
             "`{pattern}` in business logic \u{2014} use a wrapper or domain events instead."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

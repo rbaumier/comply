@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-recursive-cte-no-termination",
     description: "`WITH RECURSIVE` without a `CYCLE` clause or depth guard can run forever on cyclic graphs.",
     remediation: "Add a `CYCLE` clause (PostgreSQL 14+) or guard the recursive term with a depth column (`WHERE depth < N`). Cycles in the data are easy to introduce by accident.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

@@ -34,7 +34,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             format!(
                 "{kind} references ServiceAccount/{sa_name} in namespace {namespace}, but no such ServiceAccount exists in the project."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

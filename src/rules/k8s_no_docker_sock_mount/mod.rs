@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-docker-sock-mount",
     description: "Pod mounts the host docker socket; this grants full root on the host.",
     remediation: "Remove the docker.sock hostPath volume; use a sidecar with rootless tooling instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

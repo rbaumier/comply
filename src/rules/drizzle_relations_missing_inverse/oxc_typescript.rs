@@ -119,7 +119,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "`relations(...)` references `{name}` but no inverse `relations({name}, ...)` is defined in this file."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

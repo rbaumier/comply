@@ -192,7 +192,7 @@ impl OxcCheck for Check {
                     "`{keyword}` in a static context refers to the class itself, not an instance — use the {} name instead.",
                     if keyword == "super" { "parent class" } else { "class" }
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

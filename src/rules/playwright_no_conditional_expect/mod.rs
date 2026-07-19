@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   A conditional assertion can silently pass when the branch \
                   is never taken, giving false confidence. Structure the \
                   test so the expected state is deterministic.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

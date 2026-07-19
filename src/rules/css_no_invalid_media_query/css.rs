@@ -8,7 +8,7 @@ crate::ast_check! { on ["media_statement"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         "Malformed `@media` query.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

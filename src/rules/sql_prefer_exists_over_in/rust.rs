@@ -33,7 +33,7 @@ impl AstCheck for Check {
             "`IN (SELECT ...)` materializes the entire subquery — \
              use `EXISTS (SELECT 1 ...)` which short-circuits on first match."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

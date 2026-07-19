@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-json-identical-keys",
     description: "Translation file is missing keys present in the base locale.",
     remediation: "Add the missing translation keys to maintain consistency across locales.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

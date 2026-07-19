@@ -14,7 +14,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
         &node,
         super::META.id,
         "Pod spec is missing `priorityClassName`; declare one for scheduling predictability.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

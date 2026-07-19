@@ -32,7 +32,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &replicas_pair,
             super::META.id,
             format!("Deployment with replicas: {n} must declare spec.template.spec.affinity.podAntiAffinity."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

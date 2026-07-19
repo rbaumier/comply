@@ -40,7 +40,7 @@ impl OxcCheck for Check {
                             message:
                                 "Prefer `Date.now()` over `new Date().getTime()`/`.valueOf()`."
                                     .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         return;
@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                             rule_id: super::META.id.into(),
                             message: "Prefer `Date.now()` over `Number(new Date())`."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: super::META.id.into(),
                         message: "Prefer `Date.now()` over `+new Date()`.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

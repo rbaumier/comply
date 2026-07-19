@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Wrap `JSON.parse(input)` in a try/catch, or use a safe parser \
                   (Zod, `Result.try`, etc). Any invalid or empty input throws a \
                   SyntaxError that will crash the request/event handler.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["error-handling"],
 

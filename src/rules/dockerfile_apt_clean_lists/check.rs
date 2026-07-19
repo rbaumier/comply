@@ -21,7 +21,7 @@ crate::ast_check! { on ["run_instruction"] prefilter = ["apt-get install"] => |n
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "Add `rm -rf /var/lib/apt/lists/*` after apt-get install to keep the image small.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

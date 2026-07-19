@@ -31,7 +31,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Remove the type prefix. TypeScript's type checker already \
                   tells you the type — encoding it in the name is obsolete \
                   and lies when the type changes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
 

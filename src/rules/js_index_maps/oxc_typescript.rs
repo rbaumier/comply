@@ -173,7 +173,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`.{method}()` inside a loop is O(n*m) — build a `Map` or `Set` for O(1) lookups."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

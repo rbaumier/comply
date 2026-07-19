@@ -78,7 +78,7 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
                   pattern-match failure modes. Define a proper error enum \
                   (use `thiserror::Error`)."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

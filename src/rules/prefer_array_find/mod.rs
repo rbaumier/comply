@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-array-find",
     description: "Prefer `.find(…)` over `.filter(…)[0]` or `.filter(…).at(0)`.",
     remediation: "Replace `.filter(…)[0]` with `.find(…)` to short-circuit on the first match.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

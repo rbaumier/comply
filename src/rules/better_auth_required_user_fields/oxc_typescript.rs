@@ -133,7 +133,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("`user` schema is missing {missing} — both fields are required."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

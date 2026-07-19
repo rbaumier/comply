@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-quickfix-biome",
     description: "`quickfix.biome` is used in an editor settings file.",
     remediation: "Replace `quickfix.biome` with `source.fixAll.biome`. The `quickfix.biome` code action applies fixes from rules and other actions without coordinating between them, which can produce malformed code when two fixes touch the same lines.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["json"],
 

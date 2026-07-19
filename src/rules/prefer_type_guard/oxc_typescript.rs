@@ -220,7 +220,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Function `isX` returns `boolean` with type checks \u{2014} use a type predicate (`x is Type`) instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

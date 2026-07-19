@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Indexing an `as const` enum-shaped object with an arbitrary string defeats the narrow type.",
     remediation: "Cast the index to `keyof typeof X` (`X[k as keyof typeof X]`), or convert the object \
                   to a real enum / discriminated map and accept the narrow keys explicitly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

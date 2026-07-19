@@ -52,7 +52,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Magic number as `.flat()` depth is not allowed. Use a named constant or `Infinity`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

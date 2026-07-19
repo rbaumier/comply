@@ -75,7 +75,7 @@ impl AstCheck for Check {
                 "Numeric '{name}' has an ambiguous base '{base}' — add \
                  an explicit unit suffix like `_ms`, `_bytes`, `_count`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

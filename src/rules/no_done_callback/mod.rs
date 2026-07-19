@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-done-callback",
     description: "Test callbacks that take a `done` parameter use the legacy async style.",
     remediation: "Use async/await instead of done callback.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

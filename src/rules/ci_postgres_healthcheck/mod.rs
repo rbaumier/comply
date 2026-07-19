@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   lets downstream steps race the database startup and fail flakily.",
     remediation: "Add `options: --health-cmd pg_isready --health-interval 10s \
                   --health-timeout 5s --health-retries 5` (or equivalent) to the service.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ci-cd"],
 

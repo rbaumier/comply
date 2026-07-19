@@ -84,7 +84,7 @@ impl OxcCheck for Check {
                     "Top-level `const {name} = () => ...` — prefer `function {name}(...) {{ ... }}` \
                      for a named binding, hoisting, and better stack traces."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

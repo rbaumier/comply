@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-overflow-hidden-on-focus-container",
     description: "`overflow-hidden` clips focus rings on focusable children.",
     remediation: "Use `overflow-clip` (Tailwind 3.1+) or move clipping to a wrapper that doesn't host focusable children.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "accessibility"],
 

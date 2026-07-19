@@ -20,7 +20,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-submit-handler-without-preventDefault",
     description: "Inline `onSubmit={...}` handler does not call `preventDefault()`.",
     remediation: "Call `event.preventDefault()` at the top of the handler, or switch to a form action that doesn't navigate.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

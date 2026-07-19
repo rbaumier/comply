@@ -108,7 +108,7 @@ impl TextCheck for Check {
                               \"state update on unmounted component\". Track a `cancelled` flag and skip \
                               the setter when set."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

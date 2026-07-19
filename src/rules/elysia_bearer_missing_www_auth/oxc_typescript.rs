@@ -36,7 +36,7 @@ impl OxcCheck for Check {
                     message:
                         "Bearer auth 401/400 response without `WWW-Authenticate` header (RFC 6750)."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

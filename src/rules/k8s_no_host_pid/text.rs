@@ -14,7 +14,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &pair,
             super::META.id,
             "Pod spec sets `hostPID: true`; remove to isolate the PID namespace.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

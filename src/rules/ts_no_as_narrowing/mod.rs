@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-as-narrowing",
     description: "`as` should not be used to narrow types; use type predicates or `in` checks.",
     remediation: "Replace `x as NarrowType` with a user-defined type guard (`x is NarrowType`) or an `in`/`typeof`/`instanceof` check.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

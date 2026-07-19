@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "expression-complexity",
     description: "Overly complex expression with too many logical/conditional operators.",
     remediation: "Extract parts of the expression into named intermediate variables. Lines with 4+ logical/conditional operators are hard to read and reason about.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

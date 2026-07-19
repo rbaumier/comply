@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-pin-exact-version",
     description: "Base image tag must pin a full version (e.g. `node:22.12-alpine3.20`), not just a major.",
     remediation: "Replace bare-major tags like `:22` with a precise pin such as `22.12-alpine3.20`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

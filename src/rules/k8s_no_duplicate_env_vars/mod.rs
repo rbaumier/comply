@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-duplicate-env-vars",
     description: "Container env entries must not repeat the same `name`.",
     remediation: "Remove the duplicate env entry; later definitions silently override earlier ones.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

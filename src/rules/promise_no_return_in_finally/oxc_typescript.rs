@@ -84,7 +84,7 @@ impl OxcCheck for Check {
             message: "`return` in `.finally(...)` is discarded — move the value to a \
                       preceding `.then(...)` if it matters."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

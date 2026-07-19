@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Commented-out tests are dead code that hides missing coverage.",
     remediation: "Remove the commented-out test or re-enable it. Use `.skip()` \
                   if you need to temporarily disable it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-commented-out-tests.md",
     ),

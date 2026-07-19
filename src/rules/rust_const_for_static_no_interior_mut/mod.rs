@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   and the value is a literal or `const fn` expression. \
                   `const` inlines at every use site; `static` reserves a \
                   fixed address you don't need.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

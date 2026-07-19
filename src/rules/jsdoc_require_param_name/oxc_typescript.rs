@@ -51,7 +51,7 @@ impl OxcCheck for Check {
                             message:
                                 "`@param` is missing a parameter name — add the name after the optional `{type}`."
                                     .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

@@ -75,7 +75,7 @@ impl OxcCheck for Check {
                       a frozen input. Add an `onChange` handler or \
                       `readOnly`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-shorthand-overrides-longhand",
     description: "Shorthand declared after a longhand silently resets the longhand.",
     remediation: "Move the shorthand before the longhand or remove the longhand.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-abusive-eslint-disable",
     description: "`eslint-disable` without specifying rules silences everything — too broad.",
     remediation: "Specify the exact rules to disable: `eslint-disable-next-line no-console`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

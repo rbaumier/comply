@@ -149,7 +149,7 @@ impl TextCheck for Check {
                     "{marker} comment is missing an issue reference — \
                      add a ticket number or URL (e.g. `{marker}(#1234)` or `{marker}(https://...)`)."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

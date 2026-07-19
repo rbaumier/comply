@@ -25,7 +25,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &pair,
                 super::META.id,
                 "RBAC rule grants verbs: [\"*\"]; enumerate the verbs needed.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

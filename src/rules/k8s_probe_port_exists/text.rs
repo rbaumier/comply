@@ -61,7 +61,7 @@ fn check_probe(
                     "{} port `{}` does not match any port declared by the container.",
                     probe_key, trimmed
                 ),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

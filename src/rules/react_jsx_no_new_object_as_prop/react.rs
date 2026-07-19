@@ -38,7 +38,7 @@ crate::ast_check! { on ["jsx_attribute"] => |node, source, ctx, diagnostics|
         message: format!(
             "Object literal as value of JSX prop `{attr_name}` creates a new reference every render — extract to a constant or wrap in `useMemo`."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

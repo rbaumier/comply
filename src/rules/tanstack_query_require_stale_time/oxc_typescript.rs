@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`QueryClient` without a default `staleTime` refetches on every component mount.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

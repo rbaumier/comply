@@ -275,7 +275,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Do not delete dynamically computed property keys — use `Map` or `Set`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

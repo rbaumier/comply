@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-deploy-port-hardcoded",
     description: "Elysia `.listen()` uses a hardcoded numeric port — deployment platforms typically inject the port via environment.",
     remediation: "Read the port from `process.env.PORT` (with a sensible default) so the same image works locally and on hosting.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["deployment", "elysia"],
 

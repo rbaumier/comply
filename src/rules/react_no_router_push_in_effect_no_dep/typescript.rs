@@ -109,7 +109,7 @@ impl TextCheck for Check {
                 message: "`router.push(...)` in a mount-only `useEffect` always navigates on first render. \
                           Move it into an event handler, gate it on a condition, or use a server-side redirect."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             search_from = close + 1;

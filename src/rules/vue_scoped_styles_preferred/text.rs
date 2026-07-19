@@ -53,7 +53,7 @@ crate::ast_check! { on ["style_element"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`<style>` without `scoped` leaks selectors globally. Add `scoped` unless global is intentional.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

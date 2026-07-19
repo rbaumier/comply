@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-route-missing-params-schema",
     description: "Elysia route declares URL parameters but no `params:` schema.",
     remediation: "Add `params: t.Object({ id: t.Numeric(), ... })` so path params are validated and typed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["validation", "elysia"],
 

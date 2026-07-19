@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ui-stagger-children-cap",
     description: "`staggerChildren` should stay ≤ 0.05s (50ms); larger values make lists feel sluggish.",
     remediation: "Reduce `staggerChildren` to 0.05 or less, or drop it entirely.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

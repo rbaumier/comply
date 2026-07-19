@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-dangling-hpa",
     description: "HorizontalPodAutoscaler.spec.scaleTargetRef must reference a resource that exists in the project.",
     remediation: "Create the referenced workload (Deployment, StatefulSet, ...) or fix the scaleTargetRef kind/name/namespace.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

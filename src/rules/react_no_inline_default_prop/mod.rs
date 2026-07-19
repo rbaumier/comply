@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-inline-default-prop",
     description: "Non-primitive default props in `memo()` create new references every render, breaking memoization.",
     remediation: "Define the default value outside the component: `const EMPTY: T[] = []` then `{ items = EMPTY }`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

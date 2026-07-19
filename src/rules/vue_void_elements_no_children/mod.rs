@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-void-elements-no-children",
     description: "Void HTML elements (`<br>`, `<img>`, `<input>`) cannot have children.",
     remediation: "Remove children from void elements.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue", "html"],
 

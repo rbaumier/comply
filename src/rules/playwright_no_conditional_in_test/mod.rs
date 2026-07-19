@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Conditional logic in tests makes them non-deterministic.",
     remediation: "Remove `if`/`switch`/ternary from the test body. Write \
                   separate tests for each branch.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/no-conditional-in-test.md",
     ),

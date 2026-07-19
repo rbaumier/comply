@@ -94,7 +94,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "t() key must match `domain.subkey` (lowercase-leading segments, dot-separated).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

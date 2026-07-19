@@ -40,7 +40,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Use `.key` instead of `.{prop_text}`."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

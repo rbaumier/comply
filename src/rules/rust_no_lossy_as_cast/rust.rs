@@ -310,7 +310,7 @@ impl AstCheck for Check {
                  fallible narrowing, or `From::from(x)` if the cast \
                  is provably total."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-expect-resolves",
     description: "Prefer `await expect(promise).resolves` over `expect(await promise)`.",
     remediation: "Use await expect(promise).resolves instead of expect(await promise)",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

@@ -38,7 +38,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-no-drizzle-kit-in-runtime",
     description: "`drizzle-kit` is a CLI/dev-time package — importing it from runtime code pulls migration tooling into the production bundle.",
     remediation: "Keep `drizzle-kit` imports inside `drizzle.config.ts` or migration scripts; runtime code should depend only on `drizzle-orm`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle", "bundle"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-no-interactive-element-to-noninteractive-role",
     description: "Interactive elements must not be assigned non-interactive ARIA roles.",
     remediation: "Remove the non-interactive `role` or use a non-interactive element instead of `<button>`, `<a>`, `<input>`, `<select>`, or `<textarea>`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

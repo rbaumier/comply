@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-zypper-non-interactive",
     description: "`zypper install` must run non-interactively in builds.",
     remediation: "Pass `-n` (or `--non-interactive`) to zypper.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

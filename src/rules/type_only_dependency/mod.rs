@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "type-only-dependency",
     description: "Production dependency is only imported via `import type` — move to devDependencies.",
     remediation: "Move the package from `dependencies` to `devDependencies` since it's only used for type information at build time.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports", "dependencies"],
 

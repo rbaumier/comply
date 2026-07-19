@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Test declares a body schema but never asserts a 400/422 validation error."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

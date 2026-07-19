@@ -86,7 +86,7 @@ impl OxcCheck for Check {
                 "Drizzle `.values([...])` with {count} rows exceeds the {max}-row chunking threshold — \
                  split into chunks to stay under the driver bind-parameter limit."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

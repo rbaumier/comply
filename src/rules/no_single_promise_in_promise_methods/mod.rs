@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Wrapping a single-element array with `Promise.all/any/race()` is unnecessary.",
     remediation: "Use the value directly instead of wrapping it in a Promise method: \
                   `await single` instead of `await Promise.all([single])`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

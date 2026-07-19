@@ -460,7 +460,7 @@ impl TextCheck for Check {
                                  `await Promise.all(arr.map(async ...))`.",
                                 pat.trim_start_matches('.')
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

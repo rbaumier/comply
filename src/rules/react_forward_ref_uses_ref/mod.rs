@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`forwardRef` component does not use the `ref` parameter.",
     remediation: "Either use the `ref` parameter in the component body or remove \
                   the `forwardRef` wrapper — it serves no purpose without a ref.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/forward-ref-uses-ref.md",
     ),

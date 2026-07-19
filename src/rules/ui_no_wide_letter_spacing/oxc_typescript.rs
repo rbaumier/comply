@@ -106,7 +106,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`letterSpacing: \"{raw}\"` — values above {max_spacing}em hurt readability."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

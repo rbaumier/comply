@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-resource-requests",
     description: "Each container must define resources.requests.cpu and resources.requests.memory.",
     remediation: "Add `resources.requests.cpu` and `resources.requests.memory` under each container.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

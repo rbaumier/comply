@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-documented-with-semantics",
     description: "Complex regex (>20 chars) without a comment explaining its purpose.",
     remediation: "Add a comment above the regex explaining what it matches.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

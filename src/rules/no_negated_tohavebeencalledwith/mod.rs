@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-negated-tohavebeencalledwith",
     description: "Disallow negated `toHaveBeenCalledWith` assertions, which pass whenever the mock was called with any other arguments and so never fail.",
     remediation: "Use `expect(fn).not.toHaveBeenCalled()` or assert over `fn.mock.calls`",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

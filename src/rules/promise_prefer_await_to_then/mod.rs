@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "promise-prefer-await-to-then",
     description: "`.then(...)` chains are harder to read and harder to debug than `async/await`.",
     remediation: "Mark the surrounding function `async` and use `await expr` instead of `expr.then(...)`. Same for `.catch` → `try/catch`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/eslint-community/eslint-plugin-promise/blob/main/docs/rules/prefer-await-to-then.md"),
     categories: &["promise"],
 

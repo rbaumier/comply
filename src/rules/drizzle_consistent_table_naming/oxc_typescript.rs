@@ -81,7 +81,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Table name `{table_name}` should be lowercase snake_case plural (e.g. `user_profiles`)."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

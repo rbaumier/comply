@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Import/export with empty attribute list `with {}` is not allowed.",
     remediation: "Either add the required attributes (e.g. `with { type: 'json' }`) \
                   or remove the empty `with {}` clause.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

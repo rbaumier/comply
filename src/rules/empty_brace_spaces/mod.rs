@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "empty-brace-spaces",
     description: "Do not add spaces between braces.",
     remediation: "Remove whitespace between empty braces: `{  }` -> `{}`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

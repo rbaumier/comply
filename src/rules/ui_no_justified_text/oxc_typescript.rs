@@ -105,7 +105,7 @@ impl OxcCheck for Check {
                         message:
                             "`textAlign: 'justify'` without `hyphens: 'auto'` — produces rivers of whitespace."
                                 .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-bigint-literals",
     description: "Prefer `BigInt` literals over `BigInt(…)` constructor.",
     remediation: "Replace `BigInt(123)` with `123n` — the literal form is shorter and clearer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

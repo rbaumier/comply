@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-no-callback-literal",
     description: "First argument to error-first callbacks should be an Error object or `null`, not a string literal.",
     remediation: "Pass `new Error('...')` or `null` as the first argument instead of a string literal.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["node"],
 

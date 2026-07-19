@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-no-for-update-without-skip-locked",
     description: "`SELECT ... FOR UPDATE` without `SKIP LOCKED` or `NOWAIT` blocks every concurrent worker behind one slow transaction.",
     remediation: "For job-queue / work-stealing patterns use `FOR UPDATE SKIP LOCKED`. For fail-fast contention use `FOR UPDATE NOWAIT`. Plain `FOR UPDATE` is rarely what you want in concurrent code.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql", "concurrency"],
 

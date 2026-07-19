@@ -27,7 +27,7 @@ crate::ast_check! { on ["at_rule", "keyframes_statement", "media_statement"] => 
                 &kw,
                 super::META.id,
                 format!("`{name}` is deprecated; {hint}."),
-                Severity::Warning,
+                Severity::Error,
             ));
             return;
         }

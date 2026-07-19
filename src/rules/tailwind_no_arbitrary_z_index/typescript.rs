@@ -69,7 +69,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             "Use a design token (e.g. `z-10`, `z-50`) instead of an arbitrary z-index value.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

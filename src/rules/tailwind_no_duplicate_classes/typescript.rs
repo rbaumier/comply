@@ -59,7 +59,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                 &node,
                 super::META.id,
                 format!("Duplicate class `{class}` — remove the repetition."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

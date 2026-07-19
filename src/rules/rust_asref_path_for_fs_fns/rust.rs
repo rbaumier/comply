@@ -49,7 +49,7 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
                  so callers can pass `&str`, `String`, `&Path`, or `PathBuf` \
                  without converting."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
         // Report once per function to avoid noise on two-path helpers.
         break;

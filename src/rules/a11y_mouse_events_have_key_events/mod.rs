@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-mouse-events-have-key-events",
     description: "Flag `onMouseOver` without `onFocus` and `onMouseOut` without `onBlur`.",
     remediation: "Add `onFocus` alongside `onMouseOver` and `onBlur` alongside `onMouseOut` to ensure keyboard accessibility.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

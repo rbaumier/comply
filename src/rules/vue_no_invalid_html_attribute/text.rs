@@ -74,7 +74,7 @@ impl TextCheck for Check {
                         column: 1,
                         rule_id: "vue-no-invalid-html-attribute".into(),
                         message: format!("Invalid `rel` value `{token}` on `<{}>`.", elem.tag,),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

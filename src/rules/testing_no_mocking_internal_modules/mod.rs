@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-no-mocking-internal-modules",
     description: "Mocking a relative internal module couples tests to implementation details.",
     remediation: "Mock only external boundaries (HTTP, DB, third-party SDKs). Refactor so the collaborator is injected, or rely on the real internal module.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

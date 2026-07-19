@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-add-for-files",
     description: "Use COPY instead of ADD for plain files and folders.",
     remediation: "Replace ADD with COPY when the source is a regular file or directory.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

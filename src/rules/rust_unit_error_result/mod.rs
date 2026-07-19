@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
                   it as the `E` parameter. If absence is the only failure \
                   mode, return `Option<T>` instead. `Result<T, ()>` is the \
                   worst of both worlds.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   `obj.foo === undefined`. Keep `typeof` when the operand is a \
                   bare identifier that may not be declared — \
                   `x === undefined` throws ReferenceError in that case.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

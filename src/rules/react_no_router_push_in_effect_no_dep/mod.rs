@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`router.push(...)` in a mount-only `useEffect` always navigates — almost certainly a bug.",
     remediation: "Move the navigation into an event handler, gate it on a condition the effect depends on, \
                   or perform the redirect server-side (e.g. `redirect()` in Next.js).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react", "nextjs"],
 

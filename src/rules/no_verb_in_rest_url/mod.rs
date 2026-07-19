@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   `POST /api/orders` to create, `GET /api/orders/:id` to \
                   read, `PATCH /api/orders/:id` to update, \
                   `DELETE /api/orders/:id` to remove.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api"],
 

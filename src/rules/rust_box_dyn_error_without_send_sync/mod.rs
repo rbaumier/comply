@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   from a function that's awaited on another runtime worker. \
                   Use `Box<dyn Error + Send + Sync + 'static>` (or the \
                   `anyhow::Error` alias).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

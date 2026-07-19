@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-no-duplicate-id",
     description: "HTML `id` attributes must be unique within a document.",
     remediation: "Use unique id values",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["html"],
 

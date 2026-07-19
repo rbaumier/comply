@@ -92,7 +92,7 @@ impl OxcCheck for Check {
             message:
                 "Reluctant quantifier before end-of-pattern is useless \u{2014} it always matches the minimum."
                     .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

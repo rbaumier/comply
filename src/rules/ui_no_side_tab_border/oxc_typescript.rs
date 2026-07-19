@@ -104,7 +104,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`{key}` alongside a bottom border looks like a tab indicator \u{2014} drop the side border."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

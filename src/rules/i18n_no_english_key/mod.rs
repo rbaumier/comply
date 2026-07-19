@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-no-english-key",
     description: "t() key looks like a full English sentence, not an identifier.",
     remediation: "Use an identifier-style key such as `domain.key` and put the English copy in the locale file.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

@@ -8,7 +8,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-get-prefix-rust",
     description: "Simple accessor uses `get_` prefix — Rust convention is to omit it.",
     remediation: "Rename `get_foo(&self)` to `foo(&self)`. Reserve `get` for fallible or expensive operations.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

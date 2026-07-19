@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   reduce clarity.",
     remediation: "Rewrite the comment to be direct. Replace passive voice with \
                   active. Remove filler words. Fix repeated words.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["comments"],
 
@@ -166,7 +166,7 @@ pub(crate) fn lint_comment_nodes(
                             column: 1,
                             rule_id: META.id.into(),
                             message: format!("Weasel word `{weasel}` in comment — be specific."),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         break;
@@ -184,7 +184,7 @@ pub(crate) fn lint_comment_nodes(
                             message: format!(
                                 "Passive voice `{passive}` in comment — use active voice."
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         break;
@@ -218,7 +218,7 @@ pub(crate) fn lint_comment_nodes(
                     column: 1,
                     rule_id: META.id.into(),
                     message: format!("Lexical illusion: `{first}` repeated across lines."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -285,7 +285,7 @@ pub(crate) fn lint_comment_spans(
                             column: 1,
                             rule_id: META.id.into(),
                             message: format!("Weasel word `{weasel}` in comment — be specific."),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         break;
@@ -301,7 +301,7 @@ pub(crate) fn lint_comment_spans(
                             message: format!(
                                 "Passive voice `{passive}` in comment — use active voice."
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         break;
@@ -332,7 +332,7 @@ pub(crate) fn lint_comment_spans(
                     column: 1,
                     rule_id: META.id.into(),
                     message: format!("Lexical illusion: `{first}` repeated across lines."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

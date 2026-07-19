@@ -98,7 +98,7 @@ fn push_diag(span_start: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>)
         rule_id: "prefer-single-boolean-return".into(),
         message: "`if (cond) return <bool>; else return <bool>;` — return the condition directly."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((span_start as usize, 0)),
     });
 }

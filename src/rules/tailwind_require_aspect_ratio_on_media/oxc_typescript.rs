@@ -81,7 +81,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`<{tag}>` lacks aspect ratio — add a Tailwind `aspect-*` class or both `width` and `height` to prevent layout shift."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

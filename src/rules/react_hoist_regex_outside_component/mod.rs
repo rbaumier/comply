@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   component. Regex literals inside a function body allocate \
                   a new RegExp object every call, defeating the JS engine's \
                   compiled-pattern cache.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "react"],
 

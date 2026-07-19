@@ -83,7 +83,7 @@ impl OxcCheck for Check {
                             message:
                                 "`@param` is missing a description — explain what this parameter represents, not just its type."
                                     .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

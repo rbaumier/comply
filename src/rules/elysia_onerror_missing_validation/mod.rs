@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-onerror-missing-validation",
     description: "`onError` handler doesn't branch on `'VALIDATION'` — schema errors will be returned as generic 500s.",
     remediation: "Inside `onError`, branch on `code === 'VALIDATION'` (or `'NOT_FOUND'`/`'PARSE'`) and return a structured response.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

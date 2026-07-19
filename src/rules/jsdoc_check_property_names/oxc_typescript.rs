@@ -65,7 +65,7 @@ impl OxcCheck for Check {
                             message: format!(
                                 "Duplicate @property name `{name}` on a @typedef — remove or rename the duplicate."
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

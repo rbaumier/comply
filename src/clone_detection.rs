@@ -484,7 +484,7 @@ fn merge_and_emit(
                     files[s.cfi].path.display(),
                     s.cline,
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             }
         })

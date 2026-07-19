@@ -77,7 +77,7 @@ impl OxcCheck for Check {
                       `toBeEnabled`, etc.) instead of asserting on \
                       awaited locator methods — they auto-retry."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

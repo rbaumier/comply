@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Mutually exclusive Tailwind classes produce unpredictable styles.",
     remediation: "Keep only the intended utility. For example, `p-4 p-6` — \
                   remove one of the two padding values.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

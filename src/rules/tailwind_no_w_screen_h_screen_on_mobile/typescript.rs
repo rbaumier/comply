@@ -65,7 +65,7 @@ impl TextCheck for Check {
                             "min-h-dvh"
                         }
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

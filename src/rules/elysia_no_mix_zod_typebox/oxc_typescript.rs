@@ -50,7 +50,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "File uses both Zod and Elysia's `t` validators — pick one. Mixing breaks Elysia's static type inference.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -25,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
                   uncomfortable truth, let that sink in, make no mistake, the reality is, \
                   at the end of the day, it's worth noting, think about it, and that's okay, \
                   deep dive, game-changer, circle back, double down, on the same page.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["comments"],
 

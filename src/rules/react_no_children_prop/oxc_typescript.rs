@@ -42,7 +42,7 @@ impl OxcCheck for Check {
                     message: "Pass children between tags instead of as a \
                               `children` prop."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-prefer-exists-over-in",
     description: "`WHERE x IN (SELECT ...)` — prefer `EXISTS` which exits on first match.",
     remediation: "Replace `WHERE col IN (SELECT ...)` with `WHERE EXISTS (SELECT 1 FROM ... WHERE ...)`. EXISTS short-circuits on the first match; IN must materialize the entire subquery.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

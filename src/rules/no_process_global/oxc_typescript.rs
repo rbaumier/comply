@@ -124,7 +124,7 @@ impl OxcCheck for Check {
             message: "Usage of the `process` global is discouraged. Import it with \
                       `import process from \"node:process\";` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

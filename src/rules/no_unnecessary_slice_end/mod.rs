@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-unnecessary-slice-end",
     description: "Disallow unnecessary `.length` or `Infinity` as the `end` argument of `slice()`.",
     remediation: "Remove the second argument: `.slice(start)` already goes to the end.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

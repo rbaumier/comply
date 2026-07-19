@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-value-at-rule",
     description: "Disallow the CSS Modules `@value` at-rule.",
     remediation: "Replace the `@value` declaration with a native CSS custom property, e.g. `:root { --primary: #fff }` referenced via `var(--primary)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

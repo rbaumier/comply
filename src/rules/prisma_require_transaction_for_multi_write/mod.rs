@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prisma-require-transaction-for-multi-write",
     description: "Multiple Prisma write operations in the same file without `$transaction` — partial failures leave inconsistent state.",
     remediation: "Wrap the writes in `prisma.$transaction([...])` (sequential) or `prisma.$transaction(async (tx) => { ... })` (interactive).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["prisma", "safety"],
 

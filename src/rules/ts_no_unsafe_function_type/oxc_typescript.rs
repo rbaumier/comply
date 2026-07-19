@@ -73,7 +73,7 @@ impl OxcCheck for Check {
             message: "Built-in `Function` type loses signature info — replace with \
                       a precise call signature like `(arg: T) => U`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

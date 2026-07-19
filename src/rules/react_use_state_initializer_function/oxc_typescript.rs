@@ -85,7 +85,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Pass a lazy initializer `() => expr` to `useState` to avoid recomputing on every render.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

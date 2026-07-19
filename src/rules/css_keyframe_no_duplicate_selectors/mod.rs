@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-keyframe-no-duplicate-selectors",
     description: "Disallow duplicated keyframe selectors within `@keyframes`.",
     remediation: "Merge duplicate keyframe blocks or change the selector.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

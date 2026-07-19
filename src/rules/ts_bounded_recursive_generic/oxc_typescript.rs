@@ -137,7 +137,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Recursive type `{name}` has no depth parameter; add one to bound recursion."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

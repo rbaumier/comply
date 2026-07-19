@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Missing `key` prop inside iterator — React needs stable keys to reconcile lists.",
     remediation: "Add a unique, stable `key` prop to each JSX element returned \
                   from `.map()`, `.flatMap()`, `.from()`, or an array literal.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-key.md",
     ),

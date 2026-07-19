@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-array-from-map",
     description: "Prefer `Array.from(iter, mapFn)` over `[...iter].map(mapFn)`.",
     remediation: "Use `Array.from(iterable, mapFn)` to avoid intermediate array allocation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/from",
     ),

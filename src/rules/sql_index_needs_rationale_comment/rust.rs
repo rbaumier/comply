@@ -162,7 +162,7 @@ pub(super) fn check_string_content(
                       write throughput and disk — explain what query it accelerates \
                       so future readers know whether it's still useful."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

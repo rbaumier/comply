@@ -59,7 +59,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Calls to `require()` should use string literals.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

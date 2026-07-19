@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-no-catch-panic",
     description: "Forbid catch handlers that match or re-handle Panic from better-result.",
     remediation: "Let Panic propagate — don't re-handle it in a catch.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

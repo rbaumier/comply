@@ -41,7 +41,7 @@ impl AstCheck for Check {
                 &node,
                 super::META.id,
                 message,
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

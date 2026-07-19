@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   or format with a timezone-aware API (`Intl.DateTimeFormat`, `date-fns-tz`). \
                   To anchor a date-only string to UTC, append a time and zone (`new Date(\
                   \"2026-01-15T00:00:00Z\")`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness"],
 

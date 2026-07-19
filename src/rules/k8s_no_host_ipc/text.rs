@@ -14,7 +14,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &pair,
             super::META.id,
             "Pod spec sets `hostIPC: true`; remove to isolate the IPC namespace.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

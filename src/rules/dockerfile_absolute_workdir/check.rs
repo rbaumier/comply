@@ -22,7 +22,7 @@ crate::ast_check! { on ["workdir_instruction"] => |node, source, ctx, diagnostic
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "WORKDIR must use an absolute path.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

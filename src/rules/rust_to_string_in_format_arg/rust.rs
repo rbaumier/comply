@@ -113,7 +113,7 @@ impl AstCheck for Check {
                     "`.to_string()` inside `{bare}!(..)` is redundant — \
                      the formatter already calls `Display`. Drop the call."
                 ),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-no-string-concat-with-translation",
     description: "Concatenating `t()` results breaks word order in RTL and agglutinative languages.",
     remediation: "Use interpolation: `t('greeting', { name })` instead of `t('hello') + ' ' + name`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

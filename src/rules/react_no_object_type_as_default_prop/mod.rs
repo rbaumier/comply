@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Move default values to a module-level constant or use `useMemo`/`useCallback`. \
                   `function Foo({ items = DEFAULT_ITEMS })` with `const DEFAULT_ITEMS = []` \
                   outside the component keeps a stable reference.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

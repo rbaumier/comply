@@ -118,7 +118,7 @@ impl OxcCheck for Check {
                 "`{key_unquoted}` is not a valid XState transition property (allowed: {}).",
                 VALID_TRANSITION_PROPS.join(", ")
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

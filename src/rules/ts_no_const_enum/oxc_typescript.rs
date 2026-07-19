@@ -36,7 +36,7 @@ impl OxcCheck for Check {
             message: "`const enum` is inlined at compile time and breaks with \
                       isolatedModules; use a regular enum or a union type instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

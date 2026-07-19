@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-dynamic-template",
     description: "Dynamic HTML construction via innerHTML, document.write, or similar APIs is an XSS vector.",
     remediation: "Use safe DOM APIs (`textContent`, `createElement`) or a framework's built-in escaping. Avoid raw HTML injection entirely.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security"],
 

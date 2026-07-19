@@ -121,7 +121,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
                     format!(
                         "Prefer shorthand: `{variant}{bang}{left_prefix}{lv} {variant}{bang}{right_prefix}{rv}` can be written as `{variant}{bang}{short_prefix}{lv}`."
                     ),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

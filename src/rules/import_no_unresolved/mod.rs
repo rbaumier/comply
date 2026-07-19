@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-no-unresolved",
     description: "Relative import path must resolve to an existing file.",
     remediation: "Fix the import path — the target file may have been moved, renamed, or deleted.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/import-js/eslint-plugin-import/blob/main/docs/rules/no-unresolved.md",
     ),

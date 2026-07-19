@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`OFFSET` pagination is O(N) on deep pages — use cursor-based pagination: `WHERE id > :last_id ORDER BY id LIMIT N`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

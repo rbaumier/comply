@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-unnecessary-whitespace",
     description: "Multiple consecutive spaces in className/class attributes are unnecessary.",
     remediation: "Remove extra whitespace in class strings",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

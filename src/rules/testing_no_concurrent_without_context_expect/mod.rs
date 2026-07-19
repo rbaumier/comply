@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "testing-no-concurrent-without-context-expect",
     description: "test.concurrent must destructure { expect } from the test context — the module-level expect is not scoped per concurrent test.",
     remediation: "Destructure expect from the test context: test.concurrent('...', ({ expect }) => { ... })",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://vitest.dev/guide/test-context.html"),
     categories: &["testing"],
 

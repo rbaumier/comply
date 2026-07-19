@@ -33,7 +33,7 @@ crate::ast_check! { on ["cmd_instruction", "entrypoint_instruction"] => |node, s
             column: pos.column + 1,
             rule_id: super::META.id.into(),
             message: "CMD/ENTRYPOINT must use exec form (JSON array); shell form breaks signal forwarding.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((node.byte_range().start, node.byte_range().len())),
         });
     }

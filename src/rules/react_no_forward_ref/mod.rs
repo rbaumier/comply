@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`forwardRef(...)` is deprecated in React 19 — accept `ref` as a regular prop.",
     remediation: "Remove the `forwardRef` wrapper and declare `ref` in the component props. \
                   React 19 forwards refs automatically to function components.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://react.dev/blog/2024/12/05/react-19#ref-as-a-prop"),
     categories: &["react"],
 

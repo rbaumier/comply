@@ -67,7 +67,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Rest destructuring on `{name}()` result — destructure only the fields you actually use."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
                   early-return branch, and wrap the caller tree in a \
                   `<Suspense fallback={...}>` boundary. `data` will be \
                   guaranteed defined.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://tanstack.com/query/v5/docs/framework/react/reference/useSuspenseQuery"),
     categories: &["tanstack-query"],
 

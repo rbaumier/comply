@@ -157,7 +157,7 @@ impl OxcCheck for Check {
                     "Error message \"{msg}\" is too vague \
                      — describe what went wrong and what to do about it."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

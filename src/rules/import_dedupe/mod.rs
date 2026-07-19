@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "import-dedupe",
     description: "Duplicate named specifiers inside a single import statement.",
     remediation: "Remove the duplicate identifiers from the import specifier list.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/antfu/eslint-plugin-antfu/blob/main/src/rules/import-dedupe.md",
     ),

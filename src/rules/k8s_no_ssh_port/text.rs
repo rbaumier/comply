@@ -28,7 +28,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &cp_pair,
                     super::META.id,
                     "Container exposes TCP port 22 (SSH); remove and use `kubectl exec` for debugging.".into(),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

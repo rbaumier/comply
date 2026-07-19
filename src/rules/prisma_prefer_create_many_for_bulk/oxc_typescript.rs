@@ -77,7 +77,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`create()` called inside a loop — use `createMany({ data: [...] })` for one round-trip.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -19,7 +19,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-react-native-platform-components",
     description: "Platform-specific React Native components belong in platform-specific files.",
     remediation: "Move the import to a file with the matching platform suffix (`.android.*` / `.ios.*`), or split mixed platforms into separate files.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

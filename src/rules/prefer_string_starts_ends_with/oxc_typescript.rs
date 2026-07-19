@@ -63,7 +63,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "prefer-string-starts-ends-with".into(),
                     message: "Prefer `String#startsWith()` over a regex with `^`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;
@@ -79,7 +79,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "prefer-string-starts-ends-with".into(),
                     message: "Prefer `String#endsWith()` over a regex with `$`.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -145,7 +145,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Interactive element is missing an accessible label (`aria-label` or `aria-labelledby`).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

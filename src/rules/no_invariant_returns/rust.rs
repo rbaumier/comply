@@ -193,7 +193,7 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
         column: pos.column + 1,
         rule_id: "no-invariant-returns".into(),
         message: "Function always returns the same literal value \u{2014} consider using a constant instead.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

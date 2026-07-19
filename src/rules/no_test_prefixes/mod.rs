@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-test-prefixes",
     description: "`ftest`/`fdescribe`/`fit`/`xtest`/`xdescribe`/`xit` focus or skip tests via prefix.",
     remediation: "Use .only or .skip modifiers instead of f/x prefixes",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

@@ -171,7 +171,7 @@ fn make_diagnostic(ctx: &CheckCtx, span: Span) -> Diagnostic {
         message: "Solid component props must not be destructured — reading \
                   `props.foo` is what preserves reactivity."
             .into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     }
 }

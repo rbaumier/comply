@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-static-inline-value",
     description: "Route handler returns only a static string literal — pass the literal directly for ahead-of-time response caching.",
     remediation: "Replace `.get('/health', () => 'ok')` with `.get('/health', 'ok')`. Elysia compiles literal responses ahead of time.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance", "elysia"],
 

@@ -94,7 +94,7 @@ impl AstCheck for Check {
                  the result in a named struct so each field has a \
                  name and refactors don't break every caller."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

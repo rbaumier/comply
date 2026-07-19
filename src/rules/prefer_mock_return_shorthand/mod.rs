@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-mock-return-shorthand",
     description: "Prefer `.mockReturnValue(x)` over `.mockImplementation(() => x)`.",
     remediation: "Use mockReturnValue(x) instead of mockImplementation(() => x)",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

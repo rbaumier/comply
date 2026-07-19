@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-singular-table-names",
     description: "Table names should be singular nouns.",
     remediation: "Rename `users` -> `user`, `orders` -> `order`. Singular table names match the row-as-entity model and keep joins readable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

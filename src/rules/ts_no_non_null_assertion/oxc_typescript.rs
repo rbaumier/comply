@@ -86,7 +86,7 @@ impl OxcCheck for Check {
             message: "Avoid non-null assertions (`!`) — they silence the type \
                       checker. Narrow the type or use optional chaining instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

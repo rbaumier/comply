@@ -83,7 +83,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Handler returns `status({code}, ...)` but `response:` schema has no `{code}:` key."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

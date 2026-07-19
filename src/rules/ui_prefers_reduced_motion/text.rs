@@ -29,7 +29,7 @@ crate::ast_check! { on ["keyframes_statement", "declaration"] => |node, source, 
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "CSS declares motion (animation/transition) without a `@media (prefers-reduced-motion: reduce)` branch.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((target.byte_range().start, target.byte_range().len())),
     });
 }

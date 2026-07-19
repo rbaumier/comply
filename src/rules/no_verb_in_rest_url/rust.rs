@@ -23,7 +23,7 @@ crate::ast_check! { on ["string_literal", "raw_string_literal"] => |node, source
             "REST URL contains the verb '{verb}' — use HTTP semantics instead \
              (POST /api/orders, GET /api/orders/:id…)."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

@@ -59,7 +59,7 @@ impl OxcCheck for Check {
                                 column: 1,
                                 rule_id: super::META.id.into(),
                                 message: "@next tag is missing a description — explain what the caller passes to .next().".into(),
-                                severity: Severity::Warning,
+                                severity: Severity::Error,
                                 span: None,
                             });
                         }

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `import { default as foo } from './m'` with \
                   `import foo from './m'`. The named form is verbose and \
                   obscures the intent of importing the default export.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

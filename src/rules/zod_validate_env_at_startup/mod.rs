@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   `envSchema.parse(process.env)` (or `.safeParse`) once at \
                   startup. Export the parsed, typed object and consume it \
                   everywhere else instead of raw `process.env.X`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

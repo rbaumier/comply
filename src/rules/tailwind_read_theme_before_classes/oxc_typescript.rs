@@ -148,7 +148,7 @@ impl OxcCheck for Check {
                       Import `tailwind.config` / call `resolveConfig(...)` / use `theme(...)`, \
                       or switch to a design-token class."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

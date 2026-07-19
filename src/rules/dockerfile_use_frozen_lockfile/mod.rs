@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-use-frozen-lockfile",
     description: "pnpm/yarn install in Dockerfiles must use `--frozen-lockfile`.",
     remediation: "Pass `--frozen-lockfile` to `pnpm install` / `yarn install` so the build fails on lockfile drift.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

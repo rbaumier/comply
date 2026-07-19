@@ -74,7 +74,7 @@ impl OxcCheck for Check {
             message: "`new URL(...)` throws on invalid input — wrap in try/catch \
                       or gate with `URL.canParse(s)` first."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

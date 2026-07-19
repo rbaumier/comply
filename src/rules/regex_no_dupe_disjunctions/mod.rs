@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-dupe-disjunctions",
     description: "Regex contains duplicate alternatives that are redundant.",
     remediation: "Remove the duplicate alternative from the disjunction.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-dupe-disjunctions.html",
     ),

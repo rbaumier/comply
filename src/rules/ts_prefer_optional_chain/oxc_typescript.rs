@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             message: "`a && a.b` is the classic optional-chain pattern — write `a?.b` \
                       instead. Same short-circuit, less repetition."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -23,7 +23,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &pair,
                 super::META.id,
                 "RBAC rule grants resources: [\"*\"]; enumerate the resources needed.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

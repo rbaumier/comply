@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: "no-thenable".into(),
                         message: "Do not add `then` to an object.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -89,7 +89,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "no-thenable".into(),
                             message: "Do not add `then` to a class.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -108,7 +108,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "no-thenable".into(),
                             message: "Do not add `then` to an object.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }
@@ -137,7 +137,7 @@ impl OxcCheck for Check {
                         column,
                         rule_id: "no-thenable".into(),
                         message: "Do not add `then` to a class.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -158,7 +158,7 @@ impl OxcCheck for Check {
                                     column,
                                     rule_id: "no-thenable".into(),
                                     message: "Do not export `then`.".into(),
-                                    severity: Severity::Warning,
+                                    severity: Severity::Error,
                                     span: None,
                                 });
                             }
@@ -173,7 +173,7 @@ impl OxcCheck for Check {
                                     column,
                                     rule_id: "no-thenable".into(),
                                     message: "Do not export `then`.".into(),
-                                    severity: Severity::Warning,
+                                    severity: Severity::Error,
                                     span: None,
                                 });
                             }
@@ -194,7 +194,7 @@ impl OxcCheck for Check {
                             column,
                             rule_id: "no-thenable".into(),
                             message: "Do not export `then`.".into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

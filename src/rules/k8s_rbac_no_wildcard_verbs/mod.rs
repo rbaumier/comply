@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-rbac-no-wildcard-verbs",
     description: "RBAC rules must not grant verbs: [\"*\"]; enumerate the verbs needed.",
     remediation: "Replace `verbs: [\"*\"]` with the specific verbs required (get, list, watch, create, update, patch, delete).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

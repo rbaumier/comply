@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prisma-soft-delete-filter",
     description: "`prisma.<model>.findMany() / findFirst()` without a `deletedAt: null` (or equivalent) filter returns soft-deleted rows.",
     remediation: "Add `where: { deletedAt: null, ... }` (or your project's soft-delete predicate) so soft-deleted rows don't leak into the result set.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["prisma", "safety"],
 

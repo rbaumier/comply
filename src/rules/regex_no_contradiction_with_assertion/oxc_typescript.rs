@@ -110,7 +110,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Assertion contradicts the pattern around it \u{2014} this branch can never match.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   accept the same format-args grammar as `format!`, so \
                   the inner `format!` allocates a `String` only to be \
                   copied into the log buffer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust", "performance"],
 

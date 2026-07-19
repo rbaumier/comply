@@ -34,7 +34,7 @@ impl AstCheck for Check {
             &node,
             super::META.id,
             "Both sides select a primary key — use `UNION ALL` to skip the dedup sort.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

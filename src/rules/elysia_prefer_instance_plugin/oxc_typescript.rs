@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Callback-style plugin `(app: Elysia) => ...` \u{2014} prefer `new Elysia({ name: '...' })` instance plugins for deduplication and type inference.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

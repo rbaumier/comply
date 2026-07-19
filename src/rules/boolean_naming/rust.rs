@@ -128,7 +128,7 @@ fn check_node(node: tree_sitter::Node, ctx: &CheckCtx) -> Option<Diagnostic> {
              `is_*`, `has_*`, `should_*`, `can_*`, `will_*`, `did_*`, `was_*`, \
              `in_*`, `seen_*`, `found_*`, `allow_*`, `use_*`, `always_*`, `with_*`, `needs_*`."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     })
 }

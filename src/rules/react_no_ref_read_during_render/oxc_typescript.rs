@@ -997,7 +997,7 @@ impl OxcCheck for Check {
                          the value during render.",
                         obj.name.as_str()
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -1048,7 +1048,7 @@ impl OxcCheck for Check {
                          the value during render.",
                         obj.name.as_str()
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -21,7 +21,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "sql-drop-table-no-cascade-warning".into(),
                     message: "`DROP TABLE ... CASCADE` silently removes views, foreign keys, and other dependents. Drop them explicitly so the migration is auditable.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             } else if !has_if_exists {
@@ -31,7 +31,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "sql-drop-table-no-cascade-warning".into(),
                     message: "`DROP TABLE` without `IF EXISTS` errors on rerun. Add `IF EXISTS` so the migration is idempotent.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

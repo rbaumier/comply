@@ -36,7 +36,7 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
             message: format!(
                 "Function `{name}` has a cyclomatic complexity of {complexity} (max: {threshold}).",
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

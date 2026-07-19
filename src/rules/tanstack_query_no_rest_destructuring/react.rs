@@ -55,7 +55,7 @@ crate::ast_check! { on ["variable_declarator"] => |node, source, ctx, diagnostic
         message: format!(
             "Rest destructuring on `{name}()` result — destructure only the fields you actually use."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

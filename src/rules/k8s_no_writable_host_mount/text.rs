@@ -24,7 +24,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &volume_map,
                 super::META.id,
                 "Pod uses a writable hostPath volume; mark the volumeMount as `readOnly: true` or remove it.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

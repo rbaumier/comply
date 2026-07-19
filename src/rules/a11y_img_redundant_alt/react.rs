@@ -41,7 +41,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
                     column: pos.column + 1,
                     rule_id: "a11y-img-redundant-alt".into(),
                     message: "`alt` text should not contain words like \"image\", \"picture\", or \"photo\" — describe the content instead.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

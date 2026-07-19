@@ -53,7 +53,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Do not use the return value of `ReactDOM.render()`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

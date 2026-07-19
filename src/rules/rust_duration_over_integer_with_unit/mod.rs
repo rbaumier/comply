@@ -29,7 +29,7 @@ pub const META: RuleMeta = RuleMeta {
                   For config parsing, use a humantime crate or similar to accept \
                   \"30d\" / \"24h\" at the config boundary. The type then carries \
                   the unit through the codebase.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

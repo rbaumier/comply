@@ -22,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
                   definition. Without it, typos in input files or API \
                   payloads deserialize silently — fields the type doesn't \
                   know about are dropped, and the user finds out later.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

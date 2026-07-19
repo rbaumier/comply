@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sonarjs-no-empty-collection",
     description: "Iterating an array literal that's defined as `[]` and never mutated does nothing.",
     remediation: "Either populate the array before the loop, or remove the dead iteration.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://sonarsource.github.io/rspec/#/rspec/S4158"),
     categories: &["sonarjs"],
 

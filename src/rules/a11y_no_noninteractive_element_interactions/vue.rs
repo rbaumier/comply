@@ -36,7 +36,7 @@ impl TextCheck for Check {
                         "Non-interactive element `<{}>` has an event handler without a `role` attribute.",
                         elem.tag
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

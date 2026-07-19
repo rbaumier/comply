@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-duplicate-classes",
     description: "Duplicate CSS classes in className/class attributes are redundant and confusing.",
     remediation: "Remove the duplicate class. Each utility should appear at most once.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

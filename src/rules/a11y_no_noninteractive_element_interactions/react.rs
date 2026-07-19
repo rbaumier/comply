@@ -41,7 +41,7 @@ crate::ast_check! { on ["jsx_opening_element", "jsx_self_closing_element"] => |n
             message: format!(
                 "Non-interactive element `<{tag}>` has an event handler without a `role` attribute."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

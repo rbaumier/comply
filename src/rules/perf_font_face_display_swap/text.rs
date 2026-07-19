@@ -27,7 +27,7 @@ crate::ast_check! { on ["at_rule"] prefilter = ["@font-face"] => |node, source, 
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "`@font-face` block is missing `font-display: swap` — text will be invisible while the font loads.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

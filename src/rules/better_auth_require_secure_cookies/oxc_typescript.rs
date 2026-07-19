@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Better Auth config is missing `useSecureCookies: true` — add `advanced: { useSecureCookies: true }` so session cookies are only sent over HTTPS.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

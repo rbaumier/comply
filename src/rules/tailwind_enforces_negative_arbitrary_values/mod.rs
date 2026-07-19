@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-enforces-negative-arbitrary-values",
     description: "Negative arbitrary Tailwind values should live inside the brackets, not on the utility prefix.",
     remediation: "Use top-[-1px] instead of -top-[1px]",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

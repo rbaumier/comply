@@ -40,7 +40,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
         &anchor,
         super::META.id,
         "Namespaced resource must set metadata.namespace explicitly.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

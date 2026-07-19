@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-watch-immediate-over-onmounted",
     description: "A `watch` paired with an `onMounted` that runs the same callback duplicates logic.",
     remediation: "Drop the `onMounted` and pass `{ immediate: true }` to the watch.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

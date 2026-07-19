@@ -75,7 +75,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Junction table (2 FK columns) must declare a composite `primaryKey({ columns: [...] })` in the table options callback.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-property-mutation",
     description: "Forbids mutation of object properties.",
     remediation: "Use spread syntax `{ ...obj, prop: value }` or immutable update patterns.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["functional", "immutability"],
 

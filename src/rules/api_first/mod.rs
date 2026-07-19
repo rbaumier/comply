@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "api-first",
     description: "Route handler files should define an API schema.",
     remediation: "Define the API schema before the handler using `z.object`, `createRoute`, or `zodValidator`. API-first design ensures the contract is documented and validated before implementation.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["api"],
 

@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   The `else if` form reduces nesting and makes the intent clearer. \
                   NOTE: this is different from `no-collapsible-if` which merges \
                   nested `if` without `else` using `&&`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

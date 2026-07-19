@@ -202,7 +202,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Derived state in `useEffect` is an anti-pattern. Compute the value during render instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

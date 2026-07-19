@@ -337,7 +337,7 @@ crate::ast_check! { on ["attribute", "directive_attribute"] => |node, source, ct
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: format!("Attribute `{name}` should be hyphenated (kebab-case)."),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

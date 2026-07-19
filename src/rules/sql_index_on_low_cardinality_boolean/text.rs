@@ -41,7 +41,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: "sql-index-on-low-cardinality-boolean".into(),
                     message: "B-tree index on a boolean column has too low selectivity to be useful. Use a partial index (`WHERE flag = TRUE`) or drop it.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

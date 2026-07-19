@@ -71,7 +71,7 @@ impl OxcCheck for Check {
                         "String `\"{content}\"` appears {count} times — extract to a constant.",
                         count = positions.len()
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

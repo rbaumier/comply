@@ -61,7 +61,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`spawn()` must be called inside an `assign()` action.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

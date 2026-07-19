@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `new Promise((resolve, reject) => { ... })` with \
                   `const { promise, resolve, reject } = Promise.withResolvers();` \
                   and call `resolve`/`reject` from wherever you previously did.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Promise/withResolvers",
     ),

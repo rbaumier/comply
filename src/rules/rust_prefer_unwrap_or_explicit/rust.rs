@@ -155,7 +155,7 @@ impl AstCheck for Check {
                       `.unwrap_or_else(|| <expr>)`. The goal is that a reader should \
                       see what the code does on None/Err without looking up trait impls."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

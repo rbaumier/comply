@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-unnecessary-type-constraint",
     description: "`<T extends any>` and `<T extends unknown>` are unnecessary — all types already extend these.",
     remediation: "Remove the `extends any` or `extends unknown` constraint.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

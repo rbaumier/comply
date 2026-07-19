@@ -21,7 +21,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &container,
                 super::META.id,
                 "Container must declare resources.limits.cpu and resources.limits.memory.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

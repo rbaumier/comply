@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`.flatMap().filter()` iterates twice — combine into a single `.flatMap()`.",
     remediation: "Move the filter predicate into the `flatMap` callback and return `[]` for \
                   items that should be excluded.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

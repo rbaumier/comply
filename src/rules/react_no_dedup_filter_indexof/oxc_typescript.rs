@@ -231,7 +231,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "`.filter(... indexOf ...)` is O(n²) dedup — use `[...new Set(arr)]` (O(n))."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

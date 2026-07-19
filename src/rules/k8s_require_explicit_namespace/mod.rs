@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-explicit-namespace",
     description: "Namespaced resources must declare metadata.namespace explicitly.",
     remediation: "Add `metadata.namespace: <name>` rather than relying on the implicit `default` namespace.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

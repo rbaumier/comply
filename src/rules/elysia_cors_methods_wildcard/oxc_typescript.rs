@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`credentials: true` without an explicit `methods` list — every HTTP verb is allowed.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -76,7 +76,7 @@ fn check_escapes(text: &str, byte_start: usize, ctx: &CheckCtx, diagnostics: &mu
                 "Use uppercase characters for the value of the escape \
                  sequence: `{matched}` -> `{uppercased}`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

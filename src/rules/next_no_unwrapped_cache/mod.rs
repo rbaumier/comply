@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "next-no-unwrapped-cache",
     description: "`unstable_cache` callbacks must handle errors — an unhandled throw poisons the cache.",
     remediation: "Wrap the inner work in try/catch and return a sentinel, or guard the call site with an error boundary.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/app/api-reference/functions/unstable_cache"),
     categories: &["nextjs", "reliability"],
 

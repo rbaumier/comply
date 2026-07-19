@@ -17,7 +17,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
         &node,
         super::META.id,
         "Pod spec is missing `dnsConfig.options`; set `ndots:2` to reduce DNS lookup latency.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

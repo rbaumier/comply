@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-unique-stage-names",
     description: "Each FROM stage alias must be unique.",
     remediation: "Rename the duplicate `AS <alias>` to a unique value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

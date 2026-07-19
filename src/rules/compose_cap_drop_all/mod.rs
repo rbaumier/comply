@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "compose-cap-drop-all",
     description: "Each service must declare `cap_drop: [ALL]` (and re-add specific caps via `cap_add:`).",
     remediation: "Add `cap_drop: [ALL]` under every service block.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker", "docker-compose"],
 

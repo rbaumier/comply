@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-unsafe-function-type",
     description: "The built-in `Function` type is unsafe — it accepts any callable and loses signature information.",
     remediation: "Replace `Function` with a precise function signature like `(arg: T) => U` or `() => void`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-unsafe-function-type/"),
     categories: &["typescript"],
 

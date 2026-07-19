@@ -28,7 +28,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                         &pair,
                         super::META.id,
                         format!("{field} must be >= 2 for availability (found {n})."),
-                        Severity::Warning,
+                        Severity::Error,
                     ));
                 }
         }
@@ -40,7 +40,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &kind_pair,
                 super::META.id,
                 format!("{field} not set; defaults to 1. Set it to >= 2."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

@@ -110,7 +110,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "`{name}` is a const array used with `.includes()` — consider using a `Set` with `.has()` for O(1) lookups."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

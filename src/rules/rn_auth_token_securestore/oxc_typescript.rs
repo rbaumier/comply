@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             message: format!(
                 "AsyncStorage is unencrypted — store `{key}` in expo-secure-store instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

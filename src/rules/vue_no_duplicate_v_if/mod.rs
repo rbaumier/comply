@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   Two separate `v-if` directives evaluate independently — if the \
                   condition changes between the two evaluations, both render or \
                   neither does.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "vue"],
 

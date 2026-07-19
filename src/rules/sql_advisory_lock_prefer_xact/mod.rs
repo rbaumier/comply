@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-advisory-lock-prefer-xact",
     description: "`pg_advisory_lock` holds until session ends, leaking if the connection is reused. Use `pg_advisory_xact_lock` instead.",
     remediation: "Replace `pg_advisory_lock(key)` with `pg_advisory_xact_lock(key)` — it auto-releases at transaction end.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
 

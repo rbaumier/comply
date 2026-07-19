@@ -57,7 +57,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             format!("`{name}()` operator missing surrounding spaces."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

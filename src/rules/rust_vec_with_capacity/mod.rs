@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-vec-with-capacity",
     description: "`Vec::new()` followed by a for-loop with `.push()` reallocates repeatedly. Use `Vec::with_capacity()` when the size is known.",
     remediation: "Replace `Vec::new()` with `Vec::with_capacity(source.len())` when iterating a collection of known length.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

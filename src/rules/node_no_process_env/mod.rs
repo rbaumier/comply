@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-no-process-env",
     description: "Direct use of `process.env` is discouraged.",
     remediation: "Centralize environment access in a config module instead of scattering `process.env` reads.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/eslint-community/eslint-plugin-n/blob/master/docs/rules/no-process-env.md",
     ),

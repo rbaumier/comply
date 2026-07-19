@@ -81,7 +81,7 @@ impl OxcCheck for Check {
                              `z.infer` returns the transformed *output* type. \
                              Use `z.input<typeof {name}>` for form values."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

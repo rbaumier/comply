@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-require-aspect-ratio-on-media",
     description: "`<img>` / `<video>` without `aspect-*` or width+height causes layout shift.",
     remediation: "Add a Tailwind `aspect-*` class (e.g. `aspect-video`) or both `width` and `height` attributes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "performance"],
 

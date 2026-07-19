@@ -76,7 +76,7 @@ crate::ast_check! { on ["if_expression", "while_expression"] => |node, source, c
             column: pos.column + 1,
             rule_id: "no-bitwise-in-boolean".into(),
             message: "Bitwise operator in boolean context — did you mean `&&`/`||`?".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

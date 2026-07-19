@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "node-handle-callback-err",
     description: "Callback error parameter is declared but never used.",
     remediation: "Handle the error parameter (log it, rethrow, or forward). If intentionally unused, prefix with `_`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["node"],
 

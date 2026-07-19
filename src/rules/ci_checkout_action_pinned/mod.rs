@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   supply-chain drift.",
     remediation: "Use `uses: actions/checkout@v4` (or a commit SHA). Never pin to @main, \
                   @master, or @v3 or lower.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ci-cd"],
 

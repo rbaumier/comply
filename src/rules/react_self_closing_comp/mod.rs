@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Components and HTML elements without children should use self-closing syntax.",
     remediation: "Replace `<Foo></Foo>` with `<Foo />` (and `<div></div>` with `<div />` \
                   in JSX). This reduces noise and makes it obvious the element has no content.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/self-closing-comp.md",
     ),

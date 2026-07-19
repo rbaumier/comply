@@ -64,7 +64,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Rename the catch parameter to `error` (or a suffixed \
                   variant like `parseError` when disambiguating nested \
                   catches). Use `_` if the parameter is unused.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/catch-error-name.md",
     ),

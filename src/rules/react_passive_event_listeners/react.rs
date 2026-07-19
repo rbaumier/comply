@@ -47,7 +47,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             &node,
             super::META.id,
             format!("Add `{{ passive: true }}` to `addEventListener('{event_name}', ...)` to avoid jank."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

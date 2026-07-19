@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-min-touch-target",
     description: "Interactive elements should be ~44x44px minimum (WCAG 2.5.5).",
     remediation: "Bump padding / height so the touch target reaches 44px (e.g. `h-11 px-4`, or `min-h-11 min-w-11` for icon buttons).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind", "a11y"],
 

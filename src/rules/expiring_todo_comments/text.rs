@@ -131,7 +131,7 @@ impl TextCheck for Check {
                         "{marker} has expired (date {date_str} is past due) — \
                          resolve it or update the expiration date."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

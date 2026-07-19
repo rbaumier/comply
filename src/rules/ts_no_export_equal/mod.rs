@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-export-equal",
     description: "CommonJS-style `export = ...` — prefer ES module exports.",
     remediation: "Use ES module exports: `export default` or named exports.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

@@ -61,7 +61,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`new Pool()` must pass a config object with `idleTimeoutMillis` and `connectionTimeoutMillis`.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -80,7 +80,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`new Pool()` must set both `idleTimeoutMillis` and `connectionTimeoutMillis` so stuck connections don't leak and new ones fail fast.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

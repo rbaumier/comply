@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                  unsupervised. Use a `for...of` loop with `await`, or \
                  `Promise.all(arr.map(async ...))` for parallel awaited work."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

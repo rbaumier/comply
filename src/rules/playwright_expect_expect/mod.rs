@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "playwright-expect-expect",
     description: "Test has no assertions — every test should verify behaviour.",
     remediation: "Add at least one `expect()` call inside the test body.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/expect-expect.md",
     ),

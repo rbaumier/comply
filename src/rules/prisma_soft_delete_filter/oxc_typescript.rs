@@ -387,7 +387,7 @@ impl OxcCheck for Check {
                 "`{method}` without a `{soft_delete_field}` filter — soft-deleted rows will \
                  leak into the result. Add `where: {{ {soft_delete_field}: null, … }}`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

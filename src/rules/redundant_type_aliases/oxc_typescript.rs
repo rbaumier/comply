@@ -106,7 +106,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Type alias is just renaming \u{2014} use the original type directly or add structure.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

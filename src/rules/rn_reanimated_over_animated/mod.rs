@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-reanimated-over-animated",
     description: "Legacy `Animated` from react-native runs on the JS thread and drops frames.",
     remediation: "Use `react-native-reanimated` primitives (`useSharedValue`, `withTiming`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

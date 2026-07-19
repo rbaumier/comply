@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `{expr && <X />}` with `{expr ? <X /> : null}` \
                   or `{Boolean(expr) && <X />}`. `&&` lets falsy values \
                   like `0` and `''` leak into the DOM.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "react"],
 

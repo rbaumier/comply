@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-vendor-prefix-at-rule",
     description: "Vendor-prefixed CSS at-rules are unnecessary with modern autoprefixer tooling.",
     remediation: "Remove the vendor prefix (e.g. `@-webkit-keyframes` → `@keyframes`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

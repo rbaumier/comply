@@ -38,7 +38,7 @@ impl AstCheck for Check {
             &node,
             super::META.id,
             "`NOW()`/`CURRENT_TIMESTAMP` freezes at transaction start — use `clock_timestamp()` inside BEGIN blocks.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

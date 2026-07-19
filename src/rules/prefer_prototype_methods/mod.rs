@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer borrowing methods from the prototype instead of a literal instance.",
     remediation: "Replace `{}.hasOwnProperty.call(…)` with `Object.prototype.hasOwnProperty.call(…)`, \
                   `[].slice.call(…)` with `Array.prototype.slice.call(…)`, etc.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

@@ -121,7 +121,7 @@ impl TextCheck for Check {
                     message: "`dehydrate(...)` runs before an `await prefetchQuery(...)` — \
                               pending queries serialize empty."
                         .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 }
             })

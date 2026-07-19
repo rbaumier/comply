@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/require-template",
     description: "Generic functions must document each type parameter with @template.",
     remediation: "Add `@template T` (or `@template {Constraint} T`) for each generic type parameter.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/require-template.md",
     ),

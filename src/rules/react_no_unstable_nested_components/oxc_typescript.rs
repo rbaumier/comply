@@ -110,7 +110,7 @@ impl OxcCheck for Check {
                                       the entire subtree's DOM and state. Move it outside \
                                       the parent component."
                                 .into(),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                         return;

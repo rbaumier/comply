@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Too many assertions in a single test — split into focused tests.",
     remediation: "Keep each test to ≤ 5 `expect()` calls. Extract additional \
                   assertions into separate test cases.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/playwright-community/eslint-plugin-playwright/blob/main/docs/rules/max-expects.md",
     ),

@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-add-for-archive-extract",
     description: "ADD should not be used to fetch URLs; use RUN curl/wget + tar.",
     remediation: "Replace `ADD <url>` with a `RUN curl ... && tar ...` pipeline that cleans up afterwards.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

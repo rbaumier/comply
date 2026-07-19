@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "consistent-date-clone",
     description: "Prefer `new Date(date)` over `new Date(date.getTime())` for cloning.",
     remediation: "Remove the unnecessary `.getTime()` / `.valueOf()` call — `new Date(date)` already clones correctly.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

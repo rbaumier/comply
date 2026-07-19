@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-useless-string-raw",
     description: "Disallow unnecessary `String.raw` on a template literal with no backslash escape.",
     remediation: "Drop the `String.raw` tag and use the plain template literal.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["complexity"],
 

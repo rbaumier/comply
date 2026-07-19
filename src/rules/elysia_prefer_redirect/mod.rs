@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-prefer-redirect",
     description: "Manual redirect via `set.status = 301/302` and `set.headers.location` — use `redirect()` for typed redirects.",
     remediation: "Return `redirect(url, code)` from the handler instead of mutating `set.status` and `set.headers.location`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "elysia"],
 

@@ -40,7 +40,7 @@ impl TextCheck for Check {
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: format!("Obsolete HTML tag `<{tag_lower}>`. Use CSS instead."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -74,7 +74,7 @@ impl TextCheck for Check {
                         message: format!(
                             "Obsolete HTML attribute `{name_lower}` on `<{tag_lower}>`. Use CSS instead."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

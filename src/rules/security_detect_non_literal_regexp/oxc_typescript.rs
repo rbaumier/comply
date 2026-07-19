@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                       ReDoS / regex injection vector. Escape the input or use a \
                       static literal."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

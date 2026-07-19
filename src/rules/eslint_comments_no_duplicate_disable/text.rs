@@ -68,7 +68,7 @@ impl TextCheck for Check {
                                 "Rule `{}` listed multiple times — remove the duplicate.",
                                 duplicates[0]
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

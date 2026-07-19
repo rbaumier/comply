@@ -64,7 +64,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Global-scoped plugin exposes typed context (`state`/`decorate`/`model`) — types leak into every consumer. Use `as: 'scoped'`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

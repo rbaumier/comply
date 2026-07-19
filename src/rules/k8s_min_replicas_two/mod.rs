@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-min-replicas-two",
     description: "Deployments must have replicas >= 2 (or HPA minReplicas >= 2) for availability.",
     remediation: "Set `spec.replicas: 2` or higher, or use a HorizontalPodAutoscaler with minReplicas >= 2.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

@@ -125,7 +125,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Docstring opens with `{first}` \u{2014} start with intent, not implementation (e.g. `Return\u{2026}`, `Ensure\u{2026}`)."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

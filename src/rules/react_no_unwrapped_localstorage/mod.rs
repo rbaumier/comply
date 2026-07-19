@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   exhaustion, and server-side rendering. Calling it unwrapped crashes the app.",
     remediation: "Wrap `localStorage` access in `try { ... } catch (e) { ... }` and \
                   provide a safe fallback.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

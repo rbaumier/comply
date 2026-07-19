@@ -70,7 +70,7 @@ impl OxcCheck for Check {
                 message: "The type of this variable may evolve implicitly to the `any` type. \
                           Add an explicit type or initialization to avoid implicit type evolution."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

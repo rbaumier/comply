@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-no-server-assertion",
     description: "`app.server!` non-null assertion is unsafe — `server` is undefined until `.listen()` resolves.",
     remediation: "Read `app.server` only inside the `.listen()` callback or after awaiting `listen()`. Avoid `!` non-null assertions on `server`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

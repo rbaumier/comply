@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer `String#trimStart()` / `String#trimEnd()` over the deprecated `trimLeft()` / `trimRight()`.",
     remediation: "Replace `.trimLeft()` with `.trimStart()` and `.trimRight()` with `.trimEnd()`. \
                   The `trimLeft`/`trimRight` aliases are deprecated in favor of the spec names.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

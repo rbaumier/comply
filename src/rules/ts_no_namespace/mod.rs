@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-namespace",
     description: "TypeScript `namespace` is a legacy construct — use ES modules instead.",
     remediation: "Replace the `namespace` with ES module exports (`export` / `import`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

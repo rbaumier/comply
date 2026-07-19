@@ -89,7 +89,7 @@ crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
                          `React.cache(...)` so multiple Server Components in the \
                          same render share one request."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }
@@ -134,7 +134,7 @@ crate::ast_check! { on ["export_statement"] => |node, source, ctx, diagnostics|
                              `React.cache(...)` so multiple Server Components in the \
                              same render share one request."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

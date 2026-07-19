@@ -204,7 +204,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Import from barrel file `{module}` — import directly from the source module instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((
                 import.span.start as usize,
                 (import.span.end - import.span.start) as usize,

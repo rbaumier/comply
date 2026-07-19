@@ -90,7 +90,7 @@ impl OxcCheck for Check {
                         "`{name}` is declared without initialization — \
                          assign a value at declaration."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

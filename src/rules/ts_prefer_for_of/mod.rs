@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-for-of",
     description: "A `for` loop whose index is only used for array access can be a simpler `for-of`.",
     remediation: "Replace the `for` loop with `for (const item of array)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/prefer-for-of/"),
     categories: &["typescript"],
 

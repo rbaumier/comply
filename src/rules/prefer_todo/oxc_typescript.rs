@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                 "Empty `{name}` body — use `{name}.todo('...')` to mark this as a \
                  placeholder so the runner reports it as pending.",
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

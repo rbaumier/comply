@@ -22,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-chain-state-updates",
     description: "A single `useEffect` callback triggers multiple setState calls.",
     remediation: "Combine the updates into one reducer / object, or move the derivation into render.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

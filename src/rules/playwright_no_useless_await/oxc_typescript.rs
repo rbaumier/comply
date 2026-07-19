@@ -155,7 +155,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Unnecessary await expression. This method does not return a Promise.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

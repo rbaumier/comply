@@ -29,7 +29,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             &anchor,
             super::META.id,
             "Resource must include app.kubernetes.io/name and app.kubernetes.io/instance labels.".into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

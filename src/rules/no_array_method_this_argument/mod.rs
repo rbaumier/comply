@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-array-method-this-argument",
     description: "Do not use the `thisArg` parameter in array methods.",
     remediation: "Remove the second argument from the array method call. Use `.bind()` or an arrow function to bind context instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

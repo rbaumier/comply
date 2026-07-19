@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "tailwind-no-manual-dark-variants",
     description: "Forbid manual `dark:` color variants paired with raw palette colors.",
     remediation: "Replace `bg-white dark:bg-zinc-900` with a semantic token like `bg-background` that already resolves per theme.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tailwind"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "sql-alter-column-type-unsafe",
     description: "`ALTER COLUMN ... TYPE` without a `USING` clause may force a full table rewrite.",
     remediation: "Add a `USING` clause that lets PostgreSQL skip the rewrite when the cast is binary-compatible, or follow the expand/contract pattern: add a new column, backfill, swap, drop the old column.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql", "migrations"],
 

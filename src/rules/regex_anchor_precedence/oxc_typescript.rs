@@ -116,7 +116,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Anchor in alternation may not bind as expected \u{2014} use `/^(a|b)$/` instead of `/^a|b$/`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

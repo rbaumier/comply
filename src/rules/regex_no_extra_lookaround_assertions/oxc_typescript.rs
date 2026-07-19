@@ -84,7 +84,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Useless nested lookaround assertion \u{2014} it can be inlined.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

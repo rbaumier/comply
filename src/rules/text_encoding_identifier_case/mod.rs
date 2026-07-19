@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "text-encoding-identifier-case",
     description: "Enforce consistent case for text encoding identifiers (`utf-8`, `ascii`).",
     remediation: "Use lowercase: `'utf-8'` instead of `'UTF-8'`, `'ascii'` instead of `'ASCII'`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

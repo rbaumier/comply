@@ -65,7 +65,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`formState.{property}` bypasses React Hook Form proxy tracking — destructure it: `const {{ {property} }} = formState;`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

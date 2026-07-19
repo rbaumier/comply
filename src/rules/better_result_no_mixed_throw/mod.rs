@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-no-mixed-throw",
     description: "A function returning Result<...> must not contain throw (except inside Result.try).",
     remediation: "Return Result.err(...) instead of throwing inside Result-returning functions.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

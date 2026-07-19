@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-identical-title",
     description: "Duplicate test or describe titles within the same scope hide which assertion actually failed.",
     remediation: "Use unique test titles.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jest-community/eslint-plugin-jest/blob/main/docs/rules/no-identical-title.md",
     ),

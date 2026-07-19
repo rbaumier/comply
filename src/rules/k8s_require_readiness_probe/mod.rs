@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-require-readiness-probe",
     description: "Each container must define a readinessProbe.",
     remediation: "Add `readinessProbe` (httpGet / tcpSocket / exec) to each container spec.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

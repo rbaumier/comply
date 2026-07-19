@@ -1642,7 +1642,7 @@ impl OxcCheck for Check {
                              what the value IS (`parsedOrder`, `userProfile`, \
                              `paymentReceipt`)."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;
@@ -1775,7 +1775,7 @@ impl OxcCheck for Check {
                      represent? (`processOrder` → `fulfillOrder`, `updatedData` → \
                      `revisedInvoice`)."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -154,7 +154,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Replace manual `{setter}(true/false)` loading state with `useTransition`."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

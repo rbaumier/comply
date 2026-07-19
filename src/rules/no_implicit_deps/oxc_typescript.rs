@@ -294,7 +294,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Bare import `{spec}` is not listed in package.json (checked root `{root}`)."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

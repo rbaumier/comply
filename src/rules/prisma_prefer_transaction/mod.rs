@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prisma-prefer-transaction",
     description: "Two or more Prisma write calls in the same function should run in `$transaction`.",
     remediation: "Wrap the writes in `prisma.$transaction([...])` so they commit/rollback atomically.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["prisma"],
 

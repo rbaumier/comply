@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-plugin-functional-callback",
     description: "Functional plugins `(app: Elysia) => app.get(...)` lose type inference — prefer `new Elysia()` instances.",
     remediation: "Export `new Elysia({ name }).get(...)` and `.use(plugin)` instead of an arrow that mutates the parent app.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "elysia"],
 

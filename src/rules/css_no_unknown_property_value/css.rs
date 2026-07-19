@@ -69,7 +69,7 @@ crate::ast_check! { on ["declaration"] => |node, source, ctx, diagnostics|
             value,
             super::META.id,
             format!("Unknown value `{val}` for `{prop_name}`."),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

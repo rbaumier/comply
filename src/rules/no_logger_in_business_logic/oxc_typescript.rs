@@ -126,7 +126,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`{pattern}` in business logic — use a `withLogging()` wrapper or domain events instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

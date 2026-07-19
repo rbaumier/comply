@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`useEffect` awaits then calls `setState` without a cancellation flag — risks updating an unmounted component.",
     remediation: "Track a `cancelled` flag inside the effect and skip the setter when set; \
                   return a cleanup that flips it. Alternative: use `AbortController`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

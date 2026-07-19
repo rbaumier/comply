@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`useSession({ cookie })` must set `sameSite` to `'lax'` or `'strict'`.",
     remediation: "Add `sameSite: 'lax'` (default) or `sameSite: 'strict'` to the \
                   cookie config to mitigate CSRF.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["tanstack-start"],
 

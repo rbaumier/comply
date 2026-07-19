@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Bounce/elastic easing in inline styles — use `ease-out` or a smooth deceleration curve.",
     remediation: "Replace bounce/elastic/wobble easing with `ease-out` or \
                   `cubic-bezier(0.16, 1, 0.3, 1)` for a modern feel.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

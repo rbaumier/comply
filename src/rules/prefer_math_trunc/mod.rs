@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Prefer `Math.trunc(x)` over bitwise hacks like `x | 0`, `~~x`, or `x >> 0`.",
     remediation: "Replace bitwise truncation with `Math.trunc(x)`. Bitwise operators silently \
                   coerce to 32-bit integers and obscure intent.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

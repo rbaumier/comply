@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
                   `z.string().url()` with `z.url()`, `z.number().int()` with \
                   `z.int()`, and similar chains. Top-level helpers are \
                   tree-shakeable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "zod"],
 

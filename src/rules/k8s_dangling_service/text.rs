@@ -51,7 +51,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             format!(
                 "Service selector does not match any workload's pod template labels in namespace {namespace}; the Service routes to nothing."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

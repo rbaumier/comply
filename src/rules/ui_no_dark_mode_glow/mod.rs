@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Colored box-shadow glow on a dark background — prefer subtle neutral shadows.",
     remediation: "Use a neutral shadow (e.g. `rgba(0,0,0,0.3)`) or a very \
                   subtle tinted shadow instead of a bright glow effect.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

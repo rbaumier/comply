@@ -100,7 +100,7 @@ impl OxcCheck for Check {
                       the operand is a property access (which cannot throw \
                       ReferenceError)."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

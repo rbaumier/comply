@@ -45,7 +45,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "better-result-no-promise-catch".into(),
             message: "Replace .catch() on Promise with Result.tryPromise({ try, catch }).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

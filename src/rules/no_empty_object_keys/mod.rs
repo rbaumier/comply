@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-empty-object-keys",
     description: "Object key is empty.",
     remediation: "Remove this property or give it a meaningful key name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness"],
 

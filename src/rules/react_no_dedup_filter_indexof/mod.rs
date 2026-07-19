@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "react-no-dedup-filter-indexof",
     description: "Deduping via `filter((v, i, a) => a.indexOf(v) === i)` is O(n²).",
     remediation: "Use `[...new Set(arr)]` — O(n).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react", "code-quality"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "xstate-event-names",
     description: "XState event names must be SCREAMING_SNAKE_CASE.",
     remediation: "Rename the event key to uppercase letters, digits, and underscores (e.g. `NEXT`, `FETCH_DATA`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://stately.ai/docs/events"),
     categories: &["xstate"],
 

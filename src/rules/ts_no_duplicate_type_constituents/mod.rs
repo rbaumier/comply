@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-duplicate-type-constituents",
     description: "Duplicate members in a union or intersection are dead — TS resolves them to the same type but readers and refactors can be confused.",
     remediation: "Remove the duplicate type member. Use an alias if the repetition signals a missing concept.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-duplicate-type-constituents/"),
     categories: &["typescript"],
 

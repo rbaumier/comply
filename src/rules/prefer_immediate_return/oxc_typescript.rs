@@ -85,7 +85,7 @@ impl OxcCheck for Check {
                     "Variable `{var_name}` is assigned and immediately \
                      returned — return the expression directly."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -56,7 +56,7 @@ impl OxcCheck for Check {
             message: "Vue `nextTick` was called with a callback — await its returned Promise \
                       instead (`await nextTick()`)."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

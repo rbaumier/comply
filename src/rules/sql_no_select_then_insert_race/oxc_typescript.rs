@@ -110,7 +110,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "SELECT then INSERT on `{sel_table}` is a TOCTOU race — use `INSERT ... ON CONFLICT`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 break;

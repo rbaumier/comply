@@ -97,7 +97,7 @@ impl OxcCheck for Check {
             message: "`JSON.parse` can throw on invalid input — wrap it in \
                       try/catch or use a safe parser (Zod, schema validator)."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

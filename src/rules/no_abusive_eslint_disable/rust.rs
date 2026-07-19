@@ -14,7 +14,7 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
         &node,
         super::META.id,
         "Specify the rules you want to disable.".into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

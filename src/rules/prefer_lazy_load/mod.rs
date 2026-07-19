@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-lazy-load",
     description: "`<img>` and `<iframe>` should set `loading=\"lazy\"` to defer off-screen loads.",
     remediation: "Add `loading=\"lazy\"` (or `loading=\"eager\"` for above-the-fold assets).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["performance"],
 

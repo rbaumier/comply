@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                 "Avoid {form} import of the whole `{module}` library — import the specific function \
                  (e.g. `{module}/debounce` or a named import) to keep the bundle small."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((
                 import.span.start as usize,
                 (import.span.end - import.span.start) as usize,

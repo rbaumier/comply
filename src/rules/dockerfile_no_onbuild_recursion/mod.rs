@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-no-onbuild-recursion",
     description: "ONBUILD cannot wrap FROM, ONBUILD, or MAINTAINER instructions.",
     remediation: "Remove the inner FROM/ONBUILD/MAINTAINER from the ONBUILD wrapper.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

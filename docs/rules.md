@@ -154,2736 +154,2736 @@
 
 ## accessibility
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `a11y-alt-text` | ❌ | `<img>`, `<area>`, and `<input type="image">` must have an `alt` attribute. | Add an `alt` attribute describing the image content, or `alt=""` for decorative images. |
-| `a11y-anchor-ambiguous-text` | ⚠️ | Flag `<a>` elements with ambiguous text like "click here" or "read more". | Use descriptive link text that indicates the purpose of the link, e.g., "View documentation" instead of "click here". |
-| `a11y-anchor-has-content` | ❌ | Anchors must have text content for screen readers. | Add text content inside the `<a>` tag, or use `aria-label` for accessible labeling. |
-| `a11y-anchor-is-valid` | ❌ | Anchors must have a valid `href` — not `"#"`, `"javascript:"`, or missing. | Use a real URL for `href`, or use a `<button>` if the element triggers an action. |
-| `a11y-aria-activedescendant-has-tabindex` | ❌ | Elements with `aria-activedescendant` must be tabbable. | Add `tabIndex={0}` (or another non-negative value) to the element that uses `aria-activedescendant`. |
-| `a11y-aria-props` | ❌ | Flag invalid `aria-*` attributes in JSX. | Use only valid WAI-ARIA attributes. Remove or replace the invalid `aria-` attribute with a valid one from the WAI-ARIA specification. |
-| `a11y-aria-role` | ❌ | Flag invalid `role` attribute values in JSX. | Use only valid WAI-ARIA role values. See the WAI-ARIA specification for the full list of valid roles. |
-| `a11y-aria-unsupported-elements` | ❌ | ARIA attributes and `role` must not be used on elements that do not support them. | Remove `aria-*` and `role` attributes from `<meta>`, `<html>`, `<script>`, `<style>`, `<head>`, `<title>`, `<link>`, and `<base>` elements. |
-| `a11y-autocomplete-valid` | ❌ | The `autoComplete` attribute must use a valid value. | Use a valid autocomplete token such as `name`, `email`, `username`, `new-password`, etc. See the HTML spec for the full list. |
-| `a11y-button-without-accessible-name` | ❌ | Icon-only `<button>` without `aria-label` is unannounceable to screen readers. | Add `aria-label`, `aria-labelledby`, or visible text content. |
-| `a11y-click-events-have-key-events` | ⚠️ | Elements with `onClick` must also have a keyboard event handler. | Add `onKeyDown`, `onKeyUp`, or `onKeyPress` alongside `onClick` for keyboard accessibility. |
-| `a11y-control-has-associated-label` | ⚠️ | Interactive elements must have an accessible label. | Add text content, `aria-label`, or `aria-labelledby` to `<button>`, `<input>`, `<select>`, and `<textarea>` elements. `<input type="hidden">` is exempt. |
-| `a11y-dialog-missing-aria-labelledby` | ❌ | Dialog elements without `aria-label` / `aria-labelledby` are unannounced. | Add `aria-label` or point `aria-labelledby` at the dialog title element. |
-| `a11y-heading-has-content` | ❌ | Headings (`h1`–`h6`) must have text content. | Add text content inside the heading tag so screen readers can announce it. |
-| `a11y-html-has-lang` | ❌ | The `<html>` element must have a `lang` attribute. | Add `lang="en"` (or the appropriate language code) to the `<html>` element. |
-| `a11y-iframe-has-title` | ❌ | `<iframe>` elements must have a `title` attribute. | Add a `title` attribute describing the iframe content for screen reader users. |
-| `a11y-img-redundant-alt` | ⚠️ | `alt` text should not contain redundant words like "image", "picture", or "photo". | Describe the image content instead of stating that it is an image. Remove words like "image", "picture", or "photo" from the `alt` attribute. |
-| `a11y-interactive-supports-focus` | ⚠️ | Elements with interactive handlers and an interactive role must be focusable. | Add `tabIndex={0}` to elements that have `onClick`/`onKeyDown` and an interactive `role`. |
-| `a11y-label-has-associated-control` | ⚠️ | `<label>` must have an associated control via `htmlFor` or by wrapping an input. | Add `htmlFor="input-id"` to the `<label>` or wrap an `<input>`, `<select>`, or `<textarea>` inside it. |
-| `a11y-media-has-caption` | ⚠️ | Flag `<video>` and `<audio>` elements without `<track kind="captions">` children. | Add a `<track kind="captions" src="..." />` element inside `<video>` or `<audio>` to provide captions. |
-| `a11y-mouse-events-have-key-events` | ⚠️ | Flag `onMouseOver` without `onFocus` and `onMouseOut` without `onBlur`. | Add `onFocus` alongside `onMouseOver` and `onBlur` alongside `onMouseOut` to ensure keyboard accessibility. |
-| `a11y-no-access-key` | ⚠️ | Avoid using `accessKey` — it conflicts with screen reader keyboard shortcuts. | Remove the `accessKey` attribute. Provide alternative navigation methods instead. |
-| `a11y-no-aria-hidden-on-focusable` | ❌ | Flag `aria-hidden="true"` on focusable elements. | Remove `aria-hidden` from focusable elements or remove the focusable behavior. Elements hidden from assistive technology should not be focusable. |
-| `a11y-no-autofocus` | ⚠️ | Avoid using `autoFocus` — it is disorienting for screen reader users. | Remove `autoFocus` and let the user navigate to the element naturally. |
-| `a11y-no-distracting-elements` | ❌ | Flag `<marquee>` and `<blink>` elements which are distracting and deprecated. | Remove `<marquee>` and `<blink>` elements. Use CSS animations if motion is needed, with `prefers-reduced-motion` support. |
-| `a11y-no-interactive-element-to-noninteractive-role` | ⚠️ | Interactive elements must not be assigned non-interactive ARIA roles. | Remove the non-interactive `role` or use a non-interactive element instead of `<button>`, `<a>`, `<input>`, `<select>`, or `<textarea>`. |
-| `a11y-no-noninteractive-element-interactions` | ⚠️ | Flag non-interactive elements with event handlers but no `role` attribute. | Add a `role` attribute to indicate the element's interactive purpose, or use a native interactive element like `<button>`. |
-| `a11y-no-noninteractive-element-to-interactive-role` | ⚠️ | Non-interactive elements must not be assigned interactive ARIA roles. | Use a native interactive element (`<button>`, `<a>`) instead of adding an interactive `role` to a `<div>`, `<span>`, etc. |
-| `a11y-no-noninteractive-tabindex` | ⚠️ | Flag non-interactive elements with `tabIndex` (other than -1). | Remove `tabIndex` from non-interactive elements or use a native interactive element. `tabIndex={-1}` is acceptable for programmatic focus. |
-| `a11y-no-redundant-roles` | ⚠️ | Flag elements with explicit roles matching their implicit ARIA role. | Remove the redundant `role` attribute. The element already has this role implicitly. |
-| `a11y-no-static-element-interactions` | ⚠️ | Flag `<div>` and `<span>` with `onClick` but no `role` attribute. | Add a `role` attribute or use a native interactive element like `<button>` instead. |
-| `a11y-prefer-tag-over-role` | ⚠️ | Prefer semantic HTML elements over `role` attributes on generic elements. | Use the native semantic element instead of adding a `role` to a `<div>` or `<span>`. |
-| `a11y-role-has-required-aria-props` | ❌ | Elements with ARIA roles must have all required ARIA properties. | Add the missing ARIA properties: `checkbox`/`radio` need `aria-checked`, `slider` needs `aria-valuenow`/`aria-valuemin`/`aria-valuemax`, `combobox` needs `aria-expanded`, `scrollbar` needs `aria-controls`/`aria-valuenow`. |
-| `a11y-scope` | ❌ | The `scope` attribute should only be used on `<th>` elements. | Remove `scope` from non-`<th>` elements, or change the element to `<th>`. |
-| `a11y-tabindex-no-positive` | ❌ | `tabIndex` must not be positive — only `0` or `-1` are valid. | Use `tabIndex={0}` to make an element focusable in document order, or `tabIndex={-1}` for programmatic focus only. Positive values break natural tab order. |
-| `html-no-abstract-roles` | ⚠️ | Abstract WAI-ARIA roles must not be used on DOM elements. | Replace the abstract role with a concrete role from the WAI-ARIA specification. |
-| `html-no-aria-hidden-body` | ⚠️ | `aria-hidden="true"` must not be applied to the `<body>` element. | Remove `aria-hidden` from `<body>`; scope the attribute to the specific subtree you want to hide. |
-| `html-no-nested-interactive` | ⚠️ | Interactive elements must not be nested inside other interactive elements. | Move the nested interactive element outside, or restructure the component. |
-| `html-no-positive-tabindex` | ⚠️ | HTML `tabindex` attribute must not be positive — it breaks natural tab order. | Use `tabindex="0"` (or `-1`) and rely on document order for focus sequence. |
-| `html-no-skip-heading-levels` | ⚠️ | Heading levels should not skip (e.g., h1 to h3 without h2). | Use sequential heading levels for proper document outline. |
-| `html-require-button-type` | ⚠️ | `<button>` must have an explicit `type` attribute. | Add `type="button"`, `type="submit"`, or `type="reset"` to the `<button>` element. |
-| `html-require-img-alt` | ⚠️ | `<img>` elements must declare an `alt` attribute. | Add `alt="<description>"` for meaningful images or `alt=""` for decorative ones. |
-| `html-require-input-label` | ⚠️ | Form inputs must have accessible labels. | Add a <label> element with htmlFor, wrap in label, or use aria-label/aria-labelledby. |
-| `no-svg-without-title` | ❌ | `<svg>` elements must have an accessible name. | Add a non-empty `<title>` as the first child of the `<svg>`, or give it an accessible name via `aria-label`/`aria-labelledby`. If the SVG is purely decorative, mark it `aria-hidden="true"` or give it a non-image role (e.g. `role="presentation"`). |
-| `ui-no-disabled-zoom` | ⚠️ | Viewport meta disables pinch-to-zoom — accessibility violation. | Remove `user-scalable=no` and `maximum-scale=1` from the viewport meta tag. Users with low vision rely on zoom. |
-| `ui-no-gray-on-colored-background` | ⚠️ | Gray text on colored background — low contrast, hard to read. | Use a lighter or white text color on saturated backgrounds for adequate contrast. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `a11y-alt-text` | `<img>`, `<area>`, and `<input type="image">` must have an `alt` attribute. | Add an `alt` attribute describing the image content, or `alt=""` for decorative images. |
+| `a11y-anchor-ambiguous-text` | Flag `<a>` elements with ambiguous text like "click here" or "read more". | Use descriptive link text that indicates the purpose of the link, e.g., "View documentation" instead of "click here". |
+| `a11y-anchor-has-content` | Anchors must have text content for screen readers. | Add text content inside the `<a>` tag, or use `aria-label` for accessible labeling. |
+| `a11y-anchor-is-valid` | Anchors must have a valid `href` — not `"#"`, `"javascript:"`, or missing. | Use a real URL for `href`, or use a `<button>` if the element triggers an action. |
+| `a11y-aria-activedescendant-has-tabindex` | Elements with `aria-activedescendant` must be tabbable. | Add `tabIndex={0}` (or another non-negative value) to the element that uses `aria-activedescendant`. |
+| `a11y-aria-props` | Flag invalid `aria-*` attributes in JSX. | Use only valid WAI-ARIA attributes. Remove or replace the invalid `aria-` attribute with a valid one from the WAI-ARIA specification. |
+| `a11y-aria-role` | Flag invalid `role` attribute values in JSX. | Use only valid WAI-ARIA role values. See the WAI-ARIA specification for the full list of valid roles. |
+| `a11y-aria-unsupported-elements` | ARIA attributes and `role` must not be used on elements that do not support them. | Remove `aria-*` and `role` attributes from `<meta>`, `<html>`, `<script>`, `<style>`, `<head>`, `<title>`, `<link>`, and `<base>` elements. |
+| `a11y-autocomplete-valid` | The `autoComplete` attribute must use a valid value. | Use a valid autocomplete token such as `name`, `email`, `username`, `new-password`, etc. See the HTML spec for the full list. |
+| `a11y-button-without-accessible-name` | Icon-only `<button>` without `aria-label` is unannounceable to screen readers. | Add `aria-label`, `aria-labelledby`, or visible text content. |
+| `a11y-click-events-have-key-events` | Elements with `onClick` must also have a keyboard event handler. | Add `onKeyDown`, `onKeyUp`, or `onKeyPress` alongside `onClick` for keyboard accessibility. |
+| `a11y-control-has-associated-label` | Interactive elements must have an accessible label. | Add text content, `aria-label`, or `aria-labelledby` to `<button>`, `<input>`, `<select>`, and `<textarea>` elements. `<input type="hidden">` is exempt. |
+| `a11y-dialog-missing-aria-labelledby` | Dialog elements without `aria-label` / `aria-labelledby` are unannounced. | Add `aria-label` or point `aria-labelledby` at the dialog title element. |
+| `a11y-heading-has-content` | Headings (`h1`–`h6`) must have text content. | Add text content inside the heading tag so screen readers can announce it. |
+| `a11y-html-has-lang` | The `<html>` element must have a `lang` attribute. | Add `lang="en"` (or the appropriate language code) to the `<html>` element. |
+| `a11y-iframe-has-title` | `<iframe>` elements must have a `title` attribute. | Add a `title` attribute describing the iframe content for screen reader users. |
+| `a11y-img-redundant-alt` | `alt` text should not contain redundant words like "image", "picture", or "photo". | Describe the image content instead of stating that it is an image. Remove words like "image", "picture", or "photo" from the `alt` attribute. |
+| `a11y-interactive-supports-focus` | Elements with interactive handlers and an interactive role must be focusable. | Add `tabIndex={0}` to elements that have `onClick`/`onKeyDown` and an interactive `role`. |
+| `a11y-label-has-associated-control` | `<label>` must have an associated control via `htmlFor` or by wrapping an input. | Add `htmlFor="input-id"` to the `<label>` or wrap an `<input>`, `<select>`, or `<textarea>` inside it. |
+| `a11y-media-has-caption` | Flag `<video>` and `<audio>` elements without `<track kind="captions">` children. | Add a `<track kind="captions" src="..." />` element inside `<video>` or `<audio>` to provide captions. |
+| `a11y-mouse-events-have-key-events` | Flag `onMouseOver` without `onFocus` and `onMouseOut` without `onBlur`. | Add `onFocus` alongside `onMouseOver` and `onBlur` alongside `onMouseOut` to ensure keyboard accessibility. |
+| `a11y-no-access-key` | Avoid using `accessKey` — it conflicts with screen reader keyboard shortcuts. | Remove the `accessKey` attribute. Provide alternative navigation methods instead. |
+| `a11y-no-aria-hidden-on-focusable` | Flag `aria-hidden="true"` on focusable elements. | Remove `aria-hidden` from focusable elements or remove the focusable behavior. Elements hidden from assistive technology should not be focusable. |
+| `a11y-no-autofocus` | Avoid using `autoFocus` — it is disorienting for screen reader users. | Remove `autoFocus` and let the user navigate to the element naturally. |
+| `a11y-no-distracting-elements` | Flag `<marquee>` and `<blink>` elements which are distracting and deprecated. | Remove `<marquee>` and `<blink>` elements. Use CSS animations if motion is needed, with `prefers-reduced-motion` support. |
+| `a11y-no-interactive-element-to-noninteractive-role` | Interactive elements must not be assigned non-interactive ARIA roles. | Remove the non-interactive `role` or use a non-interactive element instead of `<button>`, `<a>`, `<input>`, `<select>`, or `<textarea>`. |
+| `a11y-no-noninteractive-element-interactions` | Flag non-interactive elements with event handlers but no `role` attribute. | Add a `role` attribute to indicate the element's interactive purpose, or use a native interactive element like `<button>`. |
+| `a11y-no-noninteractive-element-to-interactive-role` | Non-interactive elements must not be assigned interactive ARIA roles. | Use a native interactive element (`<button>`, `<a>`) instead of adding an interactive `role` to a `<div>`, `<span>`, etc. |
+| `a11y-no-noninteractive-tabindex` | Flag non-interactive elements with `tabIndex` (other than -1). | Remove `tabIndex` from non-interactive elements or use a native interactive element. `tabIndex={-1}` is acceptable for programmatic focus. |
+| `a11y-no-redundant-roles` | Flag elements with explicit roles matching their implicit ARIA role. | Remove the redundant `role` attribute. The element already has this role implicitly. |
+| `a11y-no-static-element-interactions` | Flag `<div>` and `<span>` with `onClick` but no `role` attribute. | Add a `role` attribute or use a native interactive element like `<button>` instead. |
+| `a11y-prefer-tag-over-role` | Prefer semantic HTML elements over `role` attributes on generic elements. | Use the native semantic element instead of adding a `role` to a `<div>` or `<span>`. |
+| `a11y-role-has-required-aria-props` | Elements with ARIA roles must have all required ARIA properties. | Add the missing ARIA properties: `checkbox`/`radio` need `aria-checked`, `slider` needs `aria-valuenow`/`aria-valuemin`/`aria-valuemax`, `combobox` needs `aria-expanded`, `scrollbar` needs `aria-controls`/`aria-valuenow`. |
+| `a11y-scope` | The `scope` attribute should only be used on `<th>` elements. | Remove `scope` from non-`<th>` elements, or change the element to `<th>`. |
+| `a11y-tabindex-no-positive` | `tabIndex` must not be positive — only `0` or `-1` are valid. | Use `tabIndex={0}` to make an element focusable in document order, or `tabIndex={-1}` for programmatic focus only. Positive values break natural tab order. |
+| `html-no-abstract-roles` | Abstract WAI-ARIA roles must not be used on DOM elements. | Replace the abstract role with a concrete role from the WAI-ARIA specification. |
+| `html-no-aria-hidden-body` | `aria-hidden="true"` must not be applied to the `<body>` element. | Remove `aria-hidden` from `<body>`; scope the attribute to the specific subtree you want to hide. |
+| `html-no-nested-interactive` | Interactive elements must not be nested inside other interactive elements. | Move the nested interactive element outside, or restructure the component. |
+| `html-no-positive-tabindex` | HTML `tabindex` attribute must not be positive — it breaks natural tab order. | Use `tabindex="0"` (or `-1`) and rely on document order for focus sequence. |
+| `html-no-skip-heading-levels` | Heading levels should not skip (e.g., h1 to h3 without h2). | Use sequential heading levels for proper document outline. |
+| `html-require-button-type` | `<button>` must have an explicit `type` attribute. | Add `type="button"`, `type="submit"`, or `type="reset"` to the `<button>` element. |
+| `html-require-img-alt` | `<img>` elements must declare an `alt` attribute. | Add `alt="<description>"` for meaningful images or `alt=""` for decorative ones. |
+| `html-require-input-label` | Form inputs must have accessible labels. | Add a <label> element with htmlFor, wrap in label, or use aria-label/aria-labelledby. |
+| `no-svg-without-title` | `<svg>` elements must have an accessible name. | Add a non-empty `<title>` as the first child of the `<svg>`, or give it an accessible name via `aria-label`/`aria-labelledby`. If the SVG is purely decorative, mark it `aria-hidden="true"` or give it a non-image role (e.g. `role="presentation"`). |
+| `ui-no-disabled-zoom` | Viewport meta disables pinch-to-zoom — accessibility violation. | Remove `user-scalable=no` and `maximum-scale=1` from the viewport meta tag. Users with low vision rely on zoom. |
+| `ui-no-gray-on-colored-background` | Gray text on colored background — low contrast, hard to read. | Use a lighter or white text color on saturated backgrounds for adequate contrast. |
 
 ## accessibility > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `html-require-explicit-size` | ⚠️ | `<img>` and `<video>` must declare `width` and `height` to avoid layout shift. | Add explicit `width` and `height` attributes (or CSS `aspect-ratio`) to reserve space. |
-| `perf-prefers-reduced-motion` | ⚠️ | CSS with animations or `@keyframes` must guard them with a `prefers-reduced-motion: reduce` media query. | Add `@media (prefers-reduced-motion: reduce) { ... }` that disables or shortens animations. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `html-require-explicit-size` | `<img>` and `<video>` must declare `width` and `height` to avoid layout shift. | Add explicit `width` and `height` attributes (or CSS `aspect-ratio`) to reserve space. |
+| `perf-prefers-reduced-motion` | CSS with animations or `@keyframes` must guard them with a `prefers-reduced-motion: reduce` media query. | Add `@media (prefers-reduced-motion: reduce) { ... }` that disables or shortens animations. |
 
 ## accessibility > ui
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `ui-min-hit-area-44` | ⚠️ | Interactive elements (button, a, input) should have a tap target of at least 44×44 CSS pixels. | Avoid utility classes that force a small size (h-3/w-3/h-4/w-4); pad the element so its hit area is ≥ 44px. |
-| `ui-prefers-reduced-motion` | ⚠️ | CSS declaring animation or transition must provide a `@media (prefers-reduced-motion: reduce)` branch. | Wrap motion-sensitive declarations in `@media (prefers-reduced-motion: reduce) { ... }` that disables them. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `ui-min-hit-area-44` | Interactive elements (button, a, input) should have a tap target of at least 44×44 CSS pixels. | Avoid utility classes that force a small size (h-3/w-3/h-4/w-4); pad the element so its hit area is ≥ 44px. |
+| `ui-prefers-reduced-motion` | CSS declaring animation or transition must provide a `@media (prefers-reduced-motion: reduce)` branch. | Wrap motion-sensitive declarations in `@media (prefers-reduced-motion: reduce) { ... }` that disables them. |
 
 ## api
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `api-deprecation-headers` | ⚠️ | Route handlers marked `@deprecated` must set `Deprecation` and `Sunset` response headers. | Add `Deprecation: true` and `Sunset: <date>` to the handler response so clients can detect the deprecation at runtime (RFC 9745 / RFC 8594). |
-| `api-first` | ⚠️ | Route handler files should define an API schema. | Define the API schema before the handler using `z.object`, `createRoute`, or `zodValidator`. API-first design ensures the contract is documented and validated before implementation. |
-| `api-list-requires-pagination` | ⚠️ | List endpoints must support pagination to prevent unbounded result sets. | Add `limit`/`cursor` or `page`/`pageSize` parameters to the handler. |
-| `api-no-array-root-response` | ⚠️ | API endpoints must not return a root-level JSON array — wrap in an object for extensibility. | Return `{ data: [...], total: n }` instead of a bare array. |
-| `api-no-boolean-field-in-response` | ⚠️ | Response types should use string-unions / enums instead of booleans for extensibility. | Replace `isActive: boolean` with `status: 'active' \| 'inactive' \| ...` so new states don't break the wire contract. |
-| `no-verb-in-rest-url` | ⚠️ | REST URLs should identify resources, not actions. | Replace verb-in-URL patterns with HTTP semantics: `POST /api/orders` to create, `GET /api/orders/:id` to read, `PATCH /api/orders/:id` to update, `DELETE /api/orders/:id` to remove. |
-| `structured-api-error` | ⚠️ | Bare `new Error()` in route handlers — use structured errors. | Replace `new Error("message")` with a structured error containing `{ type, code, status, detail }`. Bare Error messages are not machine-parseable and lack HTTP status context. |
-| `timeout-on-io` | ⚠️ | I/O calls without a timeout can hang forever. | Wrap the I/O call with `withTimeout(call, 5_000)` or pass `{ signal: AbortSignal.timeout(5_000) }`. Default timeouts: 5s for DB, 10s for external APIs, 30s for file ops. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `api-deprecation-headers` | Route handlers marked `@deprecated` must set `Deprecation` and `Sunset` response headers. | Add `Deprecation: true` and `Sunset: <date>` to the handler response so clients can detect the deprecation at runtime (RFC 9745 / RFC 8594). |
+| `api-first` | Route handler files should define an API schema. | Define the API schema before the handler using `z.object`, `createRoute`, or `zodValidator`. API-first design ensures the contract is documented and validated before implementation. |
+| `api-list-requires-pagination` | List endpoints must support pagination to prevent unbounded result sets. | Add `limit`/`cursor` or `page`/`pageSize` parameters to the handler. |
+| `api-no-array-root-response` | API endpoints must not return a root-level JSON array — wrap in an object for extensibility. | Return `{ data: [...], total: n }` instead of a bare array. |
+| `api-no-boolean-field-in-response` | Response types should use string-unions / enums instead of booleans for extensibility. | Replace `isActive: boolean` with `status: 'active' \| 'inactive' \| ...` so new states don't break the wire contract. |
+| `no-verb-in-rest-url` | REST URLs should identify resources, not actions. | Replace verb-in-URL patterns with HTTP semantics: `POST /api/orders` to create, `GET /api/orders/:id` to read, `PATCH /api/orders/:id` to update, `DELETE /api/orders/:id` to remove. |
+| `structured-api-error` | Bare `new Error()` in route handlers — use structured errors. | Replace `new Error("message")` with a structured error containing `{ type, code, status, detail }`. Bare Error messages are not machine-parseable and lack HTTP status context. |
+| `timeout-on-io` | I/O calls without a timeout can hang forever. | Wrap the I/O call with `withTimeout(call, 5_000)` or pass `{ signal: AbortSignal.timeout(5_000) }`. Default timeouts: 5s for DB, 10s for external APIs, 30s for file ops. |
 
 ## api-design
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `api-branded-id-types` | ⚠️ | Entity IDs in public API signatures must use branded types, not raw string/number. | Introduce a branded type such as `type OrderId = string & { readonly __brand: 'OrderId' }` and use it instead of `string`/`number` for ID parameters. |
-| `api-no-internal-ids-in-response` | ⚠️ | Response DTOs must not expose internal column names, sequential IDs, or implementation fields. | Rename the field to its public counterpart (e.g. `user_id` → `userId`, `pk` → `id`) and drop implementation-only columns from the response shape. |
-| `api-no-nullable-variant-fields` | ⚠️ | Interfaces must not encode state via clusters of optional fields; use discriminated unions. | Replace the optional cluster with a `status: 'cancelled'; cancelReason: string; cancelledAt: string` variant in a discriminated union. |
-| `api-put-vs-patch` | ⚠️ | PUT handlers with Partial<> payloads should use PATCH instead. | If the handler accepts fields-provided-only semantics, register it with `.patch(...)`. Keep `.put(...)` for full-resource replacement. |
-| `api-response-envelope-consistency` | ⚠️ | Mixing `{ data: ... }` envelopes with raw returns forces every client to branch. | Pick one shape for the file (envelope or raw) and apply it to every response. |
-| `api-route-version-prefix` | ⚠️ | API routes must start with a version prefix (/v1/, /v2/, …). | Prefix the route path with a version segment, e.g. `/v1/users`. If routes are mounted on a versioned sub-router, disable this rule for that file. |
-| `api-separate-input-output-types` | ⚠️ | The same type must not serve as both request input and response output. | Split into separate input (CreateXInput) and output (XResponse) types. Server-managed fields (id, createdAt, updatedAt) belong only in the output shape. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `api-branded-id-types` | Entity IDs in public API signatures must use branded types, not raw string/number. | Introduce a branded type such as `type OrderId = string & { readonly __brand: 'OrderId' }` and use it instead of `string`/`number` for ID parameters. |
+| `api-no-internal-ids-in-response` | Response DTOs must not expose internal column names, sequential IDs, or implementation fields. | Rename the field to its public counterpart (e.g. `user_id` → `userId`, `pk` → `id`) and drop implementation-only columns from the response shape. |
+| `api-no-nullable-variant-fields` | Interfaces must not encode state via clusters of optional fields; use discriminated unions. | Replace the optional cluster with a `status: 'cancelled'; cancelReason: string; cancelledAt: string` variant in a discriminated union. |
+| `api-put-vs-patch` | PUT handlers with Partial<> payloads should use PATCH instead. | If the handler accepts fields-provided-only semantics, register it with `.patch(...)`. Keep `.put(...)` for full-resource replacement. |
+| `api-response-envelope-consistency` | Mixing `{ data: ... }` envelopes with raw returns forces every client to branch. | Pick one shape for the file (envelope or raw) and apply it to every response. |
+| `api-route-version-prefix` | API routes must start with a version prefix (/v1/, /v2/, …). | Prefix the route path with a version segment, e.g. `/v1/users`. If routes are mounted on a versioned sub-router, disable this rule for that file. |
+| `api-separate-input-output-types` | The same type must not serve as both request input and response output. | Split into separate input (CreateXInput) and output (XResponse) types. Server-managed fields (id, createdAt, updatedAt) belong only in the output shape. |
 
 ## architecture
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `layer-import-boundary` | ⚠️ | Imports that cross hexagonal architecture layers break dependency inversion and make the domain untestable. | Domain must not import from infrastructure or application. Application must not import from infrastructure. Use dependency injection or ports/adapters instead. |
-| `no-global-types-file` | ⚠️ | Forbids global `types.ts` files at project root or shared locations. | Colocate types with the code that uses them, or use domain-specific type files. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `layer-import-boundary` | Imports that cross hexagonal architecture layers break dependency inversion and make the domain untestable. | Domain must not import from infrastructure or application. Application must not import from infrastructure. Use dependency injection or ports/adapters instead. |
+| `no-global-types-file` | Forbids global `types.ts` files at project root or shared locations. | Colocate types with the code that uses them, or use domain-specific type files. |
 
 ## async
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-async-array-callback` | ⚠️ | `async` callback passed to a non-awaiting array method. | `forEach`/`map`/`filter`/`some`/`every`/`find` don't await their callbacks — your async work runs in parallel (or not at all) and rejections become unhandled. Use `for (const x of arr)` with `await` inside, or `Promise.all(arr.map(async ...))` when you want parallel + awaited. |
-| `no-async-without-await` | ⚠️ | `async` function never uses `await`. | Either remove the `async` keyword (the function returns a value, not a Promise of one) or add the `await` that justifies it. An `async` function that never awaits forces callers to unwrap a Promise for no reason. |
-| `no-floating-promise` | ⚠️ | Promise-returning call is used as a statement — rejection is ignored. | `await` the promise, chain `.then/.catch`, pass it to `Promise.all`, or explicitly mark `void promise` if you intentionally ignore it. An unhandled rejection becomes an `UnhandledPromiseRejection` warning — and in Node 15+, crashes the process. |
-| `no-redundant-await` | ⚠️ | `return await` outside a try block is redundant. | Drop the `await` — an `async` function already wraps its return value in a Promise, so `return await p` is equivalent to `return p` but adds a microtask. Keep `return await` only inside a `try` block, where it affects catch semantics. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-async-array-callback` | `async` callback passed to a non-awaiting array method. | `forEach`/`map`/`filter`/`some`/`every`/`find` don't await their callbacks — your async work runs in parallel (or not at all) and rejections become unhandled. Use `for (const x of arr)` with `await` inside, or `Promise.all(arr.map(async ...))` when you want parallel + awaited. |
+| `no-async-without-await` | `async` function never uses `await`. | Either remove the `async` keyword (the function returns a value, not a Promise of one) or add the `await` that justifies it. An `async` function that never awaits forces callers to unwrap a Promise for no reason. |
+| `no-floating-promise` | Promise-returning call is used as a statement — rejection is ignored. | `await` the promise, chain `.then/.catch`, pass it to `Promise.all`, or explicitly mark `void promise` if you intentionally ignore it. An unhandled rejection becomes an `UnhandledPromiseRejection` warning — and in Node 15+, crashes the process. |
+| `no-redundant-await` | `return await` outside a try block is redundant. | Drop the `await` — an `async` function already wraps its return value in a Promise, so `return await p` is equivalent to `return p` but adds a microtask. Keep `return await` only inside a `try` block, where it affects catch semantics. |
 
 ## better-auth
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `better-auth-client-framework-import` | ⚠️ | Import `createAuthClient` from a framework-specific path (e.g. `better-auth/react`). | Replace `better-auth/client` with `better-auth/react`, `better-auth/vue`, `better-auth/svelte`, or `better-auth/solid`. |
-| `better-auth-drizzle-useplural` | ⚠️ | `drizzleAdapter` with a `users` table requires `usePlural: true`. | Add `usePlural: true` to the `drizzleAdapter(db, { ... })` options. |
-| `better-auth-email-verification-handler` | ❌ | `emailVerification.sendOnSignUp: true` requires `sendVerificationEmail`. | Define `sendVerificationEmail(user, url)` in the `emailVerification` block. |
-| `better-auth-expo-no-cookie-auth` | ❌ | React Native/Expo apps must use `expoClient()` from `@better-auth/expo`. | Import `expoClient` from `@better-auth/expo/client` and pass it via `plugins` to `createAuthClient`. |
-| `better-auth-no-duplicate-baseurl` | ⚠️ | Avoid hardcoding `baseURL` in `betterAuth()` — rely on `BETTER_AUTH_URL`. | Remove `baseURL` from the config and set `BETTER_AUTH_URL` in the environment instead. |
-| `better-auth-no-duplicate-secret` | ⚠️ | Avoid hardcoding `secret` in `betterAuth()` — rely on `BETTER_AUTH_SECRET`. | Remove `secret` from the config and set `BETTER_AUTH_SECRET` in the environment instead. |
-| `better-auth-required-user-fields` | ⚠️ | `user` config must declare both `email` and `name` additional fields. | Add `email` and `name` to `user.additionalFields` (or your user schema). |
-| `better-auth-reset-password-handler` | ❌ | `emailAndPassword.enabled: true` requires a `sendResetPassword` handler. | Define `sendResetPassword({ user, url })` in the `emailAndPassword` block. |
-| `better-auth-session-infer-type` | ⚠️ | Derive `Session` from `typeof auth.$Infer.Session` instead of manual declarations. | Replace the manual `Session` interface/type with `type Session = typeof auth.$Infer.Session`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `better-auth-client-framework-import` | Import `createAuthClient` from a framework-specific path (e.g. `better-auth/react`). | Replace `better-auth/client` with `better-auth/react`, `better-auth/vue`, `better-auth/svelte`, or `better-auth/solid`. |
+| `better-auth-drizzle-useplural` | `drizzleAdapter` with a `users` table requires `usePlural: true`. | Add `usePlural: true` to the `drizzleAdapter(db, { ... })` options. |
+| `better-auth-email-verification-handler` | `emailVerification.sendOnSignUp: true` requires `sendVerificationEmail`. | Define `sendVerificationEmail(user, url)` in the `emailVerification` block. |
+| `better-auth-expo-no-cookie-auth` | React Native/Expo apps must use `expoClient()` from `@better-auth/expo`. | Import `expoClient` from `@better-auth/expo/client` and pass it via `plugins` to `createAuthClient`. |
+| `better-auth-no-duplicate-baseurl` | Avoid hardcoding `baseURL` in `betterAuth()` — rely on `BETTER_AUTH_URL`. | Remove `baseURL` from the config and set `BETTER_AUTH_URL` in the environment instead. |
+| `better-auth-no-duplicate-secret` | Avoid hardcoding `secret` in `betterAuth()` — rely on `BETTER_AUTH_SECRET`. | Remove `secret` from the config and set `BETTER_AUTH_SECRET` in the environment instead. |
+| `better-auth-required-user-fields` | `user` config must declare both `email` and `name` additional fields. | Add `email` and `name` to `user.additionalFields` (or your user schema). |
+| `better-auth-reset-password-handler` | `emailAndPassword.enabled: true` requires a `sendResetPassword` handler. | Define `sendResetPassword({ user, url })` in the `emailAndPassword` block. |
+| `better-auth-session-infer-type` | Derive `Session` from `typeof auth.$Infer.Session` instead of manual declarations. | Replace the manual `Session` interface/type with `type Session = typeof auth.$Infer.Session`. |
 
 ## better-auth > imports
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `better-auth-plugin-import-path` | ⚠️ | Importing from `better-auth/plugins` barrel prevents tree-shaking. | Import from the plugin's specific path: `better-auth/plugins/two-factor`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `better-auth-plugin-import-path` | Importing from `better-auth/plugins` barrel prevents tree-shaking. | Import from the plugin's specific path: `better-auth/plugins/two-factor`. |
 
 ## better-auth > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `better-auth-middleware-requires-headers` | ❌ | `getSession()` in middleware must forward request headers. | Call `getSession({ headers: await headers() })` — otherwise session lookup fails in middleware context. |
-| `better-auth-no-disable-csrf` | ❌ | `disableCSRFCheck: true` removes CSRF protection from Better Auth. | Remove `disableCSRFCheck` — CSRF protection is enabled by default and must stay on. |
-| `better-auth-no-disable-origin-check` | ❌ | `disableOriginCheck: true` removes origin validation from Better Auth. | Remove `disableOriginCheck` — origin validation prevents cross-origin request forgery. |
-| `better-auth-require-rate-limit` | ⚠️ | Better Auth config without `rateLimit` leaves auth endpoints unprotected. | Add `rateLimit: { enabled: true }` to your `betterAuth({})` config. |
-| `better-auth-require-secure-cookies` | ⚠️ | Better Auth config missing `useSecureCookies: true` — session cookies transmitted over HTTP. | Add `advanced: { useSecureCookies: true }` to your Better Auth config for production. |
-| `better-auth-secret-min-length` | ❌ | Better Auth `secret` must be at least 32 characters long. | Use a secret of 32+ characters (e.g. generated via `openssl rand -base64 32`). |
-| `better-auth-trusted-providers` | ⚠️ | `accountLinking` enabled without `trustedProviders` allows any OAuth provider to link accounts. | Add `trustedProviders: ['google', 'github']` to `accountLinking` to restrict which providers may link. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `better-auth-middleware-requires-headers` | `getSession()` in middleware must forward request headers. | Call `getSession({ headers: await headers() })` — otherwise session lookup fails in middleware context. |
+| `better-auth-no-disable-csrf` | `disableCSRFCheck: true` removes CSRF protection from Better Auth. | Remove `disableCSRFCheck` — CSRF protection is enabled by default and must stay on. |
+| `better-auth-no-disable-origin-check` | `disableOriginCheck: true` removes origin validation from Better Auth. | Remove `disableOriginCheck` — origin validation prevents cross-origin request forgery. |
+| `better-auth-require-rate-limit` | Better Auth config without `rateLimit` leaves auth endpoints unprotected. | Add `rateLimit: { enabled: true }` to your `betterAuth({})` config. |
+| `better-auth-require-secure-cookies` | Better Auth config missing `useSecureCookies: true` — session cookies transmitted over HTTP. | Add `advanced: { useSecureCookies: true }` to your Better Auth config for production. |
+| `better-auth-secret-min-length` | Better Auth `secret` must be at least 32 characters long. | Use a secret of 32+ characters (e.g. generated via `openssl rand -base64 32`). |
+| `better-auth-trusted-providers` | `accountLinking` enabled without `trustedProviders` allows any OAuth provider to link accounts. | Add `trustedProviders: ['google', 'github']` to `accountLinking` to restrict which providers may link. |
 
 ## better-result
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `better-result-await-inside-gen` | ⚠️ | In Result.gen, Promise-returning Results must use `yield* Result.await(...)`. | Replace `await` with `yield* Result.await(...)` inside Result.gen generators. |
-| `better-result-caller-must-handle` | ⚠️ | Returned Results must be handled — do not ignore them. | Assign, match, map, unwrap, or yield* the returned Result. |
-| `better-result-catch-returns-tagged` | ⚠️ | The catch of Result.tryPromise must return a TaggedError, not a raw Error/string. | Return a TaggedError subclass instance from the catch handler. |
-| `better-result-constructor-spreads-args` | ⚠️ | TaggedError constructors with computed message must spread args in super(). | Call super({ ...args, message }) to forward all constructor args. |
-| `better-result-no-catch-panic` | ⚠️ | Forbid catch handlers that match or re-handle Panic from better-result. | Let Panic propagate — don't re-handle it in a catch. |
-| `better-result-no-manual-propagation` | ⚠️ | Forbid manual error propagation via `if (r.isErr()) return Result.err(r.error)`. | Use Result.gen + yield* to propagate errors. |
-| `better-result-no-mixed-throw` | ⚠️ | A function returning Result<...> must not contain throw (except inside Result.try). | Return Result.err(...) instead of throwing inside Result-returning functions. |
-| `better-result-no-nullable-return` | ⚠️ | Functions returning T \| null/undefined for not-found should return Result<T, NotFoundError>. | Replace the nullable return with Result<T, NotFoundError>. |
-| `better-result-no-param-properties` | ⚠️ | TaggedError constructors must not use parameter properties — call super({ ...args, message }). | Remove `public`/`private`/`readonly` modifiers on constructor parameters and assign via super(). |
-| `better-result-no-promise-catch` | ⚠️ | Replace .catch() on Promise with Result.tryPromise() in better-result modules. | Wrap the promise with Result.tryPromise({ try, catch }) instead of chaining .catch(). |
-| `better-result-no-rewrap-error` | ⚠️ | Forbid `return Result.err(result.error)` when `return result` suffices. | Return the existing Result directly instead of re-wrapping its error. |
-| `better-result-no-throw` | ⚠️ | In modules importing better-result, throw is forbidden for domain/infra errors. | Return Result.err(new TaggedError(...)) instead of throwing. |
-| `better-result-no-try-catch` | ⚠️ | Replace try/catch with Result.try({ try, catch }) in better-result modules. | Wrap the throwing code in Result.try({ try: () => ..., catch: (e) => new TaggedError(...) }). |
-| `better-result-prefer-map-single` | ⚠️ | Forbid Result.gen wrapping a single transformation — use .map()/.andThen() instead. | Replace Result.gen with a direct .map() or .andThen() when there is only one yield*. |
-| `better-result-prefer-matcherror-exhaustive` | ⚠️ | Prefer matchError over matchErrorPartial when the union is fully enumerable. | Use matchError({ ... }) for exhaustive matching on the error union. |
-| `better-result-require-gen-for-chains` | ⚠️ | Require Result.gen + yield* when chaining 2+ Results instead of nested .andThen. | Rewrite the chain using Result.gen(function* () { const a = yield* ...; const b = yield* ...; }). |
-| `better-result-tag-matches-classname` | ⚠️ | The string passed to TaggedError('X') must match the class name X. | Rename the tag or the class so they match exactly. |
-| `better-result-tagged-error-cause-unknown` | ⚠️ | The cause field in TaggedError must be typed `unknown`, not Error/any. | Declare `cause: unknown` so callers can't rely on a specific error shape. |
-| `better-result-tagged-error-message` | ⚠️ | Classes extending TaggedError must declare a message: string field. | Add `message: string` (or `readonly message: string`) to the class body. |
-| `better-result-try-requires-catch` | ⚠️ | Result.try / Result.tryPromise must include both `try` and `catch`. | Provide an object with both `try` and `catch` keys. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `better-result-await-inside-gen` | In Result.gen, Promise-returning Results must use `yield* Result.await(...)`. | Replace `await` with `yield* Result.await(...)` inside Result.gen generators. |
+| `better-result-caller-must-handle` | Returned Results must be handled — do not ignore them. | Assign, match, map, unwrap, or yield* the returned Result. |
+| `better-result-catch-returns-tagged` | The catch of Result.tryPromise must return a TaggedError, not a raw Error/string. | Return a TaggedError subclass instance from the catch handler. |
+| `better-result-constructor-spreads-args` | TaggedError constructors with computed message must spread args in super(). | Call super({ ...args, message }) to forward all constructor args. |
+| `better-result-no-catch-panic` | Forbid catch handlers that match or re-handle Panic from better-result. | Let Panic propagate — don't re-handle it in a catch. |
+| `better-result-no-manual-propagation` | Forbid manual error propagation via `if (r.isErr()) return Result.err(r.error)`. | Use Result.gen + yield* to propagate errors. |
+| `better-result-no-mixed-throw` | A function returning Result<...> must not contain throw (except inside Result.try). | Return Result.err(...) instead of throwing inside Result-returning functions. |
+| `better-result-no-nullable-return` | Functions returning T \| null/undefined for not-found should return Result<T, NotFoundError>. | Replace the nullable return with Result<T, NotFoundError>. |
+| `better-result-no-param-properties` | TaggedError constructors must not use parameter properties — call super({ ...args, message }). | Remove `public`/`private`/`readonly` modifiers on constructor parameters and assign via super(). |
+| `better-result-no-promise-catch` | Replace .catch() on Promise with Result.tryPromise() in better-result modules. | Wrap the promise with Result.tryPromise({ try, catch }) instead of chaining .catch(). |
+| `better-result-no-rewrap-error` | Forbid `return Result.err(result.error)` when `return result` suffices. | Return the existing Result directly instead of re-wrapping its error. |
+| `better-result-no-throw` | In modules importing better-result, throw is forbidden for domain/infra errors. | Return Result.err(new TaggedError(...)) instead of throwing. |
+| `better-result-no-try-catch` | Replace try/catch with Result.try({ try, catch }) in better-result modules. | Wrap the throwing code in Result.try({ try: () => ..., catch: (e) => new TaggedError(...) }). |
+| `better-result-prefer-map-single` | Forbid Result.gen wrapping a single transformation — use .map()/.andThen() instead. | Replace Result.gen with a direct .map() or .andThen() when there is only one yield*. |
+| `better-result-prefer-matcherror-exhaustive` | Prefer matchError over matchErrorPartial when the union is fully enumerable. | Use matchError({ ... }) for exhaustive matching on the error union. |
+| `better-result-require-gen-for-chains` | Require Result.gen + yield* when chaining 2+ Results instead of nested .andThen. | Rewrite the chain using Result.gen(function* () { const a = yield* ...; const b = yield* ...; }). |
+| `better-result-tag-matches-classname` | The string passed to TaggedError('X') must match the class name X. | Rename the tag or the class so they match exactly. |
+| `better-result-tagged-error-cause-unknown` | The cause field in TaggedError must be typed `unknown`, not Error/any. | Declare `cause: unknown` so callers can't rely on a specific error shape. |
+| `better-result-tagged-error-message` | Classes extending TaggedError must declare a message: string field. | Add `message: string` (or `readonly message: string`) to the class body. |
+| `better-result-try-requires-catch` | Result.try / Result.tryPromise must include both `try` and `catch`. | Provide an object with both `try` and `catch` keys. |
 
 ## bundle-size
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `js-no-full-lodash-import` | ⚠️ | Importing from `lodash` pulls the entire library — use a subpath like `lodash/map` or `lodash-es`. | Replace `import _ from 'lodash'` / `import { map } from 'lodash'` with `import map from 'lodash/map'` or switch to `lodash-es` (which tree-shakes). |
-| `js-no-moment` | ⚠️ | moment.js is 300kB+ — use `date-fns`, `dayjs`, or `Temporal` instead. | Replace `moment` with a smaller library (`date-fns`, `dayjs`) or the native `Temporal` API. |
-| `react-use-lazy-motion` | ⚠️ | Importing `motion` from `framer-motion` — use `LazyMotion` + `m` for a smaller bundle. | Wrap your tree in `<LazyMotion features={domAnimation}>` and replace `motion.div` with `m.div` to lazy-load animation features. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `js-no-full-lodash-import` | Importing from `lodash` pulls the entire library — use a subpath like `lodash/map` or `lodash-es`. | Replace `import _ from 'lodash'` / `import { map } from 'lodash'` with `import map from 'lodash/map'` or switch to `lodash-es` (which tree-shakes). |
+| `js-no-moment` | moment.js is 300kB+ — use `date-fns`, `dayjs`, or `Temporal` instead. | Replace `moment` with a smaller library (`date-fns`, `dayjs`) or the native `Temporal` API. |
+| `react-use-lazy-motion` | Importing `motion` from `framer-motion` — use `LazyMotion` + `m` for a smaller bundle. | Wrap your tree in `<LazyMotion features={domAnimation}>` and replace `motion.div` with `m.div` to lazy-load animation features. |
 
 ## ci-cd
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `ci-cache-key-includes-lockfile` | ⚠️ | An `actions/cache` key that doesn't include `hashFiles(...)` of the lockfile never invalidates — stale caches break reproducibility. | Include `${{ hashFiles('**/package-lock.json') }}` (or the pnpm/yarn equivalent) in the cache `key:`. |
-| `ci-checkout-action-pinned` | ⚠️ | actions/checkout must be pinned to v4 or higher — older versions and floating refs (@main, @master) expose workflows to breaking changes and supply-chain drift. | Use `uses: actions/checkout@v4` (or a commit SHA). Never pin to @main, @master, or @v3 or lower. |
-| `ci-docker-gha-cache` | ⚠️ | `docker/build-push-action` without `cache-from`/`cache-to: type=gha` rebuilds every layer from scratch on each run, burning CI minutes. | Add `cache-from: type=gha` and `cache-to: type=gha,mode=max` to the step's `with:` block. |
-| `ci-no-hardcoded-db-password` | ❌ | POSTGRES_PASSWORD hard-coded in a workflow leaks into logs, forks, and git history. Even a throwaway CI password is a credential. | Reference a repository secret instead: `POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}`. |
-| `ci-no-plaintext-secrets` | ❌ | Workflow `env:`/`with:` values whose key mentions password, token, secret, or api_key must not be literal strings — they leak into logs, forks and git history. | Reference the value via `${{ secrets.<NAME> }}` from repository or environment secrets. |
-| `ci-playwright-report-upload` | ⚠️ | A workflow that runs Playwright but never uploads `playwright-report/` gives no way to debug failed E2E runs — traces, screenshots and videos are lost with the runner. | Add a step using `actions/upload-artifact@v4` that uploads `playwright-report/` with `if: failure()` (or `if: always()`). |
-| `ci-postgres-healthcheck` | ⚠️ | A postgres service container with no `--health-cmd pg_isready` option lets downstream steps race the database startup and fail flakily. | Add `options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5` (or equivalent) to the service. |
-| `ci-setup-node-cache-enabled` | ⚠️ | actions/setup-node without `cache:` re-downloads the npm registry on every run, wasting minutes and bandwidth. | Add `cache: 'npm'` (or 'pnpm'/'yarn') inside the step's `with:` block. |
-| `ci-use-npm-ci` | ⚠️ | `npm install` mutates the lockfile and installs without strict reproducibility. CI must use `npm ci` to install exactly what the lockfile describes. | Replace `run: npm install` with `run: npm ci` in the workflow. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `ci-cache-key-includes-lockfile` | An `actions/cache` key that doesn't include `hashFiles(...)` of the lockfile never invalidates — stale caches break reproducibility. | Include `${{ hashFiles('**/package-lock.json') }}` (or the pnpm/yarn equivalent) in the cache `key:`. |
+| `ci-checkout-action-pinned` | actions/checkout must be pinned to v4 or higher — older versions and floating refs (@main, @master) expose workflows to breaking changes and supply-chain drift. | Use `uses: actions/checkout@v4` (or a commit SHA). Never pin to @main, @master, or @v3 or lower. |
+| `ci-docker-gha-cache` | `docker/build-push-action` without `cache-from`/`cache-to: type=gha` rebuilds every layer from scratch on each run, burning CI minutes. | Add `cache-from: type=gha` and `cache-to: type=gha,mode=max` to the step's `with:` block. |
+| `ci-no-hardcoded-db-password` | POSTGRES_PASSWORD hard-coded in a workflow leaks into logs, forks, and git history. Even a throwaway CI password is a credential. | Reference a repository secret instead: `POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}`. |
+| `ci-no-plaintext-secrets` | Workflow `env:`/`with:` values whose key mentions password, token, secret, or api_key must not be literal strings — they leak into logs, forks and git history. | Reference the value via `${{ secrets.<NAME> }}` from repository or environment secrets. |
+| `ci-playwright-report-upload` | A workflow that runs Playwright but never uploads `playwright-report/` gives no way to debug failed E2E runs — traces, screenshots and videos are lost with the runner. | Add a step using `actions/upload-artifact@v4` that uploads `playwright-report/` with `if: failure()` (or `if: always()`). |
+| `ci-postgres-healthcheck` | A postgres service container with no `--health-cmd pg_isready` option lets downstream steps race the database startup and fail flakily. | Add `options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5` (or equivalent) to the service. |
+| `ci-setup-node-cache-enabled` | actions/setup-node without `cache:` re-downloads the npm registry on every run, wasting minutes and bandwidth. | Add `cache: 'npm'` (or 'pnpm'/'yarn') inside the step's `with:` block. |
+| `ci-use-npm-ci` | `npm install` mutates the lockfile and installs without strict reproducibility. CI must use `npm ci` to install exactly what the lockfile describes. | Replace `run: npm install` with `run: npm ci` in the workflow. |
 
 ## code-quality
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `arguments-order` | ⚠️ | Detects call sites where argument names suggest wrong order. | Check argument order matches parameter order in the function signature. |
-| `array-callback-without-return` | ❌ | Array method callback with block body but no `return` statement. | Add a `return` statement inside the callback body, or use a concise arrow expression without braces. |
-| `arrow-this-in-function` | ⚠️ | `this` inside an arrow function with no enclosing regular function or method binds to the outer scope and is likely a bug. | Arrow functions don't bind their own `this`, use regular function or ensure nested in function context |
-| `async-await-only` | ⚠️ | Promise chain (`.then()`/`.catch()`) instead of `async`/`await`. | Use `async`/`await` instead of `.then()`/`.catch()` chains. |
-| `block-scope-case` | ⚠️ | `case` clause contains a lexical declaration that is not wrapped in a block. | Wrap the case body in braces: `case X: { const y = ...; break; }`. Otherwise the binding leaks into sibling cases and can trigger TDZ errors. |
-| `boundary-condition` | ⚠️ | Array boundary access (`arr[0]` or `arr[arr.length - 1]`) without a length guard or fallback. | Guard the access with `if (arr.length)` / `arr.length > 0`, use `arr.at(0)` / `arr.at(-1)`, or provide a fallback via `?? fallback` or `\|\| fallback`. On an empty array, a raw boundary access returns `undefined` and will crash downstream code. |
-| `catch-error-name` | ⚠️ | The catch parameter should be named `error`. | Rename the catch parameter to `error` (or a suffixed variant like `parseError` when disambiguating nested catches). Use `_` if the parameter is unused. |
-| `cognitive-complexity` | ❌ | Function cognitive complexity exceeds 5. | Simplify by extracting helpers, removing nesting, or splitting into smaller functions. Cognitive complexity measures how hard a function is to understand. |
-| `comma-or-logical-or-case` | ❌ | Switch `case` uses comma or `\|\|` instead of fall-through. | Use separate `case` clauses with fall-through instead of comma or `\|\|` in a single `case`. |
-| `comment-max-words` | ⚠️ | Comment sentence exceeds 25 words. | Split long comment sentences — one idea per sentence keeps the intent scannable. |
-| `consistent-date-clone` | ⚠️ | Prefer `new Date(date)` over `new Date(date.getTime())` for cloning. | Remove the unnecessary `.getTime()` / `.valueOf()` call — `new Date(date)` already clones correctly. |
-| `consistent-destructuring` | ⚠️ | Use destructured variables over properties. | A property was already destructured from this object — destructure this property too instead of accessing it via dot notation. |
-| `consistent-empty-array-spread` | ⚠️ | Parenthesize ternaries spread into array literals. | Wrap the ternary in parentheses: `[...(condition ? ['a'] : [])]` instead of `[...condition ? ['a'] : []]`. Without parens the precedence is ambiguous and confusing. |
-| `consistent-existence-index-check` | ⚠️ | Enforce `=== -1` / `!== -1` for index existence checks. | Use `index === -1` to check non-existence and `index !== -1` to check existence, instead of `< 0`, `>= 0`, or `> -1`. |
-| `consistent-function-scoping` | ⚠️ | Nested function does not capture any variable from its parent scope and could be hoisted. | Move the inner function to the outer scope or module level. Functions that don't close over parent state belong at the top level where they're easier to test and reuse. |
-| `consistent-template-literal-escape` | ⚠️ | Use `\${` instead of `$\{` to escape in template literals. | Escape the dollar sign (`\${`) rather than the opening brace (`$\{`) or both (`\$\{`). This is the consistent way to prevent expression interpolation in template literals. |
-| `custom-error-definition` | ⚠️ | Enforce correct Error subclassing. | Use a class field `name = 'MyError';` instead of setting `this.name` in the constructor. Pass the error message to `super()` instead of setting `this.message`. |
-| `cyclomatic-complexity` | ⚠️ | Functions with cyclomatic complexity > 10 are hard to test and maintain. | Refactor the function: extract helper functions, use early returns, replace conditionals with polymorphism or lookup tables. |
-| `data-clumps` | ⚠️ | Same 3+ parameter names appear together in multiple function signatures. | Extract the repeated parameter group into a value object / options type. Data clumps indicate a missing abstraction — e.g. `(host, port, protocol)` should be a `ConnectionConfig`. |
-| `de-morgan-simplify` | ⚠️ | Apply De Morgan's law: `!(a && b)` is `!a \|\| !b`, `!(a \|\| b)` is `!a && !b`. | Distribute the negation using De Morgan's law. `!(a && b)` becomes `!a \|\| !b` and `!(a \|\| b)` becomes `!a && !b`. The expanded form is easier to reason about. |
-| `deprecation-without-alternative` | ⚠️ | Deprecation annotation missing a migration message. | Add a message indicating what to use instead: `#[deprecated(note = "Use X instead")]` in Rust, or text after `@deprecated` in JSDoc. |
-| `elseif-without-else` | ⚠️ | `if/else if` chain without a final `else` clause. | Add a final `else` block to handle all remaining cases explicitly, even if it's just a comment or unreachable assertion. |
-| `empty-brace-spaces` | ⚠️ | Do not add spaces between braces. | Remove whitespace between empty braces: `{  }` -> `{}`. |
-| `error-message` | ⚠️ | Pass a message to the Error constructor. | Add a descriptive string message as the first argument to the Error constructor (or second for AggregateError, third for SuppressedError). Empty strings and non-string literals are also flagged. |
-| `error-message-is-remediation` | ⚠️ | Error messages should describe what went wrong and what to do about it. | Replace short/noun-only error messages like `"Invalid"` or `"Not found"` with actionable messages: `"User not found — verify the ID and retry"`. Good errors contain a verb and guide the reader toward a fix. |
-| `error-without-cause` | ❌ | new Error(e.message) drops the original stack — pass { cause: e }. | When wrapping a caught error, preserve the original stack and chain: `throw new Error('high-level message', { cause: original })`. Without `cause`, the debugger sees the wrapped message but loses the source location, type, and nested cause chain. |
-| `escape-case` | ⚠️ | Use uppercase characters for the value of escape sequences. | Replace lowercase hex digits in escape sequences with uppercase: `\xff` -> `\xFF`, `\u00ff` -> `\u00FF`. |
-| `expiring-todo-comments` | ⚠️ | TODO/FIXME with an expiration date that has passed should be resolved. | Resolve the TODO/FIXME — the expiration date has passed. Either complete the task or update the date. |
-| `explicit-length-check` | ❌ | Enforce explicitly comparing the `length` or `size` property of a value. | Use `arr.length > 0` instead of `arr.length` and `arr.length === 0` instead of `!arr.length`. |
-| `expression-complexity` | ⚠️ | Overly complex expression with too many logical/conditional operators. | Extract parts of the expression into named intermediate variables. Lines with 4+ logical/conditional operators are hard to read and reason about. |
-| `factory-di-shape` | ⚠️ | `create*` factory functions should take a single deps object, not individual params. | Replace individual dependency parameters with a single object: `createService({ db, cache, logger })`. A deps object makes the dependency list extensible without breaking callers and reads as named arguments. |
-| `file-size-limit` | ⚠️ | Source file exceeds the recommended line count. | Split the file into smaller, focused modules. |
-| `filename-naming-convention` | ⚠️ | Filename does not match the expected naming convention for its language. | Use kebab-case for JS/TS filenames (e.g. `user-profile.ts`), PascalCase or kebab-case for Vue SFC filenames (e.g. `UserProfile.vue` or `user-profile.vue`), and snake_case for Rust filenames (e.g. `user_profile.rs`). |
-| `for-loop-increment-sign` | ❌ | For-loop increment goes the wrong direction relative to the condition. | Fix the increment direction: use `i++` with `i <` conditions and `i--` with `i >` conditions. |
-| `function-doc-banned-verbs` | ⚠️ | Function docstring opens with a verb that paraphrases the implementation. | Open the docstring with intent (`Ensure…`, `Return…`), not restatement (`Reads…`, `Iterates…`). |
-| `function-return-type` | ⚠️ | Detects functions returning inconsistent types across branches. | Ensure all return paths return the same type, or use a discriminated union. |
-| `generator-without-yield` | ⚠️ | Generator function does not contain a `yield` expression. | Add a `yield` expression or convert to a regular function. A generator without `yield` is misleading — callers expect lazy iteration. |
-| `halstead-complexity` | ⚠️ | Function Halstead volume/difficulty/effort exceeds threshold. | Split the function into smaller helpers, reduce operator/operand churn, or extract repeated sub-expressions into named bindings. |
-| `id-length` | ❌ | Identifier names shorter than `min` hide intent. | Rename to a full word — `createdAt` not `d`, `userCount` not `n`. Allow-list conventional short names in `comply.toml`:  [rules.id-length] exceptions = ["t", "i", "j"] exception_patterns = ["^[A-Z]$"] |
-| `inconsistent-function-call` | ❌ | A function must be called consistently — always with `new` or always without. | Pick one style per function. If it sets `this.*`, always call with `new`; otherwise, never use `new`. |
-| `index-of-compare-to-positive` | ❌ | `.indexOf(…) < 1` matches both index 0 and absence — use `< 0` or `!== -1`. | Replace `< 1` with `< 0` (absent) or `!== -1` (present) to disambiguate index 0. |
-| `intermediate-variables` | ⚠️ | `if` condition chains three or more boolean operands. | Extract parts of the condition into named local variables so the `if` reads as one or two high-level checks. |
-| `invariant-requires-message` | ❌ | `invariant()` call without a descriptive message. | Add a message as the second argument: `invariant(cond, "Router must be initialized")`. |
-| `justify-inaction` | ⚠️ | Empty catch/else/match-arm/loop block without an explaining comment inside. | Add a comment inside the empty block explaining why the inaction is intentional, or remove the block if it is redundant. |
-| `max-call-chain-depth` | ⚠️ | Deeply nested function calls like f(g(h(i(x)))) are hard to debug. | Extract intermediate variables to flatten the call stack. |
-| `nested-control-flow` | ❌ | Deeply nested control flow (depth > 3) is hard to read and maintain. | Extract inner blocks into separate functions, use early returns or guard clauses to reduce nesting. |
-| `new-for-builtins` | ❌ | Enforce `new` for constructors and disallow it for `Symbol`/`BigInt`. | Use `new Map()` instead of `Map()` for constructors that require it. Conversely, use `Symbol()` and `BigInt()` without `new` — they are factory functions, not constructors. |
-| `no-abusive-eslint-disable` | ⚠️ | `eslint-disable` without specifying rules silences everything — too broad. | Specify the exact rules to disable: `eslint-disable-next-line no-console`. |
-| `no-accessor-recursion` | ⚠️ | Disallow recursive access in getters and setters. | A getter that reads `this.foo` or a setter that writes `this.foo` on the same property triggers infinite recursion. Use a backing field (e.g. `this._foo`) or a `WeakMap`. |
-| `no-all-duplicated-branches` | ❌ | All branches have the same implementation — the conditional is pointless. | Remove the conditional and keep just the body. Duplicated branches hide that the branching is no longer meaningful. |
-| `no-anonymous-default-export` | ⚠️ | Disallow anonymous functions and classes as the default export. | Name the exported function or class. Anonymous default exports break refactoring tools, produce unhelpful stack traces, and make `import` auto-complete less useful. |
-| `no-arguments-usage` | ❌ | Direct use of the `arguments` object is discouraged. | Use rest parameters (`...args`) instead of `arguments`. Rest parameters are a real Array and work with arrow functions. |
-| `no-array-callback-reference` | ⚠️ | Do not pass a function reference directly to an array iterator method. | Wrap the callback: `.map(x => parseInt(x))` instead of `.map(parseInt)`. Passing a function reference exposes it to unexpected extra arguments (element, index, array). |
-| `no-array-delete` | ❌ | `delete` on an array element creates a sparse hole instead of removing. | Use `Array.prototype.splice()` to remove elements: `arr.splice(index, 1)` instead of `delete arr[index]`. |
-| `no-array-method-this-argument` | ⚠️ | Do not use the `thisArg` parameter in array methods. | Remove the second argument from the array method call. Use `.bind()` or an arrow function to bind context instead. |
-| `no-array-reduce` | ⚠️ | `Array#reduce()` and `Array#reduceRight()` are not allowed. | Use a `for` loop, `for...of`, or other array methods instead of `.reduce()` / `.reduceRight()` for better readability. |
-| `no-array-reverse` | ⚠️ | `Array#reverse()` mutates the array in place. | Use `.toReversed()` instead — it returns a new array without mutating the original. |
-| `no-array-sort-mutation` | ⚠️ | Prefer `Array#toSorted()` over `Array#sort()` (mutates in place). | Replace `.sort()` with `.toSorted()`. `Array#sort()` mutates the array in place which can cause subtle bugs. `Array#toSorted()` returns a new sorted array, leaving the original unchanged. |
-| `no-assign-mutated-array` | ⚠️ | Do not assign the result of a mutating array method (`sort`, `reverse`, `fill`). | Use `toSorted()`, `toReversed()`, or spread before mutating: `[...arr].sort()` |
-| `no-associative-arrays` | ❌ | Arrays should not be used as associative arrays (use Map or object instead). | Use `Map<string, T>` or a plain object `Record<string, T>` instead of assigning string keys on an array. |
-| `no-async-constructor` | ❌ | Constructors cannot be `async` — they must return the instance, not a Promise. | Use a static async factory method instead: `static async create() { ... return new MyClass(); }`. |
-| `no-await-expression-member` | ❌ | Do not access a member directly from an await expression. | Extract the awaited value into a variable, then access the member: `const response = await fetch(url); const data = response.json();`. |
-| `no-await-in-promise-methods` | ⚠️ | Promise in `Promise.all/race/any/allSettled()` should not be awaited. | Remove the `await` keyword from array elements passed to Promise methods. Awaiting inside the array serializes the calls, defeating the purpose of `Promise.all()`. |
-| `no-bitwise-in-boolean` | ⚠️ | Bitwise operators in boolean contexts are likely typos. | Use `&&` instead of `&`, `\|\|` instead of `\|`. Bitwise operators in `if`/`while` conditions are almost always a mistake. |
-| `no-boolean-flag-param` | ❌ | Boolean flag parameters hide two behaviors behind one signature. | Split into two named functions. `sendNotification(msg, isUrgent)` → `sendUrgentNotification(msg)` + `sendNormalNotification(msg)`. A ternary or options object is not a fix — the boolean must disappear from the signature. |
-| `no-built-in-override` | ❌ | Overriding built-in globals like `Array`, `Object`, `Promise` shadows critical APIs. | Rename the variable. Overriding built-in globals breaks standard library behaviour and causes subtle bugs downstream. |
-| `no-case-label-in-switch` | ❌ | Label statement inside switch looks like a case but is a JS label. | Use `case <value>:` instead. A bare `identifier:` inside a switch is a label statement, not a case branch. |
-| `no-collapsible-if` | ❌ | Nested `if` can be merged with `&&`. | Merge `if (a) { if (b) { ... } }` into `if (a && b) { ... }`. Unnecessary nesting wastes indent levels. |
-| `no-collection-size-mischeck` | ❌ | `.length >= 0` is always true; `.length < 0` is always false. | Use `.length > 0` to check non-empty, or `.length === 0` to check empty. |
-| `no-common-grab-bag` | ⚠️ | Grab-bag filenames magnetize unrelated code. | Rename the file to describe what it actually owns. `common`/`utils`/`helpers`/`shared`/`misc` are magnet names that attract unrelated code over time. |
-| `no-console-spaces` | ⚠️ | Leading/trailing spaces in `console.log` arguments produce misaligned output. | Remove the leading or trailing space from the string argument. Use comma-separated arguments for spacing instead. |
-| `no-constructor-side-effects` | ⚠️ | `new X()` without assignment is a side-effect anti-pattern. | Assign the result of `new X()` to a variable, or refactor side effects out of the constructor into a static method. |
-| `no-deprecated-api` | ⚠️ | Usage of deprecated Node.js or browser API. | Replace with the modern equivalent: `Buffer.from()` instead of `new Buffer()`, `url.URL` instead of `url.parse()`, etc. |
-| `no-document-cookie` | ⚠️ | Do not use `document.cookie` directly. | Use a cookie library (e.g. `js-cookie`, `cookie`) instead of raw `document.cookie` access. Direct cookie manipulation is error-prone and hard to maintain. |
-| `no-duplicate-string` | ⚠️ | String literal appears 3+ times — extract to a constant. | Extract the repeated string into a named constant and reference it everywhere. Reduces typo risk and makes future changes a single-line edit. |
-| `no-duplicated-branches` | ⚠️ | Two branches of an if/else have identical bodies. | Merge the conditions or remove the duplicate branch. |
-| `no-element-overwrite` | ❌ | A collection element is written and immediately overwritten on the next line. | Remove the first assignment or use a different key/index. |
-| `no-empty-catch` | ⚠️ | Disallow empty catch blocks that silently swallow errors. | Handle the error explicitly — log it, rethrow, or add a comment explaining why swallowing is intentional. |
-| `no-empty-file` | ⚠️ | Empty files are not allowed — they add noise without value. | Add meaningful content or delete the file. |
-| `no-equals-in-for-termination` | ⚠️ | `for` loop uses `==` or `===` in the termination condition. | Use `<`, `<=`, `>`, or `>=` instead. Equality checks in `for` termination either never execute the body or loop forever if the counter skips the target value. |
-| `no-for-in-iterable` | ❌ | `for...in` iterates over object keys, not values — use `for...of` for arrays. | Replace `for (x in arr)` with `for (x of arr)`. `for...in` enumerates property names (strings), including inherited ones, which is almost never the intent for arrays or iterables. |
-| `no-for-loop` | ⚠️ | Use a `for-of` loop instead of this `for` loop. | Replace `for (let i = 0; i < arr.length; i++)` with `for (const item of arr)`. If the index is needed, use `for (const [i, item] of arr.entries())`. |
-| `no-function-declaration-in-block` | ❌ | Function declaration inside a control-flow block has inconsistent hoisting behavior. | Move the function declaration to the top level, or use a `const fn = () => { ... }` expression instead. Function declarations in blocks are only conditionally hoisted in sloppy mode and forbidden in strict mode by some engines. |
-| `no-globals-shadowing` | ⚠️ | Local variable shadows a well-known global identifier. | Rename the local variable to avoid shadowing `console`, `window`, `document`, `process`, `global`, `globalThis`, `setTimeout`, or `setInterval`. Shadowing globals makes code confusing and can break runtime behavior. |
-| `no-gratuitous-expression` | ❌ | Boolean expression is always true or always false. | Remove the dead branch. A condition that can never flip is either a bug or leftover from a refactor. |
-| `no-hex-escape` | ⚠️ | Enforce the use of Unicode escapes instead of hexadecimal escapes. | Replace `\x41` with `\u0041` — Unicode escapes are more consistent and readable. |
-| `no-history-in-comments` | ⚠️ | Comment narrates history rather than describing current behaviour. | Keep comments about what the code does now. Put history in git log or commit messages. |
-| `no-identical-conditions` | ❌ | Duplicate condition in `if / else if` chain is always dead code or a bug. | Change one of the duplicate conditions so each branch is reachable. |
-| `no-identical-expressions` | ❌ | Identical expressions on both sides of a binary operator are usually a bug. | Use two different expressions, or simplify the expression. |
-| `no-identical-functions` | ❌ | Two functions have identical implementations. | Extract the duplicated logic into a shared helper. Identical functions diverge silently when one gets patched. |
-| `no-ignored-exceptions` | ❌ | Empty `catch` block silently swallows exceptions. | At minimum, log the error or re-throw it. Silent catch blocks hide bugs and make debugging extremely difficult. If intentional, add an explanatory comment. |
-| `no-ignored-return` | ⚠️ | Return value of a pure method is ignored — the call has no effect. | Assign or return the result: `const result = arr.map(...)` or use a side-effect method instead. |
-| `no-immediate-mutation` | ⚠️ | Disallow immediate mutation after variable assignment. | Chain the mutation onto the initialiser: `const arr = [3,1,2].sort()` instead of declaring then mutating on the next line. This makes the intent clearer and avoids an intermediate mutable state. |
-| `no-implicit-deps` | ⚠️ | Import of a bare specifier that is not a known Node.js builtin — may be an unlisted dependency. | Ensure the package is listed in `package.json` dependencies. Bare specifier imports that are neither relative paths nor Node.js builtins may break when not explicitly installed. |
-| `no-in-misuse` | ❌ | `in` operator on arrays checks keys (indices), not values — use `.includes()` instead. | Replace `x in arr` with `arr.includes(x)` or use a `Set`. |
-| `no-inconsistent-returns` | ⚠️ | Function has inconsistent returns — some paths return a value, others return nothing. | Ensure every return path either returns a value or returns nothing. Mixing `return expr;` with bare `return;` or implicit returns is confusing. |
-| `no-incorrect-string-concat` | ⚠️ | Suspicious string concatenation with a number variable. | Use explicit conversion: `"text" + String(num)` or template literals: `\`text${num}\``. |
-| `no-inline-function-event-listener` | ⚠️ | Inline function passed to addEventListener cannot be removed later. | Extract callback to named function for proper cleanup |
-| `no-instanceof-builtins` | ⚠️ | Avoid `instanceof` for built-in types — it fails across realms. | Use `Array.isArray(x)` instead of `x instanceof Array`. For errors, check the `name` property or use `Error.isError()`. `instanceof` breaks across iframes, VMs, and module boundaries. |
-| `no-invalid-fetch-options` | ❌ | `fetch()` / `new Request()` with `body` on a GET or HEAD request is invalid. | Remove the `body` property or change the method to POST/PUT/PATCH. |
-| `no-invalid-remove-event-listener` | ⚠️ | `removeEventListener` with an inline function or `.bind()` call never matches the original listener. | Pass a stable function reference to `removeEventListener` — store the bound/arrow function in a variable first. |
-| `no-invariant-returns` | ⚠️ | Function always returns the same literal value. | If the return value never varies, the function likely has dead logic or should be a constant. |
-| `no-inverted-boolean-check` | ⚠️ | `!a === b` negates `a` before comparing — likely meant `a !== b`. | The `!` operator binds tighter than `===`/`!==`, so `!a === b` is `(!a) === b`, not `!(a === b)`. Use `a !== b` or wrap explicitly: `!(a === b)`. |
-| `no-logger-in-business-logic` | ⚠️ | Logging calls in business logic (service/domain/core/model/entity layers). | Remove direct `logger.*` / `console.log` calls from business logic. Use a `withLogging()` wrapper or emit domain events instead. Logging is a cross-cutting concern — it belongs in infrastructure, not domain code. |
-| `no-lonely-if` | ⚠️ | Unexpected `if` as the only statement in an `else` block. | Replace `else { if (cond) { ... } }` with `else if (cond) { ... }`. The `else if` form reduces nesting and makes the intent clearer. NOTE: this is different from `no-collapsible-if` which merges nested `if` without `else` using `&&`. |
-| `no-loop-counter-reassign` | ❌ | Assignment to a `for` loop counter inside the loop body causes subtle bugs. | Use a separate variable instead of reassigning the loop counter. Modifying the counter inside the body makes the loop hard to reason about and often hides off-by-one errors. |
-| `no-magic-array-flat-depth` | ⚠️ | Disallow a magic number as the `depth` argument in `Array#flat()`. | Extract the depth into a named constant, or use `Infinity` for unbounded flattening. |
-| `no-magic-numbers` | ⚠️ | Magic numbers in TS/JS make code harder to understand — use named constants instead. | Extract the number into a named `const`. TS enums, numeric literal types, `readonly` properties, and common values (0, 1, -1) are allowed. |
-| `no-misleading-array-reverse` | ❌ | `.reverse()`, `.sort()`, `.fill()` mutate in place and return the same reference — assigning or returning the result is misleading. | These methods mutate the original array and return the same reference. Use `[...arr].reverse()` or `arr.toReversed()` to avoid mutating the original. |
-| `no-misplaced-loop-counter` | ❌ | `for` loop update clause modifies a different variable than the condition. | Ensure the update expression (`i++`) modifies the same variable used in the loop condition (`i < n`). Mismatched variables usually indicate a copy-paste bug. |
-| `no-multi-op-oneliner` | ⚠️ | Dense one-liners with many chained operators resist review. | Extract intermediate named variables. Each step of the expression should have a name that says what it represents — `activeItems`, `prices`, `subtotal`, `total`. |
-| `no-mutating-assign` | ⚠️ | Disallow `Object.assign(target, ...)` when `target` is not an empty object literal — it mutates the target in place. | Use spread syntax `{...target, ...source}` or `Object.assign({}, target, source)` to produce a new object instead of mutating. |
-| `no-named-default` | ⚠️ | Disallow `import { default as foo }` — use `import foo` instead. | Replace `import { default as foo } from './m'` with `import foo from './m'`. The named form is verbose and obscures the intent of importing the default export. |
-| `no-negated-condition` | ⚠️ | Disallow negated conditions with an else branch. | Swap the if/else branches (or ternary arms) and remove the negation for clearer intent. |
-| `no-negation-in-equality-check` | ❌ | Negated expression in equality check is a precedence bug. | `!x === y` is parsed as `(!x) === y`, not `!(x === y)`. Use `x !== y` or wrap explicitly: `!(x === y)`. |
-| `no-nested-assignment` | ❌ | Assignment inside a condition or sub-expression is likely a bug. | Move the assignment before the condition: `x = value; if (x) { ... }`. If intentional, use a separate statement. |
-| `no-nested-incdec` | ⚠️ | `++` or `--` used inside an expression, not as a standalone statement. | Separate the increment/decrement from the expression. Write `i++; arr[i] = x;` instead of `arr[i++] = x;` to make the order of operations explicit. |
-| `no-nested-switch` | ❌ | `switch` inside another `switch` is hard to follow. | Extract the inner switch into a separate function. Nested switches create deeply indented, hard-to-read code that is easy to get wrong. |
-| `no-nested-template-literal` | ❌ | Nested template literal — extract to a named variable. | Extract the inner template to a named variable. Nested backticks are hard to read and easy to misparse. |
-| `no-nested-ternary` | ❌ | Nested ternaries are hard to read and easy to misparse. | Nested ternary — extract to if/else or a named variable for each branch. |
-| `no-new-regex-with-variable` | ❌ | `new RegExp(variable)` enables ReDoS attacks. | Replace dynamic regex construction with a literal regex or a vetted safe-regex library. User-controlled patterns can trigger exponential backtracking and freeze the event loop. |
-| `no-object-as-default-parameter` | ⚠️ | Do not use an object literal as a default parameter value. | Use destructuring with individual defaults instead of a default object literal. `function f({ timeout = 1000 } = {})` is clearer and avoids the all-or-nothing replacement problem when a caller passes a partial object. |
-| `no-one-iteration-loop` | ⚠️ | Loop body always exits on the first iteration. | Remove the loop — it is equivalent to the body running once. If a loop is intended, ensure the exit statement is guarded by a condition. |
-| `no-primitive-wrappers` | ❌ | `new String()`, `new Number()`, `new Boolean()` create wrapper objects, not primitives. | Use primitive literals or factory functions without `new`: `String(x)`, `Number(x)`, `Boolean(x)`. |
-| `no-process-exit` | ⚠️ | `process.exit()` terminates abruptly — throw an error instead. | Replace `process.exit()` with `throw new Error(...)`. Only use `process.exit()` in CLI entry points. |
-| `no-redundant-assignment` | ❌ | Variable is assigned then immediately overwritten. | Remove the first assignment — it has no observable effect. |
-| `no-redundant-boolean` | ❌ | Redundant boolean literal in a return or condition. | Simplify: `if (x) return true; else return false;` → `return x;`. `x === true` → `x`. The boolean adds no information. |
-| `no-redundant-clsx` | ⚠️ | `clsx()` / `cn()` called with a single static string is redundant. | Remove clsx/cn wrapper when using single static string |
-| `no-redundant-jump` | ⚠️ | Redundant `return;` at end of function or `continue;` at end of loop body. | Remove the redundant `return;` or `continue;` — execution already falls through naturally. |
-| `no-redundant-null-undefined-check` | ⚠️ | Comparing the same operand against both `null` and `undefined` is a verbose nullish check. | Collapse `x !== null && x !== undefined` (or the `x === null \|\| x === undefined` mirror) into a single strict, type-narrowing guard — not the loose `x != null`, which fights projects that ban `==`/`!=`. Define once: `function isDefined<T>(v: T): v is NonNullable<T> { return v !== null && v !== undefined; }`, then use `isDefined(x)` / `!isDefined(x)`. It narrows to `NonNullable<T>` (e.g. `arr.filter(isDefined)`). No autofix — the helper's name and location are project-specific. |
-| `no-shallow-passthrough-method` | ⚠️ | Method body only forwards arguments to another method with the same signature. | Inline the call at each call-site or add real behaviour — a pure pass-through adds a layer with no value. |
-| `no-side-effects-in-initialization` | ⚠️ | Top-level side effects (bare calls, `new`, IIFE) at module scope prevent tree-shaking. | Avoid side effects at module top-level for tree-shaking |
-| `no-single-promise-in-promise-methods` | ⚠️ | Wrapping a single-element array with `Promise.all/any/race()` is unnecessary. | Use the value directly instead of wrapping it in a Promise method: `await single` instead of `await Promise.all([single])`. |
-| `no-small-switch` | ⚠️ | `switch` with fewer than 3 cases — use `if/else` instead. | Replace small `switch` statements (< 3 cases) with `if/else` chains. `switch` adds indentation and boilerplate (`break`, `case`, `default`) that isn't justified for 1-2 branches. |
-| `no-sort-without-comparator` | ❌ | `.sort()` without comparator sorts lexicographically. | Pass an explicit comparator: `arr.sort((a, b) => a - b)` for numbers. Default `.sort()` converts to strings, so `[10, 2, 1].sort()` yields `[1, 10, 2]`. |
-| `no-static-only-class` | ⚠️ | Disallow classes that only have static members. | Replace the class with plain exported functions or an object literal. Static-only classes add indirection without benefit — they cannot be instantiated meaningfully and prevent tree-shaking. |
-| `no-thenable` | ⚠️ | Disallow `then` property on objects and classes. | Rename the `then` method/property. Objects with a `then` method are treated as thenables by `await` and `Promise.resolve()`, causing unexpected behavior. |
-| `no-this-assignment` | ⚠️ | Disallow assigning `this` to a variable. | Use an arrow function instead of capturing `this` in a variable. Arrow functions lexically bind `this`, making the alias unnecessary and removing a common source of bugs. |
-| `no-throw` | ❌ | Never throw — Result<T, E> surfaces errors as values. | Use Result<T, E> instead of throw — surface errors as values, not exceptions. Callers can't see thrown errors in the type signature. |
-| `no-try-promise` | ❌ | Promise rejection inside try/catch without `await` won't be caught. | Add `await` before promise-returning calls inside try blocks, or use `.catch()` directly. Without `await`, the promise rejects asynchronously and the `catch` block never runs. |
-| `no-typeof-undefined` | ⚠️ | Prefer direct `=== undefined` comparison when the operand is guaranteed to be a declared binding (e.g. a property access). | When the operand is a member expression like `obj.foo`, replace `typeof obj.foo === 'undefined'` with `obj.foo === undefined`. Keep `typeof` when the operand is a bare identifier that may not be declared — `x === undefined` throws ReferenceError in that case. |
-| `no-undefined-argument` | ⚠️ | Passing `undefined` as a function argument is pointless. | Omit the argument instead of passing `undefined` explicitly. |
-| `no-undefined-assignment` | ⚠️ | Assigning `undefined` explicitly is unnecessary. | Use `let x;` instead of `let x = undefined;`, or use `delete obj.prop` instead of `obj.prop = undefined`. |
-| `no-unenclosed-multiline-block` | ❌ | `if`/`for`/`while` without braces and a multiline body is a bug magnet. | Always wrap `if`/`for`/`while` bodies in curly braces `{}` when the body is on the next line. |
-| `no-unnecessary-array-flat-depth` | ⚠️ | Disallow using `1` as the `depth` argument of `Array#flat()`. | Remove the argument: `.flat()` defaults to depth 1. |
-| `no-unnecessary-array-splice-count` | ⚠️ | Disallow unnecessary `.length` or `Infinity` as the count argument of `Array#splice()` / `Array#toSpliced()`. | Remove the second argument: `.splice(start)` deletes all elements from `start` to the end. |
-| `no-unnecessary-await` | ⚠️ | Do not `await` non-promise values. | Remove the unnecessary `await` — literals, arrays, functions, and other non-thenable values resolve synchronously and the `await` just adds confusion. |
-| `no-unnecessary-slice-end` | ⚠️ | Disallow unnecessary `.length` or `Infinity` as the `end` argument of `slice()`. | Remove the second argument: `.slice(start)` already goes to the end. |
-| `no-unreadable-array-destructuring` | ⚠️ | Array destructuring may not contain consecutive ignored values. | Use index access instead: `const third = arr[2]`. Consecutive commas like `[,, x,,,, y]` are hard to read and easy to miscount. |
-| `no-unreadable-iife` | ⚠️ | IIFE with parenthesized arrow function body is unreadable. | Extract the inner expression from the arrow function body into a variable, or remove the unnecessary parentheses around the body. |
-| `no-unthrown-error` | ❌ | `new Error(...)` is created but never thrown, returned, or assigned. | Add `throw` before `new Error(...)`, or assign/return it. |
-| `no-unused-collection` | ⚠️ | Collection is populated but never read. | Either use the collection (iterate, return, pass to a function) or remove the dead code. Populated-but-unread collections indicate logic that was never finished or already removed. |
-| `no-unused-template-literal` | ❌ | Template literal without interpolation or special characters — use a string literal. | Replace the backticks with quotes: `` `bar` `` becomes `"bar"`. |
-| `no-useless-collection-argument` | ⚠️ | Disallow useless values in `Set`, `Map`, `WeakSet`, or `WeakMap` constructors. | Remove the empty/null/undefined argument from the collection constructor. `new Set([])` and `new Map(undefined)` are equivalent to `new Set()` and `new Map()`. |
-| `no-useless-error-capture-stack-trace` | ⚠️ | Unnecessary `Error.captureStackTrace()` in Error subclass constructor. | Remove the `Error.captureStackTrace(this)` call. Built-in Error subclasses already capture the stack trace automatically via `super()`. (Keep the two-argument `Error.captureStackTrace(this, constructorOpt)` form — it trims constructor frames from the trace.) |
-| `no-useless-fallback-in-spread` | ⚠️ | Disallow useless fallback when spreading in object literals. | Remove the `\|\| {}` or `?? {}` fallback — spreading `undefined`/`null` is already a no-op in object literals. |
-| `no-useless-increment` | ❌ | `return x++` / `return x--` returns the value *before* the increment. | Increment before the return (`x++; return x;`) or use prefix (`return ++x`). |
-| `no-useless-iterator-to-array` | ⚠️ | Disallow unnecessary `.toArray()` on iterators. | Remove `.toArray()` — the consuming context already accepts iterables. `for…of`, spread, `yield*`, `new Set(…)`, `Array.from(…)`, and `Object.fromEntries(…)` all work directly on iterators. |
-| `no-useless-length-check` | ⚠️ | Disallow useless array length check. | Remove the redundant `.length` guard. `Array#some()` already returns `false` for an empty array, and `Array#every()` already returns `true` for an empty array. The length check adds no value. |
-| `no-useless-promise-resolve-reject` | ⚠️ | Disallow returning `Promise.resolve/reject()` in async functions. | In an async function, `return value` already wraps in `Promise.resolve()` and `throw error` already wraps in `Promise.reject()`. Remove the unnecessary wrapper. |
-| `no-useless-spread` | ⚠️ | Disallow unnecessary spread. | Remove the redundant spread — `[...[1,2]]` is just `[1,2]` and `{...{a:1}}` is just `{a:1}`. |
-| `no-useless-switch-case` | ⚠️ | Disallow useless case in switch statements. | Remove the empty case that falls through to `default` — it has no effect since `default` already handles all unmatched values. |
-| `no-valueof-field` | ⚠️ | Do not define `valueOf` as a method or property on a class, interface, or object literal. | Avoid overriding valueOf, use explicit conversion methods |
-| `no-zero-fractions` | ⚠️ | Disallow number literals with zero fractions or dangling dots. | Remove the unnecessary `.0` fraction — write `1` instead of `1.0`. |
-| `non-existent-operator` | ❌ | Typo operator detected — `=+`, `=-`, `=!` are not valid operators. | Swap the characters: `=+` → `+=`, `=-` → `-=`, `=!` → `!=`. |
-| `number-literal-case` | ⚠️ | Enforce proper case for numeric literals. | Use lowercase prefix/exponent (`0x`, `0b`, `0o`, `1e3`). Hex digits may be all-lowercase (`0xff`) or all-uppercase (`0xFF`) — only mixed-case (`0xfF`) is flagged. |
-| `numeric-separators-style` | ⚠️ | Enforce the style of numeric separators by correctly grouping digits. | Add underscores to group digits: `1000000` → `1_000_000`. |
-| `operation-returning-nan` | ❌ | Arithmetic operation will produce `NaN`. | Convert the operand to a number first (`Number(x)`, `parseInt(x)`, `+x`) or fix the expression. Arithmetic on `undefined` or non-numeric strings always returns `NaN`. |
-| `prefer-add-event-listener` | ⚠️ | Prefer `.addEventListener()` over `on`-event property assignment. | Replace `element.onclick = handler` with `element.addEventListener('click', handler)`. `addEventListener` supports multiple listeners and provides better control via options (capture, passive, once). |
-| `prefer-array-find` | ⚠️ | Prefer `.find(…)` over `.filter(…)[0]` or `.filter(…).at(0)`. | Replace `.filter(…)[0]` with `.find(…)` to short-circuit on the first match. |
-| `prefer-array-flat` | ⚠️ | Prefer `.flat()` over legacy array flattening techniques. | Replace `[].concat(…arr)` or `.reduce((a,b) => a.concat(b), [])` with `.flat()`. |
-| `prefer-array-index-of` | ⚠️ | Prefer `.indexOf(val)` over `.findIndex(x => x === val)`. | Replace `.findIndex(x => x === val)` with `.indexOf(val)` for simple equality checks. |
-| `prefer-array-some` | ⚠️ | Prefer `.some(…)` over `.filter(…).length` checks. | Replace `.filter(…).length > 0` with `.some(…)` — it short-circuits. |
-| `prefer-array-to-spliced` | ⚠️ | Prefer `toSpliced()` over `slice().splice()` for immutable splice. | Use `arr.toSpliced(start, deleteCount, ...items)` instead. |
-| `prefer-at` | ⚠️ | Prefer `.at()` method for index access and `String#charAt()`. | Use `.at(-1)` instead of `[arr.length - 1]` for last-element access, and `str.at(0)` instead of `str.charAt(0)`. The `.at()` method handles negative indices natively. |
-| `prefer-bigint-literals` | ⚠️ | Prefer `BigInt` literals over `BigInt(…)` constructor. | Replace `BigInt(123)` with `123n` — the literal form is shorter and clearer. |
-| `prefer-blob-reading-methods` | ⚠️ | Prefer `Blob#text()` / `Blob#arrayBuffer()` over `FileReader` methods. | Use `await blob.text()` instead of `reader.readAsText(blob)`, or `await blob.arrayBuffer()` instead of `reader.readAsArrayBuffer(blob)`. |
-| `prefer-class-fields` | ⚠️ | Prefer class field declarations over `this` assignments in constructors for static values. | Move the literal assignment from the constructor to a class field declaration. Class fields are more declarative and make the default value visible at a glance. |
-| `prefer-classlist-toggle` | ⚠️ | Prefer `Element#classList.toggle()` over conditional `add`/`remove`. | Replace `if (c) el.classList.add('x') else el.classList.remove('x')` with `el.classList.toggle('x', c)`. The `toggle` method with a force argument is cleaner and avoids conditional branching. |
-| `prefer-code-point` | ⚠️ | Prefer `String#codePointAt()` over `String#charCodeAt()` and `String.fromCodePoint()` over `String.fromCharCode()`. | Use `codePointAt()` instead of `charCodeAt()` and `String.fromCodePoint()` instead of `String.fromCharCode()`. The code-point variants handle full Unicode (including astral symbols) correctly. |
-| `prefer-concise-arrow-body` | ⚠️ | Arrow function body contains a single `return` statement — use concise body form. | Replace `() => { return expr }` with `() => expr` (wrap object literals in parens: `() => ({...})`). |
-| `prefer-date-now` | ⚠️ | Prefer `Date.now()` over `new Date().getTime()`, `+new Date()`, or `Number(new Date())`. | Replace with `Date.now()`. It is clearer, avoids allocating a throwaway `Date` object, and is faster. |
-| `prefer-default-last` | ⚠️ | `default` clause in switch should be the last clause. | Move the `default:` clause to the end of the switch statement for readability. |
-| `prefer-default-parameters` | ⚠️ | Prefer default parameters over reassignment. | Replace `x = x \|\| 'default'` / `x = x ?? 'default'` in the function body with a default parameter value `function f(x = 'default')`. Default parameters are clearer and avoid subtle bugs with falsy values. |
-| `prefer-destructuring-assignment` | ⚠️ | Consecutive property accesses on the same object can be destructured. | Use destructuring: `const { x, y } = obj;` instead of separate `const x = obj.x; const y = obj.y;` declarations. Destructuring is more concise and makes the intent clear. |
-| `prefer-dom-node-append` | ⚠️ | Prefer `Node#append()` over `Node#appendChild()`. | Replace `.appendChild(x)` with `.append(x)`. `.append()` accepts multiple arguments, strings, and never returns the appended node (avoiding subtle misuse). |
-| `prefer-dom-node-dataset` | ⚠️ | Prefer `.dataset` over `.setAttribute('data-*')` / `.getAttribute('data-*')`. | Replace `.setAttribute('data-foo', v)` with `.dataset.foo = v` and `.getAttribute('data-foo')` with `.dataset.foo`. The `dataset` API is cleaner and avoids string-based attribute manipulation. |
-| `prefer-dom-node-remove` | ⚠️ | Prefer `childNode.remove()` over `parentNode.removeChild(childNode)`. | Replace `parent.removeChild(child)` with `child.remove()`. The modern `.remove()` API is simpler and doesn't require a reference to the parent node. |
-| `prefer-dom-node-text-content` | ⚠️ | Prefer `.textContent` over `.innerText`. | Replace `.innerText` with `.textContent`. `.textContent` is faster (no layout reflow), works on all node types, and returns text from hidden elements too. |
-| `prefer-early-return` | ⚠️ | Function body is wrapped in a single `if` — invert it as a guard clause. | Invert the condition and return early: `if (!cond) return; ...` — reduces nesting and clarifies the happy path. |
-| `prefer-event-target` | ⚠️ | Prefer `EventTarget` over `EventEmitter`. | Use the web-standard `EventTarget` class instead of Node's `EventEmitter` — it works in all runtimes. |
-| `prefer-export-from` | ⚠️ | Prefer `export { x } from './m'` over import-then-re-export. | Replace `import { x } from './m'; export { x };` with `export { x } from './m';`. Direct re-export is shorter, avoids a binding in the local scope, and makes the re-export intent explicit. |
-| `prefer-global-this` | ⚠️ | Prefer `globalThis` over `window`, `self`, and `global`. | Replace `window.`, `self.`, or `global.` with `globalThis.`. `globalThis` is the standard cross-platform way to access the global object in any JS environment. |
-| `prefer-immediate-return` | ⚠️ | Variable is assigned and immediately returned. | Return the expression directly: `return computeValue()` instead of `const result = computeValue(); return result;`. |
-| `prefer-import-meta-properties` | ⚠️ | Prefer `import.meta.filename` and `import.meta.dirname` over legacy techniques. | Replace `fileURLToPath(import.meta.url)` with `import.meta.filename` and `dirname(fileURLToPath(import.meta.url))` with `import.meta.dirname`. Node.js 21.2+ and Bun support these properties natively. |
-| `prefer-json-parse-buffer` | ⚠️ | Prefer reading a JSON file as a buffer. | Remove the `'utf-8'` / `'utf8'` encoding argument from `fs.readFileSync()` when the result is passed to `JSON.parse()`. `JSON.parse()` accepts a `Buffer` directly, which avoids an intermediate string allocation. |
-| `prefer-keyboard-event-key` | ⚠️ | Prefer `KeyboardEvent#key` over `KeyboardEvent#keyCode`. | Use `event.key` instead of `event.keyCode`, `event.charCode`, or `event.which`. The `.key` property returns a human-readable string and is the modern standard. |
-| `prefer-less-than` | ⚠️ | Prefer `<` / `<=` over `>` / `>=` for readability. | Prefer `<` over `>` for readability |
-| `prefer-logical-operator-over-ternary` | ⚠️ | Prefer `\|\|`/`??` over a ternary that repeats the test in a branch. | Replace `foo ? foo : bar` with `foo \|\| bar` (or `foo ?? bar`). |
-| `prefer-math-min-max` | ⚠️ | Prefer `Math.min()`/`Math.max()` over comparison ternaries. | Replace `value > max ? max : value` with `Math.min(value, max)` (or `Math.max` for the inverse pattern). |
-| `prefer-math-trunc` | ⚠️ | Prefer `Math.trunc(x)` over bitwise hacks like `x \| 0`, `~~x`, or `x >> 0`. | Replace bitwise truncation with `Math.trunc(x)`. Bitwise operators silently coerce to 32-bit integers and obscure intent. |
-| `prefer-modern-dom-apis` | ⚠️ | Prefer `.before()` / `.replaceWith()` over `.insertBefore()` / `.replaceChild()`. | Replace `parent.insertBefore(newNode, ref)` with `ref.before(newNode)` and `parent.replaceChild(newNode, old)` with `old.replaceWith(newNode)`. The modern APIs are called on the target node directly, removing the need for a parent reference. |
-| `prefer-modern-math-apis` | ⚠️ | Prefer modern `Math` APIs: `Math.hypot()`, `Math.log2()`, `Math.log10()`. | Replace `Math.sqrt(a*a + b*b)` with `Math.hypot(a, b)`, `Math.log(x) / Math.LN2` with `Math.log2(x)`, `Math.log(x) * Math.LOG2E` with `Math.log2(x)`, `Math.log(x) / Math.LN10` with `Math.log10(x)`, `Math.log(x) * Math.LOG10E` with `Math.log10(x)`. |
-| `prefer-module` | ⚠️ | Prefer ESM (`import`/`export`) over CommonJS (`require`/`module.exports`). | Replace `require()` with `import`, `module.exports` / `exports.x` with `export`, and `__dirname` / `__filename` with `import.meta.dirname` / `import.meta.filename`. |
-| `prefer-native-coercion-functions` | ⚠️ | Prefer using `String`, `Number`, `BigInt`, `Boolean`, and `Symbol` directly. | Pass the coercion function directly instead of wrapping it: `.map(Number)` instead of `.map(x => Number(x))`. |
-| `prefer-negative-index` | ⚠️ | Prefer negative index over `.length - index` for `slice`, `splice`, `at`, `with`, and related methods. | Use a negative index directly (e.g. `str.slice(-3)`) instead of computing `.length - N`. Negative indices are shorter and less error-prone. |
-| `prefer-node-protocol` | ⚠️ | Prefer `node:` protocol for Node.js builtin imports. | Replace bare builtin specifiers (`fs`, `path`, …) with `node:fs`, `node:path`. The `node:` prefix makes it unambiguous that the import targets a Node.js builtin, not a user-land package with the same name. |
-| `prefer-number-properties` | ⚠️ | Prefer `Number.isNaN()`, `Number.parseInt()`, etc. over global equivalents. | Replace global `isNaN()`, `isFinite()`, `parseInt()`, `parseFloat()`, `NaN`, and `Infinity` with their `Number.*` equivalents. The `Number` methods are stricter (no implicit coercion) and the properties are unambiguous. |
-| `prefer-object-from-entries` | ⚠️ | Prefer `Object.fromEntries()` over building objects from key-value pairs via `reduce`. | Use `Object.fromEntries(arr.map(…))` instead of `arr.reduce((acc, …) => ({ ...acc, … }), {})`. It is more readable and avoids quadratic spread copies. |
-| `prefer-object-literal` | ⚠️ | Use `{}` instead of `new Object()`. | Replace `new Object()` with `{}` — object literals are cleaner and more idiomatic. |
-| `prefer-optional-catch-binding` | ⚠️ | Prefer omitting the `catch` binding parameter when it is unused. | Remove the unused catch binding: use `catch { … }` instead of `catch (error) { … }`. Optional catch binding is supported in ES2019+. |
-| `prefer-promise-shorthand` | ⚠️ | `new Promise` wrapping a single `resolve`/`reject` call — use `Promise.resolve`/`Promise.reject` instead. | Replace `new Promise((resolve) => resolve(x))` with `Promise.resolve(x)` and `new Promise((_, reject) => reject(x))` with `Promise.reject(x)`. |
-| `prefer-prototype-methods` | ⚠️ | Prefer borrowing methods from the prototype instead of a literal instance. | Replace `{}.hasOwnProperty.call(…)` with `Object.prototype.hasOwnProperty.call(…)`, `[].slice.call(…)` with `Array.prototype.slice.call(…)`, etc. |
-| `prefer-query-selector` | ⚠️ | Prefer `.querySelector()` / `.querySelectorAll()` over legacy DOM query methods. | Replace `.getElementById('x')` with `.querySelector('#x')`, and `.getElementsByClassName('x')` / `.getElementsByTagName('x')` / `.getElementsByName('x')` with `.querySelectorAll('.x')`. The `querySelector` API is more flexible and consistent. |
-| `prefer-reflect-apply` | ⚠️ | Prefer `Reflect.apply(fn, thisArg, args)` over `fn.apply(thisArg, args)`. | Replace `fn.apply(ctx, args)` with `Reflect.apply(fn, ctx, args)`. `Reflect.apply` cannot be overridden and makes the intent explicit. |
-| `prefer-regexp-test` | ⚠️ | Prefer `RegExp#test()` over `String#match()` in boolean contexts. | Use `/pattern/.test(str)` instead of `str.match(/pattern/)` when only a boolean result is needed. `test()` is faster because it stops at the first match. |
-| `prefer-response-static-json` | ⚠️ | Prefer `Response.json()` over `new Response(JSON.stringify())`. | Replace `new Response(JSON.stringify(data), ...)` with `Response.json(data, ...)`. The static method sets the `Content-Type` header automatically and is more readable. |
-| `prefer-set-has` | ⚠️ | Prefer `Set#has()` over `Array#includes()` when checking for existence or non-existence. | Convert the array to a `Set` and use `.has()` instead of `.includes()`. `Array#includes()` is O(n) per call; `Set#has()` is O(1). This matters when the check is inside a loop or called repeatedly. |
-| `prefer-set-size` | ⚠️ | Prefer `Set#size` instead of spreading into an array and reading `.length`. | Replace `[...mySet].length` or `Array.from(mySet).length` with `mySet.size`. Spreading a Set into an array just to read its length is wasteful — `Set#size` is O(1). |
-| `prefer-single-boolean-return` | ⚠️ | `if (cond) return true; else return false;` can be replaced by `return cond;`. | Return the condition (or its negation) directly: `return cond;` or `return !cond;`. |
-| `prefer-single-call` | ⚠️ | Combine multiple consecutive `.push()`, `.classList.add()`, or `.classList.remove()` into one call. | Merge consecutive calls to the same method on the same receiver into a single call with multiple arguments. For example, `arr.push(a); arr.push(b);` becomes `arr.push(a, b);`. |
-| `prefer-spread` | ⚠️ | Prefer the spread operator over `Array.from()`, `Array#concat()`, and `Array#slice()`. | Use `[...x]` instead of `Array.from(x)`, `[...arr, ...other]` instead of `arr.concat(other)`, and `[...arr]` instead of `arr.slice()`. The spread syntax is more idiomatic. |
-| `prefer-string-raw` | ⚠️ | `String.raw` should be used to avoid escaping `\`. | Use `String.raw`\`...\`` for strings with multiple backslash escapes. This is clearer and avoids double-escaping mistakes. |
-| `prefer-string-replace-all` | ⚠️ | Prefer `String#replaceAll()` over `String#replace()` with a global regex. | Replace `.replace(/pattern/g, replacement)` with `.replaceAll('pattern', replacement)`. `replaceAll()` is clearer in intent and avoids regex escaping pitfalls. |
-| `prefer-string-slice` | ⚠️ | Prefer `String#slice()` over `String#substr()` and `String#substring()`. | Replace `.substring()` / `.substr()` with `.slice()`. `.slice()` has clearer negative-index semantics and is the modern standard. |
-| `prefer-string-trim-start-end` | ⚠️ | Prefer `String#trimStart()` / `String#trimEnd()` over the deprecated `trimLeft()` / `trimRight()`. | Replace `.trimLeft()` with `.trimStart()` and `.trimRight()` with `.trimEnd()`. The `trimLeft`/`trimRight` aliases are deprecated in favor of the spec names. |
-| `prefer-structured-clone` | ⚠️ | Prefer `structuredClone(…)` over `JSON.parse(JSON.stringify(…))` for deep cloning. | Replace `JSON.parse(JSON.stringify(x))` with `structuredClone(x)`. `structuredClone` handles circular references, typed arrays, and other values that JSON serialization silently drops or corrupts. |
-| `prefer-switch-over-chained-if` | ⚠️ | Long if/else-if chains should be switch statements. | Convert a 4+ branch if/else-if chain into a `switch` statement. Switch makes the discriminant obvious and lets TypeScript warn on missing cases for union types. |
-| `prefer-ternary` | ⚠️ | Simple if/else assignment can be a ternary expression. | Replace `if (c) { x = a; } else { x = b; }` with `x = c ? a : b;`. |
-| `prefer-top-level-await` | ⚠️ | Prefer top-level await over async IIFE or async-function-then-call patterns. | Use top-level `await` directly instead of wrapping in an async IIFE or defining an async function and immediately calling it. Top-level await is supported in ESM. |
-| `prefer-type-error` | ⚠️ | Use `TypeError` instead of `Error` in type-checking conditions. | When throwing inside an `if` that performs a type check (typeof, instanceof, Array.isArray, etc.), use `new TypeError()` instead of `new Error()` to signal the caller passed a wrong type. |
-| `prefer-while` | ⚠️ | `for (;;)` or `for (;cond;)` without init/update — use `while` instead. | Replace `for (;;)` with `while (true)` and `for (;condition;)` with `while (condition)`. The `for` form hides intent when init and update are unused. |
-| `pure-by-default` | ⚠️ | Function references top-level mutable state. | Pass the state as a parameter instead of referencing a top-level `let`/`var`. This makes the function pure and easier to test. |
-| `redundant-logical-operand` | ⚠️ | Logical expression with a redundant boolean-literal or null operand. | Drop the redundant term: `true && x` and `x && true` are `x`; `false && x` is `false`; `false \|\| x` and `x \|\| false` are `x`; `true \|\| x` is `true`; `null ?? x` is `x`. |
-| `regex-documented-with-semantics` | ⚠️ | Complex regex (>20 chars) without a comment explaining its purpose. | Add a comment above the regex explaining what it matches. |
-| `relative-url-style` | ⚠️ | Remove the `./` prefix from relative URLs in `new URL()`. | Remove the leading `./` from the first argument of `new URL()`: use `new URL('file.js', base)` instead of `new URL('./file.js', base)`. The `./` is redundant in URL resolution. |
-| `require-array-join-separator` | ⚠️ | Enforce using the separator argument with `Array#join()`. | Pass an explicit separator: `arr.join(',')`. The default is `','` but relying on it harms readability. |
-| `require-explicit-undefined` | ⚠️ | Functions that return a value must use `return undefined;` — bare `return;` hides intent. | Replace bare `return;` with `return undefined;` inside functions whose return type is not `void` or `never`. The explicit form makes the undefined value a deliberate choice, not an accident. |
-| `require-module-attributes` | ⚠️ | Import/export with empty attribute list `with {}` is not allowed. | Either add the required attributes (e.g. `with { type: 'json' }`) or remove the empty `with {}` clause. |
-| `require-module-specifiers` | ⚠️ | Re-export statements with empty specifier lists (`export {} from 'x'`) are not allowed. | Add specifiers to the re-export, or remove the statement entirely. |
-| `require-number-to-fixed-digits-argument` | ⚠️ | Enforce using the digits argument with `Number#toFixed()`. | Pass an explicit digits argument: `num.toFixed(0)`. The default is `0` but relying on it harms readability. |
-| `require-post-message-target-origin` | ⚠️ | `postMessage()` called without the `targetOrigin` argument. | Always provide a `targetOrigin` argument (e.g. `self.location.origin` or `'*'`) to `postMessage()`. |
-| `sonarjs-no-empty-collection` | ⚠️ | Iterating an array literal that's defined as `[]` and never mutated does nothing. | Either populate the array before the loop, or remove the dead iteration. |
-| `sonarjs-no-gratuitous-expressions` | ⚠️ | Boolean expression that always evaluates to the same value — dead branch or buggy condition. | Remove the constant branch, or fix the condition to actually depend on a runtime value. |
-| `sonarjs-no-useless-catch` | ⚠️ | `catch (e) { throw e; }` adds no value — remove the try/catch. | Delete the try/catch and let the exception propagate. If you wanted to add context, wrap the error or convert to a typed Result; if you wanted to log, log alongside the rethrow. |
-| `strings-comparison` | ⚠️ | Relational comparison with string literals uses lexicographic order. | Use `localeCompare()` for locale-aware ordering, or compare numeric values explicitly. |
-| `switch-case-braces` | ⚠️ | Missing braces in `case` clause. | Wrap `case` clause body in `{ }` to create a block scope. Without braces, `let`/`const`/`class`/`function` declarations leak into the enclosing `switch` scope and can cause `SyntaxError` or surprising variable sharing between cases. |
-| `switch-case-break-position` | ⚠️ | `break`/`return` should be inside the case block, not after it. | Move the `break`/`return`/`continue`/`throw` statement inside the `{ }` block of the case clause. Placing it outside creates an inconsistent style where the block looks complete but the terminator dangles after the closing brace. |
-| `template-indent` | ⚠️ | Template literals should not inherit indentation from surrounding code. | Strip the common leading whitespace from the template literal content, or use a dedent/stripIndent helper. |
-| `text-encoding-identifier-case` | ⚠️ | Enforce consistent case for text encoding identifiers (`utf-8`, `ascii`). | Use lowercase: `'utf-8'` instead of `'UTF-8'`, `'ascii'` instead of `'ASCII'`. |
-| `throw-new-error` | ⚠️ | Use `new` when creating an error. | Replace `throw Error(...)` with `throw new Error(...)`. Calling Error without `new` is valid but inconsistent and can confuse readers about whether a new instance is created. |
-| `todo-needs-issue-link` | ⚠️ | TODO/FIXME/HACK comment without an issue reference. | Add a ticket or URL reference: `// TODO(#1234): ...` or `// TODO(https://...): ...`. |
-| `too-many-break-or-continue` | ⚠️ | Loop contains 2+ `break`/`continue` statements — consider refactoring. | Extract the loop body into a function, use early returns, or restructure the logic. Multiple break/continue statements make loops hard to follow and often indicate the loop is doing too much. |
-| `unicorn-no-useless-undefined` | ⚠️ | Explicit `undefined` in a position where the default is already undefined is redundant. | Drop the explicit `undefined`: `return;` instead of `return undefined;`, `let x;` instead of `let x = undefined;`. |
-| `unicorn-prefer-array-flat-map` | ⚠️ | `.map(fn).flat()` walks the array twice — `.flatMap(fn)` does it once. | Replace `xs.map(fn).flat()` with `xs.flatMap(fn)`. Same shape, half the work. |
-| `unused-enum-member` | ⚠️ | Enum member is declared but never referenced in this file. | Remove the unused member, or reference it where the enum is consumed. |
-| `useless-string-operation` | ❌ | String method result is ignored — strings are immutable. | Assign the result: `str = str.trim()`. String methods return a new value and never mutate in place. |
-| `workaround-reference` | ⚠️ | Workaround/hack comment without a reference to the upstream issue. | Add a link or issue number explaining what the workaround is for. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `arguments-order` | Detects call sites where argument names suggest wrong order. | Check argument order matches parameter order in the function signature. |
+| `array-callback-without-return` | Array method callback with block body but no `return` statement. | Add a `return` statement inside the callback body, or use a concise arrow expression without braces. |
+| `arrow-this-in-function` | `this` inside an arrow function with no enclosing regular function or method binds to the outer scope and is likely a bug. | Arrow functions don't bind their own `this`, use regular function or ensure nested in function context |
+| `async-await-only` | Promise chain (`.then()`/`.catch()`) instead of `async`/`await`. | Use `async`/`await` instead of `.then()`/`.catch()` chains. |
+| `block-scope-case` | `case` clause contains a lexical declaration that is not wrapped in a block. | Wrap the case body in braces: `case X: { const y = ...; break; }`. Otherwise the binding leaks into sibling cases and can trigger TDZ errors. |
+| `boundary-condition` | Array boundary access (`arr[0]` or `arr[arr.length - 1]`) without a length guard or fallback. | Guard the access with `if (arr.length)` / `arr.length > 0`, use `arr.at(0)` / `arr.at(-1)`, or provide a fallback via `?? fallback` or `\|\| fallback`. On an empty array, a raw boundary access returns `undefined` and will crash downstream code. |
+| `catch-error-name` | The catch parameter should be named `error`. | Rename the catch parameter to `error` (or a suffixed variant like `parseError` when disambiguating nested catches). Use `_` if the parameter is unused. |
+| `cognitive-complexity` | Function cognitive complexity exceeds 5. | Simplify by extracting helpers, removing nesting, or splitting into smaller functions. Cognitive complexity measures how hard a function is to understand. |
+| `comma-or-logical-or-case` | Switch `case` uses comma or `\|\|` instead of fall-through. | Use separate `case` clauses with fall-through instead of comma or `\|\|` in a single `case`. |
+| `comment-max-words` | Comment sentence exceeds 25 words. | Split long comment sentences — one idea per sentence keeps the intent scannable. |
+| `consistent-date-clone` | Prefer `new Date(date)` over `new Date(date.getTime())` for cloning. | Remove the unnecessary `.getTime()` / `.valueOf()` call — `new Date(date)` already clones correctly. |
+| `consistent-destructuring` | Use destructured variables over properties. | A property was already destructured from this object — destructure this property too instead of accessing it via dot notation. |
+| `consistent-empty-array-spread` | Parenthesize ternaries spread into array literals. | Wrap the ternary in parentheses: `[...(condition ? ['a'] : [])]` instead of `[...condition ? ['a'] : []]`. Without parens the precedence is ambiguous and confusing. |
+| `consistent-existence-index-check` | Enforce `=== -1` / `!== -1` for index existence checks. | Use `index === -1` to check non-existence and `index !== -1` to check existence, instead of `< 0`, `>= 0`, or `> -1`. |
+| `consistent-function-scoping` | Nested function does not capture any variable from its parent scope and could be hoisted. | Move the inner function to the outer scope or module level. Functions that don't close over parent state belong at the top level where they're easier to test and reuse. |
+| `consistent-template-literal-escape` | Use `\${` instead of `$\{` to escape in template literals. | Escape the dollar sign (`\${`) rather than the opening brace (`$\{`) or both (`\$\{`). This is the consistent way to prevent expression interpolation in template literals. |
+| `custom-error-definition` | Enforce correct Error subclassing. | Use a class field `name = 'MyError';` instead of setting `this.name` in the constructor. Pass the error message to `super()` instead of setting `this.message`. |
+| `cyclomatic-complexity` | Functions with cyclomatic complexity > 10 are hard to test and maintain. | Refactor the function: extract helper functions, use early returns, replace conditionals with polymorphism or lookup tables. |
+| `data-clumps` | Same 3+ parameter names appear together in multiple function signatures. | Extract the repeated parameter group into a value object / options type. Data clumps indicate a missing abstraction — e.g. `(host, port, protocol)` should be a `ConnectionConfig`. |
+| `de-morgan-simplify` | Apply De Morgan's law: `!(a && b)` is `!a \|\| !b`, `!(a \|\| b)` is `!a && !b`. | Distribute the negation using De Morgan's law. `!(a && b)` becomes `!a \|\| !b` and `!(a \|\| b)` becomes `!a && !b`. The expanded form is easier to reason about. |
+| `deprecation-without-alternative` | Deprecation annotation missing a migration message. | Add a message indicating what to use instead: `#[deprecated(note = "Use X instead")]` in Rust, or text after `@deprecated` in JSDoc. |
+| `elseif-without-else` | `if/else if` chain without a final `else` clause. | Add a final `else` block to handle all remaining cases explicitly, even if it's just a comment or unreachable assertion. |
+| `empty-brace-spaces` | Do not add spaces between braces. | Remove whitespace between empty braces: `{  }` -> `{}`. |
+| `error-message` | Pass a message to the Error constructor. | Add a descriptive string message as the first argument to the Error constructor (or second for AggregateError, third for SuppressedError). Empty strings and non-string literals are also flagged. |
+| `error-message-is-remediation` | Error messages should describe what went wrong and what to do about it. | Replace short/noun-only error messages like `"Invalid"` or `"Not found"` with actionable messages: `"User not found — verify the ID and retry"`. Good errors contain a verb and guide the reader toward a fix. |
+| `error-without-cause` | new Error(e.message) drops the original stack — pass { cause: e }. | When wrapping a caught error, preserve the original stack and chain: `throw new Error('high-level message', { cause: original })`. Without `cause`, the debugger sees the wrapped message but loses the source location, type, and nested cause chain. |
+| `escape-case` | Use uppercase characters for the value of escape sequences. | Replace lowercase hex digits in escape sequences with uppercase: `\xff` -> `\xFF`, `\u00ff` -> `\u00FF`. |
+| `expiring-todo-comments` | TODO/FIXME with an expiration date that has passed should be resolved. | Resolve the TODO/FIXME — the expiration date has passed. Either complete the task or update the date. |
+| `explicit-length-check` | Enforce explicitly comparing the `length` or `size` property of a value. | Use `arr.length > 0` instead of `arr.length` and `arr.length === 0` instead of `!arr.length`. |
+| `expression-complexity` | Overly complex expression with too many logical/conditional operators. | Extract parts of the expression into named intermediate variables. Lines with 4+ logical/conditional operators are hard to read and reason about. |
+| `factory-di-shape` | `create*` factory functions should take a single deps object, not individual params. | Replace individual dependency parameters with a single object: `createService({ db, cache, logger })`. A deps object makes the dependency list extensible without breaking callers and reads as named arguments. |
+| `file-size-limit` | Source file exceeds the recommended line count. | Split the file into smaller, focused modules. |
+| `filename-naming-convention` | Filename does not match the expected naming convention for its language. | Use kebab-case for JS/TS filenames (e.g. `user-profile.ts`), PascalCase or kebab-case for Vue SFC filenames (e.g. `UserProfile.vue` or `user-profile.vue`), and snake_case for Rust filenames (e.g. `user_profile.rs`). |
+| `for-loop-increment-sign` | For-loop increment goes the wrong direction relative to the condition. | Fix the increment direction: use `i++` with `i <` conditions and `i--` with `i >` conditions. |
+| `function-doc-banned-verbs` | Function docstring opens with a verb that paraphrases the implementation. | Open the docstring with intent (`Ensure…`, `Return…`), not restatement (`Reads…`, `Iterates…`). |
+| `function-return-type` | Detects functions returning inconsistent types across branches. | Ensure all return paths return the same type, or use a discriminated union. |
+| `generator-without-yield` | Generator function does not contain a `yield` expression. | Add a `yield` expression or convert to a regular function. A generator without `yield` is misleading — callers expect lazy iteration. |
+| `halstead-complexity` | Function Halstead volume/difficulty/effort exceeds threshold. | Split the function into smaller helpers, reduce operator/operand churn, or extract repeated sub-expressions into named bindings. |
+| `id-length` | Identifier names shorter than `min` hide intent. | Rename to a full word — `createdAt` not `d`, `userCount` not `n`. Allow-list conventional short names in `comply.toml`:  [rules.id-length] exceptions = ["t", "i", "j"] exception_patterns = ["^[A-Z]$"] |
+| `inconsistent-function-call` | A function must be called consistently — always with `new` or always without. | Pick one style per function. If it sets `this.*`, always call with `new`; otherwise, never use `new`. |
+| `index-of-compare-to-positive` | `.indexOf(…) < 1` matches both index 0 and absence — use `< 0` or `!== -1`. | Replace `< 1` with `< 0` (absent) or `!== -1` (present) to disambiguate index 0. |
+| `intermediate-variables` | `if` condition chains three or more boolean operands. | Extract parts of the condition into named local variables so the `if` reads as one or two high-level checks. |
+| `invariant-requires-message` | `invariant()` call without a descriptive message. | Add a message as the second argument: `invariant(cond, "Router must be initialized")`. |
+| `justify-inaction` | Empty catch/else/match-arm/loop block without an explaining comment inside. | Add a comment inside the empty block explaining why the inaction is intentional, or remove the block if it is redundant. |
+| `max-call-chain-depth` | Deeply nested function calls like f(g(h(i(x)))) are hard to debug. | Extract intermediate variables to flatten the call stack. |
+| `nested-control-flow` | Deeply nested control flow (depth > 3) is hard to read and maintain. | Extract inner blocks into separate functions, use early returns or guard clauses to reduce nesting. |
+| `new-for-builtins` | Enforce `new` for constructors and disallow it for `Symbol`/`BigInt`. | Use `new Map()` instead of `Map()` for constructors that require it. Conversely, use `Symbol()` and `BigInt()` without `new` — they are factory functions, not constructors. |
+| `no-abusive-eslint-disable` | `eslint-disable` without specifying rules silences everything — too broad. | Specify the exact rules to disable: `eslint-disable-next-line no-console`. |
+| `no-accessor-recursion` | Disallow recursive access in getters and setters. | A getter that reads `this.foo` or a setter that writes `this.foo` on the same property triggers infinite recursion. Use a backing field (e.g. `this._foo`) or a `WeakMap`. |
+| `no-all-duplicated-branches` | All branches have the same implementation — the conditional is pointless. | Remove the conditional and keep just the body. Duplicated branches hide that the branching is no longer meaningful. |
+| `no-anonymous-default-export` | Disallow anonymous functions and classes as the default export. | Name the exported function or class. Anonymous default exports break refactoring tools, produce unhelpful stack traces, and make `import` auto-complete less useful. |
+| `no-arguments-usage` | Direct use of the `arguments` object is discouraged. | Use rest parameters (`...args`) instead of `arguments`. Rest parameters are a real Array and work with arrow functions. |
+| `no-array-callback-reference` | Do not pass a function reference directly to an array iterator method. | Wrap the callback: `.map(x => parseInt(x))` instead of `.map(parseInt)`. Passing a function reference exposes it to unexpected extra arguments (element, index, array). |
+| `no-array-delete` | `delete` on an array element creates a sparse hole instead of removing. | Use `Array.prototype.splice()` to remove elements: `arr.splice(index, 1)` instead of `delete arr[index]`. |
+| `no-array-method-this-argument` | Do not use the `thisArg` parameter in array methods. | Remove the second argument from the array method call. Use `.bind()` or an arrow function to bind context instead. |
+| `no-array-reduce` | `Array#reduce()` and `Array#reduceRight()` are not allowed. | Use a `for` loop, `for...of`, or other array methods instead of `.reduce()` / `.reduceRight()` for better readability. |
+| `no-array-reverse` | `Array#reverse()` mutates the array in place. | Use `.toReversed()` instead — it returns a new array without mutating the original. |
+| `no-array-sort-mutation` | Prefer `Array#toSorted()` over `Array#sort()` (mutates in place). | Replace `.sort()` with `.toSorted()`. `Array#sort()` mutates the array in place which can cause subtle bugs. `Array#toSorted()` returns a new sorted array, leaving the original unchanged. |
+| `no-assign-mutated-array` | Do not assign the result of a mutating array method (`sort`, `reverse`, `fill`). | Use `toSorted()`, `toReversed()`, or spread before mutating: `[...arr].sort()` |
+| `no-associative-arrays` | Arrays should not be used as associative arrays (use Map or object instead). | Use `Map<string, T>` or a plain object `Record<string, T>` instead of assigning string keys on an array. |
+| `no-async-constructor` | Constructors cannot be `async` — they must return the instance, not a Promise. | Use a static async factory method instead: `static async create() { ... return new MyClass(); }`. |
+| `no-await-expression-member` | Do not access a member directly from an await expression. | Extract the awaited value into a variable, then access the member: `const response = await fetch(url); const data = response.json();`. |
+| `no-await-in-promise-methods` | Promise in `Promise.all/race/any/allSettled()` should not be awaited. | Remove the `await` keyword from array elements passed to Promise methods. Awaiting inside the array serializes the calls, defeating the purpose of `Promise.all()`. |
+| `no-bitwise-in-boolean` | Bitwise operators in boolean contexts are likely typos. | Use `&&` instead of `&`, `\|\|` instead of `\|`. Bitwise operators in `if`/`while` conditions are almost always a mistake. |
+| `no-boolean-flag-param` | Boolean flag parameters hide two behaviors behind one signature. | Split into two named functions. `sendNotification(msg, isUrgent)` → `sendUrgentNotification(msg)` + `sendNormalNotification(msg)`. A ternary or options object is not a fix — the boolean must disappear from the signature. |
+| `no-built-in-override` | Overriding built-in globals like `Array`, `Object`, `Promise` shadows critical APIs. | Rename the variable. Overriding built-in globals breaks standard library behaviour and causes subtle bugs downstream. |
+| `no-case-label-in-switch` | Label statement inside switch looks like a case but is a JS label. | Use `case <value>:` instead. A bare `identifier:` inside a switch is a label statement, not a case branch. |
+| `no-collapsible-if` | Nested `if` can be merged with `&&`. | Merge `if (a) { if (b) { ... } }` into `if (a && b) { ... }`. Unnecessary nesting wastes indent levels. |
+| `no-collection-size-mischeck` | `.length >= 0` is always true; `.length < 0` is always false. | Use `.length > 0` to check non-empty, or `.length === 0` to check empty. |
+| `no-common-grab-bag` | Grab-bag filenames magnetize unrelated code. | Rename the file to describe what it actually owns. `common`/`utils`/`helpers`/`shared`/`misc` are magnet names that attract unrelated code over time. |
+| `no-console-spaces` | Leading/trailing spaces in `console.log` arguments produce misaligned output. | Remove the leading or trailing space from the string argument. Use comma-separated arguments for spacing instead. |
+| `no-constructor-side-effects` | `new X()` without assignment is a side-effect anti-pattern. | Assign the result of `new X()` to a variable, or refactor side effects out of the constructor into a static method. |
+| `no-deprecated-api` | Usage of deprecated Node.js or browser API. | Replace with the modern equivalent: `Buffer.from()` instead of `new Buffer()`, `url.URL` instead of `url.parse()`, etc. |
+| `no-document-cookie` | Do not use `document.cookie` directly. | Use a cookie library (e.g. `js-cookie`, `cookie`) instead of raw `document.cookie` access. Direct cookie manipulation is error-prone and hard to maintain. |
+| `no-duplicate-string` | String literal appears 3+ times — extract to a constant. | Extract the repeated string into a named constant and reference it everywhere. Reduces typo risk and makes future changes a single-line edit. |
+| `no-duplicated-branches` | Two branches of an if/else have identical bodies. | Merge the conditions or remove the duplicate branch. |
+| `no-element-overwrite` | A collection element is written and immediately overwritten on the next line. | Remove the first assignment or use a different key/index. |
+| `no-empty-catch` | Disallow empty catch blocks that silently swallow errors. | Handle the error explicitly — log it, rethrow, or add a comment explaining why swallowing is intentional. |
+| `no-empty-file` | Empty files are not allowed — they add noise without value. | Add meaningful content or delete the file. |
+| `no-equals-in-for-termination` | `for` loop uses `==` or `===` in the termination condition. | Use `<`, `<=`, `>`, or `>=` instead. Equality checks in `for` termination either never execute the body or loop forever if the counter skips the target value. |
+| `no-for-in-iterable` | `for...in` iterates over object keys, not values — use `for...of` for arrays. | Replace `for (x in arr)` with `for (x of arr)`. `for...in` enumerates property names (strings), including inherited ones, which is almost never the intent for arrays or iterables. |
+| `no-for-loop` | Use a `for-of` loop instead of this `for` loop. | Replace `for (let i = 0; i < arr.length; i++)` with `for (const item of arr)`. If the index is needed, use `for (const [i, item] of arr.entries())`. |
+| `no-function-declaration-in-block` | Function declaration inside a control-flow block has inconsistent hoisting behavior. | Move the function declaration to the top level, or use a `const fn = () => { ... }` expression instead. Function declarations in blocks are only conditionally hoisted in sloppy mode and forbidden in strict mode by some engines. |
+| `no-globals-shadowing` | Local variable shadows a well-known global identifier. | Rename the local variable to avoid shadowing `console`, `window`, `document`, `process`, `global`, `globalThis`, `setTimeout`, or `setInterval`. Shadowing globals makes code confusing and can break runtime behavior. |
+| `no-gratuitous-expression` | Boolean expression is always true or always false. | Remove the dead branch. A condition that can never flip is either a bug or leftover from a refactor. |
+| `no-hex-escape` | Enforce the use of Unicode escapes instead of hexadecimal escapes. | Replace `\x41` with `\u0041` — Unicode escapes are more consistent and readable. |
+| `no-history-in-comments` | Comment narrates history rather than describing current behaviour. | Keep comments about what the code does now. Put history in git log or commit messages. |
+| `no-identical-conditions` | Duplicate condition in `if / else if` chain is always dead code or a bug. | Change one of the duplicate conditions so each branch is reachable. |
+| `no-identical-expressions` | Identical expressions on both sides of a binary operator are usually a bug. | Use two different expressions, or simplify the expression. |
+| `no-identical-functions` | Two functions have identical implementations. | Extract the duplicated logic into a shared helper. Identical functions diverge silently when one gets patched. |
+| `no-ignored-exceptions` | Empty `catch` block silently swallows exceptions. | At minimum, log the error or re-throw it. Silent catch blocks hide bugs and make debugging extremely difficult. If intentional, add an explanatory comment. |
+| `no-ignored-return` | Return value of a pure method is ignored — the call has no effect. | Assign or return the result: `const result = arr.map(...)` or use a side-effect method instead. |
+| `no-immediate-mutation` | Disallow immediate mutation after variable assignment. | Chain the mutation onto the initialiser: `const arr = [3,1,2].sort()` instead of declaring then mutating on the next line. This makes the intent clearer and avoids an intermediate mutable state. |
+| `no-implicit-deps` | Import of a bare specifier that is not a known Node.js builtin — may be an unlisted dependency. | Ensure the package is listed in `package.json` dependencies. Bare specifier imports that are neither relative paths nor Node.js builtins may break when not explicitly installed. |
+| `no-in-misuse` | `in` operator on arrays checks keys (indices), not values — use `.includes()` instead. | Replace `x in arr` with `arr.includes(x)` or use a `Set`. |
+| `no-inconsistent-returns` | Function has inconsistent returns — some paths return a value, others return nothing. | Ensure every return path either returns a value or returns nothing. Mixing `return expr;` with bare `return;` or implicit returns is confusing. |
+| `no-incorrect-string-concat` | Suspicious string concatenation with a number variable. | Use explicit conversion: `"text" + String(num)` or template literals: `\`text${num}\``. |
+| `no-inline-function-event-listener` | Inline function passed to addEventListener cannot be removed later. | Extract callback to named function for proper cleanup |
+| `no-instanceof-builtins` | Avoid `instanceof` for built-in types — it fails across realms. | Use `Array.isArray(x)` instead of `x instanceof Array`. For errors, check the `name` property or use `Error.isError()`. `instanceof` breaks across iframes, VMs, and module boundaries. |
+| `no-invalid-fetch-options` | `fetch()` / `new Request()` with `body` on a GET or HEAD request is invalid. | Remove the `body` property or change the method to POST/PUT/PATCH. |
+| `no-invalid-remove-event-listener` | `removeEventListener` with an inline function or `.bind()` call never matches the original listener. | Pass a stable function reference to `removeEventListener` — store the bound/arrow function in a variable first. |
+| `no-invariant-returns` | Function always returns the same literal value. | If the return value never varies, the function likely has dead logic or should be a constant. |
+| `no-inverted-boolean-check` | `!a === b` negates `a` before comparing — likely meant `a !== b`. | The `!` operator binds tighter than `===`/`!==`, so `!a === b` is `(!a) === b`, not `!(a === b)`. Use `a !== b` or wrap explicitly: `!(a === b)`. |
+| `no-logger-in-business-logic` | Logging calls in business logic (service/domain/core/model/entity layers). | Remove direct `logger.*` / `console.log` calls from business logic. Use a `withLogging()` wrapper or emit domain events instead. Logging is a cross-cutting concern — it belongs in infrastructure, not domain code. |
+| `no-lonely-if` | Unexpected `if` as the only statement in an `else` block. | Replace `else { if (cond) { ... } }` with `else if (cond) { ... }`. The `else if` form reduces nesting and makes the intent clearer. NOTE: this is different from `no-collapsible-if` which merges nested `if` without `else` using `&&`. |
+| `no-loop-counter-reassign` | Assignment to a `for` loop counter inside the loop body causes subtle bugs. | Use a separate variable instead of reassigning the loop counter. Modifying the counter inside the body makes the loop hard to reason about and often hides off-by-one errors. |
+| `no-magic-array-flat-depth` | Disallow a magic number as the `depth` argument in `Array#flat()`. | Extract the depth into a named constant, or use `Infinity` for unbounded flattening. |
+| `no-magic-numbers` | Magic numbers in TS/JS make code harder to understand — use named constants instead. | Extract the number into a named `const`. TS enums, numeric literal types, `readonly` properties, and common values (0, 1, -1) are allowed. |
+| `no-misleading-array-reverse` | `.reverse()`, `.sort()`, `.fill()` mutate in place and return the same reference — assigning or returning the result is misleading. | These methods mutate the original array and return the same reference. Use `[...arr].reverse()` or `arr.toReversed()` to avoid mutating the original. |
+| `no-misplaced-loop-counter` | `for` loop update clause modifies a different variable than the condition. | Ensure the update expression (`i++`) modifies the same variable used in the loop condition (`i < n`). Mismatched variables usually indicate a copy-paste bug. |
+| `no-multi-op-oneliner` | Dense one-liners with many chained operators resist review. | Extract intermediate named variables. Each step of the expression should have a name that says what it represents — `activeItems`, `prices`, `subtotal`, `total`. |
+| `no-mutating-assign` | Disallow `Object.assign(target, ...)` when `target` is not an empty object literal — it mutates the target in place. | Use spread syntax `{...target, ...source}` or `Object.assign({}, target, source)` to produce a new object instead of mutating. |
+| `no-named-default` | Disallow `import { default as foo }` — use `import foo` instead. | Replace `import { default as foo } from './m'` with `import foo from './m'`. The named form is verbose and obscures the intent of importing the default export. |
+| `no-negated-condition` | Disallow negated conditions with an else branch. | Swap the if/else branches (or ternary arms) and remove the negation for clearer intent. |
+| `no-negation-in-equality-check` | Negated expression in equality check is a precedence bug. | `!x === y` is parsed as `(!x) === y`, not `!(x === y)`. Use `x !== y` or wrap explicitly: `!(x === y)`. |
+| `no-nested-assignment` | Assignment inside a condition or sub-expression is likely a bug. | Move the assignment before the condition: `x = value; if (x) { ... }`. If intentional, use a separate statement. |
+| `no-nested-incdec` | `++` or `--` used inside an expression, not as a standalone statement. | Separate the increment/decrement from the expression. Write `i++; arr[i] = x;` instead of `arr[i++] = x;` to make the order of operations explicit. |
+| `no-nested-switch` | `switch` inside another `switch` is hard to follow. | Extract the inner switch into a separate function. Nested switches create deeply indented, hard-to-read code that is easy to get wrong. |
+| `no-nested-template-literal` | Nested template literal — extract to a named variable. | Extract the inner template to a named variable. Nested backticks are hard to read and easy to misparse. |
+| `no-nested-ternary` | Nested ternaries are hard to read and easy to misparse. | Nested ternary — extract to if/else or a named variable for each branch. |
+| `no-new-regex-with-variable` | `new RegExp(variable)` enables ReDoS attacks. | Replace dynamic regex construction with a literal regex or a vetted safe-regex library. User-controlled patterns can trigger exponential backtracking and freeze the event loop. |
+| `no-object-as-default-parameter` | Do not use an object literal as a default parameter value. | Use destructuring with individual defaults instead of a default object literal. `function f({ timeout = 1000 } = {})` is clearer and avoids the all-or-nothing replacement problem when a caller passes a partial object. |
+| `no-one-iteration-loop` | Loop body always exits on the first iteration. | Remove the loop — it is equivalent to the body running once. If a loop is intended, ensure the exit statement is guarded by a condition. |
+| `no-primitive-wrappers` | `new String()`, `new Number()`, `new Boolean()` create wrapper objects, not primitives. | Use primitive literals or factory functions without `new`: `String(x)`, `Number(x)`, `Boolean(x)`. |
+| `no-process-exit` | `process.exit()` terminates abruptly — throw an error instead. | Replace `process.exit()` with `throw new Error(...)`. Only use `process.exit()` in CLI entry points. |
+| `no-redundant-assignment` | Variable is assigned then immediately overwritten. | Remove the first assignment — it has no observable effect. |
+| `no-redundant-boolean` | Redundant boolean literal in a return or condition. | Simplify: `if (x) return true; else return false;` → `return x;`. `x === true` → `x`. The boolean adds no information. |
+| `no-redundant-clsx` | `clsx()` / `cn()` called with a single static string is redundant. | Remove clsx/cn wrapper when using single static string |
+| `no-redundant-jump` | Redundant `return;` at end of function or `continue;` at end of loop body. | Remove the redundant `return;` or `continue;` — execution already falls through naturally. |
+| `no-redundant-null-undefined-check` | Comparing the same operand against both `null` and `undefined` is a verbose nullish check. | Collapse `x !== null && x !== undefined` (or the `x === null \|\| x === undefined` mirror) into a single strict, type-narrowing guard — not the loose `x != null`, which fights projects that ban `==`/`!=`. Define once: `function isDefined<T>(v: T): v is NonNullable<T> { return v !== null && v !== undefined; }`, then use `isDefined(x)` / `!isDefined(x)`. It narrows to `NonNullable<T>` (e.g. `arr.filter(isDefined)`). No autofix — the helper's name and location are project-specific. |
+| `no-shallow-passthrough-method` | Method body only forwards arguments to another method with the same signature. | Inline the call at each call-site or add real behaviour — a pure pass-through adds a layer with no value. |
+| `no-side-effects-in-initialization` | Top-level side effects (bare calls, `new`, IIFE) at module scope prevent tree-shaking. | Avoid side effects at module top-level for tree-shaking |
+| `no-single-promise-in-promise-methods` | Wrapping a single-element array with `Promise.all/any/race()` is unnecessary. | Use the value directly instead of wrapping it in a Promise method: `await single` instead of `await Promise.all([single])`. |
+| `no-small-switch` | `switch` with fewer than 3 cases — use `if/else` instead. | Replace small `switch` statements (< 3 cases) with `if/else` chains. `switch` adds indentation and boilerplate (`break`, `case`, `default`) that isn't justified for 1-2 branches. |
+| `no-sort-without-comparator` | `.sort()` without comparator sorts lexicographically. | Pass an explicit comparator: `arr.sort((a, b) => a - b)` for numbers. Default `.sort()` converts to strings, so `[10, 2, 1].sort()` yields `[1, 10, 2]`. |
+| `no-static-only-class` | Disallow classes that only have static members. | Replace the class with plain exported functions or an object literal. Static-only classes add indirection without benefit — they cannot be instantiated meaningfully and prevent tree-shaking. |
+| `no-thenable` | Disallow `then` property on objects and classes. | Rename the `then` method/property. Objects with a `then` method are treated as thenables by `await` and `Promise.resolve()`, causing unexpected behavior. |
+| `no-this-assignment` | Disallow assigning `this` to a variable. | Use an arrow function instead of capturing `this` in a variable. Arrow functions lexically bind `this`, making the alias unnecessary and removing a common source of bugs. |
+| `no-throw` | Never throw — Result<T, E> surfaces errors as values. | Use Result<T, E> instead of throw — surface errors as values, not exceptions. Callers can't see thrown errors in the type signature. |
+| `no-try-promise` | Promise rejection inside try/catch without `await` won't be caught. | Add `await` before promise-returning calls inside try blocks, or use `.catch()` directly. Without `await`, the promise rejects asynchronously and the `catch` block never runs. |
+| `no-typeof-undefined` | Prefer direct `=== undefined` comparison when the operand is guaranteed to be a declared binding (e.g. a property access). | When the operand is a member expression like `obj.foo`, replace `typeof obj.foo === 'undefined'` with `obj.foo === undefined`. Keep `typeof` when the operand is a bare identifier that may not be declared — `x === undefined` throws ReferenceError in that case. |
+| `no-undefined-argument` | Passing `undefined` as a function argument is pointless. | Omit the argument instead of passing `undefined` explicitly. |
+| `no-undefined-assignment` | Assigning `undefined` explicitly is unnecessary. | Use `let x;` instead of `let x = undefined;`, or use `delete obj.prop` instead of `obj.prop = undefined`. |
+| `no-unenclosed-multiline-block` | `if`/`for`/`while` without braces and a multiline body is a bug magnet. | Always wrap `if`/`for`/`while` bodies in curly braces `{}` when the body is on the next line. |
+| `no-unnecessary-array-flat-depth` | Disallow using `1` as the `depth` argument of `Array#flat()`. | Remove the argument: `.flat()` defaults to depth 1. |
+| `no-unnecessary-array-splice-count` | Disallow unnecessary `.length` or `Infinity` as the count argument of `Array#splice()` / `Array#toSpliced()`. | Remove the second argument: `.splice(start)` deletes all elements from `start` to the end. |
+| `no-unnecessary-await` | Do not `await` non-promise values. | Remove the unnecessary `await` — literals, arrays, functions, and other non-thenable values resolve synchronously and the `await` just adds confusion. |
+| `no-unnecessary-slice-end` | Disallow unnecessary `.length` or `Infinity` as the `end` argument of `slice()`. | Remove the second argument: `.slice(start)` already goes to the end. |
+| `no-unreadable-array-destructuring` | Array destructuring may not contain consecutive ignored values. | Use index access instead: `const third = arr[2]`. Consecutive commas like `[,, x,,,, y]` are hard to read and easy to miscount. |
+| `no-unreadable-iife` | IIFE with parenthesized arrow function body is unreadable. | Extract the inner expression from the arrow function body into a variable, or remove the unnecessary parentheses around the body. |
+| `no-unthrown-error` | `new Error(...)` is created but never thrown, returned, or assigned. | Add `throw` before `new Error(...)`, or assign/return it. |
+| `no-unused-collection` | Collection is populated but never read. | Either use the collection (iterate, return, pass to a function) or remove the dead code. Populated-but-unread collections indicate logic that was never finished or already removed. |
+| `no-unused-template-literal` | Template literal without interpolation or special characters — use a string literal. | Replace the backticks with quotes: `` `bar` `` becomes `"bar"`. |
+| `no-useless-collection-argument` | Disallow useless values in `Set`, `Map`, `WeakSet`, or `WeakMap` constructors. | Remove the empty/null/undefined argument from the collection constructor. `new Set([])` and `new Map(undefined)` are equivalent to `new Set()` and `new Map()`. |
+| `no-useless-error-capture-stack-trace` | Unnecessary `Error.captureStackTrace()` in Error subclass constructor. | Remove the `Error.captureStackTrace(this)` call. Built-in Error subclasses already capture the stack trace automatically via `super()`. (Keep the two-argument `Error.captureStackTrace(this, constructorOpt)` form — it trims constructor frames from the trace.) |
+| `no-useless-fallback-in-spread` | Disallow useless fallback when spreading in object literals. | Remove the `\|\| {}` or `?? {}` fallback — spreading `undefined`/`null` is already a no-op in object literals. |
+| `no-useless-increment` | `return x++` / `return x--` returns the value *before* the increment. | Increment before the return (`x++; return x;`) or use prefix (`return ++x`). |
+| `no-useless-iterator-to-array` | Disallow unnecessary `.toArray()` on iterators. | Remove `.toArray()` — the consuming context already accepts iterables. `for…of`, spread, `yield*`, `new Set(…)`, `Array.from(…)`, and `Object.fromEntries(…)` all work directly on iterators. |
+| `no-useless-length-check` | Disallow useless array length check. | Remove the redundant `.length` guard. `Array#some()` already returns `false` for an empty array, and `Array#every()` already returns `true` for an empty array. The length check adds no value. |
+| `no-useless-promise-resolve-reject` | Disallow returning `Promise.resolve/reject()` in async functions. | In an async function, `return value` already wraps in `Promise.resolve()` and `throw error` already wraps in `Promise.reject()`. Remove the unnecessary wrapper. |
+| `no-useless-spread` | Disallow unnecessary spread. | Remove the redundant spread — `[...[1,2]]` is just `[1,2]` and `{...{a:1}}` is just `{a:1}`. |
+| `no-useless-switch-case` | Disallow useless case in switch statements. | Remove the empty case that falls through to `default` — it has no effect since `default` already handles all unmatched values. |
+| `no-valueof-field` | Do not define `valueOf` as a method or property on a class, interface, or object literal. | Avoid overriding valueOf, use explicit conversion methods |
+| `no-zero-fractions` | Disallow number literals with zero fractions or dangling dots. | Remove the unnecessary `.0` fraction — write `1` instead of `1.0`. |
+| `non-existent-operator` | Typo operator detected — `=+`, `=-`, `=!` are not valid operators. | Swap the characters: `=+` → `+=`, `=-` → `-=`, `=!` → `!=`. |
+| `number-literal-case` | Enforce proper case for numeric literals. | Use lowercase prefix/exponent (`0x`, `0b`, `0o`, `1e3`). Hex digits may be all-lowercase (`0xff`) or all-uppercase (`0xFF`) — only mixed-case (`0xfF`) is flagged. |
+| `numeric-separators-style` | Enforce the style of numeric separators by correctly grouping digits. | Add underscores to group digits: `1000000` → `1_000_000`. |
+| `operation-returning-nan` | Arithmetic operation will produce `NaN`. | Convert the operand to a number first (`Number(x)`, `parseInt(x)`, `+x`) or fix the expression. Arithmetic on `undefined` or non-numeric strings always returns `NaN`. |
+| `prefer-add-event-listener` | Prefer `.addEventListener()` over `on`-event property assignment. | Replace `element.onclick = handler` with `element.addEventListener('click', handler)`. `addEventListener` supports multiple listeners and provides better control via options (capture, passive, once). |
+| `prefer-array-find` | Prefer `.find(…)` over `.filter(…)[0]` or `.filter(…).at(0)`. | Replace `.filter(…)[0]` with `.find(…)` to short-circuit on the first match. |
+| `prefer-array-flat` | Prefer `.flat()` over legacy array flattening techniques. | Replace `[].concat(…arr)` or `.reduce((a,b) => a.concat(b), [])` with `.flat()`. |
+| `prefer-array-index-of` | Prefer `.indexOf(val)` over `.findIndex(x => x === val)`. | Replace `.findIndex(x => x === val)` with `.indexOf(val)` for simple equality checks. |
+| `prefer-array-some` | Prefer `.some(…)` over `.filter(…).length` checks. | Replace `.filter(…).length > 0` with `.some(…)` — it short-circuits. |
+| `prefer-array-to-spliced` | Prefer `toSpliced()` over `slice().splice()` for immutable splice. | Use `arr.toSpliced(start, deleteCount, ...items)` instead. |
+| `prefer-at` | Prefer `.at()` method for index access and `String#charAt()`. | Use `.at(-1)` instead of `[arr.length - 1]` for last-element access, and `str.at(0)` instead of `str.charAt(0)`. The `.at()` method handles negative indices natively. |
+| `prefer-bigint-literals` | Prefer `BigInt` literals over `BigInt(…)` constructor. | Replace `BigInt(123)` with `123n` — the literal form is shorter and clearer. |
+| `prefer-blob-reading-methods` | Prefer `Blob#text()` / `Blob#arrayBuffer()` over `FileReader` methods. | Use `await blob.text()` instead of `reader.readAsText(blob)`, or `await blob.arrayBuffer()` instead of `reader.readAsArrayBuffer(blob)`. |
+| `prefer-class-fields` | Prefer class field declarations over `this` assignments in constructors for static values. | Move the literal assignment from the constructor to a class field declaration. Class fields are more declarative and make the default value visible at a glance. |
+| `prefer-classlist-toggle` | Prefer `Element#classList.toggle()` over conditional `add`/`remove`. | Replace `if (c) el.classList.add('x') else el.classList.remove('x')` with `el.classList.toggle('x', c)`. The `toggle` method with a force argument is cleaner and avoids conditional branching. |
+| `prefer-code-point` | Prefer `String#codePointAt()` over `String#charCodeAt()` and `String.fromCodePoint()` over `String.fromCharCode()`. | Use `codePointAt()` instead of `charCodeAt()` and `String.fromCodePoint()` instead of `String.fromCharCode()`. The code-point variants handle full Unicode (including astral symbols) correctly. |
+| `prefer-concise-arrow-body` | Arrow function body contains a single `return` statement — use concise body form. | Replace `() => { return expr }` with `() => expr` (wrap object literals in parens: `() => ({...})`). |
+| `prefer-date-now` | Prefer `Date.now()` over `new Date().getTime()`, `+new Date()`, or `Number(new Date())`. | Replace with `Date.now()`. It is clearer, avoids allocating a throwaway `Date` object, and is faster. |
+| `prefer-default-last` | `default` clause in switch should be the last clause. | Move the `default:` clause to the end of the switch statement for readability. |
+| `prefer-default-parameters` | Prefer default parameters over reassignment. | Replace `x = x \|\| 'default'` / `x = x ?? 'default'` in the function body with a default parameter value `function f(x = 'default')`. Default parameters are clearer and avoid subtle bugs with falsy values. |
+| `prefer-destructuring-assignment` | Consecutive property accesses on the same object can be destructured. | Use destructuring: `const { x, y } = obj;` instead of separate `const x = obj.x; const y = obj.y;` declarations. Destructuring is more concise and makes the intent clear. |
+| `prefer-dom-node-append` | Prefer `Node#append()` over `Node#appendChild()`. | Replace `.appendChild(x)` with `.append(x)`. `.append()` accepts multiple arguments, strings, and never returns the appended node (avoiding subtle misuse). |
+| `prefer-dom-node-dataset` | Prefer `.dataset` over `.setAttribute('data-*')` / `.getAttribute('data-*')`. | Replace `.setAttribute('data-foo', v)` with `.dataset.foo = v` and `.getAttribute('data-foo')` with `.dataset.foo`. The `dataset` API is cleaner and avoids string-based attribute manipulation. |
+| `prefer-dom-node-remove` | Prefer `childNode.remove()` over `parentNode.removeChild(childNode)`. | Replace `parent.removeChild(child)` with `child.remove()`. The modern `.remove()` API is simpler and doesn't require a reference to the parent node. |
+| `prefer-dom-node-text-content` | Prefer `.textContent` over `.innerText`. | Replace `.innerText` with `.textContent`. `.textContent` is faster (no layout reflow), works on all node types, and returns text from hidden elements too. |
+| `prefer-early-return` | Function body is wrapped in a single `if` — invert it as a guard clause. | Invert the condition and return early: `if (!cond) return; ...` — reduces nesting and clarifies the happy path. |
+| `prefer-event-target` | Prefer `EventTarget` over `EventEmitter`. | Use the web-standard `EventTarget` class instead of Node's `EventEmitter` — it works in all runtimes. |
+| `prefer-export-from` | Prefer `export { x } from './m'` over import-then-re-export. | Replace `import { x } from './m'; export { x };` with `export { x } from './m';`. Direct re-export is shorter, avoids a binding in the local scope, and makes the re-export intent explicit. |
+| `prefer-global-this` | Prefer `globalThis` over `window`, `self`, and `global`. | Replace `window.`, `self.`, or `global.` with `globalThis.`. `globalThis` is the standard cross-platform way to access the global object in any JS environment. |
+| `prefer-immediate-return` | Variable is assigned and immediately returned. | Return the expression directly: `return computeValue()` instead of `const result = computeValue(); return result;`. |
+| `prefer-import-meta-properties` | Prefer `import.meta.filename` and `import.meta.dirname` over legacy techniques. | Replace `fileURLToPath(import.meta.url)` with `import.meta.filename` and `dirname(fileURLToPath(import.meta.url))` with `import.meta.dirname`. Node.js 21.2+ and Bun support these properties natively. |
+| `prefer-json-parse-buffer` | Prefer reading a JSON file as a buffer. | Remove the `'utf-8'` / `'utf8'` encoding argument from `fs.readFileSync()` when the result is passed to `JSON.parse()`. `JSON.parse()` accepts a `Buffer` directly, which avoids an intermediate string allocation. |
+| `prefer-keyboard-event-key` | Prefer `KeyboardEvent#key` over `KeyboardEvent#keyCode`. | Use `event.key` instead of `event.keyCode`, `event.charCode`, or `event.which`. The `.key` property returns a human-readable string and is the modern standard. |
+| `prefer-less-than` | Prefer `<` / `<=` over `>` / `>=` for readability. | Prefer `<` over `>` for readability |
+| `prefer-logical-operator-over-ternary` | Prefer `\|\|`/`??` over a ternary that repeats the test in a branch. | Replace `foo ? foo : bar` with `foo \|\| bar` (or `foo ?? bar`). |
+| `prefer-math-min-max` | Prefer `Math.min()`/`Math.max()` over comparison ternaries. | Replace `value > max ? max : value` with `Math.min(value, max)` (or `Math.max` for the inverse pattern). |
+| `prefer-math-trunc` | Prefer `Math.trunc(x)` over bitwise hacks like `x \| 0`, `~~x`, or `x >> 0`. | Replace bitwise truncation with `Math.trunc(x)`. Bitwise operators silently coerce to 32-bit integers and obscure intent. |
+| `prefer-modern-dom-apis` | Prefer `.before()` / `.replaceWith()` over `.insertBefore()` / `.replaceChild()`. | Replace `parent.insertBefore(newNode, ref)` with `ref.before(newNode)` and `parent.replaceChild(newNode, old)` with `old.replaceWith(newNode)`. The modern APIs are called on the target node directly, removing the need for a parent reference. |
+| `prefer-modern-math-apis` | Prefer modern `Math` APIs: `Math.hypot()`, `Math.log2()`, `Math.log10()`. | Replace `Math.sqrt(a*a + b*b)` with `Math.hypot(a, b)`, `Math.log(x) / Math.LN2` with `Math.log2(x)`, `Math.log(x) * Math.LOG2E` with `Math.log2(x)`, `Math.log(x) / Math.LN10` with `Math.log10(x)`, `Math.log(x) * Math.LOG10E` with `Math.log10(x)`. |
+| `prefer-module` | Prefer ESM (`import`/`export`) over CommonJS (`require`/`module.exports`). | Replace `require()` with `import`, `module.exports` / `exports.x` with `export`, and `__dirname` / `__filename` with `import.meta.dirname` / `import.meta.filename`. |
+| `prefer-native-coercion-functions` | Prefer using `String`, `Number`, `BigInt`, `Boolean`, and `Symbol` directly. | Pass the coercion function directly instead of wrapping it: `.map(Number)` instead of `.map(x => Number(x))`. |
+| `prefer-negative-index` | Prefer negative index over `.length - index` for `slice`, `splice`, `at`, `with`, and related methods. | Use a negative index directly (e.g. `str.slice(-3)`) instead of computing `.length - N`. Negative indices are shorter and less error-prone. |
+| `prefer-node-protocol` | Prefer `node:` protocol for Node.js builtin imports. | Replace bare builtin specifiers (`fs`, `path`, …) with `node:fs`, `node:path`. The `node:` prefix makes it unambiguous that the import targets a Node.js builtin, not a user-land package with the same name. |
+| `prefer-number-properties` | Prefer `Number.isNaN()`, `Number.parseInt()`, etc. over global equivalents. | Replace global `isNaN()`, `isFinite()`, `parseInt()`, `parseFloat()`, `NaN`, and `Infinity` with their `Number.*` equivalents. The `Number` methods are stricter (no implicit coercion) and the properties are unambiguous. |
+| `prefer-object-from-entries` | Prefer `Object.fromEntries()` over building objects from key-value pairs via `reduce`. | Use `Object.fromEntries(arr.map(…))` instead of `arr.reduce((acc, …) => ({ ...acc, … }), {})`. It is more readable and avoids quadratic spread copies. |
+| `prefer-object-literal` | Use `{}` instead of `new Object()`. | Replace `new Object()` with `{}` — object literals are cleaner and more idiomatic. |
+| `prefer-optional-catch-binding` | Prefer omitting the `catch` binding parameter when it is unused. | Remove the unused catch binding: use `catch { … }` instead of `catch (error) { … }`. Optional catch binding is supported in ES2019+. |
+| `prefer-promise-shorthand` | `new Promise` wrapping a single `resolve`/`reject` call — use `Promise.resolve`/`Promise.reject` instead. | Replace `new Promise((resolve) => resolve(x))` with `Promise.resolve(x)` and `new Promise((_, reject) => reject(x))` with `Promise.reject(x)`. |
+| `prefer-prototype-methods` | Prefer borrowing methods from the prototype instead of a literal instance. | Replace `{}.hasOwnProperty.call(…)` with `Object.prototype.hasOwnProperty.call(…)`, `[].slice.call(…)` with `Array.prototype.slice.call(…)`, etc. |
+| `prefer-query-selector` | Prefer `.querySelector()` / `.querySelectorAll()` over legacy DOM query methods. | Replace `.getElementById('x')` with `.querySelector('#x')`, and `.getElementsByClassName('x')` / `.getElementsByTagName('x')` / `.getElementsByName('x')` with `.querySelectorAll('.x')`. The `querySelector` API is more flexible and consistent. |
+| `prefer-reflect-apply` | Prefer `Reflect.apply(fn, thisArg, args)` over `fn.apply(thisArg, args)`. | Replace `fn.apply(ctx, args)` with `Reflect.apply(fn, ctx, args)`. `Reflect.apply` cannot be overridden and makes the intent explicit. |
+| `prefer-regexp-test` | Prefer `RegExp#test()` over `String#match()` in boolean contexts. | Use `/pattern/.test(str)` instead of `str.match(/pattern/)` when only a boolean result is needed. `test()` is faster because it stops at the first match. |
+| `prefer-response-static-json` | Prefer `Response.json()` over `new Response(JSON.stringify())`. | Replace `new Response(JSON.stringify(data), ...)` with `Response.json(data, ...)`. The static method sets the `Content-Type` header automatically and is more readable. |
+| `prefer-set-has` | Prefer `Set#has()` over `Array#includes()` when checking for existence or non-existence. | Convert the array to a `Set` and use `.has()` instead of `.includes()`. `Array#includes()` is O(n) per call; `Set#has()` is O(1). This matters when the check is inside a loop or called repeatedly. |
+| `prefer-set-size` | Prefer `Set#size` instead of spreading into an array and reading `.length`. | Replace `[...mySet].length` or `Array.from(mySet).length` with `mySet.size`. Spreading a Set into an array just to read its length is wasteful — `Set#size` is O(1). |
+| `prefer-single-boolean-return` | `if (cond) return true; else return false;` can be replaced by `return cond;`. | Return the condition (or its negation) directly: `return cond;` or `return !cond;`. |
+| `prefer-single-call` | Combine multiple consecutive `.push()`, `.classList.add()`, or `.classList.remove()` into one call. | Merge consecutive calls to the same method on the same receiver into a single call with multiple arguments. For example, `arr.push(a); arr.push(b);` becomes `arr.push(a, b);`. |
+| `prefer-spread` | Prefer the spread operator over `Array.from()`, `Array#concat()`, and `Array#slice()`. | Use `[...x]` instead of `Array.from(x)`, `[...arr, ...other]` instead of `arr.concat(other)`, and `[...arr]` instead of `arr.slice()`. The spread syntax is more idiomatic. |
+| `prefer-string-raw` | `String.raw` should be used to avoid escaping `\`. | Use `String.raw`\`...\`` for strings with multiple backslash escapes. This is clearer and avoids double-escaping mistakes. |
+| `prefer-string-replace-all` | Prefer `String#replaceAll()` over `String#replace()` with a global regex. | Replace `.replace(/pattern/g, replacement)` with `.replaceAll('pattern', replacement)`. `replaceAll()` is clearer in intent and avoids regex escaping pitfalls. |
+| `prefer-string-slice` | Prefer `String#slice()` over `String#substr()` and `String#substring()`. | Replace `.substring()` / `.substr()` with `.slice()`. `.slice()` has clearer negative-index semantics and is the modern standard. |
+| `prefer-string-trim-start-end` | Prefer `String#trimStart()` / `String#trimEnd()` over the deprecated `trimLeft()` / `trimRight()`. | Replace `.trimLeft()` with `.trimStart()` and `.trimRight()` with `.trimEnd()`. The `trimLeft`/`trimRight` aliases are deprecated in favor of the spec names. |
+| `prefer-structured-clone` | Prefer `structuredClone(…)` over `JSON.parse(JSON.stringify(…))` for deep cloning. | Replace `JSON.parse(JSON.stringify(x))` with `structuredClone(x)`. `structuredClone` handles circular references, typed arrays, and other values that JSON serialization silently drops or corrupts. |
+| `prefer-switch-over-chained-if` | Long if/else-if chains should be switch statements. | Convert a 4+ branch if/else-if chain into a `switch` statement. Switch makes the discriminant obvious and lets TypeScript warn on missing cases for union types. |
+| `prefer-ternary` | Simple if/else assignment can be a ternary expression. | Replace `if (c) { x = a; } else { x = b; }` with `x = c ? a : b;`. |
+| `prefer-top-level-await` | Prefer top-level await over async IIFE or async-function-then-call patterns. | Use top-level `await` directly instead of wrapping in an async IIFE or defining an async function and immediately calling it. Top-level await is supported in ESM. |
+| `prefer-type-error` | Use `TypeError` instead of `Error` in type-checking conditions. | When throwing inside an `if` that performs a type check (typeof, instanceof, Array.isArray, etc.), use `new TypeError()` instead of `new Error()` to signal the caller passed a wrong type. |
+| `prefer-while` | `for (;;)` or `for (;cond;)` without init/update — use `while` instead. | Replace `for (;;)` with `while (true)` and `for (;condition;)` with `while (condition)`. The `for` form hides intent when init and update are unused. |
+| `pure-by-default` | Function references top-level mutable state. | Pass the state as a parameter instead of referencing a top-level `let`/`var`. This makes the function pure and easier to test. |
+| `redundant-logical-operand` | Logical expression with a redundant boolean-literal or null operand. | Drop the redundant term: `true && x` and `x && true` are `x`; `false && x` is `false`; `false \|\| x` and `x \|\| false` are `x`; `true \|\| x` is `true`; `null ?? x` is `x`. |
+| `regex-documented-with-semantics` | Complex regex (>20 chars) without a comment explaining its purpose. | Add a comment above the regex explaining what it matches. |
+| `relative-url-style` | Remove the `./` prefix from relative URLs in `new URL()`. | Remove the leading `./` from the first argument of `new URL()`: use `new URL('file.js', base)` instead of `new URL('./file.js', base)`. The `./` is redundant in URL resolution. |
+| `require-array-join-separator` | Enforce using the separator argument with `Array#join()`. | Pass an explicit separator: `arr.join(',')`. The default is `','` but relying on it harms readability. |
+| `require-explicit-undefined` | Functions that return a value must use `return undefined;` — bare `return;` hides intent. | Replace bare `return;` with `return undefined;` inside functions whose return type is not `void` or `never`. The explicit form makes the undefined value a deliberate choice, not an accident. |
+| `require-module-attributes` | Import/export with empty attribute list `with {}` is not allowed. | Either add the required attributes (e.g. `with { type: 'json' }`) or remove the empty `with {}` clause. |
+| `require-module-specifiers` | Re-export statements with empty specifier lists (`export {} from 'x'`) are not allowed. | Add specifiers to the re-export, or remove the statement entirely. |
+| `require-number-to-fixed-digits-argument` | Enforce using the digits argument with `Number#toFixed()`. | Pass an explicit digits argument: `num.toFixed(0)`. The default is `0` but relying on it harms readability. |
+| `require-post-message-target-origin` | `postMessage()` called without the `targetOrigin` argument. | Always provide a `targetOrigin` argument (e.g. `self.location.origin` or `'*'`) to `postMessage()`. |
+| `sonarjs-no-empty-collection` | Iterating an array literal that's defined as `[]` and never mutated does nothing. | Either populate the array before the loop, or remove the dead iteration. |
+| `sonarjs-no-gratuitous-expressions` | Boolean expression that always evaluates to the same value — dead branch or buggy condition. | Remove the constant branch, or fix the condition to actually depend on a runtime value. |
+| `sonarjs-no-useless-catch` | `catch (e) { throw e; }` adds no value — remove the try/catch. | Delete the try/catch and let the exception propagate. If you wanted to add context, wrap the error or convert to a typed Result; if you wanted to log, log alongside the rethrow. |
+| `strings-comparison` | Relational comparison with string literals uses lexicographic order. | Use `localeCompare()` for locale-aware ordering, or compare numeric values explicitly. |
+| `switch-case-braces` | Missing braces in `case` clause. | Wrap `case` clause body in `{ }` to create a block scope. Without braces, `let`/`const`/`class`/`function` declarations leak into the enclosing `switch` scope and can cause `SyntaxError` or surprising variable sharing between cases. |
+| `switch-case-break-position` | `break`/`return` should be inside the case block, not after it. | Move the `break`/`return`/`continue`/`throw` statement inside the `{ }` block of the case clause. Placing it outside creates an inconsistent style where the block looks complete but the terminator dangles after the closing brace. |
+| `template-indent` | Template literals should not inherit indentation from surrounding code. | Strip the common leading whitespace from the template literal content, or use a dedent/stripIndent helper. |
+| `text-encoding-identifier-case` | Enforce consistent case for text encoding identifiers (`utf-8`, `ascii`). | Use lowercase: `'utf-8'` instead of `'UTF-8'`, `'ascii'` instead of `'ASCII'`. |
+| `throw-new-error` | Use `new` when creating an error. | Replace `throw Error(...)` with `throw new Error(...)`. Calling Error without `new` is valid but inconsistent and can confuse readers about whether a new instance is created. |
+| `todo-needs-issue-link` | TODO/FIXME/HACK comment without an issue reference. | Add a ticket or URL reference: `// TODO(#1234): ...` or `// TODO(https://...): ...`. |
+| `too-many-break-or-continue` | Loop contains 2+ `break`/`continue` statements — consider refactoring. | Extract the loop body into a function, use early returns, or restructure the logic. Multiple break/continue statements make loops hard to follow and often indicate the loop is doing too much. |
+| `unicorn-no-useless-undefined` | Explicit `undefined` in a position where the default is already undefined is redundant. | Drop the explicit `undefined`: `return;` instead of `return undefined;`, `let x;` instead of `let x = undefined;`. |
+| `unicorn-prefer-array-flat-map` | `.map(fn).flat()` walks the array twice — `.flatMap(fn)` does it once. | Replace `xs.map(fn).flat()` with `xs.flatMap(fn)`. Same shape, half the work. |
+| `unused-enum-member` | Enum member is declared but never referenced in this file. | Remove the unused member, or reference it where the enum is consumed. |
+| `useless-string-operation` | String method result is ignored — strings are immutable. | Assign the result: `str = str.trim()`. String methods return a new value and never mutate in place. |
+| `workaround-reference` | Workaround/hack comment without a reference to the upstream issue. | Add a link or issue number explaining what the workaround is for. |
 
 ## code-quality > imports
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `dead-export` | ⚠️ | Symbol is exported but never imported elsewhere in the project. | Remove the export (and the symbol if unused internally), or verify the export is still needed for an external consumer. Unused exports bloat the module's public surface. |
-| `duplicate-export` | ⚠️ | Same symbol is re-exported by multiple barrel files, creating ambiguous import paths. | Remove the duplicate re-export from one of the barrels so each symbol has a single canonical import path. |
-| `god-module` | ⚠️ | Module is imported by a large fraction of the project — centralisation smell. | Split the module into smaller, focused ones so importers only pull in what they need. High fan-in modules are rebuild and merge-conflict bottlenecks. |
-| `unused-file` | ⚠️ | File is not reachable from any entry point via the import graph. | Delete the file if it's truly unused, or add an import from a reachable module. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `dead-export` | Symbol is exported but never imported elsewhere in the project. | Remove the export (and the symbol if unused internally), or verify the export is still needed for an external consumer. Unused exports bloat the module's public surface. |
+| `duplicate-export` | Same symbol is re-exported by multiple barrel files, creating ambiguous import paths. | Remove the duplicate re-export from one of the barrels so each symbol has a single canonical import path. |
+| `god-module` | Module is imported by a large fraction of the project — centralisation smell. | Split the module into smaller, focused ones so importers only pull in what they need. High fan-in modules are rebuild and merge-conflict bottlenecks. |
+| `unused-file` | File is not reachable from any entry point via the import graph. | Delete the file if it's truly unused, or add an import from a reachable module. |
 
 ## code-quality > regex
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `regex-anchor-precedence` | ⚠️ | Anchor `^` or `$` in alternation may not bind as expected. | Wrap the alternation in a group: `/^(a\|b)$/` instead of `/^a\|b$/`. Without grouping, `/^a\|b$/` means `(^a)\|(b$)`, not `^(a\|b)$`. |
-| `regex-complexity` | ⚠️ | Regex pattern is overly complex (score > 20). | Break the regex into smaller named patterns or use a parser. Complex regex is hard to read, test, and maintain. |
-| `regex-no-control-chars` | ⚠️ | Raw control characters in regex are usually an accidental paste. | Replace the raw control byte with an explicit escape (e.g. `\x1b`), or remove it. |
-| `regex-no-duplicate-chars` | ⚠️ | Duplicate characters in regex character class are redundant. | Remove duplicate characters from the `[...]` character class. |
-| `regex-no-empty-after-reluctant` | ⚠️ | Reluctant quantifier with nothing consumable after it (end-of-pattern or `$`) is useless. | Remove the `?` from the quantifier — it has no effect when nothing follows it. |
-| `regex-no-empty-alternative` | ⚠️ | Empty alternative in regex matches empty string and is likely a mistake. | Remove the leading, trailing, or consecutive `\|` in the regex pattern. |
-| `regex-no-empty-character-class` | ❌ | Empty character class `[]` matches nothing and is likely a mistake. | Remove the empty `[]` or add characters inside the brackets. |
-| `regex-no-empty-group` | ⚠️ | Empty capturing group `()` is likely a mistake. | Remove the empty group or add a pattern inside it. |
-| `regex-no-empty-string-match` | ⚠️ | Regex that matches the empty string used in `.split()` or `.replace()`. | A pattern like `*`, `?`, or `{0,}` can match zero characters, causing unexpected splits or replacements. Use `+` or `{1,}` instead, or add anchors. |
-| `regex-no-misleading-char-class` | ⚠️ | Character class contains multi-codepoint graphemes that will be split. | Emoji with ZWJ or chars above U+FFFF inside `[...]` are split into individual code points. Use alternation `(?:a\|b)` instead of `[ab]` for multi-codepoint sequences. |
-| `regex-no-multiple-spaces` | ⚠️ | Multiple consecutive spaces in regex are hard to read and count. | Use a quantifier: ` {2}` or `\s{2,}` instead of multiple spaces. |
-| `regex-no-single-char-class` | ⚠️ | Character class with a single character is unnecessary. | Replace `[x]` with `x` (or `\.` for `[.]`). Single-character classes add visual noise without changing semantics. |
-| `regex-no-stateful-global` | ⚠️ | Global regex used with `.test()` or `.exec()` is stateful via `lastIndex`. | Remove the `g` flag if using `.test()` or `.exec()` repeatedly, or create the regex inside the loop. The `g` flag makes `lastIndex` persist across calls, causing alternating true/false results. |
-| `regex-no-unused-groups` | ⚠️ | Named capturing group is defined but never referenced. | Use the group via `.groups.name` or `$<name>` in a replacement, or convert to a non-capturing group `(?:...)`. |
-| `regex-prefer-char-class` | ⚠️ | Single-character alternations should use a character class. | Replace `a\|b\|c` with `[abc]`. Character classes are more readable and often faster than alternation for single characters. |
-| `regex-prefer-quantifier` | ⚠️ | Repeated identical characters or escape sequences in regex should use quantifiers. | Use quantifiers: `aaa` -> `a{3}`, `\d\d\d\d` -> `\d{4}`. |
-| `regex-use-unicode-flag` | ⚠️ | Unicode property escapes (`\p{...}` / `\P{...}`) require the `u` or `v` flag. | Add the `u` flag to the regex: `/\p{Letter}/u`. Without it, `\p` is not interpreted as a Unicode property escape. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `regex-anchor-precedence` | Anchor `^` or `$` in alternation may not bind as expected. | Wrap the alternation in a group: `/^(a\|b)$/` instead of `/^a\|b$/`. Without grouping, `/^a\|b$/` means `(^a)\|(b$)`, not `^(a\|b)$`. |
+| `regex-complexity` | Regex pattern is overly complex (score > 20). | Break the regex into smaller named patterns or use a parser. Complex regex is hard to read, test, and maintain. |
+| `regex-no-control-chars` | Raw control characters in regex are usually an accidental paste. | Replace the raw control byte with an explicit escape (e.g. `\x1b`), or remove it. |
+| `regex-no-duplicate-chars` | Duplicate characters in regex character class are redundant. | Remove duplicate characters from the `[...]` character class. |
+| `regex-no-empty-after-reluctant` | Reluctant quantifier with nothing consumable after it (end-of-pattern or `$`) is useless. | Remove the `?` from the quantifier — it has no effect when nothing follows it. |
+| `regex-no-empty-alternative` | Empty alternative in regex matches empty string and is likely a mistake. | Remove the leading, trailing, or consecutive `\|` in the regex pattern. |
+| `regex-no-empty-character-class` | Empty character class `[]` matches nothing and is likely a mistake. | Remove the empty `[]` or add characters inside the brackets. |
+| `regex-no-empty-group` | Empty capturing group `()` is likely a mistake. | Remove the empty group or add a pattern inside it. |
+| `regex-no-empty-string-match` | Regex that matches the empty string used in `.split()` or `.replace()`. | A pattern like `*`, `?`, or `{0,}` can match zero characters, causing unexpected splits or replacements. Use `+` or `{1,}` instead, or add anchors. |
+| `regex-no-misleading-char-class` | Character class contains multi-codepoint graphemes that will be split. | Emoji with ZWJ or chars above U+FFFF inside `[...]` are split into individual code points. Use alternation `(?:a\|b)` instead of `[ab]` for multi-codepoint sequences. |
+| `regex-no-multiple-spaces` | Multiple consecutive spaces in regex are hard to read and count. | Use a quantifier: ` {2}` or `\s{2,}` instead of multiple spaces. |
+| `regex-no-single-char-class` | Character class with a single character is unnecessary. | Replace `[x]` with `x` (or `\.` for `[.]`). Single-character classes add visual noise without changing semantics. |
+| `regex-no-stateful-global` | Global regex used with `.test()` or `.exec()` is stateful via `lastIndex`. | Remove the `g` flag if using `.test()` or `.exec()` repeatedly, or create the regex inside the loop. The `g` flag makes `lastIndex` persist across calls, causing alternating true/false results. |
+| `regex-no-unused-groups` | Named capturing group is defined but never referenced. | Use the group via `.groups.name` or `$<name>` in a replacement, or convert to a non-capturing group `(?:...)`. |
+| `regex-prefer-char-class` | Single-character alternations should use a character class. | Replace `a\|b\|c` with `[abc]`. Character classes are more readable and often faster than alternation for single characters. |
+| `regex-prefer-quantifier` | Repeated identical characters or escape sequences in regex should use quantifiers. | Use quantifiers: `aaa` -> `a{3}`, `\d\d\d\d` -> `\d{4}`. |
+| `regex-use-unicode-flag` | Unicode property escapes (`\p{...}` / `\P{...}`) require the `u` or `v` flag. | Add the `u` flag to the regex: `/\p{Letter}/u`. Without it, `\p` is not interpreted as a Unicode property escape. |
 
 ## comments
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `banned-comment-phrases` | ⚠️ | Narrator preambles and business jargon in comments read as AI-generated filler. | Drop the phrase and state the point directly, or delete the comment. Banned: here's the thing, here's what, here's why, let me be clear, let me walk you through, in this section we'll, as we'll see, the uncomfortable truth, let that sink in, make no mistake, the reality is, at the end of the day, it's worth noting, think about it, and that's okay, deep dive, game-changer, circle back, double down, on the same page. |
-| `banned-comment-words` | ❌ | Dismissive filler words in comments hide complexity instead of explaining it. | Remove the filler word and rewrite the comment to explain the actual subtlety. If the line needs no explanation, delete the comment instead. Banned: obviously, simply, just, basically, clearly, trivially, reloaded, really, literally, genuinely, honestly, truly, fundamentally, inevitably, interestingly, importantly, crucially. |
-| `comment-paraphrases-code` | ⚠️ | Comment shares too many tokens with the function name — likely a paraphrase. | Rewrite the comment to explain WHY the code exists, not WHAT it does. Name the consequence: what breaks if this line is deleted? If you can't name a consequence, delete the comment instead. |
-| `comment-prose-quality` | ⚠️ | Comments with weasel words, passive voice, or lexical illusions reduce clarity. | Rewrite the comment to be direct. Replace passive voice with active. Remove filler words. Fix repeated words. |
-| `no-commented-out-code` | ⚠️ | Commented-out code is unreviewable, unreachable, and rots. | Delete the commented-out code. Git history preserves the original if you need to recover it. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `banned-comment-phrases` | Narrator preambles and business jargon in comments read as AI-generated filler. | Drop the phrase and state the point directly, or delete the comment. Banned: here's the thing, here's what, here's why, let me be clear, let me walk you through, in this section we'll, as we'll see, the uncomfortable truth, let that sink in, make no mistake, the reality is, at the end of the day, it's worth noting, think about it, and that's okay, deep dive, game-changer, circle back, double down, on the same page. |
+| `banned-comment-words` | Dismissive filler words in comments hide complexity instead of explaining it. | Remove the filler word and rewrite the comment to explain the actual subtlety. If the line needs no explanation, delete the comment instead. Banned: obviously, simply, just, basically, clearly, trivially, reloaded, really, literally, genuinely, honestly, truly, fundamentally, inevitably, interestingly, importantly, crucially. |
+| `comment-paraphrases-code` | Comment shares too many tokens with the function name — likely a paraphrase. | Rewrite the comment to explain WHY the code exists, not WHAT it does. Name the consequence: what breaks if this line is deleted? If you can't name a consequence, delete the comment instead. |
+| `comment-prose-quality` | Comments with weasel words, passive voice, or lexical illusions reduce clarity. | Rewrite the comment to be direct. Replace passive voice with active. Remove filler words. Fix repeated words. |
+| `no-commented-out-code` | Commented-out code is unreviewable, unreachable, and rots. | Delete the commented-out code. Git history preserves the original if you need to recover it. |
 
 ## comments > suppressions
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `stale-suppression` | ⚠️ | A `// comply-ignore` comment that no longer suppresses any diagnostic — the rule it silences doesn't fire on the target line. | Delete the suppression comment. If the underlying violation has come back, the rule will re-fire on its own and you can decide whether to re-add the suppression with a fresh justification. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `stale-suppression` | A `// comply-ignore` comment that no longer suppresses any diagnostic — the rule it silences doesn't fire on the target line. | Delete the suppression comment. If the underlying violation has come back, the rule will re-fire on its own and you can decide whether to re-add the suppression with a fresh justification. |
 
 ## complexity
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-empty-type-parameters` | ⚠️ | Type aliases and interfaces must not declare an empty type-parameter list `<>`. | Remove the empty `<>`, or add a type parameter such as `<T>`. |
-| `no-redundant-default-export` | ⚠️ | A default export references the same symbol as a named export. | Remove either the default export or the named export so each symbol has a single canonical import path. |
-| `no-useless-string-raw` | ⚠️ | Disallow unnecessary `String.raw` on a template literal with no backslash escape. | Drop the `String.raw` tag and use the plain template literal. |
-| `use-simple-number-keys` | ⚠️ | Disallow number literal object member names which are not base 10 or use an underscore separator. | Write the object member name as a plain base-10 number (e.g. `16` instead of `0x10`, `1000` instead of `1_000`). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-empty-type-parameters` | Type aliases and interfaces must not declare an empty type-parameter list `<>`. | Remove the empty `<>`, or add a type parameter such as `<T>`. |
+| `no-redundant-default-export` | A default export references the same symbol as a named export. | Remove either the default export or the named export so each symbol has a single canonical import path. |
+| `no-useless-string-raw` | Disallow unnecessary `String.raw` on a template literal with no backslash escape. | Drop the `String.raw` tag and use the plain template literal. |
+| `use-simple-number-keys` | Disallow number literal object member names which are not base 10 or use an underscore separator. | Write the object member name as a plain base-10 number (e.g. `16` instead of `0x10`, `1000` instead of `1_000`). |
 
 ## correctness
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `date-timezone-pitfall` | ⚠️ | Flag a date-only `new Date("YYYY-MM-DD")` string, which the ECMAScript parser reads as UTC midnight and thus silently shifts the calendar day in non-UTC zones. | Construct the date with explicit local components — `new Date(2026, 0, 15)` — or format with a timezone-aware API (`Intl.DateTimeFormat`, `date-fns-tz`). To anchor a date-only string to UTC, append a time and zone (`new Date("2026-01-15T00:00:00Z")`). |
-| `no-approximative-numeric-constant` | ⚠️ | Use standard constants instead of approximated literals. | Replace the approximated literal with the matching `Math` constant (e.g. `Math.PI`, `Math.E`, `Math.SQRT2`). |
-| `no-duplicate-parameters` | ❌ | A function parameter list binds the same name more than once; the later binding silently overrides the earlier one. | Rename one of the parameters so every binding in the list is unique. |
-| `no-empty-object-keys` | ⚠️ | Object key is empty. | Remove this property or give it a meaningful key name. |
-| `no-global-is-finite` | ⚠️ | Use `Number.isFinite` instead of the global `isFinite`. | Replace `isFinite(value)` with `Number.isFinite(value)`. The global `isFinite` coerces its argument to a number first, so `isFinite('')` is `true`; `Number.isFinite` does not coerce and is unambiguous. |
-| `no-octal-escape` | ⚠️ | Disallow octal escape sequences in string literals. | Octal escape sequences are deprecated since ECMAScript 5. Replace the escape with a hexadecimal (`\xA9`) or unicode (`\u00A9`) escape. |
-| `no-parameters-only-used-in-recursion` | ⚠️ | A function parameter is only ever forwarded to recursive calls to the same function, never read otherwise, so it carries no information into the computation. | Remove the parameter (and the argument at every call site) or replace it with a constant; prefix it with `_` if the recursion genuinely needs the slot. |
-| `no-redundant-use-strict` | ⚠️ | Redundant `"use strict"` directive. | Remove the directive. ES modules and class bodies are always in strict mode, and an enclosing `"use strict"` already covers any nested scope, so the directive has no effect. |
-| `no-string-case-mismatch` | ❌ | Comparing a `toLowerCase()`/`toUpperCase()` call against a literal of the opposite case is always false. | Write the literal in the matching case (e.g. `"ABC"` for `toUpperCase()`), or remove the case conversion. |
-| `no-top-level-literals` | ⚠️ | JSON top-level value is a bare literal. | Wrap the value in an array or object — some JSON parsers only accept an object or array as the root element. |
-| `no-useless-escape-in-string` | ⚠️ | Disallow unnecessary escapes in string literals. | Remove the backslash: escaping a character that has no special meaning in this string context has no effect and may confuse a reader. Only the enclosing quote and special characters need to be escaped. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `date-timezone-pitfall` | Flag a date-only `new Date("YYYY-MM-DD")` string, which the ECMAScript parser reads as UTC midnight and thus silently shifts the calendar day in non-UTC zones. | Construct the date with explicit local components — `new Date(2026, 0, 15)` — or format with a timezone-aware API (`Intl.DateTimeFormat`, `date-fns-tz`). To anchor a date-only string to UTC, append a time and zone (`new Date("2026-01-15T00:00:00Z")`). |
+| `no-approximative-numeric-constant` | Use standard constants instead of approximated literals. | Replace the approximated literal with the matching `Math` constant (e.g. `Math.PI`, `Math.E`, `Math.SQRT2`). |
+| `no-duplicate-parameters` | A function parameter list binds the same name more than once; the later binding silently overrides the earlier one. | Rename one of the parameters so every binding in the list is unique. |
+| `no-empty-object-keys` | Object key is empty. | Remove this property or give it a meaningful key name. |
+| `no-global-is-finite` | Use `Number.isFinite` instead of the global `isFinite`. | Replace `isFinite(value)` with `Number.isFinite(value)`. The global `isFinite` coerces its argument to a number first, so `isFinite('')` is `true`; `Number.isFinite` does not coerce and is unambiguous. |
+| `no-octal-escape` | Disallow octal escape sequences in string literals. | Octal escape sequences are deprecated since ECMAScript 5. Replace the escape with a hexadecimal (`\xA9`) or unicode (`\u00A9`) escape. |
+| `no-parameters-only-used-in-recursion` | A function parameter is only ever forwarded to recursive calls to the same function, never read otherwise, so it carries no information into the computation. | Remove the parameter (and the argument at every call site) or replace it with a constant; prefix it with `_` if the recursion genuinely needs the slot. |
+| `no-redundant-use-strict` | Redundant `"use strict"` directive. | Remove the directive. ES modules and class bodies are always in strict mode, and an enclosing `"use strict"` already covers any nested scope, so the directive has no effect. |
+| `no-string-case-mismatch` | Comparing a `toLowerCase()`/`toUpperCase()` call against a literal of the opposite case is always false. | Write the literal in the matching case (e.g. `"ABC"` for `toUpperCase()`), or remove the case conversion. |
+| `no-top-level-literals` | JSON top-level value is a bare literal. | Wrap the value in an array or object — some JSON parsers only accept an object or array as the root element. |
+| `no-useless-escape-in-string` | Disallow unnecessary escapes in string literals. | Remove the backslash: escaping a character that has no special meaning in this string context has no effect and may confuse a reader. Only the enclosing quote and special characters need to be escaped. |
 
 ## correctness > package-json
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-duplicate-dependencies` | ⚠️ | A dependency is listed twice in the same `package.json` section, or in two sections that should be mutually exclusive — both confuse package managers about which version wins. | Remove one of the listings so each dependency appears in exactly one section. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-duplicate-dependencies` | A dependency is listed twice in the same `package.json` section, or in two sections that should be mutually exclusive — both confuse package managers about which version wins. | Remove one of the listings so each dependency appears in exactly one section. |
 
 ## css
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `css-calc-needs-spaces` | ⚠️ | Operators in `calc()` must be surrounded by spaces. | Add spaces around `+`, `-`, `*`, and `/` inside `calc()`. |
-| `css-custom-property-needs-var` | ⚠️ | Custom properties must be referenced via `var()`. | Wrap the `--name` in `var(--name)` to read its value. |
-| `css-font-family-needs-generic` | ⚠️ | `font-family` should end with a generic family fallback. | Append a generic family (e.g. `sans-serif`, `serif`, `monospace`). |
-| `css-font-family-quotes` | ⚠️ | Multi-word font names in `font-family` must be quoted. | Wrap the font name in double quotes (e.g. `"Times New Roman"`). |
-| `css-keyframe-no-duplicate-selectors` | ⚠️ | Disallow duplicated keyframe selectors within `@keyframes`. | Merge duplicate keyframe blocks or change the selector. |
-| `css-keyframe-no-important` | ⚠️ | Disallow `!important` inside `@keyframes` declarations. | Remove `!important` — browsers ignore it inside keyframes. |
-| `css-no-deprecated-at-rule` | ⚠️ | Deprecated CSS at-rules should not be used. | Replace the deprecated at-rule with its modern equivalent. |
-| `css-no-deprecated-media-type` | ⚠️ | Disallow deprecated `@media` types like `tty`, `tv`, `projection`. | Use `screen`, `print`, `all`, or remove the media type. |
-| `css-no-deprecated-property-value` | ⚠️ | Disallow deprecated keyword values in CSS declarations. | Replace the deprecated keyword with the modern equivalent. |
-| `css-no-duplicate-custom-properties` | ⚠️ | Disallow duplicated CSS custom properties within the same block. | Remove the redundant `--*` declaration. |
-| `css-no-duplicate-font-family` | ⚠️ | Disallow duplicated font names within a `font-family` value. | Remove the duplicate name from the font stack. |
-| `css-no-duplicate-imports` | ⚠️ | Duplicate `@import` rules load the same stylesheet twice, wasting bandwidth. | Remove the duplicate `@import`. |
-| `css-no-duplicate-properties` | ⚠️ | Disallow duplicated property declarations within the same block. | Remove the redundant declaration; consecutive duplicates for fallbacks are allowed. |
-| `css-no-empty-block` | ⚠️ | Disallow empty declaration blocks. | Remove the empty rule or add at least one declaration. |
-| `css-no-empty-comment` | ⚠️ | Disallow empty CSS comments. | Remove the empty comment or add meaningful text. |
-| `css-no-invalid-hex` | ⚠️ | Hex color must have 3, 4, 6, or 8 hexadecimal digits. | Replace the value with a valid hex color (e.g. `#ff0000`). |
-| `css-no-invalid-media-query` | ⚠️ | Disallow malformed `@media` queries. | Fix the `@media` syntax (e.g. add the missing feature or parenthesis). |
-| `css-no-nonstandard-gradient-direction` | ⚠️ | Use the standard `to <side>` direction syntax for `linear-gradient()`. | Prefix the direction with `to` (e.g. `to top`, `to bottom right`). |
-| `css-no-redundant-longhand` | ⚠️ | Use the shorthand property when all longhands are present. | Replace the four longhand declarations with a single shorthand. |
-| `css-no-shorthand-overrides-longhand` | ⚠️ | Shorthand declared after a longhand silently resets the longhand. | Move the shorthand before the longhand or remove the longhand. |
-| `css-no-unknown-at-rule` | ⚠️ | Disallow unknown CSS at-rules. | Use a standard CSS at-rule, or remove the unknown at-rule. |
-| `css-no-unknown-function` | ⚠️ | Disallow unknown CSS functions. | Use a standard CSS function or remove the call. |
-| `css-no-unknown-media-feature` | ⚠️ | Disallow unknown media features in `@media` queries. | Use a standard media feature (e.g. `min-width`, `prefers-color-scheme`). |
-| `css-no-unknown-media-value` | ⚠️ | Disallow unknown values for `prefers-color-scheme` and `orientation`. | Use a valid value (e.g. `light`, `dark`, `portrait`, `landscape`). |
-| `css-no-unknown-property-value` | ⚠️ | Disallow unknown keyword values for `display` and `position`. | Use a valid keyword (e.g. `flex`, `grid`, `relative`). |
-| `css-no-vendor-prefix-at-rule` | ⚠️ | Vendor-prefixed CSS at-rules are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix (e.g. `@-webkit-keyframes` → `@keyframes`). |
-| `css-no-vendor-prefix-media` | ⚠️ | Vendor-prefixed media features are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix from the media feature. |
-| `css-no-vendor-prefix-property` | ⚠️ | Vendor-prefixed CSS properties are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix (e.g. `-webkit-transform` → `transform`) and rely on autoprefixer. |
-| `css-no-vendor-prefix-selector` | ⚠️ | Vendor-prefixed CSS selectors are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix from the selector. |
-| `css-no-vendor-prefix-value` | ⚠️ | Vendor-prefixed CSS values are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix from the value and rely on autoprefixer. |
-| `no-descending-specificity` | ⚠️ | Disallow a lower specificity selector from coming after a higher specificity selector. | Reorder the rules so the higher-specificity selector comes after the one it overrides. |
-| `no-excessive-selector-classes` | ⚠️ | Limit the number of class selectors in a single CSS selector. | Reduce the number of chained class selectors, or split the selector into simpler selectors. |
-| `no-invalid-grid-areas` | ❌ | Disallow invalid named grid areas in CSS Grid Layouts. | Give every grid-area string the same number of cell tokens and make each named area a single filled-in rectangle. |
-| `no-invalid-position-at-import-rule` | ❌ | Disallow the use of `@import` at-rules in invalid positions. | Move every `@import` before all other at-rules and style rules; only `@charset` and `@layer` may precede it. |
-| `no-unknown-pseudo-class` | ⚠️ | Disallow unknown CSS pseudo-class selectors. | Use a known pseudo-class, a vendor-prefixed or custom (`--`) selector, or add the name to the rule's `ignore` list. |
-| `no-unknown-pseudo-element` | ⚠️ | Disallow unknown CSS pseudo-element selectors. | Use a known pseudo-element, a vendor-prefixed (`-webkit-`/`-moz-`/…) selector, or add the name to the rule's `ignore` list. |
-| `no-unknown-type-selector` | ⚠️ | Disallow CSS type selectors that are not known HTML, SVG, or MathML elements. | Use a known element name, a custom element (with a hyphen), or a class/id selector. |
-| `no-unknown-unit` | ⚠️ | Disallow unknown CSS units. | Use a known CSS unit such as `px`, `em`, `rem`, `deg`, `s`, or `fr`. |
-| `no-unmatchable-anb-selector` | ❌ | Disallow unmatchable An+B selectors. | An An+B selector whose formula is `0` (e.g. `:nth-child(0)`, `:nth-child(0n)`, `:nth-child(0n+0)`) can never match an element; remove it or use a formula that selects at least one element. |
-| `no-value-at-rule` | ⚠️ | Disallow the CSS Modules `@value` at-rule. | Replace the `@value` declaration with a native CSS custom property, e.g. `:root { --primary: #fff }` referenced via `var(--primary)`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `css-calc-needs-spaces` | Operators in `calc()` must be surrounded by spaces. | Add spaces around `+`, `-`, `*`, and `/` inside `calc()`. |
+| `css-custom-property-needs-var` | Custom properties must be referenced via `var()`. | Wrap the `--name` in `var(--name)` to read its value. |
+| `css-font-family-needs-generic` | `font-family` should end with a generic family fallback. | Append a generic family (e.g. `sans-serif`, `serif`, `monospace`). |
+| `css-font-family-quotes` | Multi-word font names in `font-family` must be quoted. | Wrap the font name in double quotes (e.g. `"Times New Roman"`). |
+| `css-keyframe-no-duplicate-selectors` | Disallow duplicated keyframe selectors within `@keyframes`. | Merge duplicate keyframe blocks or change the selector. |
+| `css-keyframe-no-important` | Disallow `!important` inside `@keyframes` declarations. | Remove `!important` — browsers ignore it inside keyframes. |
+| `css-no-deprecated-at-rule` | Deprecated CSS at-rules should not be used. | Replace the deprecated at-rule with its modern equivalent. |
+| `css-no-deprecated-media-type` | Disallow deprecated `@media` types like `tty`, `tv`, `projection`. | Use `screen`, `print`, `all`, or remove the media type. |
+| `css-no-deprecated-property-value` | Disallow deprecated keyword values in CSS declarations. | Replace the deprecated keyword with the modern equivalent. |
+| `css-no-duplicate-custom-properties` | Disallow duplicated CSS custom properties within the same block. | Remove the redundant `--*` declaration. |
+| `css-no-duplicate-font-family` | Disallow duplicated font names within a `font-family` value. | Remove the duplicate name from the font stack. |
+| `css-no-duplicate-imports` | Duplicate `@import` rules load the same stylesheet twice, wasting bandwidth. | Remove the duplicate `@import`. |
+| `css-no-duplicate-properties` | Disallow duplicated property declarations within the same block. | Remove the redundant declaration; consecutive duplicates for fallbacks are allowed. |
+| `css-no-empty-block` | Disallow empty declaration blocks. | Remove the empty rule or add at least one declaration. |
+| `css-no-empty-comment` | Disallow empty CSS comments. | Remove the empty comment or add meaningful text. |
+| `css-no-invalid-hex` | Hex color must have 3, 4, 6, or 8 hexadecimal digits. | Replace the value with a valid hex color (e.g. `#ff0000`). |
+| `css-no-invalid-media-query` | Disallow malformed `@media` queries. | Fix the `@media` syntax (e.g. add the missing feature or parenthesis). |
+| `css-no-nonstandard-gradient-direction` | Use the standard `to <side>` direction syntax for `linear-gradient()`. | Prefix the direction with `to` (e.g. `to top`, `to bottom right`). |
+| `css-no-redundant-longhand` | Use the shorthand property when all longhands are present. | Replace the four longhand declarations with a single shorthand. |
+| `css-no-shorthand-overrides-longhand` | Shorthand declared after a longhand silently resets the longhand. | Move the shorthand before the longhand or remove the longhand. |
+| `css-no-unknown-at-rule` | Disallow unknown CSS at-rules. | Use a standard CSS at-rule, or remove the unknown at-rule. |
+| `css-no-unknown-function` | Disallow unknown CSS functions. | Use a standard CSS function or remove the call. |
+| `css-no-unknown-media-feature` | Disallow unknown media features in `@media` queries. | Use a standard media feature (e.g. `min-width`, `prefers-color-scheme`). |
+| `css-no-unknown-media-value` | Disallow unknown values for `prefers-color-scheme` and `orientation`. | Use a valid value (e.g. `light`, `dark`, `portrait`, `landscape`). |
+| `css-no-unknown-property-value` | Disallow unknown keyword values for `display` and `position`. | Use a valid keyword (e.g. `flex`, `grid`, `relative`). |
+| `css-no-vendor-prefix-at-rule` | Vendor-prefixed CSS at-rules are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix (e.g. `@-webkit-keyframes` → `@keyframes`). |
+| `css-no-vendor-prefix-media` | Vendor-prefixed media features are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix from the media feature. |
+| `css-no-vendor-prefix-property` | Vendor-prefixed CSS properties are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix (e.g. `-webkit-transform` → `transform`) and rely on autoprefixer. |
+| `css-no-vendor-prefix-selector` | Vendor-prefixed CSS selectors are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix from the selector. |
+| `css-no-vendor-prefix-value` | Vendor-prefixed CSS values are unnecessary with modern autoprefixer tooling. | Remove the vendor prefix from the value and rely on autoprefixer. |
+| `no-descending-specificity` | Disallow a lower specificity selector from coming after a higher specificity selector. | Reorder the rules so the higher-specificity selector comes after the one it overrides. |
+| `no-excessive-selector-classes` | Limit the number of class selectors in a single CSS selector. | Reduce the number of chained class selectors, or split the selector into simpler selectors. |
+| `no-invalid-grid-areas` | Disallow invalid named grid areas in CSS Grid Layouts. | Give every grid-area string the same number of cell tokens and make each named area a single filled-in rectangle. |
+| `no-invalid-position-at-import-rule` | Disallow the use of `@import` at-rules in invalid positions. | Move every `@import` before all other at-rules and style rules; only `@charset` and `@layer` may precede it. |
+| `no-unknown-pseudo-class` | Disallow unknown CSS pseudo-class selectors. | Use a known pseudo-class, a vendor-prefixed or custom (`--`) selector, or add the name to the rule's `ignore` list. |
+| `no-unknown-pseudo-element` | Disallow unknown CSS pseudo-element selectors. | Use a known pseudo-element, a vendor-prefixed (`-webkit-`/`-moz-`/…) selector, or add the name to the rule's `ignore` list. |
+| `no-unknown-type-selector` | Disallow CSS type selectors that are not known HTML, SVG, or MathML elements. | Use a known element name, a custom element (with a hyphen), or a class/id selector. |
+| `no-unknown-unit` | Disallow unknown CSS units. | Use a known CSS unit such as `px`, `em`, `rem`, `deg`, `s`, or `fr`. |
+| `no-unmatchable-anb-selector` | Disallow unmatchable An+B selectors. | An An+B selector whose formula is `0` (e.g. `:nth-child(0)`, `:nth-child(0n)`, `:nth-child(0n+0)`) can never match an element; remove it or use a formula that selects at least one element. |
+| `no-value-at-rule` | Disallow the CSS Modules `@value` at-rule. | Replace the `@value` declaration with a native CSS custom property, e.g. `:root { --primary: #fff }` referenced via `var(--primary)`. |
 
 ## css > accessibility
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `css-outline-none-needs-focus` | ⚠️ | `outline: none` or `outline: 0` outside of `:focus` rules removes the keyboard focus indicator, harming accessibility. | Only use `outline: none` inside `:focus` rules, and provide a visible alternative focus style. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `css-outline-none-needs-focus` | `outline: none` or `outline: 0` outside of `:focus` rules removes the keyboard focus indicator, harming accessibility. | Only use `outline: none` inside `:focus` rules, and provide a visible alternative focus style. |
 
 ## css > i18n
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `i18n-prefer-logical-css-properties` | ⚠️ | Physical CSS properties break RTL layouts — use logical equivalents. | Replace `margin-left` → `margin-inline-start`, `padding-right` → `padding-inline-end`, `text-align: left` → `text-align: start`, `border-left` → `border-inline-start`, etc. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `i18n-prefer-logical-css-properties` | Physical CSS properties break RTL layouts — use logical equivalents. | Replace `margin-left` → `margin-inline-start`, `padding-right` → `padding-inline-end`, `text-align: left` → `text-align: start`, `border-left` → `border-inline-start`, etc. |
 
 ## database
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `db-no-n-plus-one` | ❌ | `await db.query` inside a loop is an N+1 query — use a JOIN or batch query. | Move the query outside the loop: use a JOIN, `WHERE id IN (...)`, or batch fetch. N+1 queries scale linearly with result set size and are the #1 cause of slow pages. |
-| `db-no-string-concat-sql` | ❌ | String concatenation with SQL keywords is a SQL injection vector. | Use parameterized queries (`$1`, `?`, or ORM methods) instead of string concatenation. Never interpolate user input into SQL strings. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `db-no-n-plus-one` | `await db.query` inside a loop is an N+1 query — use a JOIN or batch query. | Move the query outside the loop: use a JOIN, `WHERE id IN (...)`, or batch fetch. N+1 queries scale linearly with result set size and are the #1 cause of slow pages. |
+| `db-no-string-concat-sql` | String concatenation with SQL keywords is a SQL injection vector. | Use parameterized queries (`$1`, `?`, or ORM methods) instead of string concatenation. Never interpolate user input into SQL strings. |
 
 ## database > migrations
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `migration-needs-lock-timeout` | ⚠️ | DDL migration without `SET lock_timeout` risks write queue pileups. | Add `SET lock_timeout = '5s';` at the top of every DDL migration. Without it, an ALTER TABLE on a busy table queues all writes behind the lock indefinitely. |
-| `migration-needs-rollback` | ⚠️ | Migration without a `down`/rollback function is irreversible. | Add an explicit `down()` / `rollback()` function to every migration. Irreversible migrations prevent quick recovery from bad deploys. Make data migrations idempotent with `ON CONFLICT DO NOTHING`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `migration-needs-lock-timeout` | DDL migration without `SET lock_timeout` risks write queue pileups. | Add `SET lock_timeout = '5s';` at the top of every DDL migration. Without it, an ALTER TABLE on a busy table queues all writes behind the lock indefinitely. |
+| `migration-needs-rollback` | Migration without a `down`/rollback function is irreversible. | Add an explicit `down()` / `rollback()` function to every migration. Irreversible migrations prevent quick recovery from bad deploys. Make data migrations idempotent with `ON CONFLICT DO NOTHING`. |
 
 ## docker
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `dockerfile-absolute-workdir` | ⚠️ | WORKDIR must use an absolute path. | Replace the relative WORKDIR path with an absolute path starting with `/`. |
-| `dockerfile-add-for-archive-extract` | ⚠️ | ADD should not be used to fetch URLs; use RUN curl/wget + tar. | Replace `ADD <url>` with a `RUN curl ... && tar ...` pipeline that cleans up afterwards. |
-| `dockerfile-apk-no-cache` | ⚠️ | Use `apk add --no-cache` instead of `apk add`. | Add `--no-cache` to `apk add` to avoid leaving the apk index in the layer. |
-| `dockerfile-apt-clean-lists` | ⚠️ | `apt-get install` must clean `/var/lib/apt/lists/*` in the same RUN layer. | Append `&& rm -rf /var/lib/apt/lists/*` to the RUN that runs apt-get install. |
-| `dockerfile-apt-get-y-flag` | ⚠️ | `apt-get install` must run non-interactively (`-y`). | Add `-y` (or `--yes`) to apt-get install. |
-| `dockerfile-apt-no-recommends` | ⚠️ | Use `--no-install-recommends` with apt-get install. | Add `--no-install-recommends` to apt-get install to keep the image small. |
-| `dockerfile-copy-after-install` | ⚠️ | `COPY . .` must not precede the dependency install step; copy the lockfile and install first. | Copy `package.json` + lockfile, run install, then `COPY . .` so source edits don't invalidate the deps layer. |
-| `dockerfile-copy-from-known-stage` | ⚠️ | `COPY --from=<name>` must reference a known build stage. | Define the stage with `FROM ... AS <name>` or fix the typo. |
-| `dockerfile-copy-from-not-self` | ⚠️ | `COPY --from` must not reference the current build stage. | Reference a different stage, or use a plain COPY without `--from`. |
-| `dockerfile-copy-needs-workdir` | ⚠️ | COPY with a relative destination needs a prior WORKDIR. | Add a WORKDIR before this COPY, or use an absolute destination path. |
-| `dockerfile-copy-trailing-slash` | ⚠️ | COPY destination must end with `/` when multiple sources are given. | Append `/` to the COPY destination when copying multiple sources. |
-| `dockerfile-dnf-clean-all` | ⚠️ | `dnf install` must be paired with `dnf clean all` to shrink the image layer. | Append `&& dnf clean all` to the same RUN as `dnf install`. |
-| `dockerfile-dnf-y-flag` | ⚠️ | `dnf install` must pass `-y` to run non-interactively in builds. | Add `-y` to your `dnf install` command. |
-| `dockerfile-env-no-self-reference` | ⚠️ | Within a single ENV, a value referencing a sibling key sees the OLD value. | Split into separate ENV instructions so each reference resolves to the new value. |
-| `dockerfile-exec-form-cmd` | ⚠️ | CMD/ENTRYPOINT must use exec form `["bin","arg"]`, not shell form. | Rewrite `CMD bin arg` as `CMD ["bin", "arg"]` so the container receives SIGTERM directly. |
-| `dockerfile-instruction-order` | ⚠️ | The first non-comment instruction must be FROM (or ARG before FROM). | Move FROM (or a leading ARG) to be the first non-comment instruction. |
-| `dockerfile-label-not-empty` | ⚠️ | LABEL value must not be empty. | Provide a meaningful value for the label or remove it. |
-| `dockerfile-label-url-format` | ⚠️ | LABEL with a URL-type key must contain a valid URL. | Ensure the label value starts with `http://` or `https://`. |
-| `dockerfile-no-add-for-files` | ⚠️ | Use COPY instead of ADD for plain files and folders. | Replace ADD with COPY when the source is a regular file or directory. |
-| `dockerfile-no-apt-end-user` | ⚠️ | Use `apt-get` instead of the end-user `apt` command. | Replace `apt` with `apt-get` (or `apt-cache`) inside Dockerfile RUNs. |
-| `dockerfile-no-cd-in-run` | ⚠️ | Use WORKDIR instead of `cd` inside a RUN instruction. | Replace `RUN cd ...` patterns with a WORKDIR directive. |
-| `dockerfile-no-curl-and-wget` | ⚠️ | Dockerfile uses both curl and wget; pick one to reduce image size. | Use either `curl` or `wget` consistently across the Dockerfile. |
-| `dockerfile-no-from-platform` | ⚠️ | Avoid pinning `--platform` on FROM; it breaks multi-arch builds. | Remove `--platform=...` and let BuildKit pick the platform via build args. |
-| `dockerfile-no-latest-tag` | ⚠️ | FROM image must pin a version tag; `:latest` and untagged images drift silently. | Replace `:latest` (or missing tag) with a pinned version such as `node:22.12-alpine3.20`. |
-| `dockerfile-no-maintainer` | ⚠️ | MAINTAINER is deprecated since Docker 1.13; use a LABEL instead. | Replace `MAINTAINER user@example.com` with `LABEL maintainer="user@example.com"`. |
-| `dockerfile-no-multiple-cmd` | ⚠️ | Only one CMD is honored per build stage; later CMDs override earlier ones. | Keep a single CMD per stage; combine the arguments into one CMD. |
-| `dockerfile-no-multiple-entrypoint` | ⚠️ | Only one ENTRYPOINT is honored per build stage; later ones override earlier ones. | Keep a single ENTRYPOINT per stage. |
-| `dockerfile-no-onbuild-recursion` | ⚠️ | ONBUILD cannot wrap FROM, ONBUILD, or MAINTAINER instructions. | Remove the inner FROM/ONBUILD/MAINTAINER from the ONBUILD wrapper. |
-| `dockerfile-no-secrets-in-arg` | ❌ | ARG must not carry secret defaults; they leak into image history. | Remove the default value and source the secret via `RUN --mount=type=secret`. |
-| `dockerfile-no-secrets-in-copy` | ❌ | COPY must not include files that typically hold credentials (`.env`, `*.pem`, `id_rsa`, `.npmrc`). | Add these paths to `.dockerignore` and inject secrets via `--mount=type=secret` at build time. |
-| `dockerfile-no-secrets-in-env` | ❌ | ENV must not embed secret values; they persist in every image layer. | Inject secrets at runtime or via `RUN --mount=type=secret`; never `ENV API_KEY=...`. |
-| `dockerfile-no-shell-utils-in-run` | ⚠️ | Interactive/system tools (ssh, vim, top, kill, ...) do not belong in a RUN. | Remove these commands from the Dockerfile; configure tooling outside of image build. |
-| `dockerfile-no-sudo` | ⚠️ | Do not use `sudo` inside a Dockerfile RUN. | Remove `sudo` and switch users via `USER` if needed. |
-| `dockerfile-no-zypper-dist-upgrade` | ⚠️ | `zypper dist-upgrade` (or `dup`) is non-deterministic and bloats images. | Remove `zypper dist-upgrade`/`dup`; install only the packages you need. |
-| `dockerfile-pin-exact-version` | ⚠️ | Base image tag must pin a full version (e.g. `node:22.12-alpine3.20`), not just a major. | Replace bare-major tags like `:22` with a precise pin such as `22.12-alpine3.20`. |
-| `dockerfile-pip-no-cache-dir` | ⚠️ | `pip install` must pass `--no-cache-dir` in Dockerfiles. | Add `--no-cache-dir` to your `pip install` command. |
-| `dockerfile-pipefail` | ⚠️ | Piped RUN commands swallow upstream failures unless `pipefail` is set. | Add `SHELL ["/bin/bash", "-o", "pipefail", "-c"]` before the piped RUN. |
-| `dockerfile-require-dockerignore` | ⚠️ | Dockerfile uses broad `COPY .`; ensure a `.dockerignore` file excludes build artefacts and secrets. | Add a `.dockerignore` (mention it in a comment above the COPY) so `node_modules`, `.env`, `.git`, etc. don't leak into the image. |
-| `dockerfile-require-healthcheck` | ⚠️ | Production Dockerfile must declare a HEALTHCHECK. | Add `HEALTHCHECK --interval=30s CMD curl -f http://localhost:PORT/health \|\| exit 1`. |
-| `dockerfile-require-multi-stage` | ⚠️ | Dockerfile must use multi-stage builds (`FROM ... AS <name>`). | Split into `FROM ... AS build` and a runtime stage that `COPY --from=build` the artefacts. |
-| `dockerfile-require-non-root-user` | ⚠️ | Production Dockerfile must declare a non-root USER. | Add `USER <non-root>` (and create the user if needed) before CMD/ENTRYPOINT. |
-| `dockerfile-single-healthcheck` | ⚠️ | Only one HEALTHCHECK should appear per image. | Remove duplicate HEALTHCHECK instructions; only the last one is effective. |
-| `dockerfile-unique-stage-names` | ⚠️ | Each FROM stage alias must be unique. | Rename the duplicate `AS <alias>` to a unique value. |
-| `dockerfile-use-cache-mount` | ⚠️ | Package manager RUN steps must use `--mount=type=cache`. | Prefix the RUN with `--mount=type=cache,target=<cache-dir>` for the tool in use (npm, pnpm, pip, apt). |
-| `dockerfile-use-frozen-lockfile` | ⚠️ | pnpm/yarn install in Dockerfiles must use `--frozen-lockfile`. | Pass `--frozen-lockfile` to `pnpm install` / `yarn install` so the build fails on lockfile drift. |
-| `dockerfile-use-npm-ci` | ⚠️ | `npm install` is non-deterministic in images; use `npm ci`. | Replace `RUN npm install` with `RUN npm ci`. |
-| `dockerfile-useradd-low-uid` | ⚠️ | `useradd` without `-l` flag and high UID creates an excessively large image due to sparse `/var/log/lastlog`. | Add `-l` flag to `useradd` or use a low UID (below 65534). |
-| `dockerfile-valid-port` | ⚠️ | EXPOSE port must be a valid integer in 0..=65535. | Replace the EXPOSE value with a port between 0 and 65535. |
-| `dockerfile-wget-progress-flag` | ⚠️ | `wget` without `--progress` flag produces excessively bloated build logs. | Add `--progress=dot:giga` or `--no-verbose` to `wget` invocations. |
-| `dockerfile-yarn-cache-clean` | ⚠️ | `yarn install` must be paired with `yarn cache clean` to shrink the layer. | Append `&& yarn cache clean` to the same RUN instruction. |
-| `dockerfile-yum-clean-all` | ⚠️ | `yum install` must be paired with `yum clean all` to shrink the image layer. | Append `&& yum clean all` to the same RUN instruction as `yum install`. |
-| `dockerfile-yum-y-flag` | ⚠️ | `yum install` must pass `-y` to run non-interactively in builds. | Add `-y` to your `yum install` command. |
-| `dockerfile-zypper-clean` | ⚠️ | `zypper install` must be paired with `zypper clean` to shrink the layer. | Append `&& zypper clean` to the same RUN as `zypper install`. |
-| `dockerfile-zypper-non-interactive` | ⚠️ | `zypper install` must run non-interactively in builds. | Pass `-n` (or `--non-interactive`) to zypper. |
-| `dockerignore-must-exclude-sensitive` | ⚠️ | When Dockerfile uses `COPY .`, `.dockerignore` must exclude `.env`, `.git`, `node_modules`, keys, etc. | Create or extend `.dockerignore` with `.env*`, `.git`, `node_modules`, `*.pem`, `id_rsa`, `.npmrc`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `dockerfile-absolute-workdir` | WORKDIR must use an absolute path. | Replace the relative WORKDIR path with an absolute path starting with `/`. |
+| `dockerfile-add-for-archive-extract` | ADD should not be used to fetch URLs; use RUN curl/wget + tar. | Replace `ADD <url>` with a `RUN curl ... && tar ...` pipeline that cleans up afterwards. |
+| `dockerfile-apk-no-cache` | Use `apk add --no-cache` instead of `apk add`. | Add `--no-cache` to `apk add` to avoid leaving the apk index in the layer. |
+| `dockerfile-apt-clean-lists` | `apt-get install` must clean `/var/lib/apt/lists/*` in the same RUN layer. | Append `&& rm -rf /var/lib/apt/lists/*` to the RUN that runs apt-get install. |
+| `dockerfile-apt-get-y-flag` | `apt-get install` must run non-interactively (`-y`). | Add `-y` (or `--yes`) to apt-get install. |
+| `dockerfile-apt-no-recommends` | Use `--no-install-recommends` with apt-get install. | Add `--no-install-recommends` to apt-get install to keep the image small. |
+| `dockerfile-copy-after-install` | `COPY . .` must not precede the dependency install step; copy the lockfile and install first. | Copy `package.json` + lockfile, run install, then `COPY . .` so source edits don't invalidate the deps layer. |
+| `dockerfile-copy-from-known-stage` | `COPY --from=<name>` must reference a known build stage. | Define the stage with `FROM ... AS <name>` or fix the typo. |
+| `dockerfile-copy-from-not-self` | `COPY --from` must not reference the current build stage. | Reference a different stage, or use a plain COPY without `--from`. |
+| `dockerfile-copy-needs-workdir` | COPY with a relative destination needs a prior WORKDIR. | Add a WORKDIR before this COPY, or use an absolute destination path. |
+| `dockerfile-copy-trailing-slash` | COPY destination must end with `/` when multiple sources are given. | Append `/` to the COPY destination when copying multiple sources. |
+| `dockerfile-dnf-clean-all` | `dnf install` must be paired with `dnf clean all` to shrink the image layer. | Append `&& dnf clean all` to the same RUN as `dnf install`. |
+| `dockerfile-dnf-y-flag` | `dnf install` must pass `-y` to run non-interactively in builds. | Add `-y` to your `dnf install` command. |
+| `dockerfile-env-no-self-reference` | Within a single ENV, a value referencing a sibling key sees the OLD value. | Split into separate ENV instructions so each reference resolves to the new value. |
+| `dockerfile-exec-form-cmd` | CMD/ENTRYPOINT must use exec form `["bin","arg"]`, not shell form. | Rewrite `CMD bin arg` as `CMD ["bin", "arg"]` so the container receives SIGTERM directly. |
+| `dockerfile-instruction-order` | The first non-comment instruction must be FROM (or ARG before FROM). | Move FROM (or a leading ARG) to be the first non-comment instruction. |
+| `dockerfile-label-not-empty` | LABEL value must not be empty. | Provide a meaningful value for the label or remove it. |
+| `dockerfile-label-url-format` | LABEL with a URL-type key must contain a valid URL. | Ensure the label value starts with `http://` or `https://`. |
+| `dockerfile-no-add-for-files` | Use COPY instead of ADD for plain files and folders. | Replace ADD with COPY when the source is a regular file or directory. |
+| `dockerfile-no-apt-end-user` | Use `apt-get` instead of the end-user `apt` command. | Replace `apt` with `apt-get` (or `apt-cache`) inside Dockerfile RUNs. |
+| `dockerfile-no-cd-in-run` | Use WORKDIR instead of `cd` inside a RUN instruction. | Replace `RUN cd ...` patterns with a WORKDIR directive. |
+| `dockerfile-no-curl-and-wget` | Dockerfile uses both curl and wget; pick one to reduce image size. | Use either `curl` or `wget` consistently across the Dockerfile. |
+| `dockerfile-no-from-platform` | Avoid pinning `--platform` on FROM; it breaks multi-arch builds. | Remove `--platform=...` and let BuildKit pick the platform via build args. |
+| `dockerfile-no-latest-tag` | FROM image must pin a version tag; `:latest` and untagged images drift silently. | Replace `:latest` (or missing tag) with a pinned version such as `node:22.12-alpine3.20`. |
+| `dockerfile-no-maintainer` | MAINTAINER is deprecated since Docker 1.13; use a LABEL instead. | Replace `MAINTAINER user@example.com` with `LABEL maintainer="user@example.com"`. |
+| `dockerfile-no-multiple-cmd` | Only one CMD is honored per build stage; later CMDs override earlier ones. | Keep a single CMD per stage; combine the arguments into one CMD. |
+| `dockerfile-no-multiple-entrypoint` | Only one ENTRYPOINT is honored per build stage; later ones override earlier ones. | Keep a single ENTRYPOINT per stage. |
+| `dockerfile-no-onbuild-recursion` | ONBUILD cannot wrap FROM, ONBUILD, or MAINTAINER instructions. | Remove the inner FROM/ONBUILD/MAINTAINER from the ONBUILD wrapper. |
+| `dockerfile-no-secrets-in-arg` | ARG must not carry secret defaults; they leak into image history. | Remove the default value and source the secret via `RUN --mount=type=secret`. |
+| `dockerfile-no-secrets-in-copy` | COPY must not include files that typically hold credentials (`.env`, `*.pem`, `id_rsa`, `.npmrc`). | Add these paths to `.dockerignore` and inject secrets via `--mount=type=secret` at build time. |
+| `dockerfile-no-secrets-in-env` | ENV must not embed secret values; they persist in every image layer. | Inject secrets at runtime or via `RUN --mount=type=secret`; never `ENV API_KEY=...`. |
+| `dockerfile-no-shell-utils-in-run` | Interactive/system tools (ssh, vim, top, kill, ...) do not belong in a RUN. | Remove these commands from the Dockerfile; configure tooling outside of image build. |
+| `dockerfile-no-sudo` | Do not use `sudo` inside a Dockerfile RUN. | Remove `sudo` and switch users via `USER` if needed. |
+| `dockerfile-no-zypper-dist-upgrade` | `zypper dist-upgrade` (or `dup`) is non-deterministic and bloats images. | Remove `zypper dist-upgrade`/`dup`; install only the packages you need. |
+| `dockerfile-pin-exact-version` | Base image tag must pin a full version (e.g. `node:22.12-alpine3.20`), not just a major. | Replace bare-major tags like `:22` with a precise pin such as `22.12-alpine3.20`. |
+| `dockerfile-pip-no-cache-dir` | `pip install` must pass `--no-cache-dir` in Dockerfiles. | Add `--no-cache-dir` to your `pip install` command. |
+| `dockerfile-pipefail` | Piped RUN commands swallow upstream failures unless `pipefail` is set. | Add `SHELL ["/bin/bash", "-o", "pipefail", "-c"]` before the piped RUN. |
+| `dockerfile-require-dockerignore` | Dockerfile uses broad `COPY .`; ensure a `.dockerignore` file excludes build artefacts and secrets. | Add a `.dockerignore` (mention it in a comment above the COPY) so `node_modules`, `.env`, `.git`, etc. don't leak into the image. |
+| `dockerfile-require-healthcheck` | Production Dockerfile must declare a HEALTHCHECK. | Add `HEALTHCHECK --interval=30s CMD curl -f http://localhost:PORT/health \|\| exit 1`. |
+| `dockerfile-require-multi-stage` | Dockerfile must use multi-stage builds (`FROM ... AS <name>`). | Split into `FROM ... AS build` and a runtime stage that `COPY --from=build` the artefacts. |
+| `dockerfile-require-non-root-user` | Production Dockerfile must declare a non-root USER. | Add `USER <non-root>` (and create the user if needed) before CMD/ENTRYPOINT. |
+| `dockerfile-single-healthcheck` | Only one HEALTHCHECK should appear per image. | Remove duplicate HEALTHCHECK instructions; only the last one is effective. |
+| `dockerfile-unique-stage-names` | Each FROM stage alias must be unique. | Rename the duplicate `AS <alias>` to a unique value. |
+| `dockerfile-use-cache-mount` | Package manager RUN steps must use `--mount=type=cache`. | Prefix the RUN with `--mount=type=cache,target=<cache-dir>` for the tool in use (npm, pnpm, pip, apt). |
+| `dockerfile-use-frozen-lockfile` | pnpm/yarn install in Dockerfiles must use `--frozen-lockfile`. | Pass `--frozen-lockfile` to `pnpm install` / `yarn install` so the build fails on lockfile drift. |
+| `dockerfile-use-npm-ci` | `npm install` is non-deterministic in images; use `npm ci`. | Replace `RUN npm install` with `RUN npm ci`. |
+| `dockerfile-useradd-low-uid` | `useradd` without `-l` flag and high UID creates an excessively large image due to sparse `/var/log/lastlog`. | Add `-l` flag to `useradd` or use a low UID (below 65534). |
+| `dockerfile-valid-port` | EXPOSE port must be a valid integer in 0..=65535. | Replace the EXPOSE value with a port between 0 and 65535. |
+| `dockerfile-wget-progress-flag` | `wget` without `--progress` flag produces excessively bloated build logs. | Add `--progress=dot:giga` or `--no-verbose` to `wget` invocations. |
+| `dockerfile-yarn-cache-clean` | `yarn install` must be paired with `yarn cache clean` to shrink the layer. | Append `&& yarn cache clean` to the same RUN instruction. |
+| `dockerfile-yum-clean-all` | `yum install` must be paired with `yum clean all` to shrink the image layer. | Append `&& yum clean all` to the same RUN instruction as `yum install`. |
+| `dockerfile-yum-y-flag` | `yum install` must pass `-y` to run non-interactively in builds. | Add `-y` to your `yum install` command. |
+| `dockerfile-zypper-clean` | `zypper install` must be paired with `zypper clean` to shrink the layer. | Append `&& zypper clean` to the same RUN as `zypper install`. |
+| `dockerfile-zypper-non-interactive` | `zypper install` must run non-interactively in builds. | Pass `-n` (or `--non-interactive`) to zypper. |
+| `dockerignore-must-exclude-sensitive` | When Dockerfile uses `COPY .`, `.dockerignore` must exclude `.env`, `.git`, `node_modules`, keys, etc. | Create or extend `.dockerignore` with `.env*`, `.git`, `node_modules`, `*.pem`, `id_rsa`, `.npmrc`. |
 
 ## docker-compose
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `compose-bind-localhost-ports` | ⚠️ | Database/cache service ports must bind on `127.0.0.1:`. | Prefix the published port with `127.0.0.1:`, e.g. `127.0.0.1:5432:5432`. |
-| `compose-cap-drop-all` | ⚠️ | Each service must declare `cap_drop: [ALL]` (and re-add specific caps via `cap_add:`). | Add `cap_drop: [ALL]` under every service block. |
-| `compose-depends-on-condition` | ⚠️ | `depends_on:` must use the long form with `condition: service_healthy` (or `_completed_successfully`). | Rewrite `depends_on: [db]` as a map where each dependency declares `condition:`. |
-| `compose-healthcheck-required` | ⚠️ | Every compose service should declare a `healthcheck:`. | Add a `healthcheck:` block to the service so Docker can distinguish 'process running' from 'service ready'. `depends_on` with `condition: service_healthy` only works when the upstream actually has a healthcheck. If the image ships its own `HEALTHCHECK` and you really want to inherit it, add `healthcheck: { disable: false }` (or any explicit block) to opt in. |
-| `compose-no-inline-secrets` | ❌ | docker-compose `environment:` must not embed secret literals. | Move secret values to `env_file:` or `secrets:` and reference variables by name. |
-| `compose-no-latest-tag` | ⚠️ | docker-compose `image:` values must pin a tag (no `:latest`, no missing tag). | Replace `:latest` or untagged images with a precise pin like `postgres:16.6-alpine3.20`. |
-| `compose-no-privileged` | ❌ | Services must not set `privileged: true`. | Remove `privileged: true`; grant only the specific capabilities required via `cap_add:`. |
-| `compose-require-resource-limits` | ⚠️ | Each service must declare `deploy.resources.limits.memory`. | Add a `deploy.resources.limits.memory` entry (e.g. `memory: 512M`) to every service. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `compose-bind-localhost-ports` | Database/cache service ports must bind on `127.0.0.1:`. | Prefix the published port with `127.0.0.1:`, e.g. `127.0.0.1:5432:5432`. |
+| `compose-cap-drop-all` | Each service must declare `cap_drop: [ALL]` (and re-add specific caps via `cap_add:`). | Add `cap_drop: [ALL]` under every service block. |
+| `compose-depends-on-condition` | `depends_on:` must use the long form with `condition: service_healthy` (or `_completed_successfully`). | Rewrite `depends_on: [db]` as a map where each dependency declares `condition:`. |
+| `compose-healthcheck-required` | Every compose service should declare a `healthcheck:`. | Add a `healthcheck:` block to the service so Docker can distinguish 'process running' from 'service ready'. `depends_on` with `condition: service_healthy` only works when the upstream actually has a healthcheck. If the image ships its own `HEALTHCHECK` and you really want to inherit it, add `healthcheck: { disable: false }` (or any explicit block) to opt in. |
+| `compose-no-inline-secrets` | docker-compose `environment:` must not embed secret literals. | Move secret values to `env_file:` or `secrets:` and reference variables by name. |
+| `compose-no-latest-tag` | docker-compose `image:` values must pin a tag (no `:latest`, no missing tag). | Replace `:latest` or untagged images with a precise pin like `postgres:16.6-alpine3.20`. |
+| `compose-no-privileged` | Services must not set `privileged: true`. | Remove `privileged: true`; grant only the specific capabilities required via `cap_add:`. |
+| `compose-require-resource-limits` | Each service must declare `deploy.resources.limits.memory`. | Add a `deploy.resources.limits.memory` entry (e.g. `memory: 512M`) to every service. |
 
 ## docker-compose > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `compose-no-network-host` | ❌ | Services must not set `network_mode: host`. | Remove `network_mode: host`. Use a user-defined network with `ports:` mappings to expose only the ports you need. Host networking gives the container the daemon's network namespace, so every listening port on the container is reachable on the host with no firewalling. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `compose-no-network-host` | Services must not set `network_mode: host`. | Remove `network_mode: host`. Use a user-defined network with `ports:` mappings to expose only the ports you need. Host networking gives the container the daemon's network namespace, so every listening port on the container is reachable on the host with no firewalling. |
 
 ## drizzle
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `drizzle-camel-snake-column-names` | ⚠️ | TS property should be camelCase while the column string argument should be snake_case. | Keep the TS property name camelCase and pass the snake_case database column name as the first string argument to `varchar`/`text`/`integer`/etc. |
-| `drizzle-chunk-large-batch-insert` | ⚠️ | Drizzle `.values([...])` with a very large array risks exceeding bind-parameter limits. | Split the input into fixed-size chunks (e.g. `chunk(rows, 500).forEach(c => db.insert(t).values(c))`). |
-| `drizzle-config-satisfies` | ⚠️ | `drizzle.config.ts` should use `satisfies Config` instead of `: Config` annotations. | Replace `const config: Config = { ... }` with `export default { ... } satisfies Config` so Drizzle kit narrows the config type without widening. |
-| `drizzle-consistent-table-naming` | ⚠️ | Table names passed to `pgTable`/`mysqlTable`/`sqliteTable` should be lowercase snake_case plural. | Rename the first string argument to a lowercase snake_case plural form (e.g. `user` → `users`, `orderItem` → `order_items`). |
-| `drizzle-created-at-default-now` | ⚠️ | `createdAt` timestamp columns must have `.defaultNow()`. | Chain `.defaultNow()` on `createdAt`/`created_at` timestamp columns so the database populates the value on insert. |
-| `drizzle-fk-needs-index` | ⚠️ | Foreign key without an index — FK columns need explicit indexes. | Add `.index()` on every FK column. PostgreSQL does NOT auto-index FK columns — without an index, cascading deletes and JOIN lookups do sequential scans. |
-| `drizzle-json-requires-type` | ⚠️ | `json()`/`jsonb()` columns without `.$type<T>()` infer as `unknown`. | Call `.$type<T>()` on every `json()`/`jsonb()` column so queries return a typed shape instead of `unknown`. |
-| `drizzle-junction-composite-pk` | ⚠️ | Junction tables with 2 FK columns must declare a composite `primaryKey`. | Add `primaryKey({ columns: [t.aId, t.bId] })` in the table options callback so the junction table has a real composite primary key. |
-| `drizzle-migrations-no-data-in-schema-migration` | ⚠️ | A migration mixes DDL (CREATE / ALTER / DROP TABLE) with DML (INSERT / UPDATE / DELETE) — the two should ship in separate migrations. | Split the schema change and the data change into two `drizzle-kit generate` migrations so each can be reviewed and rolled back independently. |
-| `drizzle-multi-statement-tx` | ⚠️ | Sequential `db.insert`/`db.update`/`db.delete` in the same scope should run inside `db.transaction`. | Wrap related mutating calls in `await db.transaction(async (tx) => { ... })` so partial failures roll back. |
-| `drizzle-no-new-pool-per-request` | ⚠️ | `new Pool()` or `drizzle()` must be called at module scope, not inside a handler body. | Move the `new Pool(...)` / `drizzle(...)` initialization to module scope so connections are reused across requests. |
-| `drizzle-no-parsefloat-on-numeric` | ⚠️ | Reparsing a Drizzle `numeric`/`decimal` column with `parseFloat`/`Number`/unary `+` and doing arithmetic reintroduces IEEE-754 rounding on money. | Keep the string and compute with a decimal library (`new Decimal(order.amount)`) or do the arithmetic in SQL. |
-| `drizzle-no-push-in-production` | ❌ | `drizzle-kit push` is for dev only — use migrations in production/CI. | Replace `drizzle-kit push` with `drizzle-kit generate` + `drizzle-kit migrate` in CI/deployment scripts. |
-| `drizzle-no-select-without-limit` | ⚠️ | `db.select().from(table)` or `db.query.<table>.findMany()` without a `limit`/`where` bound scans the entire table. | Add a `limit` or `where` bound to the query to limit the result set. |
-| `drizzle-pool-requires-timeouts` | ⚠️ | `new Pool()` must define both `idleTimeoutMillis` and `connectionTimeoutMillis`. | Add `idleTimeoutMillis` and `connectionTimeoutMillis` to the `new Pool(...)` config so stuck connections don't leak and new ones fail fast. |
-| `drizzle-prefer-findmany-relations` | ⚠️ | Prefer `db.query.X.findMany({ with })` over manual `.leftJoin` / `.innerJoin` chains when relations are defined. | Use the relational query API (`db.query.X.findMany({ with: { ... } })`) instead of assembling the result manually with `.leftJoin` / `.innerJoin`. |
-| `drizzle-prefer-inarray` | ⚠️ | Prefer `inArray(col, [...])` over `sql` templates with `IN (...)`. | Replace `sql`… `IN (...)` with `inArray(col, [...])` — Drizzle's helper is parameterized and safer. |
-| `drizzle-prefer-infer-select` | ⚠️ | Prefer `typeof table.$inferSelect` over `InferSelectModel<typeof table>`. | Replace `InferSelectModel<typeof table>` with `typeof table.$inferSelect` (and `InferInsertModel` with `$inferInsert`). |
-| `drizzle-prefer-sql-now-in-predicate` | ⚠️ | Flag a bare `new Date()` / `Date.now()` passed to a Drizzle filter operator (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`between`). | Compare against the database clock with `` sql`now()` `` (or `` sql`CURRENT_DATE` `` for date-only) instead of the app server's `new Date()` / `Date.now()`. |
-| `drizzle-prepared-placeholder` | ⚠️ | `prepare()` chains must use `sql.placeholder(...)` in `where`, not inline variables. | Replace inline variables inside `.where(...)` of a `.prepare()` chain with `sql.placeholder('name')` and bind values at execution time. |
-| `drizzle-serverless-pool-max-one` | ⚠️ | In serverless (Edge/Lambda), `new Pool()` must set `max: 1`. | Set `max: 1` in the `new Pool(...)` config in serverless code — each invocation has its own pool, and >1 multiplies DB connections linearly with concurrency. |
-| `drizzle-soft-delete-filter` | ⚠️ | Queries on soft-deletable tables must filter `isNull(t.deletedAt)`. | Add `isNull(t.deletedAt)` (or equivalent) in the `where` clause of `select()` / `findMany()` calls in modules that reference `deletedAt`. |
-| `drizzle-timestamp-with-timezone` | ⚠️ | `timestamp('col')` is timezone-ambiguous. | Add `{ withTimezone: true }` to every timestamp column. Bare timestamps are interpreted differently depending on the server's zone, silently corrupting dates. |
-| `drizzle-updated-at-on-update` | ⚠️ | `updatedAt` columns must chain `.$onUpdate(() => new Date())`. | Chain `.$onUpdate(() => new Date())` on `updatedAt`/`updated_at` columns so Drizzle refreshes the value on every update. |
-| `drizzle-zod-omit-generated` | ⚠️ | `createInsertSchema(table)` should `.omit({ id, createdAt, ... })` auto-generated columns. | Chain `.omit({ id: true, createdAt: true, updatedAt: true })` on `createInsertSchema(...)` so API consumers don't submit DB-generated columns. |
-| `drizzle-zod-prefer-generated-schema` | ⚠️ | Manual `z.object({})` in a Drizzle schema file duplicates column definitions. | Use `createInsertSchema`/`createSelectSchema` from `drizzle-zod` to generate Zod schemas from the table definition. |
-| `enforce-delete-with-where` | ❌ | `db.delete(table)` without a chained `.where(...)` deletes every row in the table. | Add a `.where(condition)` clause, or use a dedicated truncate helper if you really mean to delete every row. |
-| `enforce-update-with-where` | ❌ | `db.update(table).set(...)` without `.where(...)` updates every row in the table. | Add a `.where(condition)` clause to bound the update. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `drizzle-camel-snake-column-names` | TS property should be camelCase while the column string argument should be snake_case. | Keep the TS property name camelCase and pass the snake_case database column name as the first string argument to `varchar`/`text`/`integer`/etc. |
+| `drizzle-chunk-large-batch-insert` | Drizzle `.values([...])` with a very large array risks exceeding bind-parameter limits. | Split the input into fixed-size chunks (e.g. `chunk(rows, 500).forEach(c => db.insert(t).values(c))`). |
+| `drizzle-config-satisfies` | `drizzle.config.ts` should use `satisfies Config` instead of `: Config` annotations. | Replace `const config: Config = { ... }` with `export default { ... } satisfies Config` so Drizzle kit narrows the config type without widening. |
+| `drizzle-consistent-table-naming` | Table names passed to `pgTable`/`mysqlTable`/`sqliteTable` should be lowercase snake_case plural. | Rename the first string argument to a lowercase snake_case plural form (e.g. `user` → `users`, `orderItem` → `order_items`). |
+| `drizzle-created-at-default-now` | `createdAt` timestamp columns must have `.defaultNow()`. | Chain `.defaultNow()` on `createdAt`/`created_at` timestamp columns so the database populates the value on insert. |
+| `drizzle-fk-needs-index` | Foreign key without an index — FK columns need explicit indexes. | Add `.index()` on every FK column. PostgreSQL does NOT auto-index FK columns — without an index, cascading deletes and JOIN lookups do sequential scans. |
+| `drizzle-json-requires-type` | `json()`/`jsonb()` columns without `.$type<T>()` infer as `unknown`. | Call `.$type<T>()` on every `json()`/`jsonb()` column so queries return a typed shape instead of `unknown`. |
+| `drizzle-junction-composite-pk` | Junction tables with 2 FK columns must declare a composite `primaryKey`. | Add `primaryKey({ columns: [t.aId, t.bId] })` in the table options callback so the junction table has a real composite primary key. |
+| `drizzle-migrations-no-data-in-schema-migration` | A migration mixes DDL (CREATE / ALTER / DROP TABLE) with DML (INSERT / UPDATE / DELETE) — the two should ship in separate migrations. | Split the schema change and the data change into two `drizzle-kit generate` migrations so each can be reviewed and rolled back independently. |
+| `drizzle-multi-statement-tx` | Sequential `db.insert`/`db.update`/`db.delete` in the same scope should run inside `db.transaction`. | Wrap related mutating calls in `await db.transaction(async (tx) => { ... })` so partial failures roll back. |
+| `drizzle-no-new-pool-per-request` | `new Pool()` or `drizzle()` must be called at module scope, not inside a handler body. | Move the `new Pool(...)` / `drizzle(...)` initialization to module scope so connections are reused across requests. |
+| `drizzle-no-parsefloat-on-numeric` | Reparsing a Drizzle `numeric`/`decimal` column with `parseFloat`/`Number`/unary `+` and doing arithmetic reintroduces IEEE-754 rounding on money. | Keep the string and compute with a decimal library (`new Decimal(order.amount)`) or do the arithmetic in SQL. |
+| `drizzle-no-push-in-production` | `drizzle-kit push` is for dev only — use migrations in production/CI. | Replace `drizzle-kit push` with `drizzle-kit generate` + `drizzle-kit migrate` in CI/deployment scripts. |
+| `drizzle-no-select-without-limit` | `db.select().from(table)` or `db.query.<table>.findMany()` without a `limit`/`where` bound scans the entire table. | Add a `limit` or `where` bound to the query to limit the result set. |
+| `drizzle-pool-requires-timeouts` | `new Pool()` must define both `idleTimeoutMillis` and `connectionTimeoutMillis`. | Add `idleTimeoutMillis` and `connectionTimeoutMillis` to the `new Pool(...)` config so stuck connections don't leak and new ones fail fast. |
+| `drizzle-prefer-findmany-relations` | Prefer `db.query.X.findMany({ with })` over manual `.leftJoin` / `.innerJoin` chains when relations are defined. | Use the relational query API (`db.query.X.findMany({ with: { ... } })`) instead of assembling the result manually with `.leftJoin` / `.innerJoin`. |
+| `drizzle-prefer-inarray` | Prefer `inArray(col, [...])` over `sql` templates with `IN (...)`. | Replace `sql`… `IN (...)` with `inArray(col, [...])` — Drizzle's helper is parameterized and safer. |
+| `drizzle-prefer-infer-select` | Prefer `typeof table.$inferSelect` over `InferSelectModel<typeof table>`. | Replace `InferSelectModel<typeof table>` with `typeof table.$inferSelect` (and `InferInsertModel` with `$inferInsert`). |
+| `drizzle-prefer-sql-now-in-predicate` | Flag a bare `new Date()` / `Date.now()` passed to a Drizzle filter operator (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`between`). | Compare against the database clock with `` sql`now()` `` (or `` sql`CURRENT_DATE` `` for date-only) instead of the app server's `new Date()` / `Date.now()`. |
+| `drizzle-prepared-placeholder` | `prepare()` chains must use `sql.placeholder(...)` in `where`, not inline variables. | Replace inline variables inside `.where(...)` of a `.prepare()` chain with `sql.placeholder('name')` and bind values at execution time. |
+| `drizzle-serverless-pool-max-one` | In serverless (Edge/Lambda), `new Pool()` must set `max: 1`. | Set `max: 1` in the `new Pool(...)` config in serverless code — each invocation has its own pool, and >1 multiplies DB connections linearly with concurrency. |
+| `drizzle-soft-delete-filter` | Queries on soft-deletable tables must filter `isNull(t.deletedAt)`. | Add `isNull(t.deletedAt)` (or equivalent) in the `where` clause of `select()` / `findMany()` calls in modules that reference `deletedAt`. |
+| `drizzle-timestamp-with-timezone` | `timestamp('col')` is timezone-ambiguous. | Add `{ withTimezone: true }` to every timestamp column. Bare timestamps are interpreted differently depending on the server's zone, silently corrupting dates. |
+| `drizzle-updated-at-on-update` | `updatedAt` columns must chain `.$onUpdate(() => new Date())`. | Chain `.$onUpdate(() => new Date())` on `updatedAt`/`updated_at` columns so Drizzle refreshes the value on every update. |
+| `drizzle-zod-omit-generated` | `createInsertSchema(table)` should `.omit({ id, createdAt, ... })` auto-generated columns. | Chain `.omit({ id: true, createdAt: true, updatedAt: true })` on `createInsertSchema(...)` so API consumers don't submit DB-generated columns. |
+| `drizzle-zod-prefer-generated-schema` | Manual `z.object({})` in a Drizzle schema file duplicates column definitions. | Use `createInsertSchema`/`createSelectSchema` from `drizzle-zod` to generate Zod schemas from the table definition. |
+| `enforce-delete-with-where` | `db.delete(table)` without a chained `.where(...)` deletes every row in the table. | Add a `.where(condition)` clause, or use a dedicated truncate helper if you really mean to delete every row. |
+| `enforce-update-with-where` | `db.update(table).set(...)` without `.where(...)` updates every row in the table. | Add a `.where(condition)` clause to bound the update. |
 
 ## drizzle > bundle-size
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `drizzle-no-drizzle-kit-in-runtime` | ⚠️ | `drizzle-kit` is a CLI/dev-time package — importing it from runtime code pulls migration tooling into the production bundle. | Keep `drizzle-kit` imports inside `drizzle.config.ts` or migration scripts; runtime code should depend only on `drizzle-orm`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `drizzle-no-drizzle-kit-in-runtime` | `drizzle-kit` is a CLI/dev-time package — importing it from runtime code pulls migration tooling into the production bundle. | Keep `drizzle-kit` imports inside `drizzle.config.ts` or migration scripts; runtime code should depend only on `drizzle-orm`. |
 
 ## drizzle > correctness
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `drizzle-decimal-for-money` | ⚠️ | `numeric('price')` / `decimal('amount')` for money columns must declare `precision`/`scale` — otherwise the underlying SQL type is unbounded. | Pass `{ precision: ..., scale: ... }` (e.g. `numeric('price', { precision: 12, scale: 2 })`). |
-| `drizzle-dollar-type-widens-unknown` | ⚠️ | `.$type<unknown>()` / `.$type<any>()` removes Drizzle's column type-safety with no benefit. | Pass a concrete type to `.$type<...>()` (the JSON shape, the literal union, etc.). |
-| `drizzle-findfirst-without-where` | ⚠️ | `.findFirst()` without a `where:` clause returns an arbitrary row — almost always a bug. | Pass `{ where: ... }` to scope the query, or use `.findFirst({ orderBy: ... })` if the row choice is intentional. |
-| `drizzle-leftjoin-nullable-handling` | ⚠️ | `.leftJoin(...)` returns rows whose joined columns can be `null`, but the destructured result is consumed without a null check. | Filter out rows whose joined entity is null, or treat the joined fields as nullable in the consumer. |
-| `drizzle-relations-missing-inverse` | ⚠️ | A `relations(...)` block declares a `one(...)` / `many(...)` reference whose inverse isn't defined in the same file. | Add the inverse `relations(...)` for the referenced table so Drizzle's relational query API resolves both directions. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `drizzle-decimal-for-money` | `numeric('price')` / `decimal('amount')` for money columns must declare `precision`/`scale` — otherwise the underlying SQL type is unbounded. | Pass `{ precision: ..., scale: ... }` (e.g. `numeric('price', { precision: 12, scale: 2 })`). |
+| `drizzle-dollar-type-widens-unknown` | `.$type<unknown>()` / `.$type<any>()` removes Drizzle's column type-safety with no benefit. | Pass a concrete type to `.$type<...>()` (the JSON shape, the literal union, etc.). |
+| `drizzle-findfirst-without-where` | `.findFirst()` without a `where:` clause returns an arbitrary row — almost always a bug. | Pass `{ where: ... }` to scope the query, or use `.findFirst({ orderBy: ... })` if the row choice is intentional. |
+| `drizzle-leftjoin-nullable-handling` | `.leftJoin(...)` returns rows whose joined columns can be `null`, but the destructured result is consumed without a null check. | Filter out rows whose joined entity is null, or treat the joined fields as nullable in the consumer. |
+| `drizzle-relations-missing-inverse` | A `relations(...)` block declares a `one(...)` / `many(...)` reference whose inverse isn't defined in the same file. | Add the inverse `relations(...)` for the referenced table so Drizzle's relational query API resolves both directions. |
 
 ## drizzle > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `drizzle-no-db-query-in-loop` | ⚠️ | Drizzle queries inside `for` / `for-of` / `.map` / `.forEach` cause N+1 round-trips to the database. | Hoist the query out of the loop and use `inArray(...)`/`leftJoin(...)`/`with: {...}` to fetch in a single round-trip. |
-| `drizzle-no-redundant-roundtrip-around-write` | ⚠️ | A Drizzle existence-probe guarding a write on the same table+key, or a re-read of a just-written row, is a redundant non-atomic round-trip. | Fold the probe into the write with `.onConflictDoNothing()` / `.onConflictDoUpdate()`, and read the written row back with `.returning()` instead of a follow-up query. |
-| `drizzle-prefer-select-columns` | ⚠️ | `db.select()` with no argument fetches every column — list explicitly the columns you actually need. | Pass a column projection: `db.select({ id: users.id, email: users.email })`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `drizzle-no-db-query-in-loop` | Drizzle queries inside `for` / `for-of` / `.map` / `.forEach` cause N+1 round-trips to the database. | Hoist the query out of the loop and use `inArray(...)`/`leftJoin(...)`/`with: {...}` to fetch in a single round-trip. |
+| `drizzle-no-redundant-roundtrip-around-write` | A Drizzle existence-probe guarding a write on the same table+key, or a re-read of a just-written row, is a redundant non-atomic round-trip. | Fold the probe into the write with `.onConflictDoNothing()` / `.onConflictDoUpdate()`, and read the written row back with `.returning()` instead of a follow-up query. |
+| `drizzle-prefer-select-columns` | `db.select()` with no argument fetches every column — list explicitly the columns you actually need. | Pass a column projection: `db.select({ id: users.id, email: users.email })`. |
 
 ## drizzle > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `drizzle-no-sql-raw-with-variable` | ❌ | `sql.raw()` with a non-literal argument is a SQL injection vector. | Use `sql` tagged template literals with parameterized interpolation, or `sql.identifier()` for identifiers. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `drizzle-no-sql-raw-with-variable` | `sql.raw()` with a non-literal argument is a SQL injection vector. | Use `sql` tagged template literals with parameterized interpolation, or `sql.identifier()` for identifiers. |
 
 ## e18e > modernization
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-indexof-equality` | ⚠️ | Prefer `includes()`/`startsWith()` over `indexOf()` equality checks. | Use `str.includes(x)` instead of `str.indexOf(x) !== -1`, `str.startsWith(x)` instead of `str.indexOf(x) === 0`. |
-| `prefer-array-to-reversed` | ⚠️ | Prefer `arr.toReversed()` over `[...arr].reverse()`. | Replace `[...arr].reverse()` or `arr.slice().reverse()` with `arr.toReversed()` (ES2023). |
-| `prefer-array-to-sorted` | ⚠️ | Prefer `arr.toSorted()` over `[...arr].sort()`. | Replace `[...arr].sort()` or `arr.slice().sort()` with `arr.toSorted()` (ES2023). |
-| `prefer-exponentiation-operator` | ⚠️ | Prefer `x ** y` over `Math.pow(x, y)`. | Replace `Math.pow(x, y)` with `x ** y` (ES2016). |
-| `prefer-object-has-own` | ⚠️ | Prefer `Object.hasOwn(obj, key)` over `obj.hasOwnProperty(key)`. | Replace with `Object.hasOwn(obj, key)` (ES2022). |
-| `prefer-timer-args` | ⚠️ | Prefer `setTimeout(fn, delay, arg)` over `setTimeout(() => fn(arg), delay)`. | Pass arguments directly to setTimeout/setInterval: `setTimeout(fn, delay, arg1, arg2)`. |
-| `prefer-url-canparse` | ⚠️ | Prefer `URL.canParse(url)` over try-catch with `new URL()`. | Replace try-catch URL validation with `URL.canParse(url)` (available in modern runtimes). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-indexof-equality` | Prefer `includes()`/`startsWith()` over `indexOf()` equality checks. | Use `str.includes(x)` instead of `str.indexOf(x) !== -1`, `str.startsWith(x)` instead of `str.indexOf(x) === 0`. |
+| `prefer-array-to-reversed` | Prefer `arr.toReversed()` over `[...arr].reverse()`. | Replace `[...arr].reverse()` or `arr.slice().reverse()` with `arr.toReversed()` (ES2023). |
+| `prefer-array-to-sorted` | Prefer `arr.toSorted()` over `[...arr].sort()`. | Replace `[...arr].sort()` or `arr.slice().sort()` with `arr.toSorted()` (ES2023). |
+| `prefer-exponentiation-operator` | Prefer `x ** y` over `Math.pow(x, y)`. | Replace `Math.pow(x, y)` with `x ** y` (ES2016). |
+| `prefer-object-has-own` | Prefer `Object.hasOwn(obj, key)` over `obj.hasOwnProperty(key)`. | Replace with `Object.hasOwn(obj, key)` (ES2022). |
+| `prefer-timer-args` | Prefer `setTimeout(fn, delay, arg)` over `setTimeout(() => fn(arg), delay)`. | Pass arguments directly to setTimeout/setInterval: `setTimeout(fn, delay, arg1, arg2)`. |
+| `prefer-url-canparse` | Prefer `URL.canParse(url)` over try-catch with `new URL()`. | Replace try-catch URL validation with `URL.canParse(url)` (available in modern runtimes). |
 
 ## elysia > architecture
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-custom-errors-in-model` | ⚠️ | Custom error class declared in a service file — Elysia error mapping lives next to the model. | Move `class FooError extends Error` to the matching `*.model.ts` so `app.error({ FOO: FooError })` and the schema stay co-located. |
-| `elysia-service-coupled` | ⚠️ | Service module imports framework symbols from `elysia` — couples the service layer to the HTTP layer. | Keep services framework-agnostic: throw plain errors and let route handlers translate them. Only `status` is allowed to cross from `elysia` for ergonomic HTTP errors. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-custom-errors-in-model` | Custom error class declared in a service file — Elysia error mapping lives next to the model. | Move `class FooError extends Error` to the matching `*.model.ts` so `app.error({ FOO: FooError })` and the schema stay co-located. |
+| `elysia-service-coupled` | Service module imports framework symbols from `elysia` — couples the service layer to the HTTP layer. | Keep services framework-agnostic: throw plain errors and let route handlers translate them. Only `status` is allowed to cross from `elysia` for ergonomic HTTP errors. |
 
 ## elysia > code-quality
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-plugin-functional-callback` | ⚠️ | Functional plugins `(app: Elysia) => app.get(...)` lose type inference — prefer `new Elysia()` instances. | Export `new Elysia({ name }).get(...)` and `.use(plugin)` instead of an arrow that mutates the parent app. |
-| `elysia-prefer-redirect` | ⚠️ | Manual redirect via `set.status = 301/302` and `set.headers.location` — use `redirect()` for typed redirects. | Return `redirect(url, code)` from the handler instead of mutating `set.status` and `set.headers.location`. |
-| `elysia-prefer-status-over-set` | ⚠️ | `set.status = code` mutates context — use the typed `status(code, body)` helper instead. | Use `status(code, body)` instead of `set.status = code` for type-safe responses. |
-| `elysia-route-all-method` | ⚠️ | `.all()` accepts any HTTP method — usually a specific method is more appropriate. | Replace `.all('/path', ...)` with `.get`, `.post`, `.put`, `.patch`, or `.delete` to communicate intent and let routers/proxies cache safely. |
-| `elysia-service-return-not-throw` | ⚠️ | `throw` in an Elysia service breaks typed error propagation — return `status(...)` instead. | Return `status(code, message)` instead of throwing — Elysia convention for typed error propagation. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-plugin-functional-callback` | Functional plugins `(app: Elysia) => app.get(...)` lose type inference — prefer `new Elysia()` instances. | Export `new Elysia({ name }).get(...)` and `.use(plugin)` instead of an arrow that mutates the parent app. |
+| `elysia-prefer-redirect` | Manual redirect via `set.status = 301/302` and `set.headers.location` — use `redirect()` for typed redirects. | Return `redirect(url, code)` from the handler instead of mutating `set.status` and `set.headers.location`. |
+| `elysia-prefer-status-over-set` | `set.status = code` mutates context — use the typed `status(code, body)` helper instead. | Use `status(code, body)` instead of `set.status = code` for type-safe responses. |
+| `elysia-route-all-method` | `.all()` accepts any HTTP method — usually a specific method is more appropriate. | Replace `.all('/path', ...)` with `.get`, `.post`, `.put`, `.patch`, or `.delete` to communicate intent and let routers/proxies cache safely. |
+| `elysia-service-return-not-throw` | `throw` in an Elysia service breaks typed error propagation — return `status(...)` instead. | Return `status(code, message)` instead of throwing — Elysia convention for typed error propagation. |
 
 ## elysia > correctness
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-after-response-mutation` | ❌ | `onAfterResponse` handler tries to mutate the response after it has already been sent. | Move header / status changes to `onBeforeHandle`, `mapResponse`, or `transform`. `onAfterResponse` runs after the response is flushed. |
-| `elysia-apollo-no-req-res` | ❌ | Apollo with Elysia exposes `{ request }` in context — `req`/`res` come from the Express integration and are undefined here. | Replace `context: ({ req, res }) => ...` with `context: ({ request }) => ...`. |
-| `elysia-better-auth-basepath` | ❌ | `betterAuth({ basePath: '' })` (or `'/'`) is invalid — Better Auth needs a real prefix. | Set `basePath: '/api/auth'` (or any non-empty path other than `'/'`) when constructing `betterAuth`. |
-| `elysia-better-auth-mount` | ❌ | Better Auth handlers must be mounted, not used — `.use(auth.handler)` will not match Better Auth's nested route shape. | Use `.mount(auth.handler)` (or `.mount('/api/auth', auth.handler)`) so the WHATWG handler receives the full request. |
-| `elysia-cf-compile-required` | ❌ | Elysia under the Cloudflare adapter must call `.compile()` — the Workers runtime cannot tolerate the JIT path. | Call `.compile()` on the Elysia instance before exporting it for Cloudflare. |
-| `elysia-cf-env-import` | ❌ | `process.env` is undefined in Cloudflare Workers — Elysia code under `CloudflareAdapter` must read env from the `cloudflare:workers` import. | Replace `process.env.X` with `import { env } from 'cloudflare:workers'` and `env.X`. |
-| `elysia-cf-no-inline-values` | ❌ | Inline string handler under Cloudflare adapter — string handlers bypass the proper compiled path on Workers. | Use a function handler: `.get('/', () => 'Hello')` instead of `.get('/', 'Hello')`. |
-| `elysia-cf-no-static-plugin` | ❌ | Elysia `staticPlugin` / `.file()` are unsupported under the Cloudflare adapter — there is no filesystem on Workers. | Serve static assets via Cloudflare's `[assets]` binding (Workers Sites / Static Assets) instead. |
-| `elysia-cookie-getter-setter` | ⚠️ | Code uses `cookie.get(...)` / `cookie.set(...)` — Elysia exposes cookies as `cookie.<name>.value`. | Use `ctx.cookie.<name>.value` for reads and assignment for writes (e.g. `cookie.session.value = '...'`). |
-| `elysia-cookie-removal-api` | ⚠️ | Setting `cookie.x.value = ''` doesn't clear the cookie — it sends an empty value with the same expiry. | Use `cookie.x.remove()` (or `delete cookie.x`) so Elysia emits a Set-Cookie with an expired Max-Age. |
-| `elysia-cron-name-required` | ⚠️ | `cron({ ... })` without a `name` makes the job indistinguishable from others — Elysia uses the name for diagnostics and stop(). | Pass an explicit `name: 'unique-job-id'` to every `cron(...)` call. |
-| `elysia-cron-timezone` | ⚠️ | Cron `timezone` must be in IANA format (e.g. `America/Los_Angeles`); abbreviations like `PST` are unreliable. | Use the IANA tz identifier — `America/Los_Angeles`, `Europe/Paris`, etc. Abbreviations are ambiguous around DST. |
-| `elysia-decorate-uses-request-data` | ⚠️ | `.decorate(...)` runs at boot — calling `Date.now()` or `Math.random()` there freezes a value across all requests. | Move per-request values to `.derive(...)` so they are computed for each request. |
-| `elysia-deno-serve-fetch` | ❌ | `Deno.serve(app)` does not invoke Elysia — Deno's serve API expects a `(Request) => Response` handler. | Pass `app.fetch` instead: `Deno.serve(app.fetch)`. |
-| `elysia-derive-async-no-await` | ⚠️ | `.derive(async () => ...)` whose body never `await`s — the async wrapper makes the derived value a Promise that handlers must explicitly await. | Either drop the `async` keyword or `await` the work inside `.derive(...)`. |
-| `elysia-derive-validated-data` | ⚠️ | `.derive()` callback reads `body`/`params`/`query` — those are pre-validation in `.derive()`. | Use `.resolve(...)` instead; it runs after validation so `body`/`params`/`query` reflect the validated shape. |
-| `elysia-drizzle-intermediate-var` | ❌ | Inline `t.Omit(createInsertSchema(...))` triggers `Type instantiation is possibly infinite`. | Bind `createInsertSchema(table)` to a variable first, then call `t.Omit(schema, [...])` on it. |
-| `elysia-eden-error-unchecked` | ⚠️ | Eden treaty calls return `{ data, error }` — destructuring only `data` swallows the error path. | Destructure both `{ data, error }` and check `error` before consuming `data`. |
-| `elysia-eden-null-body` | ⚠️ | Eden Treaty calls pass `undefined` as the body argument; should be `null`. | Use `null` instead of `undefined` for an empty body in Eden mutations: `treaty.path.post(null, options)`. |
-| `elysia-eden-server-export-type` | ⚠️ | Server entry file declares `new Elysia().listen(...)` but does not `export type` for Eden Treaty. | Add `export type App = typeof app;` so the Eden Treaty client can infer routes from the server type. |
-| `elysia-graphql-yoga-context` | ⚠️ | `yoga({ context })` without a `useContext` placeholder will not propagate the context into resolvers. | Define a `useContext` GraphQL placeholder (or wire the context through a plugin) so resolvers can read the value. |
-| `elysia-guard-derive-no-headers` | ⚠️ | Guard `.derive`/`.resolve` reads `headers.authorization` but the guard has no `headers:` schema. | Add a `headers: t.Object({ authorization: t.String() })` schema to the guard so the field is validated and typed. |
-| `elysia-guard-overrides-route-schema` | ⚠️ | Routes nested in a `.guard({ body: ... })` block redeclare `body:` — the inner schema overrides the guard. | Drop the `body:` from the inner route or remove it from the guard so a single source of truth validates the request body. |
-| `elysia-headers-lowercase` | ⚠️ | `headers:` schema uses uppercase header names — runtime values are always lowercased. | Use lowercase keys (`authorization`, `content-type`) — Elysia normalises incoming headers to lowercase before validation. |
-| `elysia-hooks-before-routes` | ⚠️ | Lifecycle hook chained after route definitions — Elysia hooks only apply to routes registered after them. | Chain `.onBeforeHandle(...)`, `.onError(...)`, etc. before `.get(...)`/`.post(...)` so they apply to subsequent routes. |
-| `elysia-html-import-uppercase` | ⚠️ | Files using `@elysiajs/html` must import `Html` (uppercase) for the JSX factory. | Import `{ Html }` from `@elysiajs/html` so JSX is transformed correctly: `import { Html } from '@elysiajs/html'`. |
-| `elysia-jwt-name-multiple` | ❌ | Multiple `jwt(...)` plugins registered without distinct `name` values — they overwrite each other. | Pass a unique `name` to each `jwt({...})` call (e.g. `name: 'access'`, `name: 'refresh'`) so they register as separate decorators. |
-| `elysia-listen-port-type` | ⚠️ | `process.env.PORT` is a string — `.listen()` expects a number. | Wrap with `Number(process.env.PORT)`, `parseInt(process.env.PORT, 10)`, or default with `?? 3000`. |
-| `elysia-macro-named-inference` | ⚠️ | `.macro({ ... })` bulk form blocks cross-macro type inference. | Use the named form `.macro('name', { ... })` so other macros can `resolve` against this macro's output type. |
-| `elysia-macro-throw-status` | ⚠️ | Code uses `throw status(...)` — Elysia macros and resolvers expect `return status(...)`. | Replace `throw status(...)` with `return status(...)` so Elysia tracks the response type. |
-| `elysia-nextjs-typeof-process` | ⚠️ | Eden treaty isomorphic clients must branch on `typeof process` — `typeof window` is unreliable in RSC / edge runtimes. | Use `typeof process !== 'undefined'` to detect the server side when configuring the treaty client. |
-| `elysia-no-body-on-get` | ❌ | `.get()` / `.head()` route declares a `body:` schema, which HTTP forbids. | Move the validation to `query:` or change the verb to `.post()`. |
-| `elysia-no-server-assertion` | ⚠️ | `app.server!` non-null assertion is unsafe — `server` is undefined until `.listen()` resolves. | Read `app.server` only inside the `.listen()` callback or after awaiting `listen()`. Avoid `!` non-null assertions on `server`. |
-| `elysia-nodejs-adapter-required` | ❌ | Elysia under Node.js requires the explicit `@elysiajs/node` adapter — without it the runtime falls back to Bun-only APIs. | Pass `adapter: node()` to the `Elysia` constructor when running on Node. |
-| `elysia-onerror-before-plugin` | ⚠️ | `.onError(...)` registered after `.use(plugin)` does not catch errors thrown by that plugin. | Chain `.onError(...)` before `.use(plugin)` so the handler is in scope when the plugin registers its routes. |
-| `elysia-onerror-missing-validation` | ⚠️ | `onError` handler doesn't branch on `'VALIDATION'` — schema errors will be returned as generic 500s. | Inside `onError`, branch on `code === 'VALIDATION'` (or `'NOT_FOUND'`/`'PARSE'`) and return a structured response. |
-| `elysia-onparse-no-content-type` | ⚠️ | `.onParse` handler does not branch on `contentType`. | Inspect `contentType` inside `onParse` and only return a parsed value for the formats this hook handles; otherwise let Elysia's default parsing run. |
-| `elysia-openapi-from-types-prod` | ⚠️ | `fromTypes('src/index.ts')` reads source files at runtime — should be conditional for prod builds. | Gate `fromTypes()` behind `process.env.NODE_ENV !== 'production'` or pre-compute the spec at build time. |
-| `elysia-openapi-security-scheme` | ⚠️ | Routes declare `security:` requirements without a matching `securitySchemes` definition — the generated OpenAPI doc is invalid. | Define `securitySchemes` (e.g. `bearerAuth`) at the OpenAPI plugin level matching the route-level requirements. |
-| `elysia-resolve-outside-guard` | ⚠️ | `.resolve()` is used at the Elysia chain top level instead of inside `.guard()`. | Wrap the `.resolve(...)` in a `.guard({ ... }, app => app.resolve(...))` so the derived value is only added to scoped routes. |
-| `elysia-response-status-mismatch` | ⚠️ | Handler returns a status code that is not declared in the route's `response:` schema. | Add the status key (e.g. `404: t.Object({ message: t.String() })`) to the route's `response:` map. |
-| `elysia-response-t-unknown` | ⚠️ | `response: t.Unknown()` / `t.Any()` disables response validation, so Eden inherits no type-safety. | Describe the response with a concrete TypeBox schema (`t.Object({...})`, `t.String()`, etc.). |
-| `elysia-scope-missing` | ⚠️ | Plugin defines lifecycle hooks but no scope — hooks won't propagate to the parent app. | Add `as: 'global'` or `as: 'scoped'` to the hook (or call `.as('scoped')` on the plugin) so hooks apply to the consumer. |
-| `elysia-set-status-after-return` | ⚠️ | `set.status = ...` written after a `return` is dead code — Elysia has already serialized the response. | Set `set.status` before the `return` statement that emits the response body. |
-| `elysia-static-await-hmr` | ⚠️ | `@elysiajs/static` is registered without `await` — HMR cannot pick up file changes. | Use `app.use(await staticPlugin())` so the plugin's async setup completes before the chain continues. |
-| `elysia-streaming-headers-after-yield` | ❌ | `set.headers` modified after a `yield` in a streaming handler — too late to take effect. | Set headers before the first `yield`. Once the stream starts, headers are already flushed to the client. |
-| `elysia-t-unknown-format-string` | ⚠️ | `t.String({ format: '...' })` accepts only a known set of format names — typos silently disable the format check. | Use a recognised format (e.g. `email`, `uri`, `uuid`, `date`, `date-time`, `ipv4`, `ipv6`, `hostname`, `regex`, `time`). |
-| `elysia-transform-no-schema` | ⚠️ | `transform` mutates `body` without a declared `body:` schema — input is unchecked. | Declare a `body:` schema for the route or scope before transforming the body, so Elysia validates the shape before mutation. |
-| `elysia-ws-connection-leak` | ⚠️ | WebSocket `open` adds the socket to a Set but `error`/`close` doesn't remove it — the Set leaks dead sockets. | Mirror every `.add(ws)` in `open` with a `.delete(ws)` in both `close` and `error` handlers. |
-| `elysia-ws-message-no-schema` | ⚠️ | `.ws(...)` declares a `body:` schema but no `message:` — incoming WebSocket frames go unvalidated. | Add a TypeBox `message:` schema describing each frame the server should accept. |
-| `elysia-ws-subscribe-before-publish` | ⚠️ | WebSocket calls `.publish()` without subscribing the client to the topic first. | Call `ws.subscribe('topic')` in the `open` handler before publishing to that topic from `message`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-after-response-mutation` | `onAfterResponse` handler tries to mutate the response after it has already been sent. | Move header / status changes to `onBeforeHandle`, `mapResponse`, or `transform`. `onAfterResponse` runs after the response is flushed. |
+| `elysia-apollo-no-req-res` | Apollo with Elysia exposes `{ request }` in context — `req`/`res` come from the Express integration and are undefined here. | Replace `context: ({ req, res }) => ...` with `context: ({ request }) => ...`. |
+| `elysia-better-auth-basepath` | `betterAuth({ basePath: '' })` (or `'/'`) is invalid — Better Auth needs a real prefix. | Set `basePath: '/api/auth'` (or any non-empty path other than `'/'`) when constructing `betterAuth`. |
+| `elysia-better-auth-mount` | Better Auth handlers must be mounted, not used — `.use(auth.handler)` will not match Better Auth's nested route shape. | Use `.mount(auth.handler)` (or `.mount('/api/auth', auth.handler)`) so the WHATWG handler receives the full request. |
+| `elysia-cf-compile-required` | Elysia under the Cloudflare adapter must call `.compile()` — the Workers runtime cannot tolerate the JIT path. | Call `.compile()` on the Elysia instance before exporting it for Cloudflare. |
+| `elysia-cf-env-import` | `process.env` is undefined in Cloudflare Workers — Elysia code under `CloudflareAdapter` must read env from the `cloudflare:workers` import. | Replace `process.env.X` with `import { env } from 'cloudflare:workers'` and `env.X`. |
+| `elysia-cf-no-inline-values` | Inline string handler under Cloudflare adapter — string handlers bypass the proper compiled path on Workers. | Use a function handler: `.get('/', () => 'Hello')` instead of `.get('/', 'Hello')`. |
+| `elysia-cf-no-static-plugin` | Elysia `staticPlugin` / `.file()` are unsupported under the Cloudflare adapter — there is no filesystem on Workers. | Serve static assets via Cloudflare's `[assets]` binding (Workers Sites / Static Assets) instead. |
+| `elysia-cookie-getter-setter` | Code uses `cookie.get(...)` / `cookie.set(...)` — Elysia exposes cookies as `cookie.<name>.value`. | Use `ctx.cookie.<name>.value` for reads and assignment for writes (e.g. `cookie.session.value = '...'`). |
+| `elysia-cookie-removal-api` | Setting `cookie.x.value = ''` doesn't clear the cookie — it sends an empty value with the same expiry. | Use `cookie.x.remove()` (or `delete cookie.x`) so Elysia emits a Set-Cookie with an expired Max-Age. |
+| `elysia-cron-name-required` | `cron({ ... })` without a `name` makes the job indistinguishable from others — Elysia uses the name for diagnostics and stop(). | Pass an explicit `name: 'unique-job-id'` to every `cron(...)` call. |
+| `elysia-cron-timezone` | Cron `timezone` must be in IANA format (e.g. `America/Los_Angeles`); abbreviations like `PST` are unreliable. | Use the IANA tz identifier — `America/Los_Angeles`, `Europe/Paris`, etc. Abbreviations are ambiguous around DST. |
+| `elysia-decorate-uses-request-data` | `.decorate(...)` runs at boot — calling `Date.now()` or `Math.random()` there freezes a value across all requests. | Move per-request values to `.derive(...)` so they are computed for each request. |
+| `elysia-deno-serve-fetch` | `Deno.serve(app)` does not invoke Elysia — Deno's serve API expects a `(Request) => Response` handler. | Pass `app.fetch` instead: `Deno.serve(app.fetch)`. |
+| `elysia-derive-async-no-await` | `.derive(async () => ...)` whose body never `await`s — the async wrapper makes the derived value a Promise that handlers must explicitly await. | Either drop the `async` keyword or `await` the work inside `.derive(...)`. |
+| `elysia-derive-validated-data` | `.derive()` callback reads `body`/`params`/`query` — those are pre-validation in `.derive()`. | Use `.resolve(...)` instead; it runs after validation so `body`/`params`/`query` reflect the validated shape. |
+| `elysia-drizzle-intermediate-var` | Inline `t.Omit(createInsertSchema(...))` triggers `Type instantiation is possibly infinite`. | Bind `createInsertSchema(table)` to a variable first, then call `t.Omit(schema, [...])` on it. |
+| `elysia-eden-error-unchecked` | Eden treaty calls return `{ data, error }` — destructuring only `data` swallows the error path. | Destructure both `{ data, error }` and check `error` before consuming `data`. |
+| `elysia-eden-null-body` | Eden Treaty calls pass `undefined` as the body argument; should be `null`. | Use `null` instead of `undefined` for an empty body in Eden mutations: `treaty.path.post(null, options)`. |
+| `elysia-eden-server-export-type` | Server entry file declares `new Elysia().listen(...)` but does not `export type` for Eden Treaty. | Add `export type App = typeof app;` so the Eden Treaty client can infer routes from the server type. |
+| `elysia-graphql-yoga-context` | `yoga({ context })` without a `useContext` placeholder will not propagate the context into resolvers. | Define a `useContext` GraphQL placeholder (or wire the context through a plugin) so resolvers can read the value. |
+| `elysia-guard-derive-no-headers` | Guard `.derive`/`.resolve` reads `headers.authorization` but the guard has no `headers:` schema. | Add a `headers: t.Object({ authorization: t.String() })` schema to the guard so the field is validated and typed. |
+| `elysia-guard-overrides-route-schema` | Routes nested in a `.guard({ body: ... })` block redeclare `body:` — the inner schema overrides the guard. | Drop the `body:` from the inner route or remove it from the guard so a single source of truth validates the request body. |
+| `elysia-headers-lowercase` | `headers:` schema uses uppercase header names — runtime values are always lowercased. | Use lowercase keys (`authorization`, `content-type`) — Elysia normalises incoming headers to lowercase before validation. |
+| `elysia-hooks-before-routes` | Lifecycle hook chained after route definitions — Elysia hooks only apply to routes registered after them. | Chain `.onBeforeHandle(...)`, `.onError(...)`, etc. before `.get(...)`/`.post(...)` so they apply to subsequent routes. |
+| `elysia-html-import-uppercase` | Files using `@elysiajs/html` must import `Html` (uppercase) for the JSX factory. | Import `{ Html }` from `@elysiajs/html` so JSX is transformed correctly: `import { Html } from '@elysiajs/html'`. |
+| `elysia-jwt-name-multiple` | Multiple `jwt(...)` plugins registered without distinct `name` values — they overwrite each other. | Pass a unique `name` to each `jwt({...})` call (e.g. `name: 'access'`, `name: 'refresh'`) so they register as separate decorators. |
+| `elysia-listen-port-type` | `process.env.PORT` is a string — `.listen()` expects a number. | Wrap with `Number(process.env.PORT)`, `parseInt(process.env.PORT, 10)`, or default with `?? 3000`. |
+| `elysia-macro-named-inference` | `.macro({ ... })` bulk form blocks cross-macro type inference. | Use the named form `.macro('name', { ... })` so other macros can `resolve` against this macro's output type. |
+| `elysia-macro-throw-status` | Code uses `throw status(...)` — Elysia macros and resolvers expect `return status(...)`. | Replace `throw status(...)` with `return status(...)` so Elysia tracks the response type. |
+| `elysia-nextjs-typeof-process` | Eden treaty isomorphic clients must branch on `typeof process` — `typeof window` is unreliable in RSC / edge runtimes. | Use `typeof process !== 'undefined'` to detect the server side when configuring the treaty client. |
+| `elysia-no-body-on-get` | `.get()` / `.head()` route declares a `body:` schema, which HTTP forbids. | Move the validation to `query:` or change the verb to `.post()`. |
+| `elysia-no-server-assertion` | `app.server!` non-null assertion is unsafe — `server` is undefined until `.listen()` resolves. | Read `app.server` only inside the `.listen()` callback or after awaiting `listen()`. Avoid `!` non-null assertions on `server`. |
+| `elysia-nodejs-adapter-required` | Elysia under Node.js requires the explicit `@elysiajs/node` adapter — without it the runtime falls back to Bun-only APIs. | Pass `adapter: node()` to the `Elysia` constructor when running on Node. |
+| `elysia-onerror-before-plugin` | `.onError(...)` registered after `.use(plugin)` does not catch errors thrown by that plugin. | Chain `.onError(...)` before `.use(plugin)` so the handler is in scope when the plugin registers its routes. |
+| `elysia-onerror-missing-validation` | `onError` handler doesn't branch on `'VALIDATION'` — schema errors will be returned as generic 500s. | Inside `onError`, branch on `code === 'VALIDATION'` (or `'NOT_FOUND'`/`'PARSE'`) and return a structured response. |
+| `elysia-onparse-no-content-type` | `.onParse` handler does not branch on `contentType`. | Inspect `contentType` inside `onParse` and only return a parsed value for the formats this hook handles; otherwise let Elysia's default parsing run. |
+| `elysia-openapi-from-types-prod` | `fromTypes('src/index.ts')` reads source files at runtime — should be conditional for prod builds. | Gate `fromTypes()` behind `process.env.NODE_ENV !== 'production'` or pre-compute the spec at build time. |
+| `elysia-openapi-security-scheme` | Routes declare `security:` requirements without a matching `securitySchemes` definition — the generated OpenAPI doc is invalid. | Define `securitySchemes` (e.g. `bearerAuth`) at the OpenAPI plugin level matching the route-level requirements. |
+| `elysia-resolve-outside-guard` | `.resolve()` is used at the Elysia chain top level instead of inside `.guard()`. | Wrap the `.resolve(...)` in a `.guard({ ... }, app => app.resolve(...))` so the derived value is only added to scoped routes. |
+| `elysia-response-status-mismatch` | Handler returns a status code that is not declared in the route's `response:` schema. | Add the status key (e.g. `404: t.Object({ message: t.String() })`) to the route's `response:` map. |
+| `elysia-response-t-unknown` | `response: t.Unknown()` / `t.Any()` disables response validation, so Eden inherits no type-safety. | Describe the response with a concrete TypeBox schema (`t.Object({...})`, `t.String()`, etc.). |
+| `elysia-scope-missing` | Plugin defines lifecycle hooks but no scope — hooks won't propagate to the parent app. | Add `as: 'global'` or `as: 'scoped'` to the hook (or call `.as('scoped')` on the plugin) so hooks apply to the consumer. |
+| `elysia-set-status-after-return` | `set.status = ...` written after a `return` is dead code — Elysia has already serialized the response. | Set `set.status` before the `return` statement that emits the response body. |
+| `elysia-static-await-hmr` | `@elysiajs/static` is registered without `await` — HMR cannot pick up file changes. | Use `app.use(await staticPlugin())` so the plugin's async setup completes before the chain continues. |
+| `elysia-streaming-headers-after-yield` | `set.headers` modified after a `yield` in a streaming handler — too late to take effect. | Set headers before the first `yield`. Once the stream starts, headers are already flushed to the client. |
+| `elysia-t-unknown-format-string` | `t.String({ format: '...' })` accepts only a known set of format names — typos silently disable the format check. | Use a recognised format (e.g. `email`, `uri`, `uuid`, `date`, `date-time`, `ipv4`, `ipv6`, `hostname`, `regex`, `time`). |
+| `elysia-transform-no-schema` | `transform` mutates `body` without a declared `body:` schema — input is unchecked. | Declare a `body:` schema for the route or scope before transforming the body, so Elysia validates the shape before mutation. |
+| `elysia-ws-connection-leak` | WebSocket `open` adds the socket to a Set but `error`/`close` doesn't remove it — the Set leaks dead sockets. | Mirror every `.add(ws)` in `open` with a `.delete(ws)` in both `close` and `error` handlers. |
+| `elysia-ws-message-no-schema` | `.ws(...)` declares a `body:` schema but no `message:` — incoming WebSocket frames go unvalidated. | Add a TypeBox `message:` schema describing each frame the server should accept. |
+| `elysia-ws-subscribe-before-publish` | WebSocket calls `.publish()` without subscribing the client to the topic first. | Call `ws.subscribe('topic')` in the `open` handler before publishing to that topic from `message`. |
 
 ## elysia > deployment
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-deploy-no-graceful-shutdown` | ⚠️ | Elysia server `.listen()` without graceful shutdown — in-flight requests are dropped on SIGTERM/SIGINT. | Register a `process.on('SIGTERM', ...)` (and SIGINT) handler that calls `app.stop()` to drain connections before exit. |
-| `elysia-deploy-no-health` | ⚠️ | Elysia server exposes `.listen()` without a `/health` endpoint — load balancers and orchestrators have no liveness signal. | Add `.get('/health', () => ({ status: 'ok' }))` (or similar) so platforms can probe readiness. |
-| `elysia-deploy-port-hardcoded` | ⚠️ | Elysia `.listen()` uses a hardcoded numeric port — deployment platforms typically inject the port via environment. | Read the port from `process.env.PORT` (with a sensible default) so the same image works locally and on hosting. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-deploy-no-graceful-shutdown` | Elysia server `.listen()` without graceful shutdown — in-flight requests are dropped on SIGTERM/SIGINT. | Register a `process.on('SIGTERM', ...)` (and SIGINT) handler that calls `app.stop()` to drain connections before exit. |
+| `elysia-deploy-no-health` | Elysia server exposes `.listen()` without a `/health` endpoint — load balancers and orchestrators have no liveness signal. | Add `.get('/health', () => ({ status: 'ok' }))` (or similar) so platforms can probe readiness. |
+| `elysia-deploy-port-hardcoded` | Elysia `.listen()` uses a hardcoded numeric port — deployment platforms typically inject the port via environment. | Read the port from `process.env.PORT` (with a sensible default) so the same image works locally and on hosting. |
 
 ## elysia > maintainability
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-model-reference-by-string` | ⚠️ | Routes that import a TypeBox schema variable and use it inline lose Elysia's model registry deduplication. | Register the schema with `.model({ name: schema })` once and reference it as `body: 'name'`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-model-reference-by-string` | Routes that import a TypeBox schema variable and use it inline lose Elysia's model registry deduplication. | Register the schema with `.model({ name: schema })` once and reference it as `body: 'name'`. |
 
 ## elysia > observability
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-listen-callback-info` | ⚠️ | `.listen(PORT)` called without a callback — server boot info is silently dropped. | Pass a callback to `.listen` and log `app.server?.hostname`/`app.server?.port` so deploys surface where the server is actually bound. |
-| `elysia-otel-named-functions` | ⚠️ | Anonymous arrow functions in `.derive` / `.resolve` produce unnamed OpenTelemetry spans, gutting trace readability. | Pass a named function (e.g. `function deriveUser({ ... }) { ... }`) so OTEL emits a meaningful span name. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-listen-callback-info` | `.listen(PORT)` called without a callback — server boot info is silently dropped. | Pass a callback to `.listen` and log `app.server?.hostname`/`app.server?.port` so deploys surface where the server is actually bound. |
+| `elysia-otel-named-functions` | Anonymous arrow functions in `.derive` / `.resolve` produce unnamed OpenTelemetry spans, gutting trace readability. | Pass a named function (e.g. `function deriveUser({ ... }) { ... }`) so OTEL emits a meaningful span name. |
 
 ## elysia > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-aot-dynamic-route` | ⚠️ | Route paths built via template literals or string concatenation defeat Elysia's AOT compilation. | Pass a static string literal as the route path; bind dynamic segments with `:param`. |
-| `elysia-deploy-prod-no-aot` | ⚠️ | `new Elysia({ ... })` configured without `aot: true` — production builds lose ahead-of-time compilation. | Pass `aot: true` (or omit the flag if you intentionally want JIT) when constructing the Elysia instance used in production deployments. |
-| `elysia-heavy-onrequest` | ⚠️ | `.onRequest()` performs heavy work (await/fetch/db/JSON.parse) — runs before routing. | Move heavy work to `.beforeHandle()` (per route) or `.derive()`/`.resolve()` so it runs only for routes that need it. |
-| `elysia-mapresponse-sync-compression` | ⚠️ | `.mapResponse` handler runs synchronous compression that blocks the event loop. | Use the async `gzip` / `deflate` from `zlib/promises` (or stream the response) instead of `gzipSync` / `deflateSync` inside `mapResponse`. |
-| `elysia-named-plugin` | ⚠️ | Exported Elysia plugin instance has no `name` — deduplication and tracing degrade. | Pass `new Elysia({ name: 'plugin-name' })` for plugins. Named plugins are deduplicated and surface in error traces. |
-| `elysia-static-inline-value` | ⚠️ | Route handler returns only a static string literal — pass the literal directly for ahead-of-time response caching. | Replace `.get('/health', () => 'ok')` with `.get('/health', 'ok')`. Elysia compiles literal responses ahead of time. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-aot-dynamic-route` | Route paths built via template literals or string concatenation defeat Elysia's AOT compilation. | Pass a static string literal as the route path; bind dynamic segments with `:param`. |
+| `elysia-deploy-prod-no-aot` | `new Elysia({ ... })` configured without `aot: true` — production builds lose ahead-of-time compilation. | Pass `aot: true` (or omit the flag if you intentionally want JIT) when constructing the Elysia instance used in production deployments. |
+| `elysia-heavy-onrequest` | `.onRequest()` performs heavy work (await/fetch/db/JSON.parse) — runs before routing. | Move heavy work to `.beforeHandle()` (per route) or `.derive()`/`.resolve()` so it runs only for routes that need it. |
+| `elysia-mapresponse-sync-compression` | `.mapResponse` handler runs synchronous compression that blocks the event loop. | Use the async `gzip` / `deflate` from `zlib/promises` (or stream the response) instead of `gzipSync` / `deflateSync` inside `mapResponse`. |
+| `elysia-named-plugin` | Exported Elysia plugin instance has no `name` — deduplication and tracing degrade. | Pass `new Elysia({ name: 'plugin-name' })` for plugins. Named plugins are deduplicated and surface in error traces. |
+| `elysia-static-inline-value` | Route handler returns only a static string literal — pass the literal directly for ahead-of-time response caching. | Replace `.get('/health', () => 'ok')` with `.get('/health', 'ok')`. Elysia compiles literal responses ahead of time. |
 
 ## elysia > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-apollo-playground-prod` | ⚠️ | Apollo Playground enabled unconditionally — exposing the schema explorer in production leaks introspection. | Gate `enablePlayground` on `process.env.NODE_ENV !== 'production'` (or another env flag). |
-| `elysia-array-no-bounds` | ⚠️ | `t.Array(...)` is declared without `minItems` / `maxItems` — clients can DoS the API with huge payloads. | Pass `{ minItems, maxItems }` as the second argument: `t.Array(t.String(), { maxItems: 100 })`. |
-| `elysia-bearer-missing-www-auth` | ⚠️ | Bearer auth 401/400 response without `WWW-Authenticate` header — RFC 6750 violation. | Add `set.headers['WWW-Authenticate'] = 'Bearer realm="..."'` before returning the 401/400. |
-| `elysia-bearer-not-validated` | ❌ | Bearer token is destructured but never validated — handler accepts any token. | Verify the bearer token (e.g. `await jwt.verify(bearer)`) and reject when invalid. |
-| `elysia-bearer-strip-typo` | ❌ | `replace('Bearer', '')` leaves a leading space — should be `'Bearer '` (with trailing space). | Use `.replace('Bearer ', '')` (note the trailing space) so the token is not whitespace-prefixed. |
-| `elysia-better-auth-null-session` | ❌ | Better Auth `auth.api.getSession` is called inside a macro `resolve` without a null-session check. | Check `if (!session) return status(401)` before returning user/session — `getSession` returns null for unauthenticated requests. |
-| `elysia-cookie-no-httponly` | ❌ | Cookie config is missing `httpOnly: true` — cookie is readable from JavaScript (XSS vector). | Add `httpOnly: true` to the cookie config (`t.Cookie({...})` or `cookie.set({...})`). |
-| `elysia-cookie-no-samesite` | ⚠️ | Cookie config is missing an explicit `sameSite` — defaults are inconsistent across browsers. | Set `sameSite: 'lax'` (or `'strict'` for sensitive cookies) explicitly. |
-| `elysia-cookie-no-secure` | ⚠️ | Cookie config is missing `secure: true` — cookie can be sent over plain HTTP. | Add `secure: true` so the cookie is only sent over HTTPS. |
-| `elysia-cookie-signed-no-secrets` | ❌ | Cookie marked as signed but no `secrets` configured on the Elysia app. | Configure `new Elysia({ cookie: { secrets: process.env.COOKIE_SECRETS! } })` so signed cookies can be verified. |
-| `elysia-cors-allowed-headers-wildcard` | ⚠️ | `cors({ credentials: true })` with wildcard or omitted `allowedHeaders` — browsers reject the preflight. | List the explicit headers your API accepts (e.g. `allowedHeaders: ['content-type', 'authorization']`). Wildcards are invalid when `credentials: true`. |
-| `elysia-cors-credentials-wildcard` | ❌ | CORS `credentials: true` requires an explicit origin — wildcard is rejected by browsers. | Set a specific `origin: 'https://your-domain.com'` whenever `credentials: true` is enabled. |
-| `elysia-cors-methods-wildcard` | ⚠️ | `cors()` with `credentials: true` but no explicit `methods` allows every HTTP verb. | Set `methods: ['GET', 'POST', ...]` explicitly when `credentials: true` so non-listed verbs are rejected. |
-| `elysia-cors-regex-unanchored` | ⚠️ | CORS origin regex without trailing `$` matches more than intended (e.g. `evil.com.attacker.com`). | Anchor the regex with `$` at the end to match the full origin only: `/^https:\/\/.*\.example\.com$/`. |
-| `elysia-cors-wildcard` | ❌ | Permissive CORS allows any origin to access the Elysia API. | Restrict the origin: `cors({ origin: 'https://your-domain.com' })`. Default `cors()` allows all origins. |
-| `elysia-file-magic-number` | ⚠️ | `z.file()` validates the MIME header — clients can forge it. Verify magic numbers via `fileType`. | Pair `z.file()` with `.refine(buf => fileType(buf)?.mime === 'image/png')` or equivalent magic-number check. |
-| `elysia-file-upload-no-maxsize` | ❌ | `t.File()` / `t.Files()` without `maxSize` — uncapped file uploads can DoS the server. | Set `maxSize: '5m'` (or another bound) on file upload schemas. |
-| `elysia-file-upload-no-type` | ⚠️ | `t.File()` / `t.Files()` without `type` constraint — accepts any file type. | Set `type: ['image/png', 'image/jpeg']` (or another allowlist) on file upload schemas. |
-| `elysia-html-xss-no-safe` | ❌ | JSX expression interpolating user input without `safe` attribute — XSS vector. | Add the `safe` attribute on the surrounding element so `@elysiajs/html` escapes the content. |
-| `elysia-jwt-cookie-no-httponly` | ❌ | Cookie storing a JWT is set without `httpOnly: true` — token is readable from JavaScript. | Set `httpOnly: true` on cookies that store JWTs to prevent XSS theft. |
-| `elysia-jwt-missing-exp` | ⚠️ | JWT plugin configured without `exp` — tokens never expire. | Add `exp: '7d'` (or another duration) to the `jwt({ ... })` config so tokens have an expiry. |
-| `elysia-jwt-secret-hardcoded` | ❌ | JWT secret is a hardcoded string literal — leaks via source control. | Read the secret from `process.env.JWT_SECRET` or a secret manager, never hardcode it. |
-| `elysia-jwt-verify-unchecked` | ⚠️ | `jwt.verify(...)` result is used without checking for failure (returns falsy when invalid). | Check the result: `const payload = await jwt.verify(...); if (!payload) return status(401);`. |
-| `elysia-route-missing-auth` | ⚠️ | Sensitive routes (e.g. `/admin`, `/me`, `/profile`) lack an auth guard. | Add a `beforeHandle` auth check or wrap the route in `.guard({ auth: ... })` before serving sensitive paths. |
-| `elysia-server-timing-prod` | ⚠️ | `serverTiming({ enabled: true })` hardcodes the header on — exposing internal timings to every client. | Tie `enabled` to `process.env.NODE_ENV !== 'production'` or another internal-only flag. |
-| `elysia-ws-headers-unvalidated` | ⚠️ | WebSocket route reads request headers in `beforeHandle` but does not declare a header schema. | Add a `headers` (TypeBox) schema so Elysia validates the upgrade request headers before invoking `beforeHandle`. |
-| `elysia-ws-missing-auth` | ⚠️ | Elysia `.ws()` route declared without a `beforeHandle` guard. | Add `beforeHandle` to authenticate the upgrade request before accepting the WebSocket connection. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-apollo-playground-prod` | Apollo Playground enabled unconditionally — exposing the schema explorer in production leaks introspection. | Gate `enablePlayground` on `process.env.NODE_ENV !== 'production'` (or another env flag). |
+| `elysia-array-no-bounds` | `t.Array(...)` is declared without `minItems` / `maxItems` — clients can DoS the API with huge payloads. | Pass `{ minItems, maxItems }` as the second argument: `t.Array(t.String(), { maxItems: 100 })`. |
+| `elysia-bearer-missing-www-auth` | Bearer auth 401/400 response without `WWW-Authenticate` header — RFC 6750 violation. | Add `set.headers['WWW-Authenticate'] = 'Bearer realm="..."'` before returning the 401/400. |
+| `elysia-bearer-not-validated` | Bearer token is destructured but never validated — handler accepts any token. | Verify the bearer token (e.g. `await jwt.verify(bearer)`) and reject when invalid. |
+| `elysia-bearer-strip-typo` | `replace('Bearer', '')` leaves a leading space — should be `'Bearer '` (with trailing space). | Use `.replace('Bearer ', '')` (note the trailing space) so the token is not whitespace-prefixed. |
+| `elysia-better-auth-null-session` | Better Auth `auth.api.getSession` is called inside a macro `resolve` without a null-session check. | Check `if (!session) return status(401)` before returning user/session — `getSession` returns null for unauthenticated requests. |
+| `elysia-cookie-no-httponly` | Cookie config is missing `httpOnly: true` — cookie is readable from JavaScript (XSS vector). | Add `httpOnly: true` to the cookie config (`t.Cookie({...})` or `cookie.set({...})`). |
+| `elysia-cookie-no-samesite` | Cookie config is missing an explicit `sameSite` — defaults are inconsistent across browsers. | Set `sameSite: 'lax'` (or `'strict'` for sensitive cookies) explicitly. |
+| `elysia-cookie-no-secure` | Cookie config is missing `secure: true` — cookie can be sent over plain HTTP. | Add `secure: true` so the cookie is only sent over HTTPS. |
+| `elysia-cookie-signed-no-secrets` | Cookie marked as signed but no `secrets` configured on the Elysia app. | Configure `new Elysia({ cookie: { secrets: process.env.COOKIE_SECRETS! } })` so signed cookies can be verified. |
+| `elysia-cors-allowed-headers-wildcard` | `cors({ credentials: true })` with wildcard or omitted `allowedHeaders` — browsers reject the preflight. | List the explicit headers your API accepts (e.g. `allowedHeaders: ['content-type', 'authorization']`). Wildcards are invalid when `credentials: true`. |
+| `elysia-cors-credentials-wildcard` | CORS `credentials: true` requires an explicit origin — wildcard is rejected by browsers. | Set a specific `origin: 'https://your-domain.com'` whenever `credentials: true` is enabled. |
+| `elysia-cors-methods-wildcard` | `cors()` with `credentials: true` but no explicit `methods` allows every HTTP verb. | Set `methods: ['GET', 'POST', ...]` explicitly when `credentials: true` so non-listed verbs are rejected. |
+| `elysia-cors-regex-unanchored` | CORS origin regex without trailing `$` matches more than intended (e.g. `evil.com.attacker.com`). | Anchor the regex with `$` at the end to match the full origin only: `/^https:\/\/.*\.example\.com$/`. |
+| `elysia-cors-wildcard` | Permissive CORS allows any origin to access the Elysia API. | Restrict the origin: `cors({ origin: 'https://your-domain.com' })`. Default `cors()` allows all origins. |
+| `elysia-file-magic-number` | `z.file()` validates the MIME header — clients can forge it. Verify magic numbers via `fileType`. | Pair `z.file()` with `.refine(buf => fileType(buf)?.mime === 'image/png')` or equivalent magic-number check. |
+| `elysia-file-upload-no-maxsize` | `t.File()` / `t.Files()` without `maxSize` — uncapped file uploads can DoS the server. | Set `maxSize: '5m'` (or another bound) on file upload schemas. |
+| `elysia-file-upload-no-type` | `t.File()` / `t.Files()` without `type` constraint — accepts any file type. | Set `type: ['image/png', 'image/jpeg']` (or another allowlist) on file upload schemas. |
+| `elysia-html-xss-no-safe` | JSX expression interpolating user input without `safe` attribute — XSS vector. | Add the `safe` attribute on the surrounding element so `@elysiajs/html` escapes the content. |
+| `elysia-jwt-cookie-no-httponly` | Cookie storing a JWT is set without `httpOnly: true` — token is readable from JavaScript. | Set `httpOnly: true` on cookies that store JWTs to prevent XSS theft. |
+| `elysia-jwt-missing-exp` | JWT plugin configured without `exp` — tokens never expire. | Add `exp: '7d'` (or another duration) to the `jwt({ ... })` config so tokens have an expiry. |
+| `elysia-jwt-secret-hardcoded` | JWT secret is a hardcoded string literal — leaks via source control. | Read the secret from `process.env.JWT_SECRET` or a secret manager, never hardcode it. |
+| `elysia-jwt-verify-unchecked` | `jwt.verify(...)` result is used without checking for failure (returns falsy when invalid). | Check the result: `const payload = await jwt.verify(...); if (!payload) return status(401);`. |
+| `elysia-route-missing-auth` | Sensitive routes (e.g. `/admin`, `/me`, `/profile`) lack an auth guard. | Add a `beforeHandle` auth check or wrap the route in `.guard({ auth: ... })` before serving sensitive paths. |
+| `elysia-server-timing-prod` | `serverTiming({ enabled: true })` hardcodes the header on — exposing internal timings to every client. | Tie `enabled` to `process.env.NODE_ENV !== 'production'` or another internal-only flag. |
+| `elysia-ws-headers-unvalidated` | WebSocket route reads request headers in `beforeHandle` but does not declare a header schema. | Add a `headers` (TypeBox) schema so Elysia validates the upgrade request headers before invoking `beforeHandle`. |
+| `elysia-ws-missing-auth` | Elysia `.ws()` route declared without a `beforeHandle` guard. | Add `beforeHandle` to authenticate the upgrade request before accepting the WebSocket connection. |
 
 ## elysia > testing
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-test-listen-not-handle` | ⚠️ | Elysia test boots a real server with `.listen()` and uses `fetch()` instead of `app.handle(new Request(...))`. | Drive the app in tests with `app.handle(new Request(...))` — no port binding, faster, deterministic. |
-| `elysia-test-missing-401` | ⚠️ | Test file exercises an authenticated route but never asserts a 401 / Unauthorized response. | Add a test case that sends the request without credentials and asserts the route returns 401. |
-| `elysia-test-missing-validation` | ⚠️ | Test file declares a body schema but never asserts a 400/422 validation error. | Add a test case that sends an invalid payload and asserts the route returns 400 (or 422 in `aot:false` mode). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-test-listen-not-handle` | Elysia test boots a real server with `.listen()` and uses `fetch()` instead of `app.handle(new Request(...))`. | Drive the app in tests with `app.handle(new Request(...))` — no port binding, faster, deterministic. |
+| `elysia-test-missing-401` | Test file exercises an authenticated route but never asserts a 401 / Unauthorized response. | Add a test case that sends the request without credentials and asserts the route returns 401. |
+| `elysia-test-missing-validation` | Test file declares a body schema but never asserts a 400/422 validation error. | Add a test case that sends an invalid payload and asserts the route returns 400 (or 422 in `aot:false` mode). |
 
 ## elysia > type-safety
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-global-with-types` | ⚠️ | Plugin uses `as: 'global'` while also exposing `state`, `decorate`, or `model` — global scope leaks types into every consumer. | Use `as: 'scoped'` for plugins that publish typed context. Reserve `'global'` for hook-only plugins (logging, telemetry). |
-| `elysia-import-t-not-typebox` | ⚠️ | TypeBox imported directly in an Elysia file — Elysia's `t` is the augmented public surface. | Import `t` from `elysia` instead of `Type` from `@sinclair/typebox` — Elysia's `t` includes augmented validators. |
-| `elysia-inline-handlers` | ⚠️ | Route handler passed by reference instead of inline — type inference is degraded. | Use inline handlers for type inference: `.get('/', ({ body }) => Controller.method(body))` |
-| `elysia-model-export-types` | ⚠️ | Module exports a `t.Object(...)` const but no static type derived from it. | Export the inferred type alongside the schema: `export type User = typeof UserModel.static;` |
-| `elysia-no-context-type` | ⚠️ | Function parameter typed as `Context` from elysia — manual typing breaks Elysia's inferred context. | Let Elysia infer the context type. Destructure what you need: `({ body, set, store }) => ...` |
-| `elysia-no-mix-zod-typebox` | ⚠️ | File mixes Zod and Elysia's TypeBox `t` for validation — pick one schema library. | Standardize on Elysia's `t.Object(...)` for route validation. Zod schemas are not understood by Elysia's type inference. |
-| `elysia-prefer-instance-plugin` | ⚠️ | Plugin defined as a `(app: Elysia) => app...` callback — Elysia instance plugins are preferred for type inference and deduplication. | Define plugins as `new Elysia({ name: '...' })...` instances. Callback plugins lose deduplication and degrade type inference. |
-| `elysia-require-method-chaining` | ❌ | Elysia methods called on a stored variable instead of being chained — type inference is lost. | Chain Elysia methods: `new Elysia().state(...).get(...)`. Each method returns a new type; breaking the chain loses type inference. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-global-with-types` | Plugin uses `as: 'global'` while also exposing `state`, `decorate`, or `model` — global scope leaks types into every consumer. | Use `as: 'scoped'` for plugins that publish typed context. Reserve `'global'` for hook-only plugins (logging, telemetry). |
+| `elysia-import-t-not-typebox` | TypeBox imported directly in an Elysia file — Elysia's `t` is the augmented public surface. | Import `t` from `elysia` instead of `Type` from `@sinclair/typebox` — Elysia's `t` includes augmented validators. |
+| `elysia-inline-handlers` | Route handler passed by reference instead of inline — type inference is degraded. | Use inline handlers for type inference: `.get('/', ({ body }) => Controller.method(body))` |
+| `elysia-model-export-types` | Module exports a `t.Object(...)` const but no static type derived from it. | Export the inferred type alongside the schema: `export type User = typeof UserModel.static;` |
+| `elysia-no-context-type` | Function parameter typed as `Context` from elysia — manual typing breaks Elysia's inferred context. | Let Elysia infer the context type. Destructure what you need: `({ body, set, store }) => ...` |
+| `elysia-no-mix-zod-typebox` | File mixes Zod and Elysia's TypeBox `t` for validation — pick one schema library. | Standardize on Elysia's `t.Object(...)` for route validation. Zod schemas are not understood by Elysia's type inference. |
+| `elysia-prefer-instance-plugin` | Plugin defined as a `(app: Elysia) => app...` callback — Elysia instance plugins are preferred for type inference and deduplication. | Define plugins as `new Elysia({ name: '...' })...` instances. Callback plugins lose deduplication and degrade type inference. |
+| `elysia-require-method-chaining` | Elysia methods called on a stored variable instead of being chained — type inference is lost. | Chain Elysia methods: `new Elysia().state(...).get(...)`. Each method returns a new type; breaking the chain loses type inference. |
 
 ## elysia > validation
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `elysia-booleanstring-for-body` | ⚠️ | `t.Boolean()` inside a `body:` schema rejects `"true"` / `"false"` form fields. | Use `t.BooleanString()` for form-encoded payloads where booleans arrive as strings. |
-| `elysia-numeric-body-no-coerce` | ⚠️ | `t.Number()` inside a `body:` schema rejects numeric strings — use `t.Numeric()` for form-encoded payloads. | Replace `t.Number()` with `t.Numeric()` in `body:` schemas so multipart/urlencoded numeric fields coerce. |
-| `elysia-numeric-no-bounds` | ⚠️ | `t.Number()` / `t.Numeric()` is declared without `minimum` or `maximum` bounds. | Add at least `{ minimum: 1 }` (IDs) or `{ minimum: 0, maximum: 100 }` (percentages) so the schema rejects out-of-range values. |
-| `elysia-objectstring-for-query` | ⚠️ | Nested `t.Object(...)` inside a `query:` schema — query string has no nested objects. | Use `t.ObjectString({...})` for JSON-stringified objects passed via the query string. |
-| `elysia-response-keyed-by-status` | ⚠️ | `response:` is a single TypeBox schema instead of being keyed by HTTP status. | Use `response: { 200: t.Object({...}), 404: t.Object({...}) }` so error variants are typed alongside the success body. |
-| `elysia-route-missing-body-schema` | ❌ | Elysia route handler reads `body` but the route has no `body:` schema. | Declare `body: t.Object({...})` (or a registered model name) in the route options so Elysia validates and types the request body. |
-| `elysia-route-missing-params-schema` | ⚠️ | Elysia route declares URL parameters but no `params:` schema. | Add `params: t.Object({ id: t.Numeric(), ... })` so path params are validated and typed. |
-| `elysia-route-missing-response-schema` | ⚠️ | Elysia route validates input but has no `response:` schema. | Add `response: { 200: t.Object({...}) }` so the OpenAPI doc and Eden client know the success shape. |
-| `elysia-string-format-email` | ⚠️ | Schema field named `email` / `url` / `uri` uses bare `t.String()` without `format:` constraint. | Pass `{ format: 'email' }` (or `'uri'`) so the schema rejects malformed values: `t.String({ format: 'email' })`. |
-| `elysia-zod-coerce-params` | ❌ | `z.number()` / `z.boolean()` inside `params:` or `query:` Zod schema — Zod does not coerce strings. | Use `z.coerce.number()` / `z.coerce.boolean()` for params/query because URL segments and query strings are always strings. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `elysia-booleanstring-for-body` | `t.Boolean()` inside a `body:` schema rejects `"true"` / `"false"` form fields. | Use `t.BooleanString()` for form-encoded payloads where booleans arrive as strings. |
+| `elysia-numeric-body-no-coerce` | `t.Number()` inside a `body:` schema rejects numeric strings — use `t.Numeric()` for form-encoded payloads. | Replace `t.Number()` with `t.Numeric()` in `body:` schemas so multipart/urlencoded numeric fields coerce. |
+| `elysia-numeric-no-bounds` | `t.Number()` / `t.Numeric()` is declared without `minimum` or `maximum` bounds. | Add at least `{ minimum: 1 }` (IDs) or `{ minimum: 0, maximum: 100 }` (percentages) so the schema rejects out-of-range values. |
+| `elysia-objectstring-for-query` | Nested `t.Object(...)` inside a `query:` schema — query string has no nested objects. | Use `t.ObjectString({...})` for JSON-stringified objects passed via the query string. |
+| `elysia-response-keyed-by-status` | `response:` is a single TypeBox schema instead of being keyed by HTTP status. | Use `response: { 200: t.Object({...}), 404: t.Object({...}) }` so error variants are typed alongside the success body. |
+| `elysia-route-missing-body-schema` | Elysia route handler reads `body` but the route has no `body:` schema. | Declare `body: t.Object({...})` (or a registered model name) in the route options so Elysia validates and types the request body. |
+| `elysia-route-missing-params-schema` | Elysia route declares URL parameters but no `params:` schema. | Add `params: t.Object({ id: t.Numeric(), ... })` so path params are validated and typed. |
+| `elysia-route-missing-response-schema` | Elysia route validates input but has no `response:` schema. | Add `response: { 200: t.Object({...}) }` so the OpenAPI doc and Eden client know the success shape. |
+| `elysia-string-format-email` | Schema field named `email` / `url` / `uri` uses bare `t.String()` without `format:` constraint. | Pass `{ format: 'email' }` (or `'uri'`) so the schema rejects malformed values: `t.String({ format: 'email' })`. |
+| `elysia-zod-coerce-params` | `z.number()` / `z.boolean()` inside `params:` or `query:` Zod schema — Zod does not coerce strings. | Use `z.coerce.number()` / `z.coerce.boolean()` for params/query because URL segments and query strings are always strings. |
 
 ## error-handling
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `exception-use-error-cause` | ⚠️ | Rethrowing a new Error from catch without `{ cause }` drops the original stack. | When wrapping a caught error in a new one, pass `{ cause: e }` as the second argument: `throw new Error('context', { cause: e })`. Otherwise the original stack trace and error chain are lost. |
-| `no-catch-log-rethrow` | ⚠️ | Catch that only logs and rethrows — the log duplicates the uncaught handler. | Remove the catch block entirely. The error will propagate to the top-level handler which already logs it, so the local log just produces duplicate stack traces. Catch only when you add value: wrap with context, recover, translate. |
-| `no-catch-without-use` | ⚠️ | `catch (e)` binding is unused — drop the parameter or use it. | If you don't need the error, use bare `catch { ... }` (ES2019). If you do need it, log/rethrow/return it so the binding pays rent. An unused catch binding hides error information. |
-| `throw-error-values` | ⚠️ | Only throw `Error` instances, not primitives or plain objects. | Replace `throw 'msg'` or `throw { code: ... }` with `throw new Error('msg')`. Thrown non-Error values lose stack traces and break `instanceof Error` checks in catch handlers. |
-| `try-catch-json-parse` | ⚠️ | `JSON.parse` can throw — wrap it in try/catch or a Result helper. | Wrap `JSON.parse(input)` in a try/catch, or use a safe parser (Zod, `Result.try`, etc). Any invalid or empty input throws a SyntaxError that will crash the request/event handler. |
-| `try-catch-new-url` | ⚠️ | `new URL(...)` can throw — wrap it in try/catch or use `URL.canParse`. | `new URL(invalid)` throws a TypeError. Either wrap in try/catch and handle the invalid-URL case, or gate with `URL.canParse(s)` before constructing. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `exception-use-error-cause` | Rethrowing a new Error from catch without `{ cause }` drops the original stack. | When wrapping a caught error in a new one, pass `{ cause: e }` as the second argument: `throw new Error('context', { cause: e })`. Otherwise the original stack trace and error chain are lost. |
+| `no-catch-log-rethrow` | Catch that only logs and rethrows — the log duplicates the uncaught handler. | Remove the catch block entirely. The error will propagate to the top-level handler which already logs it, so the local log just produces duplicate stack traces. Catch only when you add value: wrap with context, recover, translate. |
+| `no-catch-without-use` | `catch (e)` binding is unused — drop the parameter or use it. | If you don't need the error, use bare `catch { ... }` (ES2019). If you do need it, log/rethrow/return it so the binding pays rent. An unused catch binding hides error information. |
+| `throw-error-values` | Only throw `Error` instances, not primitives or plain objects. | Replace `throw 'msg'` or `throw { code: ... }` with `throw new Error('msg')`. Thrown non-Error values lose stack traces and break `instanceof Error` checks in catch handlers. |
+| `try-catch-json-parse` | `JSON.parse` can throw — wrap it in try/catch or a Result helper. | Wrap `JSON.parse(input)` in a try/catch, or use a safe parser (Zod, `Result.try`, etc). Any invalid or empty input throws a SyntaxError that will crash the request/event handler. |
+| `try-catch-new-url` | `new URL(...)` can throw — wrap it in try/catch or use `URL.canParse`. | `new URL(invalid)` throws a TypeError. Either wrap in try/catch and handle the invalid-URL case, or gate with `URL.canParse(s)` before constructing. |
 
 ## eslint-comments
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `eslint-comments-disable-enable-pair` | ⚠️ | An `eslint-disable` block comment without a matching `eslint-enable` leaves the rule disabled for the rest of the file — usually a copy-paste oversight. | Add `/* eslint-enable */` (or `/* eslint-enable <rule> */`) at the point the exception should end. For single-line exceptions, use `eslint-disable-next-line` or `eslint-disable-line` instead. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `eslint-comments-disable-enable-pair` | An `eslint-disable` block comment without a matching `eslint-enable` leaves the rule disabled for the rest of the file — usually a copy-paste oversight. | Add `/* eslint-enable */` (or `/* eslint-enable <rule> */`) at the point the exception should end. For single-line exceptions, use `eslint-disable-next-line` or `eslint-disable-line` instead. |
 
 ## functional
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-delete` | ⚠️ | Disallow the `delete` operator — it mutates objects in place. | Build a new object without the property, e.g. `const { [key]: _, ...rest } = obj;` or use `Object.fromEntries(Object.entries(obj).filter(...))`. |
-| `no-let` | ⚠️ | Disallow `let` declarations — prefer `const` for immutable bindings. | Replace `let` with `const`. If you truly need to reassign, restructure the code to use a new binding, `reduce`, or a pure function instead. |
-| `no-mutating-methods` | ⚠️ | Disallow array mutating methods (push, pop, shift, unshift, splice, sort, reverse, fill, copyWithin). | Use non-mutating alternatives: spread (`[...arr, x]`), `slice`, `toSorted`, `toReversed`, `toSpliced`, `filter`, `map`, or `concat`. |
-| `no-mutation` | ⚠️ | Disallow mutating properties of a `const`-bound value — assignment to its fields still mutates shared state. | Build a new object/array with the change (spread or structural copy) and assign it to a new binding, or lift the change up to the producer. |
-| `no-promise-reject` | ⚠️ | `Promise.reject()` makes error handling harder — prefer returning error values or throwing typed errors. | Return a Result type, throw a typed error, or use `Promise.resolve()` with an error discriminant. |
-| `no-try-statements` | ⚠️ | `try` blocks obscure error flow — prefer Result types or explicit error handling. | Use a Result/Either type, or a wrapper function that returns `{ data, error }` tuples instead of try/catch. |
-| `no-while-loop` | ⚠️ | Bans convertible while/do-while loops. | Use recursion, Array methods, or generators instead. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-delete` | Disallow the `delete` operator — it mutates objects in place. | Build a new object without the property, e.g. `const { [key]: _, ...rest } = obj;` or use `Object.fromEntries(Object.entries(obj).filter(...))`. |
+| `no-let` | Disallow `let` declarations — prefer `const` for immutable bindings. | Replace `let` with `const`. If you truly need to reassign, restructure the code to use a new binding, `reduce`, or a pure function instead. |
+| `no-mutating-methods` | Disallow array mutating methods (push, pop, shift, unshift, splice, sort, reverse, fill, copyWithin). | Use non-mutating alternatives: spread (`[...arr, x]`), `slice`, `toSorted`, `toReversed`, `toSpliced`, `filter`, `map`, or `concat`. |
+| `no-mutation` | Disallow mutating properties of a `const`-bound value — assignment to its fields still mutates shared state. | Build a new object/array with the change (spread or structural copy) and assign it to a new binding, or lift the change up to the producer. |
+| `no-promise-reject` | `Promise.reject()` makes error handling harder — prefer returning error values or throwing typed errors. | Return a Result type, throw a typed error, or use `Promise.resolve()` with an error discriminant. |
+| `no-try-statements` | `try` blocks obscure error flow — prefer Result types or explicit error handling. | Use a Result/Either type, or a wrapper function that returns `{ data, error }` tuples instead of try/catch. |
+| `no-while-loop` | Bans convertible while/do-while loops. | Use recursion, Array methods, or generators instead. |
 
 ## functional > immutability
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-property-mutation` | ⚠️ | Forbids mutation of object properties. | Use spread syntax `{ ...obj, prop: value }` or immutable update patterns. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-property-mutation` | Forbids mutation of object properties. | Use spread syntax `{ ...obj, prop: value }` or immutable update patterns. |
 
 ## hono > correctness
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `hono-no-get-with-body` | ⚠️ | GET and HEAD requests do not have a body — calling `c.req.json()` / `text()` / `parseBody()` / `formData()` is a bug. | Use query parameters or path parameters for GET/HEAD routes. Move body-consuming logic to POST/PUT/PATCH. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `hono-no-get-with-body` | GET and HEAD requests do not have a body — calling `c.req.json()` / `text()` / `parseBody()` / `formData()` is a bug. | Use query parameters or path parameters for GET/HEAD routes. Move body-consuming logic to POST/PUT/PATCH. |
 
 ## hono > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `hono-cookie-no-httponly` | ❌ | Cookie set without `httpOnly` — accessible to JavaScript (XSS vector). | Add `httpOnly: true` to cookie options: `setCookie(c, name, value, { httpOnly: true, secure: true, sameSite: 'Lax' })`. |
-| `hono-cookie-no-samesite` | ⚠️ | Cookie without `sameSite` or with `sameSite: 'None'` — vulnerable to CSRF. | Set `sameSite: 'Lax'` (default for most cases) or `sameSite: 'Strict'` for sensitive cookies. |
-| `hono-cookie-no-secure` | ⚠️ | Cookie set without `secure` — sent over unencrypted HTTP. | Add `secure: true` to cookie options so the cookie is only sent over HTTPS. |
-| `hono-cors-permissive` | ❌ | Permissive CORS allows any origin to access the API. | Restrict `cors({ origin: 'https://your-domain.com' })`. Default `cors()` sets `origin: '*'`. With `credentials: true`, the origin must be explicit. |
-| `hono-csp-unsafe` | ❌ | `unsafe-inline` or `unsafe-eval` in CSP defeats its purpose. | Use nonces (`NONCE` from `hono/secure-headers`) instead of `unsafe-inline`. Avoid `unsafe-eval` — it enables code injection. |
-| `hono-csrf-missing` | ⚠️ | Mutation routes without CSRF protection. | Add `import { csrf } from 'hono/csrf'` and `app.use(csrf())` to protect mutation endpoints against cross-site request forgery. |
-| `hono-error-leaks-stack` | ❌ | Returning `err.stack` or `err.message` from `app.onError(...)` leaks internal details to clients. | Return a generic message (e.g. `c.json({ error: 'Internal Server Error' }, 500)`) and log the original error server-side. |
-| `hono-jwt-secret-hardcoded` | ❌ | `jwt({ secret: "..." })` uses a hardcoded secret — anyone with the source can sign tokens. | Read the secret from an environment variable (`secret: env.JWT_SECRET`). |
-| `hono-missing-secure-headers` | ⚠️ | Hono app without `secureHeaders()` middleware. | Add `import { secureHeaders } from 'hono/secure-headers'` and `app.use(secureHeaders())`. This sets HSTS, X-Frame-Options, and 10+ other security headers with safe defaults. |
-| `hono-no-hardcoded-cors-origin` | ⚠️ | CORS origin is a hardcoded string literal — environments share the same allowed origin. | Read the origin from an environment variable or per-environment config (e.g. `cors({ origin: env.CORS_ORIGIN })`). |
-| `hono-no-unvalidated-body` | ⚠️ | Reading the request body without a validator middleware skips schema validation and can let malformed input reach handlers. | Use `validator('json', schema)` (or `zValidator`, `tbValidator`, etc.) and read the parsed body via `c.req.valid('json')`. |
-| `hono-secure-headers-disabled` | ❌ | Security header explicitly disabled in `secureHeaders()`. | Don't disable security headers. Each one protects against a specific attack vector (HSTS, clickjacking, MIME sniffing, fingerprinting). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `hono-cookie-no-httponly` | Cookie set without `httpOnly` — accessible to JavaScript (XSS vector). | Add `httpOnly: true` to cookie options: `setCookie(c, name, value, { httpOnly: true, secure: true, sameSite: 'Lax' })`. |
+| `hono-cookie-no-samesite` | Cookie without `sameSite` or with `sameSite: 'None'` — vulnerable to CSRF. | Set `sameSite: 'Lax'` (default for most cases) or `sameSite: 'Strict'` for sensitive cookies. |
+| `hono-cookie-no-secure` | Cookie set without `secure` — sent over unencrypted HTTP. | Add `secure: true` to cookie options so the cookie is only sent over HTTPS. |
+| `hono-cors-permissive` | Permissive CORS allows any origin to access the API. | Restrict `cors({ origin: 'https://your-domain.com' })`. Default `cors()` sets `origin: '*'`. With `credentials: true`, the origin must be explicit. |
+| `hono-csp-unsafe` | `unsafe-inline` or `unsafe-eval` in CSP defeats its purpose. | Use nonces (`NONCE` from `hono/secure-headers`) instead of `unsafe-inline`. Avoid `unsafe-eval` — it enables code injection. |
+| `hono-csrf-missing` | Mutation routes without CSRF protection. | Add `import { csrf } from 'hono/csrf'` and `app.use(csrf())` to protect mutation endpoints against cross-site request forgery. |
+| `hono-error-leaks-stack` | Returning `err.stack` or `err.message` from `app.onError(...)` leaks internal details to clients. | Return a generic message (e.g. `c.json({ error: 'Internal Server Error' }, 500)`) and log the original error server-side. |
+| `hono-jwt-secret-hardcoded` | `jwt({ secret: "..." })` uses a hardcoded secret — anyone with the source can sign tokens. | Read the secret from an environment variable (`secret: env.JWT_SECRET`). |
+| `hono-missing-secure-headers` | Hono app without `secureHeaders()` middleware. | Add `import { secureHeaders } from 'hono/secure-headers'` and `app.use(secureHeaders())`. This sets HSTS, X-Frame-Options, and 10+ other security headers with safe defaults. |
+| `hono-no-hardcoded-cors-origin` | CORS origin is a hardcoded string literal — environments share the same allowed origin. | Read the origin from an environment variable or per-environment config (e.g. `cors({ origin: env.CORS_ORIGIN })`). |
+| `hono-no-unvalidated-body` | Reading the request body without a validator middleware skips schema validation and can let malformed input reach handlers. | Use `validator('json', schema)` (or `zValidator`, `tbValidator`, etc.) and read the parsed body via `c.req.valid('json')`. |
+| `hono-secure-headers-disabled` | Security header explicitly disabled in `secureHeaders()`. | Don't disable security headers. Each one protects against a specific attack vector (HSTS, clickjacking, MIME sniffing, fingerprinting). |
 
 ## html
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `html-no-duplicate-attrs` | ⚠️ | HTML elements must not declare the same attribute twice. | Remove duplicate attribute |
-| `html-no-duplicate-id` | ⚠️ | HTML `id` attributes must be unique within a document. | Use unique id values |
-| `html-no-non-scalable-viewport` | ⚠️ | Viewport meta tag must not disable user scaling (`user-scalable=no`). | Allow user scaling in viewport meta tag |
-| `html-no-obsolete-tags` | ⚠️ | Obsolete HTML tags (center, font, marquee, blink, strike, big, tt) and presentational attributes (align, bgcolor, border on non-table elements) should be replaced by CSS. | Use CSS instead of obsolete HTML tags |
-| `html-no-script-style-type` | ⚠️ | `<script type="text/javascript">` and `<style type="text/css">` use default values that can be omitted. | Remove unnecessary type attribute from script/style tags |
-| `html-prefer-https` | ⚠️ | HTML `href`, `src`, and `action` attributes should use `https://` instead of `http://`. | Use https:// instead of http:// |
-| `html-require-closing-tags` | ⚠️ | Non-void HTML tags must be closed with a matching closing tag. | Close HTML tag properly |
-| `html-require-doctype` | ⚠️ | HTML files must start with a `<!DOCTYPE html>` declaration. | Add <!DOCTYPE html> at the beginning of the file |
-| `html-require-meta-charset` | ⚠️ | HTML documents must declare a character encoding via `<meta charset>`. | Add <meta charset="utf-8"> to the head |
-| `html-require-title` | ⚠️ | HTML documents must declare a `<title>` element inside `<head>`. | Add <title> element inside <head> |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `html-no-duplicate-attrs` | HTML elements must not declare the same attribute twice. | Remove duplicate attribute |
+| `html-no-duplicate-id` | HTML `id` attributes must be unique within a document. | Use unique id values |
+| `html-no-non-scalable-viewport` | Viewport meta tag must not disable user scaling (`user-scalable=no`). | Allow user scaling in viewport meta tag |
+| `html-no-obsolete-tags` | Obsolete HTML tags (center, font, marquee, blink, strike, big, tt) and presentational attributes (align, bgcolor, border on non-table elements) should be replaced by CSS. | Use CSS instead of obsolete HTML tags |
+| `html-no-script-style-type` | `<script type="text/javascript">` and `<style type="text/css">` use default values that can be omitted. | Remove unnecessary type attribute from script/style tags |
+| `html-prefer-https` | HTML `href`, `src`, and `action` attributes should use `https://` instead of `http://`. | Use https:// instead of http:// |
+| `html-require-closing-tags` | Non-void HTML tags must be closed with a matching closing tag. | Close HTML tag properly |
+| `html-require-doctype` | HTML files must start with a `<!DOCTYPE html>` declaration. | Add <!DOCTYPE html> at the beginning of the file |
+| `html-require-meta-charset` | HTML documents must declare a character encoding via `<meta charset>`. | Add <meta charset="utf-8"> to the head |
+| `html-require-title` | HTML documents must declare a `<title>` element inside `<head>`. | Add <title> element inside <head> |
 
 ## i18n
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `i18n-enforce-default-message` | ⚠️ | `<FormattedMessage>` without `defaultMessage` displays the raw key when no translation exists. | Add a `defaultMessage` prop that the user can read in the absence of a localised string. |
-| `i18n-enforce-message-id` | ⚠️ | `<FormattedMessage>` / `formatMessage` without an explicit `id` produces non-deterministic keys at build time and breaks translation tooling. | Add an explicit `id` prop (or `id` property to the descriptor object). Hashing on `defaultMessage` only is fragile to whitespace edits. |
-| `i18n-json-identical-keys` | ⚠️ | Translation file is missing keys present in the base locale. | Add the missing translation keys to maintain consistency across locales. |
-| `i18n-json-identical-placeholders` | ❌ | Translation has different placeholders than the base locale. | Use the same placeholder names as the base locale to ensure variables are correctly substituted. |
-| `i18n-json-no-empty-values` | ⚠️ | Translation value is empty. | Add the missing translation or remove the key if it's not needed. |
-| `i18n-json-no-nesting` | ⚠️ | Translation file uses nested objects — use flat keys instead. | Flatten keys: `{"a": {"b": "x"}}` → `{"a.b": "x"}` for easier searching. |
-| `i18n-json-no-untranslated` | ⚠️ | Translation value is identical to the base locale — likely untranslated. | Translate the value or confirm it should remain the same (brand names, etc.). |
-| `i18n-json-valid-message-syntax` | ❌ | ICU message format syntax is invalid in translation file. | Fix the syntax error: check for unclosed braces, invalid plural keywords, or missing `other` category. |
-| `i18n-key-exists` | ⚠️ | t() key is malformed (consecutive/leading/trailing dots, empty segments, or non-alphanumeric chars) and cannot resolve to a locale entry. Cross-file existence checks aren't performed. | Fix the key shape so it matches `domain.subkey` with alphanumeric segments separated by single dots. |
-| `i18n-key-requires-domain-prefix` | ⚠️ | t() key is missing a domain prefix (`domain.key`). | Namespace every key under a domain so locale files stay organised: `auth.login.title`. |
-| `i18n-max-key-depth` | ⚠️ | t() key nests more than 2 levels deep. | Flatten the key — locale files read better with at most two nesting levels (`domain.key`). |
-| `i18n-no-concat-translation-key` | ⚠️ | Dynamic `t()` keys built with concatenation or template literals can't be statically extracted. | Use full static key strings: `t('section.home')` instead of `t('section.' + name)`. |
-| `i18n-no-english-key` | ⚠️ | t() key looks like a full English sentence, not an identifier. | Use an identifier-style key such as `domain.key` and put the English copy in the locale file. |
-| `i18n-no-hardcoded-string-in-jsx` | ⚠️ | Hardcoded string literals in JSX text content won't be translated. | Wrap the string with the `t()` translation function. |
-| `i18n-no-manual-list-join` | ⚠️ | Array joined with a locale-specific separator instead of Intl.ListFormat. | Use `new Intl.ListFormat(locale, { type: 'conjunction' }).format(list)` so separators translate. |
-| `i18n-no-manual-pluralization` | ⚠️ | Manual `count === 1 ? singular : plural` ignores CLDR plural rules for non-English languages. | Use `t('key', { count })` — i18next applies CLDR plural rules automatically. |
-| `i18n-no-string-concat-with-translation` | ⚠️ | Concatenating `t()` results breaks word order in RTL and agglutinative languages. | Use interpolation: `t('greeting', { name })` instead of `t('hello') + ' ' + name`. |
-| `i18n-no-unnecessary-trans-component` | ⚠️ | `<Trans>` is for interpolating JSX children — use `t()` for plain text. | Replace `<Trans i18nKey="x">Plain text</Trans>` with `{t('x')}`. |
-| `i18n-prefer-intl-api` | ⚠️ | `.toLocaleDateString()` without an explicit locale uses the environment default, which varies by machine. | Pass `i18n.language` as the first argument or use `Intl.DateTimeFormat(locale).format(date)`. |
-| `i18n-use-singleton-outside-react` | ⚠️ | useTranslation() called outside a React component. | Use the `i18n.t()` singleton in non-React contexts (head(), Zod error maps, QueryCache handlers). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `i18n-enforce-default-message` | `<FormattedMessage>` without `defaultMessage` displays the raw key when no translation exists. | Add a `defaultMessage` prop that the user can read in the absence of a localised string. |
+| `i18n-enforce-message-id` | `<FormattedMessage>` / `formatMessage` without an explicit `id` produces non-deterministic keys at build time and breaks translation tooling. | Add an explicit `id` prop (or `id` property to the descriptor object). Hashing on `defaultMessage` only is fragile to whitespace edits. |
+| `i18n-json-identical-keys` | Translation file is missing keys present in the base locale. | Add the missing translation keys to maintain consistency across locales. |
+| `i18n-json-identical-placeholders` | Translation has different placeholders than the base locale. | Use the same placeholder names as the base locale to ensure variables are correctly substituted. |
+| `i18n-json-no-empty-values` | Translation value is empty. | Add the missing translation or remove the key if it's not needed. |
+| `i18n-json-no-nesting` | Translation file uses nested objects — use flat keys instead. | Flatten keys: `{"a": {"b": "x"}}` → `{"a.b": "x"}` for easier searching. |
+| `i18n-json-no-untranslated` | Translation value is identical to the base locale — likely untranslated. | Translate the value or confirm it should remain the same (brand names, etc.). |
+| `i18n-json-valid-message-syntax` | ICU message format syntax is invalid in translation file. | Fix the syntax error: check for unclosed braces, invalid plural keywords, or missing `other` category. |
+| `i18n-key-exists` | t() key is malformed (consecutive/leading/trailing dots, empty segments, or non-alphanumeric chars) and cannot resolve to a locale entry. Cross-file existence checks aren't performed. | Fix the key shape so it matches `domain.subkey` with alphanumeric segments separated by single dots. |
+| `i18n-key-requires-domain-prefix` | t() key is missing a domain prefix (`domain.key`). | Namespace every key under a domain so locale files stay organised: `auth.login.title`. |
+| `i18n-max-key-depth` | t() key nests more than 2 levels deep. | Flatten the key — locale files read better with at most two nesting levels (`domain.key`). |
+| `i18n-no-concat-translation-key` | Dynamic `t()` keys built with concatenation or template literals can't be statically extracted. | Use full static key strings: `t('section.home')` instead of `t('section.' + name)`. |
+| `i18n-no-english-key` | t() key looks like a full English sentence, not an identifier. | Use an identifier-style key such as `domain.key` and put the English copy in the locale file. |
+| `i18n-no-hardcoded-string-in-jsx` | Hardcoded string literals in JSX text content won't be translated. | Wrap the string with the `t()` translation function. |
+| `i18n-no-manual-list-join` | Array joined with a locale-specific separator instead of Intl.ListFormat. | Use `new Intl.ListFormat(locale, { type: 'conjunction' }).format(list)` so separators translate. |
+| `i18n-no-manual-pluralization` | Manual `count === 1 ? singular : plural` ignores CLDR plural rules for non-English languages. | Use `t('key', { count })` — i18next applies CLDR plural rules automatically. |
+| `i18n-no-string-concat-with-translation` | Concatenating `t()` results breaks word order in RTL and agglutinative languages. | Use interpolation: `t('greeting', { name })` instead of `t('hello') + ' ' + name`. |
+| `i18n-no-unnecessary-trans-component` | `<Trans>` is for interpolating JSX children — use `t()` for plain text. | Replace `<Trans i18nKey="x">Plain text</Trans>` with `{t('x')}`. |
+| `i18n-prefer-intl-api` | `.toLocaleDateString()` without an explicit locale uses the environment default, which varies by machine. | Pass `i18n.language` as the first argument or use `Intl.DateTimeFormat(locale).format(date)`. |
+| `i18n-use-singleton-outside-react` | useTranslation() called outside a React component. | Use the `i18n.t()` singleton in non-React contexts (head(), Zod error maps, QueryCache handlers). |
 
 ## imports
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `avoid-barrel-files` | ⚠️ | Barrel files (pure re-export hubs) hurt tree-shaking and make import graphs opaque. | Import directly from source modules instead of barrel files |
-| `avoid-importing-barrel-files` | ⚠️ | Importing from a barrel (`index`) file in the same project hurts tree-shaking and inflates startup cost. | Import directly from the module that defines the symbol instead of going through the barrel. |
-| `avoid-re-export-all` | ⚠️ | `export * from '...'` re-exports hide the module's public surface and break tree-shaking. | Use named exports instead of re-exporting all |
-| `file-extension-in-import` | ⚠️ | Relative imports should include a file extension for ESM compatibility. | Add the appropriate file extension to the import path (e.g. `.js`, `.ts`). |
-| `import-consistent-type-specifier-style` | ⚠️ | Type-only imports should use top-level `import type` syntax. | Use `import type { Foo }` instead of `import { type Foo }`. |
-| `import-dedupe` | ⚠️ | Duplicate named specifiers inside a single import statement. | Remove the duplicate identifiers from the import specifier list. |
-| `import-default` | ⚠️ | Default import requires the target module to have a default export. | Use a named import instead, or add a default export to the target module. |
-| `import-export` | ⚠️ | No duplicate export names within a module. | Remove or rename the duplicate export. |
-| `import-named` | ⚠️ | Named import must match a named export in the target module. | Check that the imported name is actually exported by the source module, or correct the import name. |
-| `import-namespace` | ⚠️ | Namespace import member must exist in the source module exports. | Check that the accessed property is actually exported by the source module, or switch to a named import. |
-| `import-no-amd` | ⚠️ | AMD `require` and `define` calls are forbidden. | Use ES module `import` instead of AMD `require([...], fn)` or `define([...], fn)`. |
-| `import-no-commonjs` | ⚠️ | CommonJS `require` calls and `module.exports` are forbidden. | Use ES module `import`/`export` syntax instead of `require()` and `module.exports`. |
-| `import-no-cycle` | ⚠️ | Circular imports create tight coupling and initialization issues. | Break the cycle by extracting shared code to a third module. |
-| `import-no-dynamic-require` | ⚠️ | Calls to `require()` should use string literals. | Replace the dynamic `require()` argument with a static string literal. |
-| `import-no-empty-named-blocks` | ⚠️ | Empty named import blocks are forbidden. | Remove the empty `import { }` or add the intended named imports. |
-| `import-no-named-as-default` | ⚠️ | Default import should not share a name with a named export of the source. | Use a named import `import { name }` instead of a default import, or rename the default import to avoid confusion. |
-| `import-no-unresolved` | ⚠️ | Relative import path must resolve to an existing file. | Fix the import path — the target file may have been moved, renamed, or deleted. |
-| `import-no-webpack-loader-syntax` | ⚠️ | Webpack loader syntax in imports is forbidden. | Do not use `!` import syntax to configure webpack loaders. Use webpack config instead. |
-| `imports-first` | ⚠️ | Import statements must appear before any other code. | Move all import/require statements to the top of the file, before any non-import code (except directives like `'use strict'`). |
-| `newline-after-import` | ⚠️ | Missing blank line after the last import statement. | Add an empty line between the last import and the first code statement for visual separation. |
-| `no-absolute-path` | ⚠️ | Import uses an absolute path — use relative or aliased paths. | Replace the absolute path import with a relative path (`./…`) or a configured path alias (`@/…`). |
-| `no-duplicate-imports` | ⚠️ | Multiple import statements from the same module — merge them. | Combine all imports from the same module into a single import statement. |
-| `no-exported-imports` | ⚠️ | An imported binding is re-exported with a plain `export` instead of `export ... from`. | Re-export the binding directly with `export { Name } from '...'` so the intent to re-export is explicit. |
-| `no-full-import` | ⚠️ | Full-library default imports from `lodash`/`underscore`/`ramda` bloat bundles. | Import individual functions: `import debounce from 'lodash/debounce'` or `import { debounce } from 'lodash-es'`. |
-| `no-import-dist` | ⚠️ | Imports should not target `dist/` build output directories. | Import from package entry point, not dist/ |
-| `no-import-module-exports` | ⚠️ | File mixes `import` declarations with `module.exports`. | Use either ES module syntax (`import`/`export`) or CommonJS (`require`/`module.exports`), not both. |
-| `no-import-node-modules-by-path` | ⚠️ | Importing from a literal `node_modules/` path bypasses the module resolver. | Import from package name, not node_modules path |
-| `no-mutable-exports` | ⚠️ | Mutable export binding (`let`/`var`) — use `const` instead, unless paired with an exported companion setter. | Change `export let` or `export var` to `export const`. Mutable exports are confusing to consumers and hard to reason about. A binding mutated through an exported setter function (e.g. `export function set_x(v) { x = v }`) is exempt — that is a controlled, intentional mutation point. |
-| `no-self-import` | ❌ | Module imports itself. | Remove the self-import. A module should never import from itself — it causes circular dependency issues. |
-| `no-useless-path-segments` | ⚠️ | Import paths should not contain useless `/../` or `/./` segments. | Simplify import path |
-| `require-not-empty` | ❌ | Module specifiers must not be empty strings. | Provide a valid module path |
-| `require-path-exists` | ❌ | Relative imports must point to files that exist. | Fix the import path or create the missing file. |
-| `require-too-many-arguments` | ⚠️ | `require()` accepts only one argument; extra arguments are ignored. | require() takes only one argument |
-| `use-json-import-attributes` | ⚠️ | A default import of a `.json` module is missing the `type: "json"` import attribute. | Add `with { type: "json" }` to the import so the runtime parses the module as JSON. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `avoid-barrel-files` | Barrel files (pure re-export hubs) hurt tree-shaking and make import graphs opaque. | Import directly from source modules instead of barrel files |
+| `avoid-importing-barrel-files` | Importing from a barrel (`index`) file in the same project hurts tree-shaking and inflates startup cost. | Import directly from the module that defines the symbol instead of going through the barrel. |
+| `avoid-re-export-all` | `export * from '...'` re-exports hide the module's public surface and break tree-shaking. | Use named exports instead of re-exporting all |
+| `file-extension-in-import` | Relative imports should include a file extension for ESM compatibility. | Add the appropriate file extension to the import path (e.g. `.js`, `.ts`). |
+| `import-consistent-type-specifier-style` | Type-only imports should use top-level `import type` syntax. | Use `import type { Foo }` instead of `import { type Foo }`. |
+| `import-dedupe` | Duplicate named specifiers inside a single import statement. | Remove the duplicate identifiers from the import specifier list. |
+| `import-default` | Default import requires the target module to have a default export. | Use a named import instead, or add a default export to the target module. |
+| `import-export` | No duplicate export names within a module. | Remove or rename the duplicate export. |
+| `import-named` | Named import must match a named export in the target module. | Check that the imported name is actually exported by the source module, or correct the import name. |
+| `import-namespace` | Namespace import member must exist in the source module exports. | Check that the accessed property is actually exported by the source module, or switch to a named import. |
+| `import-no-amd` | AMD `require` and `define` calls are forbidden. | Use ES module `import` instead of AMD `require([...], fn)` or `define([...], fn)`. |
+| `import-no-commonjs` | CommonJS `require` calls and `module.exports` are forbidden. | Use ES module `import`/`export` syntax instead of `require()` and `module.exports`. |
+| `import-no-cycle` | Circular imports create tight coupling and initialization issues. | Break the cycle by extracting shared code to a third module. |
+| `import-no-dynamic-require` | Calls to `require()` should use string literals. | Replace the dynamic `require()` argument with a static string literal. |
+| `import-no-empty-named-blocks` | Empty named import blocks are forbidden. | Remove the empty `import { }` or add the intended named imports. |
+| `import-no-named-as-default` | Default import should not share a name with a named export of the source. | Use a named import `import { name }` instead of a default import, or rename the default import to avoid confusion. |
+| `import-no-unresolved` | Relative import path must resolve to an existing file. | Fix the import path — the target file may have been moved, renamed, or deleted. |
+| `import-no-webpack-loader-syntax` | Webpack loader syntax in imports is forbidden. | Do not use `!` import syntax to configure webpack loaders. Use webpack config instead. |
+| `imports-first` | Import statements must appear before any other code. | Move all import/require statements to the top of the file, before any non-import code (except directives like `'use strict'`). |
+| `newline-after-import` | Missing blank line after the last import statement. | Add an empty line between the last import and the first code statement for visual separation. |
+| `no-absolute-path` | Import uses an absolute path — use relative or aliased paths. | Replace the absolute path import with a relative path (`./…`) or a configured path alias (`@/…`). |
+| `no-duplicate-imports` | Multiple import statements from the same module — merge them. | Combine all imports from the same module into a single import statement. |
+| `no-exported-imports` | An imported binding is re-exported with a plain `export` instead of `export ... from`. | Re-export the binding directly with `export { Name } from '...'` so the intent to re-export is explicit. |
+| `no-full-import` | Full-library default imports from `lodash`/`underscore`/`ramda` bloat bundles. | Import individual functions: `import debounce from 'lodash/debounce'` or `import { debounce } from 'lodash-es'`. |
+| `no-import-dist` | Imports should not target `dist/` build output directories. | Import from package entry point, not dist/ |
+| `no-import-module-exports` | File mixes `import` declarations with `module.exports`. | Use either ES module syntax (`import`/`export`) or CommonJS (`require`/`module.exports`), not both. |
+| `no-import-node-modules-by-path` | Importing from a literal `node_modules/` path bypasses the module resolver. | Import from package name, not node_modules path |
+| `no-mutable-exports` | Mutable export binding (`let`/`var`) — use `const` instead, unless paired with an exported companion setter. | Change `export let` or `export var` to `export const`. Mutable exports are confusing to consumers and hard to reason about. A binding mutated through an exported setter function (e.g. `export function set_x(v) { x = v }`) is exempt — that is a controlled, intentional mutation point. |
+| `no-self-import` | Module imports itself. | Remove the self-import. A module should never import from itself — it causes circular dependency issues. |
+| `no-useless-path-segments` | Import paths should not contain useless `/../` or `/./` segments. | Simplify import path |
+| `require-not-empty` | Module specifiers must not be empty strings. | Provide a valid module path |
+| `require-path-exists` | Relative imports must point to files that exist. | Fix the import path or create the missing file. |
+| `require-too-many-arguments` | `require()` accepts only one argument; extra arguments are ignored. | require() takes only one argument |
+| `use-json-import-attributes` | A default import of a `.json` module is missing the `type: "json"` import attribute. | Add `with { type: "json" }` to the import so the runtime parses the module as JSON. |
 
 ## imports > dependencies
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `type-only-dependency` | ⚠️ | Production dependency is only imported via `import type` — move to devDependencies. | Move the package from `dependencies` to `devDependencies` since it's only used for type information at build time. |
-| `unlisted-dependency` | ⚠️ | Import references an npm package not declared in package.json. | Add the package to the appropriate section of package.json (dependencies or devDependencies). |
-| `unused-dependency` | ⚠️ | Dependency in package.json is never imported in the project. | Remove the dependency from package.json, or add an import if it's actually needed. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `type-only-dependency` | Production dependency is only imported via `import type` — move to devDependencies. | Move the package from `dependencies` to `devDependencies` since it's only used for type information at build time. |
+| `unlisted-dependency` | Import references an npm package not declared in package.json. | Add the package to the appropriate section of package.json (dependencies or devDependencies). |
+| `unused-dependency` | Dependency in package.json is never imported in the project. | Remove the dependency from package.json, or add an import if it's actually needed. |
 
 ## imports > testing
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-test-imports-in-prod` | ⚠️ | Production sources must not import test or mock files. | Move the shared logic out of the test file, or keep the import inside a test file only. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-test-imports-in-prod` | Production sources must not import test or mock files. | Move the shared logic out of the test file, or keep the import inside a test file only. |
 
 ## jsdoc
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `jsdoc-complete-sentence` | ⚠️ | JSDoc descriptions must start with a capital letter and end with punctuation. | Capitalize the first letter and end the description with `.`, `!`, or `?`. Complete sentences read better in generated docs. |
-| `jsdoc-informative-docs` | ⚠️ | JSDoc description merely repeats the name of the symbol without adding useful information. | Rewrite the JSDoc to explain *why* or *how* the symbol works, not just restate its name. |
-| `jsdoc-reject-any-type` | ⚠️ | JSDoc uses `*` or `any` as a type, which defeats the purpose of type documentation. | Replace the `*`/`any` type annotation with a specific type. |
-| `jsdoc-reject-function-type` | ⚠️ | JSDoc uses bare `Function` or `function` type instead of a specific function signature. | Replace the bare `Function` type with a specific signature like `{(param: type) => returnType}`. |
-| `jsdoc/check-property-names` | ⚠️ | `@property` names must be unique inside a `@typedef` block. | Rename or remove duplicated `@property` entries so every property declared on the typedef has a unique name. |
-| `jsdoc/check-tag-names` | ⚠️ | JSDoc tag names must be known (e.g. `@param`, `@returns`, …). | Replace the unknown tag with a canonical JSDoc tag, or drop it. Common typos: `@arg` → `@param`, `@thrown` → `@throws`, `@yield` → `@yields`. |
-| `jsdoc/check-template-names` | ⚠️ | `@template` names must be referenced somewhere in the block. | Use the declared type parameter inside a `@param` / `@returns` / `@type` tag, or remove the `@template` declaration. |
-| `jsdoc/check-types` | ⚠️ | Prefer lowercase primitives in JSDoc types (e.g. `string` over `String`). | Use the lowercase primitive: `String` → `string`, `Number` → `number`, `Boolean` → `boolean`, `Object` → `object`, `Symbol` → `symbol`, `Bigint` → `bigint`. |
-| `jsdoc/check-values` | ⚠️ | `@version`, `@since`, `@license` must have a valid value. | Give `@version` / `@since` a semver-ish string (e.g. `1.2.3`). Give `@license` a non-empty SPDX identifier (e.g. `MIT`). Remove the tag if you don't have a value. |
-| `jsdoc/require-hyphen-before-param-description` | ⚠️ | Separate the `@param` name from its description with a hyphen. | Insert ` - ` between the param name and its description: `@param {string} id - the user id`. |
-| `jsdoc/require-next-description` | ⚠️ | Each @next tag must have a description. | Add prose after the @next type (e.g. `@next {T} - what the next call receives`). |
-| `jsdoc/require-param-description` | ⚠️ | Every `@param` tag must have a description. | Add a description after the parameter name: `@param {string} x - what x represents`. |
-| `jsdoc/require-param-name` | ⚠️ | Every `@param` tag must name its parameter. | Add the parameter name after the optional `{type}`: `@param {string} userId - the user's id`. |
-| `jsdoc/require-property` | ⚠️ | `@typedef` / `@interface` blocks for object types must declare at least one `@property`. | Add `@property {Type} name - description` entries for each field of the typedef, or change the typedef's type to a non-object type. |
-| `jsdoc/require-property-description` | ⚠️ | Each @property tag must have a description. | Add a prose description after the @property name (e.g. `@property {T} name - what it is`). |
-| `jsdoc/require-property-name` | ⚠️ | Each @property tag must have a name. | Add a property name after the type annotation (e.g. `@property {string} name`). |
-| `jsdoc/require-rejects` | ⚠️ | Async functions that reject must document a @rejects tag. | Add `@rejects {ErrorType} when ...` describing the rejection case. |
-| `jsdoc/require-returns-description` | ⚠️ | `@returns` tag must have a description. | Describe what the function returns after the optional `{type}`: `@returns {User} the updated user, or null if not found`. |
-| `jsdoc/require-tags` | ⚠️ | Exported function JSDoc must document parameters and return when relevant. | Add `@param` tags for each parameter and `@returns` for non-void return values. |
-| `jsdoc/require-template` | ⚠️ | Generic functions must document each type parameter with @template. | Add `@template T` (or `@template {Constraint} T`) for each generic type parameter. |
-| `jsdoc/require-template-description` | ⚠️ | Each @template tag must have a description. | Add a description after the type parameter (e.g. `@template T - the element type`). |
-| `jsdoc/require-yields` | ⚠️ | Generator functions must document a @yields tag. | Add `@yields {Type} description` to the JSDoc block of every generator function. |
-| `jsdoc/require-yields-check` | ⚠️ | `@yields` must match what the function actually yields. | Either remove a `@yields` tag from a non-yielding function, or add a `yield` to a function documented with `@yields`. |
-| `jsdoc/require-yields-description` | ⚠️ | Each @yields tag must have a description. | Add prose after the yield type (e.g. `@yields {T} a description of each value`). |
-| `jsdoc/valid-types` | ⚠️ | JSDoc `{...}` type expressions must be syntactically balanced and non-empty. | Fix unbalanced braces/parens, remove empty `{}` types, and quote string-literal types that contain whitespace. |
-| `use-single-jsdoc-asterisk` | ⚠️ | JSDoc comment lines should start (and end before `*/`) with a single asterisk. | Remove the extra asterisk so the line begins with one `*` after the indentation. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `jsdoc-complete-sentence` | JSDoc descriptions must start with a capital letter and end with punctuation. | Capitalize the first letter and end the description with `.`, `!`, or `?`. Complete sentences read better in generated docs. |
+| `jsdoc-informative-docs` | JSDoc description merely repeats the name of the symbol without adding useful information. | Rewrite the JSDoc to explain *why* or *how* the symbol works, not just restate its name. |
+| `jsdoc-reject-any-type` | JSDoc uses `*` or `any` as a type, which defeats the purpose of type documentation. | Replace the `*`/`any` type annotation with a specific type. |
+| `jsdoc-reject-function-type` | JSDoc uses bare `Function` or `function` type instead of a specific function signature. | Replace the bare `Function` type with a specific signature like `{(param: type) => returnType}`. |
+| `jsdoc/check-property-names` | `@property` names must be unique inside a `@typedef` block. | Rename or remove duplicated `@property` entries so every property declared on the typedef has a unique name. |
+| `jsdoc/check-tag-names` | JSDoc tag names must be known (e.g. `@param`, `@returns`, …). | Replace the unknown tag with a canonical JSDoc tag, or drop it. Common typos: `@arg` → `@param`, `@thrown` → `@throws`, `@yield` → `@yields`. |
+| `jsdoc/check-template-names` | `@template` names must be referenced somewhere in the block. | Use the declared type parameter inside a `@param` / `@returns` / `@type` tag, or remove the `@template` declaration. |
+| `jsdoc/check-types` | Prefer lowercase primitives in JSDoc types (e.g. `string` over `String`). | Use the lowercase primitive: `String` → `string`, `Number` → `number`, `Boolean` → `boolean`, `Object` → `object`, `Symbol` → `symbol`, `Bigint` → `bigint`. |
+| `jsdoc/check-values` | `@version`, `@since`, `@license` must have a valid value. | Give `@version` / `@since` a semver-ish string (e.g. `1.2.3`). Give `@license` a non-empty SPDX identifier (e.g. `MIT`). Remove the tag if you don't have a value. |
+| `jsdoc/require-hyphen-before-param-description` | Separate the `@param` name from its description with a hyphen. | Insert ` - ` between the param name and its description: `@param {string} id - the user id`. |
+| `jsdoc/require-next-description` | Each @next tag must have a description. | Add prose after the @next type (e.g. `@next {T} - what the next call receives`). |
+| `jsdoc/require-param-description` | Every `@param` tag must have a description. | Add a description after the parameter name: `@param {string} x - what x represents`. |
+| `jsdoc/require-param-name` | Every `@param` tag must name its parameter. | Add the parameter name after the optional `{type}`: `@param {string} userId - the user's id`. |
+| `jsdoc/require-property` | `@typedef` / `@interface` blocks for object types must declare at least one `@property`. | Add `@property {Type} name - description` entries for each field of the typedef, or change the typedef's type to a non-object type. |
+| `jsdoc/require-property-description` | Each @property tag must have a description. | Add a prose description after the @property name (e.g. `@property {T} name - what it is`). |
+| `jsdoc/require-property-name` | Each @property tag must have a name. | Add a property name after the type annotation (e.g. `@property {string} name`). |
+| `jsdoc/require-rejects` | Async functions that reject must document a @rejects tag. | Add `@rejects {ErrorType} when ...` describing the rejection case. |
+| `jsdoc/require-returns-description` | `@returns` tag must have a description. | Describe what the function returns after the optional `{type}`: `@returns {User} the updated user, or null if not found`. |
+| `jsdoc/require-tags` | Exported function JSDoc must document parameters and return when relevant. | Add `@param` tags for each parameter and `@returns` for non-void return values. |
+| `jsdoc/require-template` | Generic functions must document each type parameter with @template. | Add `@template T` (or `@template {Constraint} T`) for each generic type parameter. |
+| `jsdoc/require-template-description` | Each @template tag must have a description. | Add a description after the type parameter (e.g. `@template T - the element type`). |
+| `jsdoc/require-yields` | Generator functions must document a @yields tag. | Add `@yields {Type} description` to the JSDoc block of every generator function. |
+| `jsdoc/require-yields-check` | `@yields` must match what the function actually yields. | Either remove a `@yields` tag from a non-yielding function, or add a `yield` to a function documented with `@yields`. |
+| `jsdoc/require-yields-description` | Each @yields tag must have a description. | Add prose after the yield type (e.g. `@yields {T} a description of each value`). |
+| `jsdoc/valid-types` | JSDoc `{...}` type expressions must be syntactically balanced and non-empty. | Fix unbalanced braces/parens, remove empty `{}` types, and quote string-literal types that contain whitespace. |
+| `use-single-jsdoc-asterisk` | JSDoc comment lines should start (and end before `*/`) with a single asterisk. | Remove the extra asterisk so the line begins with one `*` after the indentation. |
 
 ## json
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-quickfix-biome` | ⚠️ | `quickfix.biome` is used in an editor settings file. | Replace `quickfix.biome` with `source.fixAll.biome`. The `quickfix.biome` code action applies fixes from rules and other actions without coordinating between them, which can produce malformed code when two fixes touch the same lines. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-quickfix-biome` | `quickfix.biome` is used in an editor settings file. | Replace `quickfix.biome` with `source.fixAll.biome`. The `quickfix.biome` code action applies fixes from rules and other actions without coordinating between them, which can produce malformed code when two fixes touch the same lines. |
 
 ## kubernetes
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `k8s-dangling-hpa` | ⚠️ | HorizontalPodAutoscaler.spec.scaleTargetRef must reference a resource that exists in the project. | Create the referenced workload (Deployment, StatefulSet, ...) or fix the scaleTargetRef kind/name/namespace. |
-| `k8s-dangling-ingress` | ⚠️ | Ingress backend.service.name must reference a Service that exists in the project. | Create the referenced Service in the matching namespace, or fix the backend.service.name. |
-| `k8s-dangling-network-policy` | ⚠️ | NetworkPolicy.spec.podSelector.matchLabels must match at least one workload's pod template labels. | Align the NetworkPolicy podSelector with a workload's pod template labels, or remove the unused NetworkPolicy. |
-| `k8s-dangling-network-policy-peer` | ⚠️ | NetworkPolicy ingress/egress peer podSelectors must match at least one workload's pod template labels. | Align the peer podSelector with a workload's pod template labels, or remove the dangling rule. |
-| `k8s-dangling-service` | ⚠️ | Service.spec.selector must match at least one workload's pod template labels. | Align the Service selector with a workload's pod template labels, or remove the unused Service. |
-| `k8s-dangling-service-monitor` | ⚠️ | ServiceMonitor.spec.selector.matchLabels must match at least one workload in the namespace. | Align the ServiceMonitor selector with a Service/workload that exists in the namespace, or remove the ServiceMonitor. |
-| `k8s-deployment-anti-affinity` | ⚠️ | Deployments with replicas > 1 must declare `spec.template.spec.affinity.podAntiAffinity`. | Add a podAntiAffinity (preferred or required) so replicas are spread across nodes/zones. |
-| `k8s-disallow-privilege-escalation` | ⚠️ | Containers must set securityContext.allowPrivilegeEscalation: false. | Add `securityContext: { allowPrivilegeEscalation: false }` to each container. |
-| `k8s-dnsconfig-options` | ⚠️ | Pods should set dnsConfig.options (e.g. `ndots:2`) to reduce DNS lookup latency. | Add `dnsConfig.options: [{name: ndots, value: '2'}]` to the pod spec. |
-| `k8s-env-value-from-resolves` | ⚠️ | Container env `valueFrom.secretKeyRef`/`configMapKeyRef` must reference an existing resource. | Create the missing Secret/ConfigMap in the namespace, or fix the reference name. |
-| `k8s-hpa-min-three-replicas` | ⚠️ | HorizontalPodAutoscaler minReplicas must be at least 3 to survive node drains. | Set `spec.minReplicas: 3` (or higher) on the HorizontalPodAutoscaler. |
-| `k8s-invalid-target-ports` | ⚠️ | Port names must conform to IANA naming: lowercase, alphanumeric, hyphens, 1-15 chars, start/end with alphanumeric. | Rename the port to match IANA conventions (e.g. `http`, `grpc`, `metrics`). |
-| `k8s-job-ttl-required` | ⚠️ | Job manifests must set `spec.ttlSecondsAfterFinished` so completed Jobs are garbage-collected. | Add `spec.ttlSecondsAfterFinished: <seconds>` to the Job (e.g. 3600 for one hour). |
-| `k8s-min-replicas-two` | ⚠️ | Deployments must have replicas >= 2 (or HPA minReplicas >= 2) for availability. | Set `spec.replicas: 2` or higher, or use a HorizontalPodAutoscaler with minReplicas >= 2. |
-| `k8s-mismatching-selector` | ⚠️ | Deployment selector.matchLabels must match spec.template.metadata.labels. | Ensure spec.selector.matchLabels is a subset of spec.template.metadata.labels. |
-| `k8s-no-allow-privileged-scc` | ⚠️ | OpenShift SecurityContextConstraints must not set allowPrivilegedContainer: true. | Set `allowPrivilegedContainer: false` on the SecurityContextConstraints, or remove the field. |
-| `k8s-no-default-service-account` | ⚠️ | Pods must set serviceAccountName; the `default` account has no safe RBAC scope. | Create a dedicated ServiceAccount and reference it via `spec.serviceAccountName`. |
-| `k8s-no-deprecated-extensions-api` | ⚠️ | Manifests must not use the removed `extensions/v1beta*` apiVersion. | Migrate to `apps/v1` (Deployment/DaemonSet/ReplicaSet), `networking.k8s.io/v1` (Ingress/NetworkPolicy), or `policy/v1` (PodSecurityPolicy successors). |
-| `k8s-no-deprecated-service-account-field` | ⚠️ | Pod spec uses the deprecated `serviceAccount` field; use `serviceAccountName`. | Rename `serviceAccount` to `serviceAccountName` in the pod spec. |
-| `k8s-no-docker-sock-mount` | ⚠️ | Pod mounts the host docker socket; this grants full root on the host. | Remove the docker.sock hostPath volume; use a sidecar with rootless tooling instead. |
-| `k8s-no-duplicate-env-vars` | ⚠️ | Container env entries must not repeat the same `name`. | Remove the duplicate env entry; later definitions silently override earlier ones. |
-| `k8s-no-exposed-services` | ⚠️ | Service.spec.type must not be NodePort or LoadBalancer; expose via Ingress / Gateway instead. | Use `type: ClusterIP` and route external traffic through an Ingress, Gateway, or service-mesh gateway. |
-| `k8s-no-host-ipc` | ⚠️ | Pod spec sets `hostIPC: true`; sharing the host IPC namespace is unsafe. | Remove `hostIPC: true` from the pod spec. |
-| `k8s-no-host-network` | ⚠️ | Pod spec sets `hostNetwork: true`; sharing the host network namespace is unsafe. | Remove `hostNetwork: true` from the pod spec. |
-| `k8s-no-host-pid` | ⚠️ | Pod spec sets `hostPID: true`; sharing the host PID namespace is unsafe. | Remove `hostPID: true` from the pod spec. |
-| `k8s-no-latest-image-tag` | ⚠️ | Container images must not use `:latest` or omit a tag. | Pin the image to a specific tag (e.g. `nginx:1.25.3`) or a digest (`@sha256:...`). |
-| `k8s-no-plaintext-secret-in-git` | ⚠️ | kind: Secret manifests must not have populated data/stringData fields in source control. | Use SealedSecrets, External Secrets Operator, SOPS, or inject at deploy time. |
-| `k8s-no-privileged-container` | ⚠️ | Container sets `securityContext.privileged: true`; this disables container isolation. | Remove `privileged: true`; grant only the specific Linux capabilities needed. |
-| `k8s-no-privileged-ports` | ⚠️ | Container binds a privileged port (<1024); requires NET_BIND_SERVICE or root. | Bind to a high port (>=1024) and use a Service to expose port 80/443. |
-| `k8s-no-secret-in-env-literal` | ⚠️ | Sensitive env vars (PASSWORD, TOKEN, SECRET, API_KEY) must not use a literal `value:`. | Reference a Secret via `valueFrom.secretKeyRef`, or mount the secret as a file. |
-| `k8s-no-secrets-in-configmap` | ⚠️ | ConfigMap data must not contain secret-looking keys (PASSWORD, TOKEN, KEY, SECRET). | Move the value into a Kubernetes Secret (or sealed/external secret) and mount or reference it. |
-| `k8s-no-sensitive-host-mounts` | ⚠️ | Pod mounts a sensitive host path (e.g. /, /etc, /proc); container can compromise the node. | Avoid mounting system paths from the host; use a dedicated data volume instead. |
-| `k8s-no-ssh-port` | ⚠️ | Deployments should not expose TCP port 22 (SSH). | Remove port 22 from the container spec. Use `kubectl exec` or `kubectl debug` for debugging. |
-| `k8s-no-unsafe-proc-mount` | ⚠️ | Container sets `securityContext.procMount: Unmasked`; this exposes /proc paths normally hidden by the runtime. | Remove `procMount: Unmasked` (or set to `Default`). |
-| `k8s-no-unsafe-sysctls` | ⚠️ | Pod securityContext.sysctls must not contain unsafe namespaced sysctls. | Remove unsafe sysctls (kernel.msg*, kernel.sem*, kernel.shm*, fs.mqueue.*, net.*) or restrict via PodSecurityPolicy / kubelet allowed-unsafe-sysctls. |
-| `k8s-no-writable-host-mount` | ⚠️ | Pod uses a hostPath volume; mount it as readOnly or remove the host mount entirely. | Avoid hostPath volumes; if required, mark the corresponding volumeMount as `readOnly: true`. |
-| `k8s-non-existent-service-account` | ⚠️ | Workload spec.serviceAccountName must reference a ServiceAccount that exists in the project. | Create the referenced ServiceAccount in the matching namespace, or fix the serviceAccountName value. |
-| `k8s-pdb-eviction-policy` | ⚠️ | PodDisruptionBudget must declare `spec.unhealthyPodEvictionPolicy` to allow eviction of unhealthy pods. | Add `spec.unhealthyPodEvictionPolicy: AlwaysAllow` (or `IfHealthyBudget`) to the PDB. |
-| `k8s-prefer-secret-files-over-env` | ⚠️ | Container env entries should not source values from `secretKeyRef`; mount the Secret as a file instead. | Mount the Secret via `volumes`/`volumeMounts` and read the value from the filesystem; env vars leak through `kubectl describe` and child processes. |
-| `k8s-priority-class-name` | ⚠️ | Workloads should declare a priorityClassName for scheduling predictability. | Add `priorityClassName` to the pod spec. |
-| `k8s-probe-port-exists` | ⚠️ | Probe port must match a port declared by the container. | Ensure livenessProbe/readinessProbe/startupProbe targets a port listed in `ports`. |
-| `k8s-rbac-no-cluster-admin-binding` | ⚠️ | RoleBinding/ClusterRoleBinding must not bind to the `cluster-admin` role. | Bind to a role with the minimum permissions required instead of `cluster-admin`. |
-| `k8s-rbac-no-create-pods` | ⚠️ | RBAC rules must not grant `create` on `pods`; this enables privilege escalation. | Remove `create` from verbs for `pods` resources, or scope to a controller resource. |
-| `k8s-rbac-no-secret-access` | ⚠️ | RBAC rules must not grant get/list/watch on `secrets`. | Avoid granting read access on secrets; use a dedicated service account scoped to specific secret names if absolutely required. |
-| `k8s-rbac-no-wildcard-resources` | ⚠️ | RBAC rules must not grant resources: ["*"]; enumerate the resources needed. | Replace `resources: ["*"]` with the specific resources required (pods, services, etc.). |
-| `k8s-rbac-no-wildcard-verbs` | ⚠️ | RBAC rules must not grant verbs: ["*"]; enumerate the verbs needed. | Replace `verbs: ["*"]` with the specific verbs required (get, list, watch, create, update, patch, delete). |
-| `k8s-require-drop-all-caps` | ⚠️ | Containers must drop ALL Linux capabilities (securityContext.capabilities.drop includes ALL). | Add `securityContext: { capabilities: { drop: ["ALL"] } }` to each container. |
-| `k8s-require-explicit-namespace` | ⚠️ | Namespaced resources must declare metadata.namespace explicitly. | Add `metadata.namespace: <name>` rather than relying on the implicit `default` namespace. |
-| `k8s-require-ingress-tls` | ⚠️ | Ingress resources must declare spec.tls to terminate TLS. | Add a `spec.tls` section with `hosts` and `secretName` referencing a TLS certificate. |
-| `k8s-require-liveness-probe` | ⚠️ | Each long-running workload container must define a livenessProbe. | Add `livenessProbe` (httpGet / tcpSocket / exec) to each container spec. |
-| `k8s-require-network-policy` | ⚠️ | Each Deployment should have an accompanying NetworkPolicy; namespaces should not rely on default-allow. | Author a NetworkPolicy that whitelists ingress/egress for this workload. |
-| `k8s-require-pod-disruption-budget` | ⚠️ | Each Deployment/StatefulSet should have an accompanying PodDisruptionBudget. | Author a PodDisruptionBudget (minAvailable or maxUnavailable) targeting this workload. |
-| `k8s-require-read-only-root` | ⚠️ | Containers must set securityContext.readOnlyRootFilesystem: true. | Add `securityContext: { readOnlyRootFilesystem: true }` to each container. |
-| `k8s-require-readiness-probe` | ⚠️ | Each container must define a readinessProbe. | Add `readinessProbe` (httpGet / tcpSocket / exec) to each container spec. |
-| `k8s-require-resource-limits` | ⚠️ | Each container must define resources.limits.cpu and resources.limits.memory. | Add `resources.limits.cpu` and `resources.limits.memory` under each container. |
-| `k8s-require-resource-requests` | ⚠️ | Each container must define resources.requests.cpu and resources.requests.memory. | Add `resources.requests.cpu` and `resources.requests.memory` under each container. |
-| `k8s-require-run-as-non-root` | ⚠️ | Containers must set securityContext.runAsNonRoot: true. | Add `securityContext: { runAsNonRoot: true }` at the pod or container level. |
-| `k8s-require-standard-labels` | ⚠️ | Resources must include app.kubernetes.io/name and app.kubernetes.io/instance labels. | Add `app.kubernetes.io/name` and `app.kubernetes.io/instance` under metadata.labels. |
-| `k8s-restart-policy-required` | ⚠️ | Standalone Pod manifests must explicitly set `spec.restartPolicy`. | Add `spec.restartPolicy: Always` (long-running) or `OnFailure`/`Never` for batch workloads. |
-| `k8s-rolling-update-zero-unavailable` | ⚠️ | Deployment strategy.rollingUpdate.maxUnavailable must be 0 to avoid downtime. | Set `spec.strategy.rollingUpdate.maxUnavailable: 0` and use `maxSurge` to add capacity during rollout. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `k8s-dangling-hpa` | HorizontalPodAutoscaler.spec.scaleTargetRef must reference a resource that exists in the project. | Create the referenced workload (Deployment, StatefulSet, ...) or fix the scaleTargetRef kind/name/namespace. |
+| `k8s-dangling-ingress` | Ingress backend.service.name must reference a Service that exists in the project. | Create the referenced Service in the matching namespace, or fix the backend.service.name. |
+| `k8s-dangling-network-policy` | NetworkPolicy.spec.podSelector.matchLabels must match at least one workload's pod template labels. | Align the NetworkPolicy podSelector with a workload's pod template labels, or remove the unused NetworkPolicy. |
+| `k8s-dangling-network-policy-peer` | NetworkPolicy ingress/egress peer podSelectors must match at least one workload's pod template labels. | Align the peer podSelector with a workload's pod template labels, or remove the dangling rule. |
+| `k8s-dangling-service` | Service.spec.selector must match at least one workload's pod template labels. | Align the Service selector with a workload's pod template labels, or remove the unused Service. |
+| `k8s-dangling-service-monitor` | ServiceMonitor.spec.selector.matchLabels must match at least one workload in the namespace. | Align the ServiceMonitor selector with a Service/workload that exists in the namespace, or remove the ServiceMonitor. |
+| `k8s-deployment-anti-affinity` | Deployments with replicas > 1 must declare `spec.template.spec.affinity.podAntiAffinity`. | Add a podAntiAffinity (preferred or required) so replicas are spread across nodes/zones. |
+| `k8s-disallow-privilege-escalation` | Containers must set securityContext.allowPrivilegeEscalation: false. | Add `securityContext: { allowPrivilegeEscalation: false }` to each container. |
+| `k8s-dnsconfig-options` | Pods should set dnsConfig.options (e.g. `ndots:2`) to reduce DNS lookup latency. | Add `dnsConfig.options: [{name: ndots, value: '2'}]` to the pod spec. |
+| `k8s-env-value-from-resolves` | Container env `valueFrom.secretKeyRef`/`configMapKeyRef` must reference an existing resource. | Create the missing Secret/ConfigMap in the namespace, or fix the reference name. |
+| `k8s-hpa-min-three-replicas` | HorizontalPodAutoscaler minReplicas must be at least 3 to survive node drains. | Set `spec.minReplicas: 3` (or higher) on the HorizontalPodAutoscaler. |
+| `k8s-invalid-target-ports` | Port names must conform to IANA naming: lowercase, alphanumeric, hyphens, 1-15 chars, start/end with alphanumeric. | Rename the port to match IANA conventions (e.g. `http`, `grpc`, `metrics`). |
+| `k8s-job-ttl-required` | Job manifests must set `spec.ttlSecondsAfterFinished` so completed Jobs are garbage-collected. | Add `spec.ttlSecondsAfterFinished: <seconds>` to the Job (e.g. 3600 for one hour). |
+| `k8s-min-replicas-two` | Deployments must have replicas >= 2 (or HPA minReplicas >= 2) for availability. | Set `spec.replicas: 2` or higher, or use a HorizontalPodAutoscaler with minReplicas >= 2. |
+| `k8s-mismatching-selector` | Deployment selector.matchLabels must match spec.template.metadata.labels. | Ensure spec.selector.matchLabels is a subset of spec.template.metadata.labels. |
+| `k8s-no-allow-privileged-scc` | OpenShift SecurityContextConstraints must not set allowPrivilegedContainer: true. | Set `allowPrivilegedContainer: false` on the SecurityContextConstraints, or remove the field. |
+| `k8s-no-default-service-account` | Pods must set serviceAccountName; the `default` account has no safe RBAC scope. | Create a dedicated ServiceAccount and reference it via `spec.serviceAccountName`. |
+| `k8s-no-deprecated-extensions-api` | Manifests must not use the removed `extensions/v1beta*` apiVersion. | Migrate to `apps/v1` (Deployment/DaemonSet/ReplicaSet), `networking.k8s.io/v1` (Ingress/NetworkPolicy), or `policy/v1` (PodSecurityPolicy successors). |
+| `k8s-no-deprecated-service-account-field` | Pod spec uses the deprecated `serviceAccount` field; use `serviceAccountName`. | Rename `serviceAccount` to `serviceAccountName` in the pod spec. |
+| `k8s-no-docker-sock-mount` | Pod mounts the host docker socket; this grants full root on the host. | Remove the docker.sock hostPath volume; use a sidecar with rootless tooling instead. |
+| `k8s-no-duplicate-env-vars` | Container env entries must not repeat the same `name`. | Remove the duplicate env entry; later definitions silently override earlier ones. |
+| `k8s-no-exposed-services` | Service.spec.type must not be NodePort or LoadBalancer; expose via Ingress / Gateway instead. | Use `type: ClusterIP` and route external traffic through an Ingress, Gateway, or service-mesh gateway. |
+| `k8s-no-host-ipc` | Pod spec sets `hostIPC: true`; sharing the host IPC namespace is unsafe. | Remove `hostIPC: true` from the pod spec. |
+| `k8s-no-host-network` | Pod spec sets `hostNetwork: true`; sharing the host network namespace is unsafe. | Remove `hostNetwork: true` from the pod spec. |
+| `k8s-no-host-pid` | Pod spec sets `hostPID: true`; sharing the host PID namespace is unsafe. | Remove `hostPID: true` from the pod spec. |
+| `k8s-no-latest-image-tag` | Container images must not use `:latest` or omit a tag. | Pin the image to a specific tag (e.g. `nginx:1.25.3`) or a digest (`@sha256:...`). |
+| `k8s-no-plaintext-secret-in-git` | kind: Secret manifests must not have populated data/stringData fields in source control. | Use SealedSecrets, External Secrets Operator, SOPS, or inject at deploy time. |
+| `k8s-no-privileged-container` | Container sets `securityContext.privileged: true`; this disables container isolation. | Remove `privileged: true`; grant only the specific Linux capabilities needed. |
+| `k8s-no-privileged-ports` | Container binds a privileged port (<1024); requires NET_BIND_SERVICE or root. | Bind to a high port (>=1024) and use a Service to expose port 80/443. |
+| `k8s-no-secret-in-env-literal` | Sensitive env vars (PASSWORD, TOKEN, SECRET, API_KEY) must not use a literal `value:`. | Reference a Secret via `valueFrom.secretKeyRef`, or mount the secret as a file. |
+| `k8s-no-secrets-in-configmap` | ConfigMap data must not contain secret-looking keys (PASSWORD, TOKEN, KEY, SECRET). | Move the value into a Kubernetes Secret (or sealed/external secret) and mount or reference it. |
+| `k8s-no-sensitive-host-mounts` | Pod mounts a sensitive host path (e.g. /, /etc, /proc); container can compromise the node. | Avoid mounting system paths from the host; use a dedicated data volume instead. |
+| `k8s-no-ssh-port` | Deployments should not expose TCP port 22 (SSH). | Remove port 22 from the container spec. Use `kubectl exec` or `kubectl debug` for debugging. |
+| `k8s-no-unsafe-proc-mount` | Container sets `securityContext.procMount: Unmasked`; this exposes /proc paths normally hidden by the runtime. | Remove `procMount: Unmasked` (or set to `Default`). |
+| `k8s-no-unsafe-sysctls` | Pod securityContext.sysctls must not contain unsafe namespaced sysctls. | Remove unsafe sysctls (kernel.msg*, kernel.sem*, kernel.shm*, fs.mqueue.*, net.*) or restrict via PodSecurityPolicy / kubelet allowed-unsafe-sysctls. |
+| `k8s-no-writable-host-mount` | Pod uses a hostPath volume; mount it as readOnly or remove the host mount entirely. | Avoid hostPath volumes; if required, mark the corresponding volumeMount as `readOnly: true`. |
+| `k8s-non-existent-service-account` | Workload spec.serviceAccountName must reference a ServiceAccount that exists in the project. | Create the referenced ServiceAccount in the matching namespace, or fix the serviceAccountName value. |
+| `k8s-pdb-eviction-policy` | PodDisruptionBudget must declare `spec.unhealthyPodEvictionPolicy` to allow eviction of unhealthy pods. | Add `spec.unhealthyPodEvictionPolicy: AlwaysAllow` (or `IfHealthyBudget`) to the PDB. |
+| `k8s-prefer-secret-files-over-env` | Container env entries should not source values from `secretKeyRef`; mount the Secret as a file instead. | Mount the Secret via `volumes`/`volumeMounts` and read the value from the filesystem; env vars leak through `kubectl describe` and child processes. |
+| `k8s-priority-class-name` | Workloads should declare a priorityClassName for scheduling predictability. | Add `priorityClassName` to the pod spec. |
+| `k8s-probe-port-exists` | Probe port must match a port declared by the container. | Ensure livenessProbe/readinessProbe/startupProbe targets a port listed in `ports`. |
+| `k8s-rbac-no-cluster-admin-binding` | RoleBinding/ClusterRoleBinding must not bind to the `cluster-admin` role. | Bind to a role with the minimum permissions required instead of `cluster-admin`. |
+| `k8s-rbac-no-create-pods` | RBAC rules must not grant `create` on `pods`; this enables privilege escalation. | Remove `create` from verbs for `pods` resources, or scope to a controller resource. |
+| `k8s-rbac-no-secret-access` | RBAC rules must not grant get/list/watch on `secrets`. | Avoid granting read access on secrets; use a dedicated service account scoped to specific secret names if absolutely required. |
+| `k8s-rbac-no-wildcard-resources` | RBAC rules must not grant resources: ["*"]; enumerate the resources needed. | Replace `resources: ["*"]` with the specific resources required (pods, services, etc.). |
+| `k8s-rbac-no-wildcard-verbs` | RBAC rules must not grant verbs: ["*"]; enumerate the verbs needed. | Replace `verbs: ["*"]` with the specific verbs required (get, list, watch, create, update, patch, delete). |
+| `k8s-require-drop-all-caps` | Containers must drop ALL Linux capabilities (securityContext.capabilities.drop includes ALL). | Add `securityContext: { capabilities: { drop: ["ALL"] } }` to each container. |
+| `k8s-require-explicit-namespace` | Namespaced resources must declare metadata.namespace explicitly. | Add `metadata.namespace: <name>` rather than relying on the implicit `default` namespace. |
+| `k8s-require-ingress-tls` | Ingress resources must declare spec.tls to terminate TLS. | Add a `spec.tls` section with `hosts` and `secretName` referencing a TLS certificate. |
+| `k8s-require-liveness-probe` | Each long-running workload container must define a livenessProbe. | Add `livenessProbe` (httpGet / tcpSocket / exec) to each container spec. |
+| `k8s-require-network-policy` | Each Deployment should have an accompanying NetworkPolicy; namespaces should not rely on default-allow. | Author a NetworkPolicy that whitelists ingress/egress for this workload. |
+| `k8s-require-pod-disruption-budget` | Each Deployment/StatefulSet should have an accompanying PodDisruptionBudget. | Author a PodDisruptionBudget (minAvailable or maxUnavailable) targeting this workload. |
+| `k8s-require-read-only-root` | Containers must set securityContext.readOnlyRootFilesystem: true. | Add `securityContext: { readOnlyRootFilesystem: true }` to each container. |
+| `k8s-require-readiness-probe` | Each container must define a readinessProbe. | Add `readinessProbe` (httpGet / tcpSocket / exec) to each container spec. |
+| `k8s-require-resource-limits` | Each container must define resources.limits.cpu and resources.limits.memory. | Add `resources.limits.cpu` and `resources.limits.memory` under each container. |
+| `k8s-require-resource-requests` | Each container must define resources.requests.cpu and resources.requests.memory. | Add `resources.requests.cpu` and `resources.requests.memory` under each container. |
+| `k8s-require-run-as-non-root` | Containers must set securityContext.runAsNonRoot: true. | Add `securityContext: { runAsNonRoot: true }` at the pod or container level. |
+| `k8s-require-standard-labels` | Resources must include app.kubernetes.io/name and app.kubernetes.io/instance labels. | Add `app.kubernetes.io/name` and `app.kubernetes.io/instance` under metadata.labels. |
+| `k8s-restart-policy-required` | Standalone Pod manifests must explicitly set `spec.restartPolicy`. | Add `spec.restartPolicy: Always` (long-running) or `OnFailure`/`Never` for batch workloads. |
+| `k8s-rolling-update-zero-unavailable` | Deployment strategy.rollingUpdate.maxUnavailable must be 0 to avoid downtime. | Set `spec.strategy.rollingUpdate.maxUnavailable: 0` and use `maxSurge` to add capacity during rollout. |
 
 ## lint-comments
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `eslint-comments-no-duplicate-disable` | ⚠️ | Disabling the same rule twice (or more) in one comment is a typo, not extra suppression. | Remove the duplicate rule id. If you really want to express "this is here on purpose", add a justification comment after `--`. |
-| `eslint-comments-no-unlimited-disable` | ⚠️ | `// eslint-disable` / `// eslint-disable-next-line` without a rule list disables every rule. | Name the rules you intend to disable: `// eslint-disable-next-line rule-a, rule-b`. Same for comply: `// comply-ignore: rule-id — reason`. |
-| `eslint-comments-require-description` | ⚠️ | `// eslint-disable-*` without a justification accumulates as silent tech debt. | Add a justification after `--`: `// eslint-disable-next-line rule-id -- reason`. Same convention as comply's `// comply-ignore: rule — reason`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `eslint-comments-no-duplicate-disable` | Disabling the same rule twice (or more) in one comment is a typo, not extra suppression. | Remove the duplicate rule id. If you really want to express "this is here on purpose", add a justification comment after `--`. |
+| `eslint-comments-no-unlimited-disable` | `// eslint-disable` / `// eslint-disable-next-line` without a rule list disables every rule. | Name the rules you intend to disable: `// eslint-disable-next-line rule-a, rule-b`. Same for comply: `// comply-ignore: rule-id — reason`. |
+| `eslint-comments-require-description` | `// eslint-disable-*` without a justification accumulates as silent tech debt. | Add a justification after `--`: `// eslint-disable-next-line rule-id -- reason`. Same convention as comply's `// comply-ignore: rule — reason`. |
 
 ## naming
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `boolean-naming` | ⚠️ | Boolean identifiers must start with is/has/should/can/will/did/was. | Rename to convey the predicate: `ready` → `isReady` (TS) or `is_ready` (Rust). Use the positive form only — prefer `!isReady` over `isNotReady`. |
-| `explicit-units` | ⚠️ | Numeric names should include an explicit unit (Ms, Bytes, Kb...). | Add a unit suffix: `delay` → `delayMs`, `size` → `sizeBytes`, `timeout` → `timeoutMs`. Ambiguous units cause real bugs — setTimeout(delay) expects ms. |
-| `no-abbreviated-names` | ⚠️ | Identifier contains a banned abbreviation. | Use the full word: `usr` → `user`, `btn` → `button`. Add project-specific bans via `banned = ["mgr:manager"]` in comply.toml. Editors auto-complete; readers don't. |
-| `no-and-in-function-name` | ❌ | `And` in a function name signals two responsibilities — split it. | A function with `And` in its name does two things. Split into two functions named after each responsibility, then let the caller compose them: `getUserAndUpdateCache` → `getUser()` + `updateCache(user)`. |
-| `no-generic-names` | ⚠️ | Generic names and mechanical prefixes carry no meaning. | Rename to describe what the value IS or what the function accomplishes. `data` → `parsedOrder`, `temp` → name the actual intermediate, `processOrder` → `fulfillOrder`, `doPayment` → `chargeCustomer`. |
-| `no-interface-prefix-i` | ⚠️ | TypeScript interface uses the `I` prefix (Hungarian notation). | Remove the `I` prefix — name the interface after the concept, not the language construct. |
-| `no-misleading-collection-name` | ❌ | Variable name lies about the underlying collection type. | Rename the binding to match the actual type — `userArray` holding a `Set` becomes `userSet`, `nameMap` holding an `Array` becomes `nameArray`. The name and the type must agree. |
-| `no-set-x-to-y` | ❌ | Function names like setStatusToClosed encode implementation, not intent. | Rename to express the INTENT, not the storage operation: `setStatusToClosed` → `closeAccount`, `setRoleToAdmin` → `promoteToAdmin`. Callers should read like a story, not a database update. |
-| `no-type-encoded-names` | ⚠️ | Identifiers must not encode their type (`strName`, `arrItems`). | Remove the type prefix. TypeScript's type checker already tells you the type — encoding it in the name is obsolete and lies when the type changes. |
-| `screaming-snake-for-constants` | ⚠️ | Top-level constant not in `SCREAMING_SNAKE_CASE`. | Rename the constant to use `SCREAMING_SNAKE_CASE`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `boolean-naming` | Boolean identifiers must start with is/has/should/can/will/did/was. | Rename to convey the predicate: `ready` → `isReady` (TS) or `is_ready` (Rust). Use the positive form only — prefer `!isReady` over `isNotReady`. |
+| `explicit-units` | Numeric names should include an explicit unit (Ms, Bytes, Kb...). | Add a unit suffix: `delay` → `delayMs`, `size` → `sizeBytes`, `timeout` → `timeoutMs`. Ambiguous units cause real bugs — setTimeout(delay) expects ms. |
+| `no-abbreviated-names` | Identifier contains a banned abbreviation. | Use the full word: `usr` → `user`, `btn` → `button`. Add project-specific bans via `banned = ["mgr:manager"]` in comply.toml. Editors auto-complete; readers don't. |
+| `no-and-in-function-name` | `And` in a function name signals two responsibilities — split it. | A function with `And` in its name does two things. Split into two functions named after each responsibility, then let the caller compose them: `getUserAndUpdateCache` → `getUser()` + `updateCache(user)`. |
+| `no-generic-names` | Generic names and mechanical prefixes carry no meaning. | Rename to describe what the value IS or what the function accomplishes. `data` → `parsedOrder`, `temp` → name the actual intermediate, `processOrder` → `fulfillOrder`, `doPayment` → `chargeCustomer`. |
+| `no-interface-prefix-i` | TypeScript interface uses the `I` prefix (Hungarian notation). | Remove the `I` prefix — name the interface after the concept, not the language construct. |
+| `no-misleading-collection-name` | Variable name lies about the underlying collection type. | Rename the binding to match the actual type — `userArray` holding a `Set` becomes `userSet`, `nameMap` holding an `Array` becomes `nameArray`. The name and the type must agree. |
+| `no-set-x-to-y` | Function names like setStatusToClosed encode implementation, not intent. | Rename to express the INTENT, not the storage operation: `setStatusToClosed` → `closeAccount`, `setRoleToAdmin` → `promoteToAdmin`. Callers should read like a story, not a database update. |
+| `no-type-encoded-names` | Identifiers must not encode their type (`strName`, `arrItems`). | Remove the type prefix. TypeScript's type checker already tells you the type — encoding it in the name is obsolete and lies when the type changes. |
+| `screaming-snake-for-constants` | Top-level constant not in `SCREAMING_SNAKE_CASE`. | Rename the constant to use `SCREAMING_SNAKE_CASE`. |
 
 ## nextjs
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `next-image-missing-sizes` | ⚠️ | `next/image` `<Image fill />` without a `sizes` prop forces the browser to download the largest source. | Add a `sizes` attribute, e.g. `sizes="(max-width: 768px) 100vw, 50vw"`. Without `sizes`, `next/image` falls back to `100vw` and serves the largest image in the `srcset`, blowing the LCP budget on smaller viewports. |
-| `next-inline-script-id` | ❌ | Next.js `<Script>` with inline body (children or `dangerouslySetInnerHTML`) requires an `id` prop so Next can dedupe across re-renders. | Add a stable `id` prop to the `<Script>` element. Without it Next will re-inject the script on every navigation. |
-| `next-no-assign-module-variable` | ❌ | Assigning to `module` (e.g. `let module = ...`) shadows Node's module object and breaks Next.js page builds. | Rename the local variable. Reserved names: `module`, `exports`, `require`, `process`, `Buffer`, `__dirname`, `__filename`. |
-| `next-no-before-interactive-script-outside-document` | ❌ | Don't use `next/script`'s `beforeInteractive` strategy outside `pages/_document.js`. | Move the `<Script strategy="beforeInteractive">` into `pages/_document.js`. The `beforeInteractive` strategy only takes effect there; outside the custom Document it is ignored, so the script no longer loads before the page becomes interactive. |
-| `next-no-client-side-redirect` | ⚠️ | Client-side `window.location` redirect — use Next.js `redirect()` or `useRouter().push()`. | Replace `window.location.href = '/x'` (or `.replace(...)`/`.assign(...)`) with `redirect('/x')` from `next/navigation`, or `router.push('/x')` from `useRouter()`. `window.location` triggers a full page reload, dropping the React tree and Next.js cache. |
-| `next-no-css-link` | ⚠️ | `<link rel="stylesheet" />` — import CSS directly for bundling and optimization. | Replace `<link rel="stylesheet" href="/foo.css" />` with `import './foo.css'` in the relevant component or layout. Next.js then bundles, minifies, and code-splits the stylesheet alongside the JS chunk that needs it. |
-| `next-no-document-import-in-page` | ❌ | `next/document` is for `_document.tsx` only; importing it elsewhere breaks SSR. | Move `Html`, `Main`, `NextScript` usage into `pages/_document.tsx`. |
-| `next-no-duplicate-head` | ❌ | Multiple `<Head>` elements in the same Next.js page interleave non-deterministically. | Use a single `<Head>` per page. Compose its children via array spread or `<>...</>` if you need to assemble metadata conditionally. |
-| `next-no-font-link` | ⚠️ | Loading Google Fonts via `<link>` — use `next/font` for self-hosting and zero layout shift. | Replace `<link href="https://fonts.googleapis.com/..." />` with `next/font`, e.g. `import { Inter } from 'next/font/google'; const inter = Inter({ subsets: ['latin'] });`. `next/font` self-hosts the font, eliminates a render-blocking request, and reserves layout space to avoid CLS. |
-| `next-no-hardcoded-revalidate-zero` | ⚠️ | `export const revalidate = 0` is a misleading way to opt out of caching. | Use `export const dynamic = 'force-dynamic';` to express intent clearly. |
-| `next-no-head-element` | ⚠️ | Using a raw `<head>` element bypasses Next.js head management. | Use the `Head` component from `next/head` (pages router) or the metadata API (app router) instead of `<head>`. |
-| `next-no-head-import-in-document` | ❌ | Importing `next/head` in `_document` doubles head management. | In `_document.tsx`, use `Head` from `next/document`. Reserve `next/head` for pages. |
-| `next-no-redirect-in-try-catch` | ❌ | `next/navigation` `redirect()` throws a control-flow error — catching it suppresses the redirect. | Move `redirect()` outside the `try { ... }` block, or rethrow inside the catch using `if (isRedirectError(err)) throw err`. |
-| `next-no-script-component-in-head` | ❌ | Next.js `<Script>` inside `<Head>` breaks the loading strategy — `<Script>` is meant to be rendered at body level. | Move the `<Script>` element outside `<Head>` so Next's `strategy` (`afterInteractive`, `lazyOnload`, …) can do its job. |
-| `next-no-server-action-without-use-server` | ❌ | Server-action files must declare `'use server'` — without it, the action runs on the client. | Add `'use server';` at the top of the file (before any imports), or rename the file if it isn't meant to host server actions. |
-| `next-no-title-in-document-head` | ❌ | Putting `<title>` inside `_document.tsx`'s `<Head>` makes every page share the same title. | Move `<title>` to per-page `<Head>` from `next/head`, or use the App Router's `metadata` export. |
-| `next-no-typos` | ❌ | Typo'd page-data export names silently disable the data-fetching hook. | Use the exact Next.js export names: `getStaticProps`, `getStaticPaths`, `getServerSideProps`, `getInitialProps`. A typo (e.g. `getStaticPorps`) is silently ignored by Next.js. |
-| `next-no-unwanted-polyfillio` | ⚠️ | Don't load polyfills from polyfill.io. | Replace the polyfill.io script with a trusted source (e.g. https://cdnjs.cloudflare.com/polyfill/) or rely on modern browser features directly. polyfill.io was compromised in a 2024 supply-chain attack, and many of the polyfills it serves are already shipped by Next.js, so the request is both unsafe and redundant. |
-| `next-prefer-next-env` | ⚠️ | Reading `window.__NEXT_DATA__` or `__NEXT_DATA__` is brittle and unsupported. | Read configuration via `process.env.NEXT_PUBLIC_*` (build-time inlined) instead of the legacy `__NEXT_DATA__` global. |
-| `react-layout-requires-children-prop` | ❌ | App Router layouts must accept and render `children`. | Destructure `children` from props and render it inside the layout's markup: `export default function Layout({ children }) {}`. |
-| `react-no-generate-static-params-in-client` | ❌ | Next.js ignores `generateStaticParams` exports from client components. | Move `generateStaticParams` to a server `page.tsx` (no `"use client"`) and import the client component as a child. |
-| `react-no-metadata-export-in-client` | ❌ | Next.js ignores `metadata` exports from client components. | Move the metadata export to a separate server component (e.g. `layout.tsx` or `page.tsx` without `"use client"`), and import your client component from there. |
-| `react-no-next-headers-in-client` | ❌ | `next/headers` is server-only — importing it from a client component throws. | Read headers/cookies in a server component and pass the values as props, or call a server action from the client. |
-| `react-no-router-push-in-effect-no-dep` | ⚠️ | `router.push(...)` in a mount-only `useEffect` always navigates — almost certainly a bug. | Move the navigation into an event handler, gate it on a condition the effect depends on, or perform the redirect server-side (e.g. `redirect()` in Next.js). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `next-image-missing-sizes` | `next/image` `<Image fill />` without a `sizes` prop forces the browser to download the largest source. | Add a `sizes` attribute, e.g. `sizes="(max-width: 768px) 100vw, 50vw"`. Without `sizes`, `next/image` falls back to `100vw` and serves the largest image in the `srcset`, blowing the LCP budget on smaller viewports. |
+| `next-inline-script-id` | Next.js `<Script>` with inline body (children or `dangerouslySetInnerHTML`) requires an `id` prop so Next can dedupe across re-renders. | Add a stable `id` prop to the `<Script>` element. Without it Next will re-inject the script on every navigation. |
+| `next-no-assign-module-variable` | Assigning to `module` (e.g. `let module = ...`) shadows Node's module object and breaks Next.js page builds. | Rename the local variable. Reserved names: `module`, `exports`, `require`, `process`, `Buffer`, `__dirname`, `__filename`. |
+| `next-no-before-interactive-script-outside-document` | Don't use `next/script`'s `beforeInteractive` strategy outside `pages/_document.js`. | Move the `<Script strategy="beforeInteractive">` into `pages/_document.js`. The `beforeInteractive` strategy only takes effect there; outside the custom Document it is ignored, so the script no longer loads before the page becomes interactive. |
+| `next-no-client-side-redirect` | Client-side `window.location` redirect — use Next.js `redirect()` or `useRouter().push()`. | Replace `window.location.href = '/x'` (or `.replace(...)`/`.assign(...)`) with `redirect('/x')` from `next/navigation`, or `router.push('/x')` from `useRouter()`. `window.location` triggers a full page reload, dropping the React tree and Next.js cache. |
+| `next-no-css-link` | `<link rel="stylesheet" />` — import CSS directly for bundling and optimization. | Replace `<link rel="stylesheet" href="/foo.css" />` with `import './foo.css'` in the relevant component or layout. Next.js then bundles, minifies, and code-splits the stylesheet alongside the JS chunk that needs it. |
+| `next-no-document-import-in-page` | `next/document` is for `_document.tsx` only; importing it elsewhere breaks SSR. | Move `Html`, `Main`, `NextScript` usage into `pages/_document.tsx`. |
+| `next-no-duplicate-head` | Multiple `<Head>` elements in the same Next.js page interleave non-deterministically. | Use a single `<Head>` per page. Compose its children via array spread or `<>...</>` if you need to assemble metadata conditionally. |
+| `next-no-font-link` | Loading Google Fonts via `<link>` — use `next/font` for self-hosting and zero layout shift. | Replace `<link href="https://fonts.googleapis.com/..." />` with `next/font`, e.g. `import { Inter } from 'next/font/google'; const inter = Inter({ subsets: ['latin'] });`. `next/font` self-hosts the font, eliminates a render-blocking request, and reserves layout space to avoid CLS. |
+| `next-no-hardcoded-revalidate-zero` | `export const revalidate = 0` is a misleading way to opt out of caching. | Use `export const dynamic = 'force-dynamic';` to express intent clearly. |
+| `next-no-head-element` | Using a raw `<head>` element bypasses Next.js head management. | Use the `Head` component from `next/head` (pages router) or the metadata API (app router) instead of `<head>`. |
+| `next-no-head-import-in-document` | Importing `next/head` in `_document` doubles head management. | In `_document.tsx`, use `Head` from `next/document`. Reserve `next/head` for pages. |
+| `next-no-redirect-in-try-catch` | `next/navigation` `redirect()` throws a control-flow error — catching it suppresses the redirect. | Move `redirect()` outside the `try { ... }` block, or rethrow inside the catch using `if (isRedirectError(err)) throw err`. |
+| `next-no-script-component-in-head` | Next.js `<Script>` inside `<Head>` breaks the loading strategy — `<Script>` is meant to be rendered at body level. | Move the `<Script>` element outside `<Head>` so Next's `strategy` (`afterInteractive`, `lazyOnload`, …) can do its job. |
+| `next-no-server-action-without-use-server` | Server-action files must declare `'use server'` — without it, the action runs on the client. | Add `'use server';` at the top of the file (before any imports), or rename the file if it isn't meant to host server actions. |
+| `next-no-title-in-document-head` | Putting `<title>` inside `_document.tsx`'s `<Head>` makes every page share the same title. | Move `<title>` to per-page `<Head>` from `next/head`, or use the App Router's `metadata` export. |
+| `next-no-typos` | Typo'd page-data export names silently disable the data-fetching hook. | Use the exact Next.js export names: `getStaticProps`, `getStaticPaths`, `getServerSideProps`, `getInitialProps`. A typo (e.g. `getStaticPorps`) is silently ignored by Next.js. |
+| `next-no-unwanted-polyfillio` | Don't load polyfills from polyfill.io. | Replace the polyfill.io script with a trusted source (e.g. https://cdnjs.cloudflare.com/polyfill/) or rely on modern browser features directly. polyfill.io was compromised in a 2024 supply-chain attack, and many of the polyfills it serves are already shipped by Next.js, so the request is both unsafe and redundant. |
+| `next-prefer-next-env` | Reading `window.__NEXT_DATA__` or `__NEXT_DATA__` is brittle and unsupported. | Read configuration via `process.env.NEXT_PUBLIC_*` (build-time inlined) instead of the legacy `__NEXT_DATA__` global. |
+| `react-layout-requires-children-prop` | App Router layouts must accept and render `children`. | Destructure `children` from props and render it inside the layout's markup: `export default function Layout({ children }) {}`. |
+| `react-no-generate-static-params-in-client` | Next.js ignores `generateStaticParams` exports from client components. | Move `generateStaticParams` to a server `page.tsx` (no `"use client"`) and import the client component as a child. |
+| `react-no-metadata-export-in-client` | Next.js ignores `metadata` exports from client components. | Move the metadata export to a separate server component (e.g. `layout.tsx` or `page.tsx` without `"use client"`), and import your client component from there. |
+| `react-no-next-headers-in-client` | `next/headers` is server-only — importing it from a client component throws. | Read headers/cookies in a server component and pass the values as props, or call a server action from the client. |
+| `react-no-router-push-in-effect-no-dep` | `router.push(...)` in a mount-only `useEffect` always navigates — almost certainly a bug. | Move the navigation into an event handler, gate it on a condition the effect depends on, or perform the redirect server-side (e.g. `redirect()` in Next.js). |
 
 ## nextjs > accessibility
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `next-metadata-missing-viewport` | ⚠️ | Layout files exporting `metadata` should also export `viewport` (inherited by nested pages). | Add `export const viewport: Viewport = { width: 'device-width', initialScale: 1 };` next to your `metadata` export. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `next-metadata-missing-viewport` | Layout files exporting `metadata` should also export `viewport` (inherited by nested pages). | Add `export const viewport: Viewport = { width: 'device-width', initialScale: 1 };` next to your `metadata` export. |
 
 ## nextjs > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `next-dynamic-no-ssr-false-with-suspense` | ⚠️ | `dynamic(..., { ssr: false })` opts the whole subtree out of SSR. | Wrap the lazy boundary in `<Suspense>` and drop `ssr: false`, or move the import into a client component. |
-| `next-no-html-link-for-pages` | ⚠️ | Using `<a href="/internal-route">` causes a full page reload. | Use `<Link>` from `next/link` for internal navigation to keep client-side routing. |
-| `next-no-img-element` | ⚠️ | Using `<img>` instead of `next/image` disables image optimization. | Replace `<img>` with `<Image>` from `next/image` to enable lazy loading and automatic resizing. |
-| `next-no-sync-scripts` | ⚠️ | Synchronous `<script>` tags block parsing and hurt LCP. | Use the `Script` component from `next/script` so Next.js can defer/optimise loading. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `next-dynamic-no-ssr-false-with-suspense` | `dynamic(..., { ssr: false })` opts the whole subtree out of SSR. | Wrap the lazy boundary in `<Suspense>` and drop `ssr: false`, or move the import into a client component. |
+| `next-no-html-link-for-pages` | Using `<a href="/internal-route">` causes a full page reload. | Use `<Link>` from `next/link` for internal navigation to keep client-side routing. |
+| `next-no-img-element` | Using `<img>` instead of `next/image` disables image optimization. | Replace `<img>` with `<Image>` from `next/image` to enable lazy loading and automatic resizing. |
+| `next-no-sync-scripts` | Synchronous `<script>` tags block parsing and hurt LCP. | Use the `Script` component from `next/script` so Next.js can defer/optimise loading. |
 
 ## nextjs > reliability
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `next-no-api-route-in-middleware` | ❌ | Calling your own API route from middleware causes a same-origin fetch loop. | Inline the logic, call a shared helper, or invoke a third-party endpoint — never fetch your own `/api/*` from middleware. |
-| `next-no-unwrapped-cache` | ⚠️ | `unstable_cache` callbacks must handle errors — an unhandled throw poisons the cache. | Wrap the inner work in try/catch and return a sentinel, or guard the call site with an error boundary. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `next-no-api-route-in-middleware` | Calling your own API route from middleware causes a same-origin fetch loop. | Inline the logic, call a shared helper, or invoke a third-party endpoint — never fetch your own `/api/*` from middleware. |
+| `next-no-unwrapped-cache` | `unstable_cache` callbacks must handle errors — an unhandled throw poisons the cache. | Wrap the inner work in try/catch and return a sentinel, or guard the call site with an error boundary. |
 
 ## nextjs > rsc
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `next-no-async-client-component` | ❌ | Client components cannot be `async` — they must be synchronous. | Drop `async`, fetch via `useEffect`/`useSWR`/`useQuery`, or convert this file to a server component. |
-| `next-no-client-import-in-server` | ❌ | Browser-only modules cannot be imported into server components. | Move the import into a `"use client"` boundary, or replace it with a server-safe alternative. |
-| `next-no-server-import-in-client` | ❌ | Server-only modules (`fs`, `net`, `next/server`, `server-only`) cannot run in the browser. | Move the import to a server module, or remove the `"use client"` directive. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `next-no-async-client-component` | Client components cannot be `async` — they must be synchronous. | Drop `async`, fetch via `useEffect`/`useSWR`/`useQuery`, or convert this file to a server component. |
+| `next-no-client-import-in-server` | Browser-only modules cannot be imported into server components. | Move the import into a `"use client"` boundary, or replace it with a server-safe alternative. |
+| `next-no-server-import-in-client` | Server-only modules (`fs`, `net`, `next/server`, `server-only`) cannot run in the browser. | Move the import to a server module, or remove the `"use client"` directive. |
 
 ## node
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-extraneous-import` | ⚠️ | Production code should not import devDependencies. | Move the package from `devDependencies` to `dependencies` in `package.json`, or move this code to a test file. |
-| `no-unsupported-node-builtins` | ⚠️ | Node.js API not available in the minimum version declared in `engines.node`. | Either bump the minimum Node.js version in `engines.node`, or use a polyfill. |
-| `node-callback-return` | ⚠️ | Callback invocations should be followed by a `return`. | Add `return` before or after calling `callback`/`cb`/`next` to prevent accidental double execution. |
-| `node-global-require` | ⚠️ | `require()` calls should be at the top-level module scope. | Move the `require()` call to the top level of the module. |
-| `node-handle-callback-err` | ⚠️ | Callback error parameter is declared but never used. | Handle the error parameter (log it, rethrow, or forward). If intentionally unused, prefix with `_`. |
-| `node-hashbang` | ⚠️ | Files with a hashbang (`#!`) must use the correct format. | Ensure the hashbang line is `#!/usr/bin/env node` and only present in executable files. |
-| `node-no-callback-literal` | ⚠️ | First argument to error-first callbacks should be an Error object or `null`, not a string literal. | Pass `new Error('...')` or `null` as the first argument instead of a string literal. |
-| `node-no-exports-assign` | ❌ | Direct assignment to `exports` variable is forbidden. | Use `module.exports = ...` instead of `exports = ...`. |
-| `node-no-mixed-requires` | ⚠️ | `require` calls should not be mixed with regular variable declarations. | Separate `require()` declarations from non-require variable declarations. |
-| `node-no-new-require` | ❌ | `new require('...')` is almost always a bug. | Separate the `require` call from the `new` expression: `const Mod = require('...'); new Mod()`. |
-| `node-no-path-concat` | ⚠️ | String concatenation with `__dirname` / `__filename` is platform-dependent. | Use `path.join()` or `path.resolve()` instead of string concatenation. |
-| `node-no-process-env` | ⚠️ | Direct use of `process.env` is discouraged. | Centralize environment access in a config module instead of scattering `process.env` reads. |
-| `node-no-sync` | ⚠️ | Synchronous Node.js methods block the event loop. | Use the asynchronous variant (e.g. `readFile` instead of `readFileSync`) or `fs.promises`. |
-| `node-no-top-level-await` | ❌ | Top-level `await` is forbidden in published modules. | Wrap the `await` expression inside an `async` function. |
-| `node-no-unhandled-rejection` | ❌ | `process.on('unhandledRejection', ...)` handlers should exit the process. | Call `process.exit(1)` (or `process.exitCode = 1` + `throw err`) inside the handler. Continuing execution after an unhandled rejection leaves the process in an unknown state. |
-| `node-prefer-promises-dns` | ⚠️ | Callback-based `dns.*` methods are discouraged. | Use `dns.promises.*` or import from `dns/promises` instead of callback-based `dns` methods. |
-| `node-prefer-promises-fs` | ⚠️ | Callback-based `fs.*` methods are discouraged. | Use `fs.promises.*` or import from `fs/promises` instead of callback-based `fs` methods. |
-| `node-prefer-stream-pipeline` | ⚠️ | `stream.pipe()` chains leak resources on error — `pipeline()` cleans them up. | Replace `a.pipe(b).pipe(c)` with `await pipeline(a, b, c)` from `node:stream/promises`. |
-| `use-node-assert-strict` | ⚠️ | Importing `node:assert` uses the loose assertion API; `node:assert/strict` is preferred. | Import from `node:assert/strict` instead of `node:assert`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-extraneous-import` | Production code should not import devDependencies. | Move the package from `devDependencies` to `dependencies` in `package.json`, or move this code to a test file. |
+| `no-unsupported-node-builtins` | Node.js API not available in the minimum version declared in `engines.node`. | Either bump the minimum Node.js version in `engines.node`, or use a polyfill. |
+| `node-callback-return` | Callback invocations should be followed by a `return`. | Add `return` before or after calling `callback`/`cb`/`next` to prevent accidental double execution. |
+| `node-global-require` | `require()` calls should be at the top-level module scope. | Move the `require()` call to the top level of the module. |
+| `node-handle-callback-err` | Callback error parameter is declared but never used. | Handle the error parameter (log it, rethrow, or forward). If intentionally unused, prefix with `_`. |
+| `node-hashbang` | Files with a hashbang (`#!`) must use the correct format. | Ensure the hashbang line is `#!/usr/bin/env node` and only present in executable files. |
+| `node-no-callback-literal` | First argument to error-first callbacks should be an Error object or `null`, not a string literal. | Pass `new Error('...')` or `null` as the first argument instead of a string literal. |
+| `node-no-exports-assign` | Direct assignment to `exports` variable is forbidden. | Use `module.exports = ...` instead of `exports = ...`. |
+| `node-no-mixed-requires` | `require` calls should not be mixed with regular variable declarations. | Separate `require()` declarations from non-require variable declarations. |
+| `node-no-new-require` | `new require('...')` is almost always a bug. | Separate the `require` call from the `new` expression: `const Mod = require('...'); new Mod()`. |
+| `node-no-path-concat` | String concatenation with `__dirname` / `__filename` is platform-dependent. | Use `path.join()` or `path.resolve()` instead of string concatenation. |
+| `node-no-process-env` | Direct use of `process.env` is discouraged. | Centralize environment access in a config module instead of scattering `process.env` reads. |
+| `node-no-sync` | Synchronous Node.js methods block the event loop. | Use the asynchronous variant (e.g. `readFile` instead of `readFileSync`) or `fs.promises`. |
+| `node-no-top-level-await` | Top-level `await` is forbidden in published modules. | Wrap the `await` expression inside an `async` function. |
+| `node-no-unhandled-rejection` | `process.on('unhandledRejection', ...)` handlers should exit the process. | Call `process.exit(1)` (or `process.exitCode = 1` + `throw err`) inside the handler. Continuing execution after an unhandled rejection leaves the process in an unknown state. |
+| `node-prefer-promises-dns` | Callback-based `dns.*` methods are discouraged. | Use `dns.promises.*` or import from `dns/promises` instead of callback-based `dns` methods. |
+| `node-prefer-promises-fs` | Callback-based `fs.*` methods are discouraged. | Use `fs.promises.*` or import from `fs/promises` instead of callback-based `fs` methods. |
+| `node-prefer-stream-pipeline` | `stream.pipe()` chains leak resources on error — `pipeline()` cleans them up. | Replace `a.pipe(b).pipe(c)` with `await pipeline(a, b, c)` from `node:stream/promises`. |
+| `use-node-assert-strict` | Importing `node:assert` uses the loose assertion API; `node:assert/strict` is preferred. | Import from `node:assert/strict` instead of `node:assert`. |
 
 ## nuxt
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `nuxt-no-direct-process-env` | ❌ | `process.env` is unavailable on the client and bypasses Nuxt's runtime config. | Use `useRuntimeConfig()` to read both public and private runtime values. |
-| `nuxt-no-manual-imports` | ⚠️ | Nuxt auto-imports composables — manual imports are redundant. | Remove the import; Nuxt auto-imports `useRuntimeConfig`, `useState`, etc. |
-| `nuxt-no-page-meta-runtime-values` | ❌ | `definePageMeta({...})` is statically analysed at build time — runtime expressions, variable references, or function calls in its properties are dropped. | Use only literals (strings, numbers, booleans, arrays of literals, object literals) in `definePageMeta`. Move dynamic values to a `setup()` block or middleware. |
-| `nuxt-no-setup-outside-definecomponent` | ❌ | `<script setup>` composables called outside `defineComponent` in options-API files leak across instances. | Either move to `<script setup>` or wrap the logic inside `defineComponent({ setup() {} })`. |
-| `nuxt-no-vue-router-import` | ⚠️ | Nuxt provides its own router via `useRouter`/`useRoute` auto-imports. | Remove the `vue-router` import; rely on the auto-imported `useRouter()` / `useRoute()`. |
-| `nuxt-plugin-no-sideeffect` | ❌ | Nuxt plugins must wrap their logic in `defineNuxtPlugin` so they receive the Nuxt app instance. | Move top-level statements into the `defineNuxtPlugin((nuxtApp) => { ... })` callback. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `nuxt-no-direct-process-env` | `process.env` is unavailable on the client and bypasses Nuxt's runtime config. | Use `useRuntimeConfig()` to read both public and private runtime values. |
+| `nuxt-no-manual-imports` | Nuxt auto-imports composables — manual imports are redundant. | Remove the import; Nuxt auto-imports `useRuntimeConfig`, `useState`, etc. |
+| `nuxt-no-page-meta-runtime-values` | `definePageMeta({...})` is statically analysed at build time — runtime expressions, variable references, or function calls in its properties are dropped. | Use only literals (strings, numbers, booleans, arrays of literals, object literals) in `definePageMeta`. Move dynamic values to a `setup()` block or middleware. |
+| `nuxt-no-setup-outside-definecomponent` | `<script setup>` composables called outside `defineComponent` in options-API files leak across instances. | Either move to `<script setup>` or wrap the logic inside `defineComponent({ setup() {} })`. |
+| `nuxt-no-vue-router-import` | Nuxt provides its own router via `useRouter`/`useRoute` auto-imports. | Remove the `vue-router` import; rely on the auto-imported `useRouter()` / `useRoute()`. |
+| `nuxt-plugin-no-sideeffect` | Nuxt plugins must wrap their logic in `defineNuxtPlugin` so they receive the Nuxt app instance. | Move top-level statements into the `defineNuxtPlugin((nuxtApp) => { ... })` callback. |
 
 ## nuxt > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `nuxt-no-blocking-data-fetch` | ⚠️ | Data fetching inside `defineNuxtRouteMiddleware` blocks navigation. | Move the fetch into the page's `setup()` via `useFetch`/`useAsyncData`, or fall back to a server route. |
-| `nuxt-no-manual-fetch-in-setup` | ❌ | Raw `fetch()` in setup duplicates the request between SSR and hydration. | Use `useFetch()` or `useAsyncData()` so the response is serialized into the payload. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `nuxt-no-blocking-data-fetch` | Data fetching inside `defineNuxtRouteMiddleware` blocks navigation. | Move the fetch into the page's `setup()` via `useFetch`/`useAsyncData`, or fall back to a server route. |
+| `nuxt-no-manual-fetch-in-setup` | Raw `fetch()` in setup duplicates the request between SSR and hydration. | Use `useFetch()` or `useAsyncData()` so the response is serialized into the payload. |
 
 ## nuxt > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `nuxt-no-v-html-in-server` | ❌ | `v-html` in an SSR-rendered component is an XSS vector when the value is not sanitized. | Pass the value through DOMPurify (or a server-side sanitizer) before binding, or render structured content as components. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `nuxt-no-v-html-in-server` | `v-html` in an SSR-rendered component is an XSS vector when the value is not sanitized. | Pass the value through DOMPurify (or a server-side sanitizer) before binding, or render structured content as components. |
 
 ## nuxt > seo
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `nuxt-no-head-in-setup` | ⚠️ | Setting `head` via component options bypasses the typed `useHead()` composable. | Call `useHead({ title, meta, link })` from `<script setup>` or inside `setup()`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `nuxt-no-head-in-setup` | Setting `head` via component options bypasses the typed `useHead()` composable. | Call `useHead({ title, meta, link })` from `<script setup>` or inside `setup()`. |
 
 ## nuxt > ssr
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `nuxt-no-client-only-in-ssr` | ❌ | Browser globals (`window`, `document`, `localStorage`) crash on the server without a client guard. | Wrap the access in `if (import.meta.client)` / `if (process.client)`, move it to `onMounted`, or use `<ClientOnly>`. |
-| `nuxt-no-global-state-in-composable` | ❌ | Module-level `let`/`var` in a composable leaks state across SSR requests. | Move the state inside the composable function body, or use `useState()` to bind it to the request lifecycle. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `nuxt-no-client-only-in-ssr` | Browser globals (`window`, `document`, `localStorage`) crash on the server without a client guard. | Wrap the access in `if (import.meta.client)` / `if (process.client)`, move it to `onMounted`, or use `<ClientOnly>`. |
+| `nuxt-no-global-state-in-composable` | Module-level `let`/`var` in a composable leaks state across SSR requests. | Move the state inside the composable function body, or use `useState()` to bind it to the request lifecycle. |
 
 ## package-json
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `package-json-required-scripts` | ⚠️ | A `package.json` is missing a script the project requires — consistent scripts across packages let each one be run reliably from the repo root. | Add the missing script(s) to the `scripts` section of `package.json`. |
-| `package-json-sorted-deps` | ⚠️ | Unsorted dependencies in package.json cause needless merge conflicts. | Sort dependency keys alphabetically in each section (dependencies, devDependencies, peerDependencies). |
-| `package-json-unique-deps` | ⚠️ | A package in both dependencies and devDependencies is ambiguous — npm/pnpm silently picks one, which surprises consumers. | Keep each package in exactly one section. Production deps go in `dependencies`; build-only tools go in `devDependencies`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `package-json-required-scripts` | A `package.json` is missing a script the project requires — consistent scripts across packages let each one be run reliably from the repo root. | Add the missing script(s) to the `scripts` section of `package.json`. |
+| `package-json-sorted-deps` | Unsorted dependencies in package.json cause needless merge conflicts. | Sort dependency keys alphabetically in each section (dependencies, devDependencies, peerDependencies). |
+| `package-json-unique-deps` | A package in both dependencies and devDependencies is ambiguous — npm/pnpm silently picks one, which surprises consumers. | Keep each package in exactly one section. Production deps go in `dependencies`; build-only tools go in `devDependencies`. |
 
 ## performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `html-no-script-without-defer` | ⚠️ | `<script src="...">` without `defer` or `async` blocks HTML parsing. | Add `defer` (preserves execution order, runs after parse) for DOM-dependent scripts, or `async` (runs as soon as it loads) for independent scripts. Without either, the browser stops parsing HTML to fetch and execute the script, delaying First Contentful Paint. |
-| `html-no-undeferred-third-party` | ⚠️ | Third-party `<script>` without `defer`/`async` blocks parsing. | Add `defer` or `async` to external `<script>` tags, or load them via `next/script` with `strategy="lazyOnload"`. |
-| `js-cache-repeated-storage` | ⚠️ | Repeated `getItem()` calls with the same key — read once into a variable. | Store the result of `localStorage.getItem(key)` in a variable and reuse it instead of calling `getItem` multiple times. |
-| `js-index-maps` | ⚠️ | `array.find()`/`findIndex()` inside a loop — build a `Map` for O(1) lookups. | Build a `Map` (or object index) from the array before the loop: `const map = new Map(items.map(i => [i.id, i]))`, then use `map.get(key)` inside the loop. |
-| `js-no-flatmap-filter` | ⚠️ | `.flatMap().filter()` iterates twice — combine into a single `.flatMap()`. | Move the filter predicate into the `flatMap` callback and return `[]` for items that should be excluded. |
-| `js-no-math-spread-array` | ⚠️ | `Math.min(...array)` / `Math.max(...array)` — stack-overflow risk on large arrays. | Use a reduce or for-loop: `array.reduce((a, b) => a < b ? a : b, Infinity)` for min, or `-Infinity` and `>` for max. |
-| `no-sync-scripts` | ⚠️ | External `<script src>` must set `async` or `defer` to avoid blocking parsing. | Add `async` (order-independent) or `defer` (order-preserving) to the `<script>`. |
-| `perf-font-face-display-swap` | ⚠️ | Every `@font-face` block must declare `font-display: swap`. | Add `font-display: swap;` inside the `@font-face` rule. |
-| `perf-font-preload-crossorigin` | ⚠️ | `<link rel="preload" as="font">` must include `crossorigin` and `type="font/woff2"`. | Add `crossorigin` and `type="font/woff2"` to the font preload link. |
-| `perf-img-fetchpriority-high` | ⚠️ | Hero/LCP images should declare `fetchpriority="high"` and must not be lazy-loaded. | Add `fetchpriority="high"` to the LCP image, and remove `loading="lazy"` on it. |
-| `perf-img-modern-format` | ⚠️ | `<img>` with .jpg/.jpeg/.png should provide a WebP/AVIF fallback via `<picture>` or `srcset`. | Wrap the image in a `<picture>` with `<source type="image/webp">`, or use `srcset` with a modern format. |
-| `perf-no-google-fonts-link` | ⚠️ | Avoid loading fonts from `fonts.googleapis.com`; self-host them instead. | Download the font files and serve them from your own origin with a `@font-face` declaration. |
-| `perf-no-render-blocking-css` | ⚠️ | `<link rel="stylesheet">` without a `media` attribute blocks first paint. | Add a `media` attribute (e.g. `media="print" onLoad="this.media='all'"`) or inline critical CSS. |
-| `prefer-lazy-load` | ⚠️ | `<img>` and `<iframe>` should set `loading="lazy"` to defer off-screen loads. | Add `loading="lazy"` (or `loading="eager"` for above-the-fold assets). |
-| `prefer-static-regex` | ⚠️ | Regex literals inside functions are recompiled on each call. | Hoist the regex to module scope or use a constant. |
-| `ui-no-global-css-variable-animation` | ⚠️ | Global CSS variable change inside `requestAnimationFrame` triggers full-page recalc. | Scope the CSS variable to the animated element: `element.style.setProperty('--x', value)` instead of `document.documentElement.style.setProperty('--x', value)`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `html-no-script-without-defer` | `<script src="...">` without `defer` or `async` blocks HTML parsing. | Add `defer` (preserves execution order, runs after parse) for DOM-dependent scripts, or `async` (runs as soon as it loads) for independent scripts. Without either, the browser stops parsing HTML to fetch and execute the script, delaying First Contentful Paint. |
+| `html-no-undeferred-third-party` | Third-party `<script>` without `defer`/`async` blocks parsing. | Add `defer` or `async` to external `<script>` tags, or load them via `next/script` with `strategy="lazyOnload"`. |
+| `js-cache-repeated-storage` | Repeated `getItem()` calls with the same key — read once into a variable. | Store the result of `localStorage.getItem(key)` in a variable and reuse it instead of calling `getItem` multiple times. |
+| `js-index-maps` | `array.find()`/`findIndex()` inside a loop — build a `Map` for O(1) lookups. | Build a `Map` (or object index) from the array before the loop: `const map = new Map(items.map(i => [i.id, i]))`, then use `map.get(key)` inside the loop. |
+| `js-no-flatmap-filter` | `.flatMap().filter()` iterates twice — combine into a single `.flatMap()`. | Move the filter predicate into the `flatMap` callback and return `[]` for items that should be excluded. |
+| `js-no-math-spread-array` | `Math.min(...array)` / `Math.max(...array)` — stack-overflow risk on large arrays. | Use a reduce or for-loop: `array.reduce((a, b) => a < b ? a : b, Infinity)` for min, or `-Infinity` and `>` for max. |
+| `no-sync-scripts` | External `<script src>` must set `async` or `defer` to avoid blocking parsing. | Add `async` (order-independent) or `defer` (order-preserving) to the `<script>`. |
+| `perf-font-face-display-swap` | Every `@font-face` block must declare `font-display: swap`. | Add `font-display: swap;` inside the `@font-face` rule. |
+| `perf-font-preload-crossorigin` | `<link rel="preload" as="font">` must include `crossorigin` and `type="font/woff2"`. | Add `crossorigin` and `type="font/woff2"` to the font preload link. |
+| `perf-img-fetchpriority-high` | Hero/LCP images should declare `fetchpriority="high"` and must not be lazy-loaded. | Add `fetchpriority="high"` to the LCP image, and remove `loading="lazy"` on it. |
+| `perf-img-modern-format` | `<img>` with .jpg/.jpeg/.png should provide a WebP/AVIF fallback via `<picture>` or `srcset`. | Wrap the image in a `<picture>` with `<source type="image/webp">`, or use `srcset` with a modern format. |
+| `perf-no-google-fonts-link` | Avoid loading fonts from `fonts.googleapis.com`; self-host them instead. | Download the font files and serve them from your own origin with a `@font-face` declaration. |
+| `perf-no-render-blocking-css` | `<link rel="stylesheet">` without a `media` attribute blocks first paint. | Add a `media` attribute (e.g. `media="print" onLoad="this.media='all'"`) or inline critical CSS. |
+| `prefer-lazy-load` | `<img>` and `<iframe>` should set `loading="lazy"` to defer off-screen loads. | Add `loading="lazy"` (or `loading="eager"` for above-the-fold assets). |
+| `prefer-static-regex` | Regex literals inside functions are recompiled on each call. | Hoist the regex to module scope or use a constant. |
+| `ui-no-global-css-variable-animation` | Global CSS variable change inside `requestAnimationFrame` triggers full-page recalc. | Scope the CSS variable to the animated element: `element.style.setProperty('--x', value)` instead of `document.documentElement.style.setProperty('--x', value)`. |
 
 ## performance > code-quality
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `function-inside-loop` | ⚠️ | Function declared inside loop creates new function object each iteration. | Move the function outside the loop, or use a method reference. |
-| `prefer-array-fill` | ⚠️ | Prefer `Array(n).fill(v)` over `Array.from({length: n}, () => v)` for constant fills. | Use `Array(n).fill(value)` for simpler constant array initialization. |
-| `prefer-array-from-map` | ⚠️ | Prefer `Array.from(iter, mapFn)` over `[...iter].map(mapFn)`. | Use `Array.from(iterable, mapFn)` to avoid intermediate array allocation. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `function-inside-loop` | Function declared inside loop creates new function object each iteration. | Move the function outside the loop, or use a method reference. |
+| `prefer-array-fill` | Prefer `Array(n).fill(v)` over `Array.from({length: n}, () => v)` for constant fills. | Use `Array(n).fill(value)` for simpler constant array initialization. |
+| `prefer-array-from-map` | Prefer `Array.from(iter, mapFn)` over `[...iter].map(mapFn)`. | Use `Array.from(iterable, mapFn)` to avoid intermediate array allocation. |
 
 ## performance > imports
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `ban-dependencies` | ⚠️ | Bans imports of legacy or heavy dependencies (lodash, moment, underscore). | Use native alternatives or lighter libraries (date-fns, es-toolkit). |
-| `no-dynamic-namespace-import-access` | ⚠️ | Accessing a namespace import dynamically (computed member access) prevents tree shaking and increases bundle size. | Use a static property access (`ns.member`) or a named import instead of a computed access (`ns[expr]`). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `ban-dependencies` | Bans imports of legacy or heavy dependencies (lodash, moment, underscore). | Use native alternatives or lighter libraries (date-fns, es-toolkit). |
+| `no-dynamic-namespace-import-access` | Accessing a namespace import dynamically (computed member access) prevents tree shaking and increases bundle size. | Use a static property access (`ns.member`) or a named import instead of a computed access (`ns[expr]`). |
 
 ## performance > testing
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-large-snapshots` | ⚠️ | Inline snapshots exceeding `max_lines` are noisy and signal over-broad assertions. | Narrow the assertion to the field under test, or split into smaller snapshots. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-large-snapshots` | Inline snapshots exceeding `max_lines` are noisy and signal over-broad assertions. | Narrow the assertion to the field under test, or split into smaller snapshots. |
 
 ## postgresql
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `pg-require-limit` | ❌ | SQL `SELECT` statements without a `LIMIT` clause can return unbounded rows. | Add a `LIMIT n` clause, a `COUNT(..)` / aggregate, or a unique `WHERE` predicate (e.g. `WHERE id = ...`) so the query is bounded. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `pg-require-limit` | SQL `SELECT` statements without a `LIMIT` clause can return unbounded rows. | Add a `LIMIT n` clause, a `COUNT(..)` / aggregate, or a unique `WHERE` predicate (e.g. `WHERE id = ...`) so the query is bounded. |
 
 ## prisma
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `prisma-no-findunique-without-where` | ⚠️ | `findUnique` without a `where` argument always resolves to null. | Pass `{ where: { id } }`, or switch to `findFirst` if filtering on a non-unique field. |
-| `prisma-no-nested-create-without-connect` | ⚠️ | Nested `create` inside another `create` writes related rows that may become orphans on rollback. | Use `connect: { id }` for existing relations and create children in a `$transaction`. |
-| `prisma-prefer-transaction` | ⚠️ | Two or more Prisma write calls in the same function should run in `$transaction`. | Wrap the writes in `prisma.$transaction([...])` so they commit/rollback atomically. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `prisma-no-findunique-without-where` | `findUnique` without a `where` argument always resolves to null. | Pass `{ where: { id } }`, or switch to `findFirst` if filtering on a non-unique field. |
+| `prisma-no-nested-create-without-connect` | Nested `create` inside another `create` writes related rows that may become orphans on rollback. | Use `connect: { id }` for existing relations and create children in a `$transaction`. |
+| `prisma-prefer-transaction` | Two or more Prisma write calls in the same function should run in `$transaction`. | Wrap the writes in `prisma.$transaction([...])` so they commit/rollback atomically. |
 
 ## prisma > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `prisma-no-findmany-without-take` | ⚠️ | `findMany()` without `take` returns the entire table — risk of OOM and slow responses. | Add a `take: N` (or `first: N` for the legacy v1 API). For pagination, combine `take` + `skip` or cursor pagination. |
-| `prisma-no-nested-include-depth` | ⚠️ | Deeply nested `include:` (>3 levels) creates huge join queries that are slow and hard to reason about. | Split the query into multiple targeted reads, or denormalise the columns you actually need with `select`. |
-| `prisma-prefer-create-many-for-bulk` | ⚠️ | Calling `prisma.<model>.create` inside a loop fires N round-trips — use `createMany`. | Build the array of inputs first, then call `createMany({ data: inputs })`. |
-| `prisma-select-only-needed-fields` | ⚠️ | `findMany` without `select` fetches every column — wasteful for wide tables. | Add `select: { id: true, ... }` (or `include` for relations) to fetch only what's needed. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `prisma-no-findmany-without-take` | `findMany()` without `take` returns the entire table — risk of OOM and slow responses. | Add a `take: N` (or `first: N` for the legacy v1 API). For pagination, combine `take` + `skip` or cursor pagination. |
+| `prisma-no-nested-include-depth` | Deeply nested `include:` (>3 levels) creates huge join queries that are slow and hard to reason about. | Split the query into multiple targeted reads, or denormalise the columns you actually need with `select`. |
+| `prisma-prefer-create-many-for-bulk` | Calling `prisma.<model>.create` inside a loop fires N round-trips — use `createMany`. | Build the array of inputs first, then call `createMany({ data: inputs })`. |
+| `prisma-select-only-needed-fields` | `findMany` without `select` fetches every column — wasteful for wide tables. | Add `select: { id: true, ... }` (or `include` for relations) to fetch only what's needed. |
 
 ## prisma > safety
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `prisma-no-delete-without-where` | ❌ | `deleteMany()` without `where` deletes every row in the table. | Add `where: { ... }`. If you really mean to wipe the table, do it from a maintenance script. |
-| `prisma-require-transaction-for-multi-write` | ⚠️ | Multiple Prisma write operations in the same file without `$transaction` — partial failures leave inconsistent state. | Wrap the writes in `prisma.$transaction([...])` (sequential) or `prisma.$transaction(async (tx) => { ... })` (interactive). |
-| `prisma-soft-delete-filter` | ⚠️ | `prisma.<model>.findMany() / findFirst()` without a `deletedAt: null` (or equivalent) filter returns soft-deleted rows. | Add `where: { deletedAt: null, ... }` (or your project's soft-delete predicate) so soft-deleted rows don't leak into the result set. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `prisma-no-delete-without-where` | `deleteMany()` without `where` deletes every row in the table. | Add `where: { ... }`. If you really mean to wipe the table, do it from a maintenance script. |
+| `prisma-require-transaction-for-multi-write` | Multiple Prisma write operations in the same file without `$transaction` — partial failures leave inconsistent state. | Wrap the writes in `prisma.$transaction([...])` (sequential) or `prisma.$transaction(async (tx) => { ... })` (interactive). |
+| `prisma-soft-delete-filter` | `prisma.<model>.findMany() / findFirst()` without a `deletedAt: null` (or equivalent) filter returns soft-deleted rows. | Add `where: { deletedAt: null, ... }` (or your project's soft-delete predicate) so soft-deleted rows don't leak into the result set. |
 
 ## prisma > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `prisma-no-raw-query-interpolation` | ❌ | `$queryRaw`/`$executeRaw` called with a non-tagged string concatenates input — SQL injection risk. | Use `$queryRaw\`SELECT ... ${value}\`` (tagged template) or `$queryRawUnsafe(sql, ...params)` with placeholders. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `prisma-no-raw-query-interpolation` | `$queryRaw`/`$executeRaw` called with a non-tagged string concatenates input — SQL injection risk. | Use `$queryRaw\`SELECT ... ${value}\`` (tagged template) or `$queryRawUnsafe(sql, ...params)` with placeholders. |
 
 ## promise
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `promise-catch-or-return` | ⚠️ | A floating Promise chain without `.catch()` or `return` swallows rejection at the runtime's discretion. | Either `.catch(handler)` the chain, `return` it from the function so the caller deals with rejection, or `void promise.catch(...)` if rejection is genuinely ignorable. |
-| `promise-no-multiple-resolved` | ❌ | A `new Promise()` executor that calls `resolve` or `reject` more than once silently discards every call after the first. | Settle the promise exactly once. Use early `return` after `resolve()` / `reject()`, or restructure the executor to a single settlement point. |
-| `promise-no-new-statics` | ❌ | `new Promise.resolve(...)` / `new Promise.reject(...)` calls a static as a constructor and throws at runtime. | Drop the `new`: `Promise.resolve(value)`, `Promise.reject(error)`, etc. |
-| `promise-no-return-in-finally` | ⚠️ | Returning a value from `.finally(...)` is silently discarded. | Move the return value to a preceding `.then(...)`. The `.finally` callback should only run side effects. |
-| `promise-no-return-wrap` | ⚠️ | Wrapping a value in `Promise.resolve(x)` / `Promise.reject(e)` inside `.then()` is redundant. | Return the value directly. The `.then` chain wraps it automatically. For errors, `throw e` instead of `return Promise.reject(e)`. |
-| `promise-prefer-await-to-then` | ⚠️ | `.then(...)` chains are harder to read and harder to debug than `async/await`. | Mark the surrounding function `async` and use `await expr` instead of `expr.then(...)`. Same for `.catch` → `try/catch`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `promise-catch-or-return` | A floating Promise chain without `.catch()` or `return` swallows rejection at the runtime's discretion. | Either `.catch(handler)` the chain, `return` it from the function so the caller deals with rejection, or `void promise.catch(...)` if rejection is genuinely ignorable. |
+| `promise-no-multiple-resolved` | A `new Promise()` executor that calls `resolve` or `reject` more than once silently discards every call after the first. | Settle the promise exactly once. Use early `return` after `resolve()` / `reject()`, or restructure the executor to a single settlement point. |
+| `promise-no-new-statics` | `new Promise.resolve(...)` / `new Promise.reject(...)` calls a static as a constructor and throws at runtime. | Drop the `new`: `Promise.resolve(value)`, `Promise.reject(error)`, etc. |
+| `promise-no-return-in-finally` | Returning a value from `.finally(...)` is silently discarded. | Move the return value to a preceding `.then(...)`. The `.finally` callback should only run side effects. |
+| `promise-no-return-wrap` | Wrapping a value in `Promise.resolve(x)` / `Promise.reject(e)` inside `.then()` is redundant. | Return the value directly. The `.then` chain wraps it automatically. For errors, `throw e` instead of `return Promise.reject(e)`. |
+| `promise-prefer-await-to-then` | `.then(...)` chains are harder to read and harder to debug than `async/await`. | Mark the surrounding function `async` and use `await expr` instead of `expr.then(...)`. Same for `.catch` → `try/catch`. |
 
 ## qwik
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `use-qwik-loader-location` | ⚠️ | Qwik loader/action functions must be in a route boundary file, exported with a `use*` name, and given an inline arrow function. | Declare route loaders in an `index`/`layout`/`plugin` file under `src/routes`, export them with a `use*` name, and pass an inline arrow function. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `use-qwik-loader-location` | Qwik loader/action functions must be in a route boundary file, exported with a `use*` name, and given an inline arrow function. | Declare route loaders in an `index`/`layout`/`plugin` file under `src/routes`, export them with a `use*` name, and pass an inline arrow function. |
 
 ## qwik > correctness
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-qwik-use-visible-task` | ❌ | `useVisibleTask$()` runs eagerly on mount, blocking hydration and hurting Qwik's resumability. | Prefer `useTask$()`/`useResource$()`, or pass `{ strategy: 'document-idle' }` when visible-task is required. |
-| `use-qwik-method-usage` | ❌ | Qwik `use*` hooks must run inside `component$` or another `use*` hook. | Move the hook into a `component$(...)` callback or a `use*`-named hook. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-qwik-use-visible-task` | `useVisibleTask$()` runs eagerly on mount, blocking hydration and hurting Qwik's resumability. | Prefer `useTask$()`/`useResource$()`, or pass `{ strategy: 'document-idle' }` when visible-task is required. |
+| `use-qwik-method-usage` | Qwik `use*` hooks must run inside `component$` or another `use*` hook. | Move the hook into a `component$(...)` callback or a `use*`-named hook. |
 
 ## react
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `function-component-definition` | ⚠️ | React components must be defined using `function` declarations, not arrow functions. | Replace `const MyComponent = () => <JSX />` with `function MyComponent() { return <JSX />; }`. |
-| `hook-use-state` | ⚠️ | useState destructuring must follow `[value, setValue]` naming. | Rename the setter to `set` + PascalCase of the state variable name. |
-| `jsx-ensure-booleans` | ⚠️ | Left-hand side of `{x && <Jsx />}` must be an unambiguous boolean. | Coerce with `!!x`, compare (`x > 0`, `x != null`), or use a ternary `cond ? <Jsx /> : null`. |
-| `jsx-filename-extension` | ⚠️ | JSX syntax must live in `.jsx` or `.tsx` files. | Rename the file to `.jsx` or `.tsx`, or move the JSX out. |
-| `jsx-fragments` | ⚠️ | Prefer the short fragment syntax `<>...</>` over `<React.Fragment>`. | Replace `<React.Fragment>` / `<Fragment>` with `<>...</>` (unless a `key` prop is required). |
-| `jsx-no-leaked-render` | ❌ | Numeric value used with `&&` in JSX renders `0` instead of nothing. | Convert to boolean: `{!!count && <Component />}` or use a ternary: `{count > 0 ? <Component /> : null}`. |
-| `jsx-no-new-function-as-prop` | ⚠️ | Arrow/function expressions as JSX prop values create a new reference every render. | Hoist the handler with `useCallback` or to a stable identifier defined outside the render. |
-| `jsx-no-undef` | ❌ | JSX component tag refers to an undefined identifier. | Import the component or declare it in this file before using it in JSX. |
-| `no-em-dash-in-jsx-text` | ⚠️ | Em-dash/en-dash in user-facing JSX copy reads as AI-generated prose. | Replace the em-dash (—) or en-dash (–) with a plain hyphen, or rewrite the sentence to drop the dash. |
-| `no-hook-setter-in-body` | ❌ | `useState` setter called directly in component body causes infinite re-renders. | Move the setter call inside `useEffect`, `useCallback`, or an event handler. |
-| `no-react-specific-props` | ⚠️ | React-specific JSX prop used in a non-React framework. | Replace the React-specific prop with its DOM-native form (`className` → `class`, `htmlFor` → `for`). |
-| `no-redundant-state` | ⚠️ | `useState` whose setter is never used — the value never changes. | Replace with a plain `const` or `useMemo`. A state variable that is never updated adds unnecessary re-render machinery. |
-| `no-submit-handler-without-preventDefault` | ⚠️ | Inline `onSubmit={...}` handler does not call `preventDefault()`. | Call `event.preventDefault()` at the top of the handler, or switch to a form action that doesn't navigate. |
-| `no-suspicious-semicolon-in-jsx` | ⚠️ | A semicolon immediately after a closing or self-closing tag is rendered as literal text and is usually a typo. | Remove the semicolon, or move it inside a JSX expression container (`{';'}`) if the character is intended to be shown. |
-| `no-uniq-key` | ❌ | Non-unique key in JSX list — `Math.random()`, `Date.now()`, or `uuid()` create new keys every render. | Use a stable, unique identifier from the data (e.g., `item.id`). Random keys destroy React's reconciliation and cause performance issues. |
-| `no-unknown-property` | ⚠️ | HTML attribute on an intrinsic JSX element is not a valid React prop. | Replace the HTML attribute with its React camelCase equivalent (e.g. `class` → `className`, `for` → `htmlFor`, `onclick` → `onClick`). |
-| `no-useless-react-setstate` | ⚠️ | Calling a `useState` setter with its own state value is a no-op. | Remove the useless `setState` call or pass a different value. `setX(x)` triggers a re-render but does not change state. |
-| `react-async-server-action` | ❌ | Server actions (functions with `"use server"`) must be `async`. | Add `async` to the function. React Server Actions must be async functions — a synchronous function with `"use server"` will cause a build error or runtime failure. |
-| `react-button-has-type` | ⚠️ | `<button>` without an explicit `type` attribute defaults to `submit`, which may cause unexpected form submissions. | Add an explicit `type` attribute (`button`, `submit`, or `reset`) to every `<button>` element so the intent is clear. |
-| `react-checked-requires-onchange` | ⚠️ | `checked` prop without `onChange` or `readOnly` makes the input uncontrollable. | Add an `onChange` handler or `readOnly` prop. Without either, React renders a frozen checkbox/radio that the user cannot interact with, and emits a console warning. |
-| `react-display-name` | ⚠️ | React components must have a display name. | Name the function, assign it to a named variable before exporting, or set `displayName`. |
-| `react-duplicate-use-directive` | ❌ | A file can have `"use client"` or `"use server"`, not both. | Pick one: server modules get `"use server"`, client components get `"use client"`. Delete the other directive. |
-| `react-exhaustive-deps` | ⚠️ | Declare every value a React Hook depends on in its dependency array. | Add the missing values to the `useEffect`/`useCallback`/`useMemo` dependency array, or remove the value from the hook body. Stale dependencies cause the hook to read outdated props or state. |
-| `react-form-requires-novalidate` | ⚠️ | A native `<form>` without `noValidate` lets the browser run its own HTML validation in parallel with the app's validation layer, producing two competing error UXs. | Add `noValidate` to the `<form>` so the app's client-side validation owns the error experience end to end. |
-| `react-forward-ref-uses-ref` | ⚠️ | `forwardRef` component does not use the `ref` parameter. | Either use the `ref` parameter in the component body or remove the `forwardRef` wrapper — it serves no purpose without a ref. |
-| `react-hoist-regex-outside-component` | ⚠️ | Regex literals inside components are recompiled every render. | Move the regex to a module-level `const` above the component. Regex literals inside a function body allocate a new RegExp object every call, defeating the JS engine's compiled-pattern cache. |
-| `react-hoist-static-jsx` | ⚠️ | JSX with no dynamic content defined inside a component is rebuilt every render. | Assign the static JSX to a module-level `const` above the component (or `React.memo` it). Re-creating an identical element tree on every render wastes reconciler work and prevents `shouldComponentUpdate`/`React.memo` short-circuits in consumers. |
-| `react-hook-form-destructuring-formstate` | ⚠️ | Accessing `formState.xxx` without destructuring defeats React Hook Form proxy tracking. | Destructure the needed fields up front: `const { isValid, errors } = formState;`. |
-| `react-hook-form-use-no-memo` | ⚠️ | React Hook Form's `useForm` returns a proxy whose getters the React Compiler memoizes incorrectly, so a file calling `useForm` under the compiler needs a `"use no memo"` directive to opt that file out of memoization. | Add a `"use no memo"` directive at the top of the file (or the component body) that calls `useForm`. |
-| `react-hook-form-validation-mode` | ⚠️ | React Hook Form's `useForm` must validate on blur and re-validate on change: `mode: "onTouched"` shows errors only after a field is touched, and `reValidateMode: "onChange"` clears them as the user fixes them. | Pass `{ mode: "onTouched", reValidateMode: "onChange" }` to `useForm`. |
-| `react-iframe-missing-sandbox` | ⚠️ | `<iframe>` without a `sandbox` attribute is a security risk. | Add a `sandbox` attribute to the `<iframe>`. The `sandbox` attribute restricts the iframe's capabilities (scripts, forms, popups) and prevents it from accessing the parent page. |
-| `react-jsx-curly-brace-presence` | ⚠️ | Use curly braces around JSX attribute values and children consistently. | Drop the curly braces when a JSX attribute value or child is a plain string literal (`prop="text"`, not `prop={"text"}`). Unnecessary braces add noise; keep them only where an expression actually needs them. |
-| `react-jsx-key` | ⚠️ | Missing `key` prop inside iterator — React needs stable keys to reconcile lists. | Add a unique, stable `key` prop to each JSX element returned from `.map()`, `.flatMap()`, `.from()`, or an array literal. |
-| `react-jsx-no-bind` | ⚠️ | Arrow functions and `.bind()` in JSX props create a new reference every render. | Hoist the handler to a stable reference — `useCallback`, a class method, or a module-level function — so memoized children don't re-render needlessly. |
-| `react-jsx-no-comment-textnodes` | ⚠️ | Comments placed as JSX text children are rendered as literal text. | Use `{/* comment */}` for JSX comments, not `// comment` or `/* comment */` as bare text. Without braces, the comment syntax is rendered as visible text in the DOM. |
-| `react-jsx-no-duplicate-props` | ❌ | Duplicate props in JSX — the last one silently wins. | Remove the duplicate prop. When the same prop name appears multiple times on a JSX element, only the last value takes effect, which is almost always a copy-paste mistake. |
-| `react-jsx-no-jsx-as-prop` | ⚠️ | JSX elements/fragments passed directly as prop values cause unnecessary re-renders. | Extract JSX to a variable or use useMemo so the prop reference is stable across renders. |
-| `react-jsx-no-new-array-as-prop` | ⚠️ | Array literals as JSX prop values create a new reference every render. | Extract array to a constant or use useMemo |
-| `react-jsx-no-new-object-as-prop` | ⚠️ | Object literals passed directly as JSX props create a new reference every render. | Extract object to a constant or use useMemo |
-| `react-jsx-no-script-url` | ❌ | `href="javascript:..."` is an XSS vector. | Use an `onClick` handler instead of a `javascript:` URL. Script URLs bypass CSP and enable cross-site scripting. |
-| `react-jsx-no-target-blank` | ⚠️ | `target="_blank"` without `rel="noreferrer"` is a security risk. | Add `rel="noreferrer"` (or `rel="noopener noreferrer"`) when using `target="_blank"`. Without it, the opened page can access `window.opener` and redirect the parent page. |
-| `react-jsx-no-useless-fragment` | ⚠️ | Unnecessary `<Fragment>` that wraps a single child or nothing. | Remove the fragment wrapper when it contains only one child or is empty. Fragments are only needed to group multiple siblings. |
-| `react-jsx-pascal-case` | ⚠️ | User-defined JSX components must use PascalCase. | Rename the component to PascalCase (e.g., `MyComponent` instead of `my_component` or `myComponent`). |
-| `react-jsx-props-no-spread-multi` | ⚠️ | Same object spread multiple times on a JSX element. | Remove the duplicate spread. Spreading the same identifier twice is likely a copy-paste mistake. |
-| `react-no-access-state-in-setstate` | ⚠️ | `this.state` inside `setState()` reads stale state. | Use the updater callback form: `this.setState(prevState => ({ count: prevState.count + 1 }))`. Reading `this.state` inside `setState` may read a stale value because React batches state updates. |
-| `react-no-adjacent-inline-elements` | ⚠️ | Adjacent inline elements without whitespace between them. | Add a space, `{' '}`, or a wrapper between adjacent inline elements to ensure they render with visible separation. |
-| `react-no-and-conditional-jsx` | ⚠️ | `&&` renders 0/'' when the left operand is falsy-but-not-false. | Replace `{expr && <X />}` with `{expr ? <X /> : null}` or `{Boolean(expr) && <X />}`. `&&` lets falsy values like `0` and `''` leak into the DOM. |
-| `react-no-array-index-key` | ⚠️ | Array indices as React keys break on reorder. | Use a stable id from the data as the React key. `items.map(item => <X key={item.id} />)` instead of `items.map((item, i) => <X key={i} />)`. Index keys associate DOM state with the wrong item on reorder/filter. |
-| `react-no-async-client-component` | ❌ | Client components can't be `async` — only server components can. | Make the component synchronous and fetch data via `useEffect` or an API route. To `await` during render, remove `"use client"` and run it as a server component. |
-| `react-no-async-useeffect-callback` | ❌ | `useEffect` callback must be sync — async callbacks return a promise, breaking cleanup. | Define an async function inside the effect and call it: `useEffect(() => { (async () => { await fetch(); })(); }, [...])`. Or use a library that supports async (e.g. SWR, React Query). |
-| `react-no-blocking-log-after-mutation` | ⚠️ | Awaiting a telemetry/log call after a main mutation in a server action delays the response for every request. | Fire-and-forget the telemetry call (drop the `await`) or schedule it via `after()` / `waitUntil()` so the response ships first. |
-| `react-no-boolean-variant-props` | ⚠️ | A component declaring two or more `isX` / `hasX` boolean props is almost always modeling mutually-exclusive variants — 2^N invalid states become representable. | Replace the booleans with a single `variant: 'primary' \| 'ghost' \| ...` prop. |
-| `react-no-browser-api-in-server-component` | ❌ | Browser globals (`window`, `document`, `localStorage`) don't exist on the server. | Move the browser-only code into a `"use client"` component, gate it behind `useEffect`, or use a server-safe alternative. |
-| `react-no-chain-state-updates` | ⚠️ | A single `useEffect` callback triggers multiple setState calls. | Combine the updates into one reducer / object, or move the derivation into render. |
-| `react-no-children-prop` | ⚠️ | Passing `children` as a prop instead of nesting content. | Place children between the opening and closing tags instead of passing them as a `children` prop. This is more readable and idiomatic. |
-| `react-no-class-component-in-server-component` | ❌ | Class components don't render in server components. | Rewrite as a function component, or move the class into a `"use client"` module. |
-| `react-no-client-hook-in-server-component` | ❌ | React hooks can only run in client components. | Add `"use client"` at the top of the file, or move the hook call into a separate client component and import it. |
-| `react-no-client-only-in-server-component` | ❌ | `client-only` can't be imported from a server component. | Mark the file `"use client"`, or remove the `client-only` import and keep the module server-safe. |
-| `react-no-constructed-context-values` | ⚠️ | `<Provider value={{ ... }}>` creates a new object every render, causing all consumers to re-render. | Memoize the context value with `useMemo` or extract it to a stable reference. `<Provider value={memoized}>` avoids unnecessary re-renders of every consumer. |
-| `react-no-cookies-in-layout` | ❌ | `cookies()`/`headers()` in a Next.js layout makes ALL child pages dynamic. | Move `cookies()` / `headers()` calls out of `layout.tsx` into the individual page files that need them. One call in a layout forces EVERY child page to be dynamically rendered, defeating static generation for the entire route segment. |
-| `react-no-danger-with-children` | ❌ | Using both `dangerouslySetInnerHTML` and `children` on the same element is invalid. | Use either `dangerouslySetInnerHTML` OR `children`, not both. React will throw a runtime error when both are provided on the same element. |
-| `react-no-deprecated` | ⚠️ | Deprecated React APIs should not be used. | Replace the deprecated API with its modern equivalent. |
-| `react-no-derived-state-in-effect` | ⚠️ | `useEffect` whose body only calls a state setter derives state — move the derivation to render. | Replace `useEffect(() => { setX(a + b) }, [a, b])` with `const x = a + b` computed directly during render. |
-| `react-no-derived-use-state` | ⚠️ | `useState` initialized from a prop — derive the value during render instead. | Remove the `useState` and compute the value inline during render, or use the `key` prop on the component to reset state when the prop changes. Copying props into state causes stale values. |
-| `react-no-destructure-zustand-store` | ⚠️ | Destructuring the full zustand store (`const { x, y } = useStore()`) subscribes the component to every state change. | Use a selector per field: `const x = useStore(s => s.x)` so the component only re-renders when that slice changes. |
-| `react-no-effect-event-handler` | ⚠️ | `useEffect` simulating an event handler — move logic to an actual event handler. | Move the conditional logic into the event handler that sets the dependency. Effects should synchronize with external systems, not react to user events. |
-| `react-no-empty-effect` | ⚠️ | `useEffect` called with an empty callback body does nothing. | Remove empty useEffect or add effect logic |
-| `react-no-event-handler-in-server-component` | ❌ | Event handlers (`onClick`, `onChange`, …) can't run in a server component. | Move interactive JSX into a client component (`"use client"`), or use a server action via `<form action={...}>` for form submits. |
-| `react-no-fetch-in-effect` | ⚠️ | `fetch()` inside `useEffect` lacks caching, deduping, and race protection. | Use a data-fetching library (TanStack Query, SWR) or move fetching to a server component / loader. |
-| `react-no-find-dom-node` | ⚠️ | `findDOMNode` is deprecated in React 19 — use refs instead. | Use refs instead of findDOMNode. |
-| `react-no-form-action-async-no-pending` | ⚠️ | `<form action={...}>` is used without a pending-state hook — submitters get no feedback. | Read the pending state via `useFormStatus()` inside a child of the form, or switch to `useActionState`. For non-form actions, use `useTransition`. |
-| `react-no-forward-ref` | ⚠️ | `forwardRef(...)` is deprecated in React 19 — accept `ref` as a regular prop. | Remove the `forwardRef` wrapper and declare `ref` in the component props. React 19 forwards refs automatically to function components. |
-| `react-no-giant-component` | ⚠️ | Component body exceeds 300 lines — break into smaller focused components. | Extract distinct sections (header, body, sidebar, etc.) into their own components. Large components are harder to test, review, and reason about. |
-| `react-no-html-entities-in-jsx` | ⚠️ | HTML entities like `&apos;`, `&quot;`, `&amp;`, `&gt;` are noise in JSX — React encodes raw characters automatically. | Replace the entity with the raw character: `&apos;` -> `'`, `&quot;` -> `"`, `&amp;` -> `&`, `&gt;` -> `>`. `&lt;` (for a literal `<`) and `&nbsp;` (non-breaking space) are kept as legitimate. |
-| `react-no-hydration-flicker` | ⚠️ | `useEffect(setState, [])` on mount causes a hydration flash. | Use `useSyncExternalStore` with `getServerSnapshot` for SSR-safe external state, or add `suppressHydrationWarning` if the mismatch is intentional (e.g. timestamps, viewport size). |
-| `react-no-initialize-state-in-effect` | ⚠️ | `useEffect` with empty deps that only calls a `setState` is redundant — initialize in `useState` directly. | Use useState(initialValue) instead of setting state in effect with empty deps |
-| `react-no-inline-default-prop` | ⚠️ | Non-primitive default props in `memo()` create new references every render, breaking memoization. | Define the default value outside the component: `const EMPTY: T[] = []` then `{ items = EMPTY }`. |
-| `react-no-invalid-html-attribute` | ⚠️ | Invalid value in HTML `rel` attribute. | Use a valid `rel` value. Common valid values for `<a>` include `noopener`, `noreferrer`, `nofollow`. For `<link>` they include `stylesheet`, `icon`, `preload`, `prefetch`. |
-| `react-no-leaked-event-listener` | ⚠️ | `addEventListener` in `useEffect` without a `removeEventListener` cleanup leaks across re-renders. | Return a cleanup function from the effect that calls `removeEventListener` on the same target with the same listener and capture flag. |
-| `react-no-leaked-fetch` | ⚠️ | `fetch(...)` in `useEffect` without an AbortController signal cannot be cancelled on unmount. | Create an AbortController, pass its `signal` to `fetch`, and return a cleanup that calls `controller.abort()`. |
-| `react-no-leaked-interval` | ⚠️ | `setInterval` in `useEffect` without `clearInterval` cleanup keeps firing after unmount. | Capture the interval id and return a cleanup that calls `clearInterval(id)`. |
-| `react-no-leaked-resize-observer` | ⚠️ | `new ResizeObserver(...)` in `useEffect` without `.disconnect()` cleanup keeps observing after unmount. | Capture the observer reference and return a cleanup that calls `.disconnect()` on it. |
-| `react-no-leaked-timeout` | ⚠️ | `setTimeout` in `useEffect` without `clearTimeout` cleanup may fire after unmount. | Capture the timeout id and return a cleanup that calls `clearTimeout(id)`. |
-| `react-no-memo-default-value` | ⚠️ | `memo(Component)` with default `[]` / `{}` parameters re-renders every time. | Extract default values to a module-level constant so the reference is stable across renders. |
-| `react-no-namespace` | ❌ | Namespaced JSX elements (`<Foo:bar>`) are not supported by React. | React does not support XML namespaces in JSX. Use a different naming pattern (e.g., `FooBar` or `Foo.Bar`). |
-| `react-no-object-in-dep-array` | ❌ | Hook dep arrays must not contain values that allocate every render. | Move inline object/array literals, inline functions, and `new Map()`-style allocations out of the dep array. Extract them into `useMemo`/`useCallback`, or depend on primitive fields that are stable across renders. |
-| `react-no-object-type-as-default-prop` | ⚠️ | Object/array/function default props create a new reference every render, breaking `React.memo`. | Move default values to a module-level constant or use `useMemo`/`useCallback`. `function Foo({ items = DEFAULT_ITEMS })` with `const DEFAULT_ITEMS = []` outside the component keeps a stable reference. |
-| `react-no-pass-data-to-parent` | ⚠️ | `useEffect` that only calls a parent callback to pass data up — lift state instead. | Move the state to the parent component and pass down a setter, or restructure to avoid the effect. |
-| `react-no-prevent-default` | ⚠️ | `event.preventDefault()` inside passive event listeners (`onScroll`, `onWheel`, `onTouchStart`, `onTouchMove`) is a no-op. | Remove the `preventDefault()` call. If you actually need to cancel the event, attach the listener manually via `addEventListener(name, handler, { passive: false })`. |
-| `react-no-prop-assignments` | ❌ | Mutating a React component's props is not allowed — props are immutable inputs. | Copy the value into a local variable and mutate that instead, or lift the state into the parent and pass a new prop value. |
-| `react-no-ref-read-during-render` | ⚠️ | Reading `ref.current` during render is unstable — refs are not designed for the render pass. | Read `ref.current` inside an event handler, `useEffect`, or `useLayoutEffect`. If you need a value during render, use state instead of a ref. |
-| `react-no-render-in-render` | ⚠️ | Inline `renderXxx()` call in JSX — extract to a component for proper reconciliation. | Replace `{renderHeader()}` with a `<Header />` component. Inline render functions bypass React's reconciliation, causing unnecessary DOM destruction and state loss on every render. |
-| `react-no-render-return-value` | ⚠️ | Do not use the return value of `ReactDOM.render()`. | Call `ReactDOM.render()` as a statement; attach refs via `ref` callbacks instead. |
-| `react-no-reset-all-state-on-prop-change` | ⚠️ | `useEffect` resets multiple states when a prop changes — use a key instead. | Add a `key={prop}` to the component to reset all state automatically when the prop changes. |
-| `react-no-sequential-await-in-component` | ⚠️ | Sequential `await` of independent calls inside an async React component serialises fetches that could run in parallel. | Wrap independent awaits in `Promise.all([...])`. Example: `const [user, posts] = await Promise.all([getUser(id), getPosts(id)])`. Server Components block rendering on each await, so chaining two fetches doubles the latency. |
-| `react-no-server-only-in-client` | ❌ | `server-only` can't be imported from a client component. | Remove `"use client"` from this file, or remove the `server-only` import and move server-side logic to a separate server module. |
-| `react-no-setstate-no-cancel-flag` | ⚠️ | `useEffect` awaits then calls `setState` without a cancellation flag — risks updating an unmounted component. | Track a `cancelled` flag inside the effect and skip the setter when set; return a cleanup that flips it. Alternative: use `AbortController`. |
-| `react-no-setstate-without-updater` | ⚠️ | State setter called with an expression that reads the current state variable directly — races against concurrent updates in React 18+. | Use the functional updater: `setX(prev => prev + 1)` or `setX(prev => [...prev, item])`. |
-| `react-no-state-setter-in-render` | ❌ | `setState(...)` called directly during render — triggers an infinite render loop. | Move the setter into an event handler or `useEffect`. If you need to derive state, compute it during render instead of storing it. |
-| `react-no-string-refs` | ❌ | String `ref` attributes are deprecated — use `useRef` / callback refs. | Replace `ref="myRef"` with a `useRef()` hook or a callback ref. String refs are a legacy API that has been removed in React 19. |
-| `react-no-sync-layout-effect-in-ssr` | ⚠️ | `useLayoutEffect` in a non-client file emits a server-rendering warning. | Add `"use client"` at the top of the file, or replace `useLayoutEffect` with `useEffect` (or the cross-environment `useIsomorphicLayoutEffect` pattern). |
-| `react-no-this-in-sfc` | ❌ | `this` has no meaning inside a functional component. | Remove `this.` references. Functional components don't have a `this` context — use hooks (`useState`, `useRef`, etc.) instead of `this.state`, `this.props`, etc. |
-| `react-no-typos` | ❌ | Probable typo in React component static property or lifecycle method. | Fix the typo. Common mistakes include `getDerivedStateFromProp` (should be `getDerivedStateFromProps`) and `componentWillRecieveProps` (should be `componentWillReceiveProps`). |
-| `react-no-unstable-nested-components` | ⚠️ | Component defined inside another component causes unmount/remount every render. | Move the inner component outside the parent component. Defining a component inside render means React sees a brand-new type on every render, destroying the entire subtree's DOM nodes and state. |
-| `react-no-unwrapped-localstorage` | ⚠️ | `localStorage.getItem`/`setItem` throws in private-browsing mode, quota exhaustion, and server-side rendering. Calling it unwrapped crashes the app. | Wrap `localStorage` access in `try { ... } catch (e) { ... }` and provide a safe fallback. |
-| `react-no-use-client-without-client-api` | ⚠️ | `"use client"` directive in a file that uses no hooks, event handlers, or browser APIs. | Remove the `"use client"` directive so the module can render on the server, or add the client-only behavior that justifies it. |
-| `react-no-useeffect-event-in-deps` | ❌ | Values returned by `useEffectEvent` must not appear in dependency arrays. | Remove the effect-event from the deps array — its identity is intentionally stable. Capture other variables it reads in the deps directly. |
-| `react-no-usememo-simple-expression` | ⚠️ | `useMemo` wrapping a trivially cheap expression — memo overhead exceeds the computation. | Remove the `useMemo` wrapper and compute the value inline. Memoizing primitives, simple property access, or basic arithmetic costs more than the computation itself. |
-| `react-no-usestate-high-frequency` | ⚠️ | `setState` inside `mousemove`/`scroll`/`resize`/`pointermove` handlers schedules a render on every frame (or faster). | Store the transient value in a `useRef` and read it when you actually need to commit a render (e.g. on drag end). |
-| `react-passive-event-listeners` | ⚠️ | Scroll/touch/wheel listeners should be passive to avoid blocking the main thread. | Pass `{ passive: true }` as the third argument: `addEventListener('wheel', handler, { passive: true })`. |
-| `react-prefer-react-cache` | ⚠️ | Module-level async fetchers should be wrapped in `React.cache()` so multiple Server Components in the same render share one request. | Wrap the async function in `React.cache(...)` (or `cache(...)` imported from `react`). Example: `export const getUser = cache(async (id) => { ... });`. Without `cache`, two Server Components that both call `getUser(1)` in the same render issue two separate network requests. |
-| `react-prefer-use-action-state` | ⚠️ | Manual `useState` + `useTransition` + form action is reinventing `useActionState`. | Replace the trio with `const [state, dispatch, pending] = useActionState(action, initial);`. |
-| `react-prefer-use-optimistic` | ⚠️ | Manual try/catch rollback of state — use `useOptimistic` for cleaner, race-safe code. | Switch to `const [optimistic, addOptimistic] = useOptimistic(state, reducer);` and call `addOptimistic(...)` before the action — React handles rollback. |
-| `react-prefer-use-reducer` | ⚠️ | Component has 4 or more `useState` calls — likely related state. | Combine related state into a single `useReducer` to keep transitions consistent and reduce re-renders. |
-| `react-prefer-use-transition` | ⚠️ | Replace manual `loading` state with `useTransition` for concurrent-safe async UI. | Replace `const [loading, setLoading] = useState(false)` + manual setLoading calls with `const [isPending, startTransition] = useTransition()`. |
-| `react-refresh-only-export-components` | ⚠️ | Non-component exports alongside component exports break React Fast Refresh (HMR). | Move non-component exports (constants, utilities, types) to a separate module. Only export React components from files that also export components, so HMR can update them without a full reload. |
-| `react-require-versioned-storage-key` | ⚠️ | `localStorage.setItem` uses a literal key without a `:vN` version suffix, so a shape change to the stored value cannot be rolled forward. | Add a version suffix (e.g. `"settings:v1"`) and bump it when the serialized shape changes so old entries can be migrated or dropped. |
-| `react-self-closing-comp` | ⚠️ | Components and HTML elements without children should use self-closing syntax. | Replace `<Foo></Foo>` with `<Foo />` (and `<div></div>` with `<div />` in JSX). This reduces noise and makes it obvious the element has no content. |
-| `react-style-prop-object` | ❌ | The `style` prop expects an object, not a CSS string. | Use `style={{ color: 'red' }}` instead of `style="color: red"`. React's `style` prop takes a JavaScript object with camelCase property names, not a CSS string. |
-| `react-use-no-conditional` | ❌ | `use(...)` (React 19) must not be called conditionally — same rules as other hooks. | Move the `use(...)` call to the top of the component, then conditionally use the value. If the value isn't always needed, restructure with separate components. |
-| `react-use-state-initializer-function` | ⚠️ | Expensive `useState` initial values should use a lazy initializer `() => expr`. | Replace `useState(expensiveCall())` with `useState(() => expensiveCall())` so the computation only runs once. |
-| `react-use-state-lazy-init` | ⚠️ | `useState(expensive())` runs on every render. | Wrap the initializer in a lazy function: `useState(() => expensive())`. Passing a function means React only calls it once on mount. Bare expressions run every render and crash in SSR for browser APIs. |
-| `react-void-dom-elements-no-children` | ❌ | Void HTML elements like `<br>`, `<img>`, `<input>` cannot have children. | Remove children or `children`/`dangerouslySetInnerHTML` props from void elements. These elements are self-closing by spec — `<br />`, `<img />`, etc. |
-| `unused-component-prop` | ⚠️ | React prop declared in the Props type but never read in the component. | Remove the unused prop from the type definition, or start using it in the component. Unused props bloat the public API and mislead consumers into passing data that is silently ignored. |
-| `use-unique-element-ids` | ⚠️ | Avoid a static string-literal `id` attribute on a JSX element. | A reused component renders duplicate ids. Generate the id with React's `useId()` hook and pass it via `id={id}` instead of a hardcoded string. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `function-component-definition` | React components must be defined using `function` declarations, not arrow functions. | Replace `const MyComponent = () => <JSX />` with `function MyComponent() { return <JSX />; }`. |
+| `hook-use-state` | useState destructuring must follow `[value, setValue]` naming. | Rename the setter to `set` + PascalCase of the state variable name. |
+| `jsx-ensure-booleans` | Left-hand side of `{x && <Jsx />}` must be an unambiguous boolean. | Coerce with `!!x`, compare (`x > 0`, `x != null`), or use a ternary `cond ? <Jsx /> : null`. |
+| `jsx-filename-extension` | JSX syntax must live in `.jsx` or `.tsx` files. | Rename the file to `.jsx` or `.tsx`, or move the JSX out. |
+| `jsx-fragments` | Prefer the short fragment syntax `<>...</>` over `<React.Fragment>`. | Replace `<React.Fragment>` / `<Fragment>` with `<>...</>` (unless a `key` prop is required). |
+| `jsx-no-leaked-render` | Numeric value used with `&&` in JSX renders `0` instead of nothing. | Convert to boolean: `{!!count && <Component />}` or use a ternary: `{count > 0 ? <Component /> : null}`. |
+| `jsx-no-new-function-as-prop` | Arrow/function expressions as JSX prop values create a new reference every render. | Hoist the handler with `useCallback` or to a stable identifier defined outside the render. |
+| `jsx-no-undef` | JSX component tag refers to an undefined identifier. | Import the component or declare it in this file before using it in JSX. |
+| `no-em-dash-in-jsx-text` | Em-dash/en-dash in user-facing JSX copy reads as AI-generated prose. | Replace the em-dash (—) or en-dash (–) with a plain hyphen, or rewrite the sentence to drop the dash. |
+| `no-hook-setter-in-body` | `useState` setter called directly in component body causes infinite re-renders. | Move the setter call inside `useEffect`, `useCallback`, or an event handler. |
+| `no-react-specific-props` | React-specific JSX prop used in a non-React framework. | Replace the React-specific prop with its DOM-native form (`className` → `class`, `htmlFor` → `for`). |
+| `no-redundant-state` | `useState` whose setter is never used — the value never changes. | Replace with a plain `const` or `useMemo`. A state variable that is never updated adds unnecessary re-render machinery. |
+| `no-submit-handler-without-preventDefault` | Inline `onSubmit={...}` handler does not call `preventDefault()`. | Call `event.preventDefault()` at the top of the handler, or switch to a form action that doesn't navigate. |
+| `no-suspicious-semicolon-in-jsx` | A semicolon immediately after a closing or self-closing tag is rendered as literal text and is usually a typo. | Remove the semicolon, or move it inside a JSX expression container (`{';'}`) if the character is intended to be shown. |
+| `no-uniq-key` | Non-unique key in JSX list — `Math.random()`, `Date.now()`, or `uuid()` create new keys every render. | Use a stable, unique identifier from the data (e.g., `item.id`). Random keys destroy React's reconciliation and cause performance issues. |
+| `no-unknown-property` | HTML attribute on an intrinsic JSX element is not a valid React prop. | Replace the HTML attribute with its React camelCase equivalent (e.g. `class` → `className`, `for` → `htmlFor`, `onclick` → `onClick`). |
+| `no-useless-react-setstate` | Calling a `useState` setter with its own state value is a no-op. | Remove the useless `setState` call or pass a different value. `setX(x)` triggers a re-render but does not change state. |
+| `react-async-server-action` | Server actions (functions with `"use server"`) must be `async`. | Add `async` to the function. React Server Actions must be async functions — a synchronous function with `"use server"` will cause a build error or runtime failure. |
+| `react-button-has-type` | `<button>` without an explicit `type` attribute defaults to `submit`, which may cause unexpected form submissions. | Add an explicit `type` attribute (`button`, `submit`, or `reset`) to every `<button>` element so the intent is clear. |
+| `react-checked-requires-onchange` | `checked` prop without `onChange` or `readOnly` makes the input uncontrollable. | Add an `onChange` handler or `readOnly` prop. Without either, React renders a frozen checkbox/radio that the user cannot interact with, and emits a console warning. |
+| `react-display-name` | React components must have a display name. | Name the function, assign it to a named variable before exporting, or set `displayName`. |
+| `react-duplicate-use-directive` | A file can have `"use client"` or `"use server"`, not both. | Pick one: server modules get `"use server"`, client components get `"use client"`. Delete the other directive. |
+| `react-exhaustive-deps` | Declare every value a React Hook depends on in its dependency array. | Add the missing values to the `useEffect`/`useCallback`/`useMemo` dependency array, or remove the value from the hook body. Stale dependencies cause the hook to read outdated props or state. |
+| `react-form-requires-novalidate` | A native `<form>` without `noValidate` lets the browser run its own HTML validation in parallel with the app's validation layer, producing two competing error UXs. | Add `noValidate` to the `<form>` so the app's client-side validation owns the error experience end to end. |
+| `react-forward-ref-uses-ref` | `forwardRef` component does not use the `ref` parameter. | Either use the `ref` parameter in the component body or remove the `forwardRef` wrapper — it serves no purpose without a ref. |
+| `react-hoist-regex-outside-component` | Regex literals inside components are recompiled every render. | Move the regex to a module-level `const` above the component. Regex literals inside a function body allocate a new RegExp object every call, defeating the JS engine's compiled-pattern cache. |
+| `react-hoist-static-jsx` | JSX with no dynamic content defined inside a component is rebuilt every render. | Assign the static JSX to a module-level `const` above the component (or `React.memo` it). Re-creating an identical element tree on every render wastes reconciler work and prevents `shouldComponentUpdate`/`React.memo` short-circuits in consumers. |
+| `react-hook-form-destructuring-formstate` | Accessing `formState.xxx` without destructuring defeats React Hook Form proxy tracking. | Destructure the needed fields up front: `const { isValid, errors } = formState;`. |
+| `react-hook-form-use-no-memo` | React Hook Form's `useForm` returns a proxy whose getters the React Compiler memoizes incorrectly, so a file calling `useForm` under the compiler needs a `"use no memo"` directive to opt that file out of memoization. | Add a `"use no memo"` directive at the top of the file (or the component body) that calls `useForm`. |
+| `react-hook-form-validation-mode` | React Hook Form's `useForm` must validate on blur and re-validate on change: `mode: "onTouched"` shows errors only after a field is touched, and `reValidateMode: "onChange"` clears them as the user fixes them. | Pass `{ mode: "onTouched", reValidateMode: "onChange" }` to `useForm`. |
+| `react-iframe-missing-sandbox` | `<iframe>` without a `sandbox` attribute is a security risk. | Add a `sandbox` attribute to the `<iframe>`. The `sandbox` attribute restricts the iframe's capabilities (scripts, forms, popups) and prevents it from accessing the parent page. |
+| `react-jsx-curly-brace-presence` | Use curly braces around JSX attribute values and children consistently. | Drop the curly braces when a JSX attribute value or child is a plain string literal (`prop="text"`, not `prop={"text"}`). Unnecessary braces add noise; keep them only where an expression actually needs them. |
+| `react-jsx-key` | Missing `key` prop inside iterator — React needs stable keys to reconcile lists. | Add a unique, stable `key` prop to each JSX element returned from `.map()`, `.flatMap()`, `.from()`, or an array literal. |
+| `react-jsx-no-bind` | Arrow functions and `.bind()` in JSX props create a new reference every render. | Hoist the handler to a stable reference — `useCallback`, a class method, or a module-level function — so memoized children don't re-render needlessly. |
+| `react-jsx-no-comment-textnodes` | Comments placed as JSX text children are rendered as literal text. | Use `{/* comment */}` for JSX comments, not `// comment` or `/* comment */` as bare text. Without braces, the comment syntax is rendered as visible text in the DOM. |
+| `react-jsx-no-duplicate-props` | Duplicate props in JSX — the last one silently wins. | Remove the duplicate prop. When the same prop name appears multiple times on a JSX element, only the last value takes effect, which is almost always a copy-paste mistake. |
+| `react-jsx-no-jsx-as-prop` | JSX elements/fragments passed directly as prop values cause unnecessary re-renders. | Extract JSX to a variable or use useMemo so the prop reference is stable across renders. |
+| `react-jsx-no-new-array-as-prop` | Array literals as JSX prop values create a new reference every render. | Extract array to a constant or use useMemo |
+| `react-jsx-no-new-object-as-prop` | Object literals passed directly as JSX props create a new reference every render. | Extract object to a constant or use useMemo |
+| `react-jsx-no-script-url` | `href="javascript:..."` is an XSS vector. | Use an `onClick` handler instead of a `javascript:` URL. Script URLs bypass CSP and enable cross-site scripting. |
+| `react-jsx-no-target-blank` | `target="_blank"` without `rel="noreferrer"` is a security risk. | Add `rel="noreferrer"` (or `rel="noopener noreferrer"`) when using `target="_blank"`. Without it, the opened page can access `window.opener` and redirect the parent page. |
+| `react-jsx-no-useless-fragment` | Unnecessary `<Fragment>` that wraps a single child or nothing. | Remove the fragment wrapper when it contains only one child or is empty. Fragments are only needed to group multiple siblings. |
+| `react-jsx-pascal-case` | User-defined JSX components must use PascalCase. | Rename the component to PascalCase (e.g., `MyComponent` instead of `my_component` or `myComponent`). |
+| `react-jsx-props-no-spread-multi` | Same object spread multiple times on a JSX element. | Remove the duplicate spread. Spreading the same identifier twice is likely a copy-paste mistake. |
+| `react-no-access-state-in-setstate` | `this.state` inside `setState()` reads stale state. | Use the updater callback form: `this.setState(prevState => ({ count: prevState.count + 1 }))`. Reading `this.state` inside `setState` may read a stale value because React batches state updates. |
+| `react-no-adjacent-inline-elements` | Adjacent inline elements without whitespace between them. | Add a space, `{' '}`, or a wrapper between adjacent inline elements to ensure they render with visible separation. |
+| `react-no-and-conditional-jsx` | `&&` renders 0/'' when the left operand is falsy-but-not-false. | Replace `{expr && <X />}` with `{expr ? <X /> : null}` or `{Boolean(expr) && <X />}`. `&&` lets falsy values like `0` and `''` leak into the DOM. |
+| `react-no-array-index-key` | Array indices as React keys break on reorder. | Use a stable id from the data as the React key. `items.map(item => <X key={item.id} />)` instead of `items.map((item, i) => <X key={i} />)`. Index keys associate DOM state with the wrong item on reorder/filter. |
+| `react-no-async-client-component` | Client components can't be `async` — only server components can. | Make the component synchronous and fetch data via `useEffect` or an API route. To `await` during render, remove `"use client"` and run it as a server component. |
+| `react-no-async-useeffect-callback` | `useEffect` callback must be sync — async callbacks return a promise, breaking cleanup. | Define an async function inside the effect and call it: `useEffect(() => { (async () => { await fetch(); })(); }, [...])`. Or use a library that supports async (e.g. SWR, React Query). |
+| `react-no-blocking-log-after-mutation` | Awaiting a telemetry/log call after a main mutation in a server action delays the response for every request. | Fire-and-forget the telemetry call (drop the `await`) or schedule it via `after()` / `waitUntil()` so the response ships first. |
+| `react-no-boolean-variant-props` | A component declaring two or more `isX` / `hasX` boolean props is almost always modeling mutually-exclusive variants — 2^N invalid states become representable. | Replace the booleans with a single `variant: 'primary' \| 'ghost' \| ...` prop. |
+| `react-no-browser-api-in-server-component` | Browser globals (`window`, `document`, `localStorage`) don't exist on the server. | Move the browser-only code into a `"use client"` component, gate it behind `useEffect`, or use a server-safe alternative. |
+| `react-no-chain-state-updates` | A single `useEffect` callback triggers multiple setState calls. | Combine the updates into one reducer / object, or move the derivation into render. |
+| `react-no-children-prop` | Passing `children` as a prop instead of nesting content. | Place children between the opening and closing tags instead of passing them as a `children` prop. This is more readable and idiomatic. |
+| `react-no-class-component-in-server-component` | Class components don't render in server components. | Rewrite as a function component, or move the class into a `"use client"` module. |
+| `react-no-client-hook-in-server-component` | React hooks can only run in client components. | Add `"use client"` at the top of the file, or move the hook call into a separate client component and import it. |
+| `react-no-client-only-in-server-component` | `client-only` can't be imported from a server component. | Mark the file `"use client"`, or remove the `client-only` import and keep the module server-safe. |
+| `react-no-constructed-context-values` | `<Provider value={{ ... }}>` creates a new object every render, causing all consumers to re-render. | Memoize the context value with `useMemo` or extract it to a stable reference. `<Provider value={memoized}>` avoids unnecessary re-renders of every consumer. |
+| `react-no-cookies-in-layout` | `cookies()`/`headers()` in a Next.js layout makes ALL child pages dynamic. | Move `cookies()` / `headers()` calls out of `layout.tsx` into the individual page files that need them. One call in a layout forces EVERY child page to be dynamically rendered, defeating static generation for the entire route segment. |
+| `react-no-danger-with-children` | Using both `dangerouslySetInnerHTML` and `children` on the same element is invalid. | Use either `dangerouslySetInnerHTML` OR `children`, not both. React will throw a runtime error when both are provided on the same element. |
+| `react-no-deprecated` | Deprecated React APIs should not be used. | Replace the deprecated API with its modern equivalent. |
+| `react-no-derived-state-in-effect` | `useEffect` whose body only calls a state setter derives state — move the derivation to render. | Replace `useEffect(() => { setX(a + b) }, [a, b])` with `const x = a + b` computed directly during render. |
+| `react-no-derived-use-state` | `useState` initialized from a prop — derive the value during render instead. | Remove the `useState` and compute the value inline during render, or use the `key` prop on the component to reset state when the prop changes. Copying props into state causes stale values. |
+| `react-no-destructure-zustand-store` | Destructuring the full zustand store (`const { x, y } = useStore()`) subscribes the component to every state change. | Use a selector per field: `const x = useStore(s => s.x)` so the component only re-renders when that slice changes. |
+| `react-no-effect-event-handler` | `useEffect` simulating an event handler — move logic to an actual event handler. | Move the conditional logic into the event handler that sets the dependency. Effects should synchronize with external systems, not react to user events. |
+| `react-no-empty-effect` | `useEffect` called with an empty callback body does nothing. | Remove empty useEffect or add effect logic |
+| `react-no-event-handler-in-server-component` | Event handlers (`onClick`, `onChange`, …) can't run in a server component. | Move interactive JSX into a client component (`"use client"`), or use a server action via `<form action={...}>` for form submits. |
+| `react-no-fetch-in-effect` | `fetch()` inside `useEffect` lacks caching, deduping, and race protection. | Use a data-fetching library (TanStack Query, SWR) or move fetching to a server component / loader. |
+| `react-no-find-dom-node` | `findDOMNode` is deprecated in React 19 — use refs instead. | Use refs instead of findDOMNode. |
+| `react-no-form-action-async-no-pending` | `<form action={...}>` is used without a pending-state hook — submitters get no feedback. | Read the pending state via `useFormStatus()` inside a child of the form, or switch to `useActionState`. For non-form actions, use `useTransition`. |
+| `react-no-forward-ref` | `forwardRef(...)` is deprecated in React 19 — accept `ref` as a regular prop. | Remove the `forwardRef` wrapper and declare `ref` in the component props. React 19 forwards refs automatically to function components. |
+| `react-no-giant-component` | Component body exceeds 300 lines — break into smaller focused components. | Extract distinct sections (header, body, sidebar, etc.) into their own components. Large components are harder to test, review, and reason about. |
+| `react-no-html-entities-in-jsx` | HTML entities like `&apos;`, `&quot;`, `&amp;`, `&gt;` are noise in JSX — React encodes raw characters automatically. | Replace the entity with the raw character: `&apos;` -> `'`, `&quot;` -> `"`, `&amp;` -> `&`, `&gt;` -> `>`. `&lt;` (for a literal `<`) and `&nbsp;` (non-breaking space) are kept as legitimate. |
+| `react-no-hydration-flicker` | `useEffect(setState, [])` on mount causes a hydration flash. | Use `useSyncExternalStore` with `getServerSnapshot` for SSR-safe external state, or add `suppressHydrationWarning` if the mismatch is intentional (e.g. timestamps, viewport size). |
+| `react-no-initialize-state-in-effect` | `useEffect` with empty deps that only calls a `setState` is redundant — initialize in `useState` directly. | Use useState(initialValue) instead of setting state in effect with empty deps |
+| `react-no-inline-default-prop` | Non-primitive default props in `memo()` create new references every render, breaking memoization. | Define the default value outside the component: `const EMPTY: T[] = []` then `{ items = EMPTY }`. |
+| `react-no-invalid-html-attribute` | Invalid value in HTML `rel` attribute. | Use a valid `rel` value. Common valid values for `<a>` include `noopener`, `noreferrer`, `nofollow`. For `<link>` they include `stylesheet`, `icon`, `preload`, `prefetch`. |
+| `react-no-leaked-event-listener` | `addEventListener` in `useEffect` without a `removeEventListener` cleanup leaks across re-renders. | Return a cleanup function from the effect that calls `removeEventListener` on the same target with the same listener and capture flag. |
+| `react-no-leaked-fetch` | `fetch(...)` in `useEffect` without an AbortController signal cannot be cancelled on unmount. | Create an AbortController, pass its `signal` to `fetch`, and return a cleanup that calls `controller.abort()`. |
+| `react-no-leaked-interval` | `setInterval` in `useEffect` without `clearInterval` cleanup keeps firing after unmount. | Capture the interval id and return a cleanup that calls `clearInterval(id)`. |
+| `react-no-leaked-resize-observer` | `new ResizeObserver(...)` in `useEffect` without `.disconnect()` cleanup keeps observing after unmount. | Capture the observer reference and return a cleanup that calls `.disconnect()` on it. |
+| `react-no-leaked-timeout` | `setTimeout` in `useEffect` without `clearTimeout` cleanup may fire after unmount. | Capture the timeout id and return a cleanup that calls `clearTimeout(id)`. |
+| `react-no-memo-default-value` | `memo(Component)` with default `[]` / `{}` parameters re-renders every time. | Extract default values to a module-level constant so the reference is stable across renders. |
+| `react-no-namespace` | Namespaced JSX elements (`<Foo:bar>`) are not supported by React. | React does not support XML namespaces in JSX. Use a different naming pattern (e.g., `FooBar` or `Foo.Bar`). |
+| `react-no-object-in-dep-array` | Hook dep arrays must not contain values that allocate every render. | Move inline object/array literals, inline functions, and `new Map()`-style allocations out of the dep array. Extract them into `useMemo`/`useCallback`, or depend on primitive fields that are stable across renders. |
+| `react-no-object-type-as-default-prop` | Object/array/function default props create a new reference every render, breaking `React.memo`. | Move default values to a module-level constant or use `useMemo`/`useCallback`. `function Foo({ items = DEFAULT_ITEMS })` with `const DEFAULT_ITEMS = []` outside the component keeps a stable reference. |
+| `react-no-pass-data-to-parent` | `useEffect` that only calls a parent callback to pass data up — lift state instead. | Move the state to the parent component and pass down a setter, or restructure to avoid the effect. |
+| `react-no-prevent-default` | `event.preventDefault()` inside passive event listeners (`onScroll`, `onWheel`, `onTouchStart`, `onTouchMove`) is a no-op. | Remove the `preventDefault()` call. If you actually need to cancel the event, attach the listener manually via `addEventListener(name, handler, { passive: false })`. |
+| `react-no-prop-assignments` | Mutating a React component's props is not allowed — props are immutable inputs. | Copy the value into a local variable and mutate that instead, or lift the state into the parent and pass a new prop value. |
+| `react-no-ref-read-during-render` | Reading `ref.current` during render is unstable — refs are not designed for the render pass. | Read `ref.current` inside an event handler, `useEffect`, or `useLayoutEffect`. If you need a value during render, use state instead of a ref. |
+| `react-no-render-in-render` | Inline `renderXxx()` call in JSX — extract to a component for proper reconciliation. | Replace `{renderHeader()}` with a `<Header />` component. Inline render functions bypass React's reconciliation, causing unnecessary DOM destruction and state loss on every render. |
+| `react-no-render-return-value` | Do not use the return value of `ReactDOM.render()`. | Call `ReactDOM.render()` as a statement; attach refs via `ref` callbacks instead. |
+| `react-no-reset-all-state-on-prop-change` | `useEffect` resets multiple states when a prop changes — use a key instead. | Add a `key={prop}` to the component to reset all state automatically when the prop changes. |
+| `react-no-sequential-await-in-component` | Sequential `await` of independent calls inside an async React component serialises fetches that could run in parallel. | Wrap independent awaits in `Promise.all([...])`. Example: `const [user, posts] = await Promise.all([getUser(id), getPosts(id)])`. Server Components block rendering on each await, so chaining two fetches doubles the latency. |
+| `react-no-server-only-in-client` | `server-only` can't be imported from a client component. | Remove `"use client"` from this file, or remove the `server-only` import and move server-side logic to a separate server module. |
+| `react-no-setstate-no-cancel-flag` | `useEffect` awaits then calls `setState` without a cancellation flag — risks updating an unmounted component. | Track a `cancelled` flag inside the effect and skip the setter when set; return a cleanup that flips it. Alternative: use `AbortController`. |
+| `react-no-setstate-without-updater` | State setter called with an expression that reads the current state variable directly — races against concurrent updates in React 18+. | Use the functional updater: `setX(prev => prev + 1)` or `setX(prev => [...prev, item])`. |
+| `react-no-state-setter-in-render` | `setState(...)` called directly during render — triggers an infinite render loop. | Move the setter into an event handler or `useEffect`. If you need to derive state, compute it during render instead of storing it. |
+| `react-no-string-refs` | String `ref` attributes are deprecated — use `useRef` / callback refs. | Replace `ref="myRef"` with a `useRef()` hook or a callback ref. String refs are a legacy API that has been removed in React 19. |
+| `react-no-sync-layout-effect-in-ssr` | `useLayoutEffect` in a non-client file emits a server-rendering warning. | Add `"use client"` at the top of the file, or replace `useLayoutEffect` with `useEffect` (or the cross-environment `useIsomorphicLayoutEffect` pattern). |
+| `react-no-this-in-sfc` | `this` has no meaning inside a functional component. | Remove `this.` references. Functional components don't have a `this` context — use hooks (`useState`, `useRef`, etc.) instead of `this.state`, `this.props`, etc. |
+| `react-no-typos` | Probable typo in React component static property or lifecycle method. | Fix the typo. Common mistakes include `getDerivedStateFromProp` (should be `getDerivedStateFromProps`) and `componentWillRecieveProps` (should be `componentWillReceiveProps`). |
+| `react-no-unstable-nested-components` | Component defined inside another component causes unmount/remount every render. | Move the inner component outside the parent component. Defining a component inside render means React sees a brand-new type on every render, destroying the entire subtree's DOM nodes and state. |
+| `react-no-unwrapped-localstorage` | `localStorage.getItem`/`setItem` throws in private-browsing mode, quota exhaustion, and server-side rendering. Calling it unwrapped crashes the app. | Wrap `localStorage` access in `try { ... } catch (e) { ... }` and provide a safe fallback. |
+| `react-no-use-client-without-client-api` | `"use client"` directive in a file that uses no hooks, event handlers, or browser APIs. | Remove the `"use client"` directive so the module can render on the server, or add the client-only behavior that justifies it. |
+| `react-no-useeffect-event-in-deps` | Values returned by `useEffectEvent` must not appear in dependency arrays. | Remove the effect-event from the deps array — its identity is intentionally stable. Capture other variables it reads in the deps directly. |
+| `react-no-usememo-simple-expression` | `useMemo` wrapping a trivially cheap expression — memo overhead exceeds the computation. | Remove the `useMemo` wrapper and compute the value inline. Memoizing primitives, simple property access, or basic arithmetic costs more than the computation itself. |
+| `react-no-usestate-high-frequency` | `setState` inside `mousemove`/`scroll`/`resize`/`pointermove` handlers schedules a render on every frame (or faster). | Store the transient value in a `useRef` and read it when you actually need to commit a render (e.g. on drag end). |
+| `react-passive-event-listeners` | Scroll/touch/wheel listeners should be passive to avoid blocking the main thread. | Pass `{ passive: true }` as the third argument: `addEventListener('wheel', handler, { passive: true })`. |
+| `react-prefer-react-cache` | Module-level async fetchers should be wrapped in `React.cache()` so multiple Server Components in the same render share one request. | Wrap the async function in `React.cache(...)` (or `cache(...)` imported from `react`). Example: `export const getUser = cache(async (id) => { ... });`. Without `cache`, two Server Components that both call `getUser(1)` in the same render issue two separate network requests. |
+| `react-prefer-use-action-state` | Manual `useState` + `useTransition` + form action is reinventing `useActionState`. | Replace the trio with `const [state, dispatch, pending] = useActionState(action, initial);`. |
+| `react-prefer-use-optimistic` | Manual try/catch rollback of state — use `useOptimistic` for cleaner, race-safe code. | Switch to `const [optimistic, addOptimistic] = useOptimistic(state, reducer);` and call `addOptimistic(...)` before the action — React handles rollback. |
+| `react-prefer-use-reducer` | Component has 4 or more `useState` calls — likely related state. | Combine related state into a single `useReducer` to keep transitions consistent and reduce re-renders. |
+| `react-prefer-use-transition` | Replace manual `loading` state with `useTransition` for concurrent-safe async UI. | Replace `const [loading, setLoading] = useState(false)` + manual setLoading calls with `const [isPending, startTransition] = useTransition()`. |
+| `react-refresh-only-export-components` | Non-component exports alongside component exports break React Fast Refresh (HMR). | Move non-component exports (constants, utilities, types) to a separate module. Only export React components from files that also export components, so HMR can update them without a full reload. |
+| `react-require-versioned-storage-key` | `localStorage.setItem` uses a literal key without a `:vN` version suffix, so a shape change to the stored value cannot be rolled forward. | Add a version suffix (e.g. `"settings:v1"`) and bump it when the serialized shape changes so old entries can be migrated or dropped. |
+| `react-self-closing-comp` | Components and HTML elements without children should use self-closing syntax. | Replace `<Foo></Foo>` with `<Foo />` (and `<div></div>` with `<div />` in JSX). This reduces noise and makes it obvious the element has no content. |
+| `react-style-prop-object` | The `style` prop expects an object, not a CSS string. | Use `style={{ color: 'red' }}` instead of `style="color: red"`. React's `style` prop takes a JavaScript object with camelCase property names, not a CSS string. |
+| `react-use-no-conditional` | `use(...)` (React 19) must not be called conditionally — same rules as other hooks. | Move the `use(...)` call to the top of the component, then conditionally use the value. If the value isn't always needed, restructure with separate components. |
+| `react-use-state-initializer-function` | Expensive `useState` initial values should use a lazy initializer `() => expr`. | Replace `useState(expensiveCall())` with `useState(() => expensiveCall())` so the computation only runs once. |
+| `react-use-state-lazy-init` | `useState(expensive())` runs on every render. | Wrap the initializer in a lazy function: `useState(() => expensive())`. Passing a function means React only calls it once on mount. Bare expressions run every render and crash in SSR for browser APIs. |
+| `react-void-dom-elements-no-children` | Void HTML elements like `<br>`, `<img>`, `<input>` cannot have children. | Remove children or `children`/`dangerouslySetInnerHTML` props from void elements. These elements are self-closing by spec — `<br />`, `<img />`, etc. |
+| `unused-component-prop` | React prop declared in the Props type but never read in the component. | Remove the unused prop from the type definition, or start using it in the component. Unused props bloat the public API and mislead consumers into passing data that is silently ignored. |
+| `use-unique-element-ids` | Avoid a static string-literal `id` attribute on a JSX element. | A reused component renders duplicate ids. Generate the id with React's `useId()` hook and pass it via `id={id}` instead of a hardcoded string. |
 
 ## react > code-quality
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `react-no-chained-filter-map-reduce` | ⚠️ | Three or more consecutive `.filter`/`.map`/`.reduce` calls walk the array multiple times and allocate intermediate arrays. | Collapse the chain into a single `for`/`reduce` pass or use a lazy iterator. |
-| `react-no-dedup-filter-indexof` | ⚠️ | Deduping via `filter((v, i, a) => a.indexOf(v) === i)` is O(n²). | Use `[...new Set(arr)]` — O(n). |
-| `react-no-find-in-map-loop` | ⚠️ | `.find()` / `.filter()` called inside a `.map()` callback or `for` loop turns an O(n) pass into O(n²). | Build a `Map`/lookup index once, then look up inside the loop. |
-| `react-no-sort-for-extrema` | ⚠️ | Sorting an array to pick only its first or last element is O(n log n) for work that can be done in O(n). | Use a single-pass `Math.min` / `Math.max` or a manual fold. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `react-no-chained-filter-map-reduce` | Three or more consecutive `.filter`/`.map`/`.reduce` calls walk the array multiple times and allocate intermediate arrays. | Collapse the chain into a single `for`/`reduce` pass or use a lazy iterator. |
+| `react-no-dedup-filter-indexof` | Deduping via `filter((v, i, a) => a.indexOf(v) === i)` is O(n²). | Use `[...new Set(arr)]` — O(n). |
+| `react-no-find-in-map-loop` | `.find()` / `.filter()` called inside a `.map()` callback or `for` loop turns an O(n) pass into O(n²). | Build a `Map`/lookup index once, then look up inside the loop. |
+| `react-no-sort-for-extrema` | Sorting an array to pick only its first or last element is O(n log n) for work that can be done in O(n). | Use a single-pass `Math.min` / `Math.max` or a manual fold. |
 
 ## react > imports
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `react-no-barrel-import-known-libs` | ⚠️ | Named imports from known non-tree-shakeable barrel packages (@mui/material, @mui/icons-material, lodash, date-fns) pull the whole library into the bundle. | Import from the library's subpath (e.g. `lodash/debounce`, `@mui/material/Button`) so bundlers can tree-shake effectively. Tree-shakeable icon/component libraries (lucide-react, @heroicons/react, @phosphor-icons/react, react-icons) are exempt. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `react-no-barrel-import-known-libs` | Named imports from known non-tree-shakeable barrel packages (@mui/material, @mui/icons-material, lodash, date-fns) pull the whole library into the bundle. | Import from the library's subpath (e.g. `lodash/debounce`, `@mui/material/Button`) so bundlers can tree-shake effectively. Tree-shakeable icon/component libraries (lucide-react, @heroicons/react, @phosphor-icons/react, react-icons) are exempt. |
 
 ## react > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `perf-route-level-code-split` | ⚠️ | Route components must be imported via `React.lazy()` / dynamic `import()`, not a static `import`. | Replace `import Foo from './pages/Foo'` with `const Foo = React.lazy(() => import('./pages/Foo'))`. |
-| `react-no-interleaved-layout-rw` | ⚠️ | Reads of layout properties (`offsetWidth`, `getBoundingClientRect`, …) interleaved with `.style.*` writes in the same function force sync layout on every write. | Batch reads first, writes second — or schedule writes inside `requestAnimationFrame` after all reads complete. |
-| `react-require-content-visibility` | ⚠️ | A `.map()` in JSX producing 20+ items with no virtualization wrapper and no `content-visibility: auto` hint paints every off-screen item. | Wrap the list in a virtualizer (`react-window`, `react-virtuoso`) or set `style={{ contentVisibility: 'auto' }}` on each row. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `perf-route-level-code-split` | Route components must be imported via `React.lazy()` / dynamic `import()`, not a static `import`. | Replace `import Foo from './pages/Foo'` with `const Foo = React.lazy(() => import('./pages/Foo'))`. |
+| `react-no-interleaved-layout-rw` | Reads of layout properties (`offsetWidth`, `getBoundingClientRect`, …) interleaved with `.style.*` writes in the same function force sync layout on every write. | Batch reads first, writes second — or schedule writes inside `requestAnimationFrame` after all reads complete. |
+| `react-require-content-visibility` | A `.map()` in JSX producing 20+ items with no virtualization wrapper and no `content-visibility: auto` hint paints every off-screen item. | Wrap the list in a virtualizer (`react-window`, `react-virtuoso`) or set `style={{ contentVisibility: 'auto' }}` on each row. |
 
 ## react > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `react-no-javascript-urls` | ❌ | Do not use `javascript:` URLs in JSX `href` / `src` / `action`. | `javascript:` URLs execute arbitrary code and are an XSS vector. Use an `onClick` handler for behaviour or a real URL for navigation. |
-| `react-server-action-requires-auth` | ⚠️ | Server Actions with mutations must check authentication. | Call `getSession()` or `auth()` and verify the result before performing mutations. |
-| `react-server-action-requires-validation` | ⚠️ | Server Actions with parameters must validate input before use. | Add `schema.parse(input)` or `schema.safeParse(input)` at the top of the Server Action body. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `react-no-javascript-urls` | Do not use `javascript:` URLs in JSX `href` / `src` / `action`. | `javascript:` URLs execute arbitrary code and are an XSS vector. Use an `onClick` handler for behaviour or a real URL for navigation. |
+| `react-server-action-requires-auth` | Server Actions with mutations must check authentication. | Call `getSession()` or `auth()` and verify the result before performing mutations. |
+| `react-server-action-requires-validation` | Server Actions with parameters must validate input before use. | Add `schema.parse(input)` or `schema.safeParse(input)` at the top of the Server Action body. |
 
 ## react-native
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rn-biometrics-hardware-check` | ⚠️ | `authenticateAsync` must be preceded by `hasHardwareAsync` / `isEnrolledAsync`. | Await both checks before calling `LocalAuthentication.authenticateAsync()`. |
-| `rn-expo-router-layout-required` | ⚠️ | Directories that import `expo-router` must contain a `_layout` file. | Add `_layout.tsx` (or `.ts` / `.jsx` / `.js`) to the directory. |
-| `rn-flashlist-estimated-item-size` | ⚠️ | `<FlashList>` is missing the `estimatedItemSize` prop. | Add `estimatedItemSize={<px>}` (approximate row height). |
-| `rn-flashlist-over-flatlist` | ⚠️ | Importing `FlatList` from `react-native` is discouraged; use FlashList. | Import `FlashList` from `@shopify/flash-list`. |
-| `rn-image-source-object` | ⚠️ | `<Image source="url">` is invalid — source must be `{ uri }` or `require()`. | Use `source={{ uri: 'https://...' }}` or `source={require('./img.png')}`. |
-| `rn-memo-list-items` | ⚠️ | List item components referenced by `renderItem` should be wrapped in React.memo. | Wrap the component definition in `memo(...)` / `React.memo(...)`. |
-| `rn-no-inline-renderitem` | ⚠️ | Inline arrow functions in `renderItem` break list virtualisation. | Extract `renderItem` to a stable component or `useCallback`. |
-| `rn-no-inline-styles` | ⚠️ | Inline style objects allocate on every render and break memoisation. | Move styles to `StyleSheet.create(...)` or wrap in `useMemo`. |
-| `rn-no-literal-colors` | ⚠️ | Color literals in React Native styles can't adapt to a theme. | Move the color to a named constant or theme variable and reference it. |
-| `rn-no-react-navigation-stack` | ⚠️ | `@react-navigation/stack` and `createStackNavigator` are forbidden; use Expo Router. | Delete the stack navigator and migrate routes to Expo Router file-based routing. |
-| `rn-no-string-route-names` | ⚠️ | `navigation.navigate('Name', ...)` bypasses Expo Router's typed paths. | Use `router.push('/typed/path')` from expo-router instead. |
-| `rn-push-permissions-before-token` | ⚠️ | `getExpoPushTokenAsync` must be preceded by `requestPermissionsAsync` in the same function. | Await `Notifications.requestPermissionsAsync()` before requesting the push token. |
-| `rn-push-token-requires-projectid` | ⚠️ | `getExpoPushTokenAsync` must be called with `{ projectId }`. | Pass `{ projectId: Constants.expoConfig.extra.eas.projectId }`. |
-| `rn-raw-string-in-text` | ⚠️ | Strings and numbers as JSX children must be wrapped in `<Text>`. | Wrap the string/number child in `<Text>...</Text>`. |
-| `rn-reanimated-over-animated` | ⚠️ | Legacy `Animated` from react-native runs on the JS thread and drops frames. | Use `react-native-reanimated` primitives (`useSharedValue`, `withTiming`). |
-| `rn-router-replace-after-login` | ⚠️ | Navigating after login/logout must not keep the previous screen on the back stack. | Use `router.replace('/path')` instead of `router.push('/path')` after auth. |
-| `use-react-native-platform-components` | ⚠️ | Platform-specific React Native components belong in platform-specific files. | Move the import to a file with the matching platform suffix (`.android.*` / `.ios.*`), or split mixed platforms into separate files. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rn-biometrics-hardware-check` | `authenticateAsync` must be preceded by `hasHardwareAsync` / `isEnrolledAsync`. | Await both checks before calling `LocalAuthentication.authenticateAsync()`. |
+| `rn-expo-router-layout-required` | Directories that import `expo-router` must contain a `_layout` file. | Add `_layout.tsx` (or `.ts` / `.jsx` / `.js`) to the directory. |
+| `rn-flashlist-estimated-item-size` | `<FlashList>` is missing the `estimatedItemSize` prop. | Add `estimatedItemSize={<px>}` (approximate row height). |
+| `rn-flashlist-over-flatlist` | Importing `FlatList` from `react-native` is discouraged; use FlashList. | Import `FlashList` from `@shopify/flash-list`. |
+| `rn-image-source-object` | `<Image source="url">` is invalid — source must be `{ uri }` or `require()`. | Use `source={{ uri: 'https://...' }}` or `source={require('./img.png')}`. |
+| `rn-memo-list-items` | List item components referenced by `renderItem` should be wrapped in React.memo. | Wrap the component definition in `memo(...)` / `React.memo(...)`. |
+| `rn-no-inline-renderitem` | Inline arrow functions in `renderItem` break list virtualisation. | Extract `renderItem` to a stable component or `useCallback`. |
+| `rn-no-inline-styles` | Inline style objects allocate on every render and break memoisation. | Move styles to `StyleSheet.create(...)` or wrap in `useMemo`. |
+| `rn-no-literal-colors` | Color literals in React Native styles can't adapt to a theme. | Move the color to a named constant or theme variable and reference it. |
+| `rn-no-react-navigation-stack` | `@react-navigation/stack` and `createStackNavigator` are forbidden; use Expo Router. | Delete the stack navigator and migrate routes to Expo Router file-based routing. |
+| `rn-no-string-route-names` | `navigation.navigate('Name', ...)` bypasses Expo Router's typed paths. | Use `router.push('/typed/path')` from expo-router instead. |
+| `rn-push-permissions-before-token` | `getExpoPushTokenAsync` must be preceded by `requestPermissionsAsync` in the same function. | Await `Notifications.requestPermissionsAsync()` before requesting the push token. |
+| `rn-push-token-requires-projectid` | `getExpoPushTokenAsync` must be called with `{ projectId }`. | Pass `{ projectId: Constants.expoConfig.extra.eas.projectId }`. |
+| `rn-raw-string-in-text` | Strings and numbers as JSX children must be wrapped in `<Text>`. | Wrap the string/number child in `<Text>...</Text>`. |
+| `rn-reanimated-over-animated` | Legacy `Animated` from react-native runs on the JS thread and drops frames. | Use `react-native-reanimated` primitives (`useSharedValue`, `withTiming`). |
+| `rn-router-replace-after-login` | Navigating after login/logout must not keep the previous screen on the back stack. | Use `router.replace('/path')` instead of `router.push('/path')` after auth. |
+| `use-react-native-platform-components` | Platform-specific React Native components belong in platform-specific files. | Move the import to a file with the matching platform suffix (`.android.*` / `.ios.*`), or split mixed platforms into separate files. |
 
 ## react-native > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rn-auth-token-securestore` | ⚠️ | Auth tokens must not be written to AsyncStorage (unencrypted). | Use `expo-secure-store` (`SecureStore.setItemAsync`) for tokens. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rn-auth-token-securestore` | Auth tokens must not be written to AsyncStorage (unencrypted). | Use `expo-secure-store` (`SecureStore.setItemAsync`) for tokens. |
 
 ## regex
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `regex-confusing-quantifier` | ⚠️ | Quantifier is confusing because its minimum is non-zero but the quantified element can match the empty string. | Replace the quantifier to reflect that it can match the empty string, e.g. use `*` instead of `+`. |
-| `regex-no-contradiction-with-assertion` | ⚠️ | Regex contains an assertion that contradicts the pattern around it, making the branch unmatchable. | Remove or fix the contradictory assertion so the branch can actually match. |
-| `regex-no-dupe-disjunctions` | ⚠️ | Regex contains duplicate alternatives that are redundant. | Remove the duplicate alternative from the disjunction. |
-| `regex-no-empty-lookaround` | ⚠️ | Empty lookaround (`(?=)`, `(?!)`, `(?<=)`, `(?<!)`) always matches or always fails — likely a mistake. | Add a pattern inside the lookaround or remove it. |
-| `regex-no-empty-string-literal-v` | ⚠️ | Empty string disjunction in a `v`-flag character class is unexpected and likely a mistake. | Remove the empty string literal from the character class string disjunction. |
-| `regex-no-escape-backspace` | ⚠️ | `[\b]` in a regex matches the backspace character, not a word boundary — this is almost always a mistake. | Use `\b` outside a character class for a word boundary. If you truly need backspace, add a comment explaining the intent. |
-| `regex-no-extra-lookaround-assertions` | ⚠️ | Lookaround assertion is useless and can be inlined into the parent pattern. | Remove the unnecessary lookaround wrapper and inline its contents. |
-| `regex-no-invisible-character` | ⚠️ | Invisible Unicode characters in regex (zero-width joiners, soft hyphens, etc.) are hard to spot and usually unintended. | Use explicit Unicode escapes (`\u{200D}`) instead of embedding invisible characters directly. |
-| `regex-no-legacy-features` | ⚠️ | Regex uses legacy RegExp static properties like `RegExp.$1` or `RegExp.lastMatch`. | Avoid legacy RegExp static properties. Use capturing groups and match results instead. |
-| `regex-no-misleading-capturing-group` | ⚠️ | Capturing group matches different things at the start and end, which is misleading. | Restructure the regex so the capturing group has a clear, unambiguous match. |
-| `regex-no-missing-g-flag` | ⚠️ | Regex used with a method that expects the global flag but the g flag is missing. | Add the `g` flag to the regex or use a method that does not require it. |
-| `regex-no-non-standard-flag` | ⚠️ | Regex uses a non-standard flag that is not part of the ECMAScript specification. | Remove the non-standard flag. Standard flags are: d, g, i, m, s, u, v, y. |
-| `regex-no-obscure-range` | ⚠️ | Character class ranges like `[A-z]` include unwanted chars (`[\]^_\``). Use `[A-Za-z]` instead. | Replace obscure ranges with explicit ones: `[A-Za-z]`, `[a-zA-Z0-9]`, etc. |
-| `regex-no-octal` | ⚠️ | Octal escapes in regex (`\1`, `\12`) are ambiguous — they could be backreferences or octal character codes. | Use named backreferences (`\k<name>`) or explicit Unicode escapes (`\u{...}`) instead of bare octal sequences. |
-| `regex-no-optional-assertion` | ⚠️ | Assertion inside an optional group is effectively ignored and does not change the pattern. | Remove the assertion or change the parent quantifier so the assertion is always evaluated. |
-| `regex-no-potentially-useless-backreference` | ⚠️ | Backreference may be useless because some paths to it do not go through the referenced group. | Restructure the regex so all paths to the backreference pass through the referenced capturing group. |
-| `regex-no-standalone-backslash` | ⚠️ | Backslash followed by a non-special character in regex is an identity escape — likely a mistake. | Remove the unnecessary backslash or use the correct escape sequence. |
-| `regex-no-trivially-nested-assertion` | ⚠️ | Lookaround assertion is trivially nested inside another lookaround of the same kind. | Merge the nested lookaround into its parent or simplify the structure. |
-| `regex-no-trivially-nested-quantifier` | ⚠️ | Two quantifiers are trivially nested and can be replaced with a single quantifier. | Merge the nested quantifiers into a single equivalent quantifier. |
-| `regex-no-useless-assertions` | ⚠️ | Regex contains an assertion that is always true or always false, making it useless. | Remove the useless assertion or restructure the pattern so the assertion is meaningful. |
-| `regex-no-useless-backreference` | ⚠️ | Backreference is always replaced by the empty string because it references itself or a group that has not yet been matched. | Remove the useless backreference or restructure the regex so the referenced group is matched before the backreference. |
-| `regex-no-useless-dollar-replacements` | ⚠️ | Replacement string references a capturing group that does not exist in the regex. | Fix the replacement reference to match an existing capturing group, or use `$$` to insert a literal dollar sign. |
-| `regex-no-useless-flag` | ⚠️ | Regex flag has no effect because the pattern does not contain anything that would be affected by it. | Remove the unnecessary flag from the regex. |
-| `regex-no-useless-lazy` | ⚠️ | Lazy quantifier has no effect when the quantified token can only match a single length. | Remove the `?` after the quantifier — it has no effect here. |
-| `regex-no-useless-quantifier` | ⚠️ | Quantifier can only match once or matches an element that is empty, making it useless. | Remove the useless quantifier or restructure the pattern. |
-| `regex-no-useless-set-operand` | ⚠️ | Character class set operation has a useless operand that does not affect the result. | Remove the useless operand from the set operation. |
-| `regex-no-useless-string-literal` | ⚠️ | String disjunction of single characters in a `v`-flag character class can be simplified. | Replace the string disjunction with a simple character class element. |
-| `regex-no-useless-two-nums-quantifier` | ⚠️ | Quantifier `{n,n}` is equivalent to `{n}` — the range is redundant. | Simplify `{3,3}` to `{3}`. |
-| `regex-no-zero-quantifier` | ⚠️ | Quantifier `{0}` or `{0,0}` matches nothing — the pattern is likely a mistake. | Remove the quantified sub-expression or fix the quantifier. |
-| `regex-optimal-lookaround-quantifier` | ⚠️ | Quantified expression at the edge of a lookaround should only match a constant number of times. | Remove or simplify the quantifier at the start/end of the lookaround expression. |
-| `regex-prefer-predefined-assertion` | ⚠️ | Lookaround assertion can be replaced with a simpler predefined assertion like `\b` or `^`/`$`. | Replace the lookaround with the equivalent predefined assertion. |
-| `regex-prefer-set-operation` | ⚠️ | Lookaround combined with a character can be expressed more clearly using a set operation. | Replace the lookaround pattern with a `v`-flag character class set operation. |
-| `regex-sort-flags` | ⚠️ | Regex flags should be alphabetically sorted for consistency (`dgimsvy`). | Reorder the flags alphabetically: e.g. `/pattern/ig` → `/pattern/gi`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `regex-confusing-quantifier` | Quantifier is confusing because its minimum is non-zero but the quantified element can match the empty string. | Replace the quantifier to reflect that it can match the empty string, e.g. use `*` instead of `+`. |
+| `regex-no-contradiction-with-assertion` | Regex contains an assertion that contradicts the pattern around it, making the branch unmatchable. | Remove or fix the contradictory assertion so the branch can actually match. |
+| `regex-no-dupe-disjunctions` | Regex contains duplicate alternatives that are redundant. | Remove the duplicate alternative from the disjunction. |
+| `regex-no-empty-lookaround` | Empty lookaround (`(?=)`, `(?!)`, `(?<=)`, `(?<!)`) always matches or always fails — likely a mistake. | Add a pattern inside the lookaround or remove it. |
+| `regex-no-empty-string-literal-v` | Empty string disjunction in a `v`-flag character class is unexpected and likely a mistake. | Remove the empty string literal from the character class string disjunction. |
+| `regex-no-escape-backspace` | `[\b]` in a regex matches the backspace character, not a word boundary — this is almost always a mistake. | Use `\b` outside a character class for a word boundary. If you truly need backspace, add a comment explaining the intent. |
+| `regex-no-extra-lookaround-assertions` | Lookaround assertion is useless and can be inlined into the parent pattern. | Remove the unnecessary lookaround wrapper and inline its contents. |
+| `regex-no-invisible-character` | Invisible Unicode characters in regex (zero-width joiners, soft hyphens, etc.) are hard to spot and usually unintended. | Use explicit Unicode escapes (`\u{200D}`) instead of embedding invisible characters directly. |
+| `regex-no-legacy-features` | Regex uses legacy RegExp static properties like `RegExp.$1` or `RegExp.lastMatch`. | Avoid legacy RegExp static properties. Use capturing groups and match results instead. |
+| `regex-no-misleading-capturing-group` | Capturing group matches different things at the start and end, which is misleading. | Restructure the regex so the capturing group has a clear, unambiguous match. |
+| `regex-no-missing-g-flag` | Regex used with a method that expects the global flag but the g flag is missing. | Add the `g` flag to the regex or use a method that does not require it. |
+| `regex-no-non-standard-flag` | Regex uses a non-standard flag that is not part of the ECMAScript specification. | Remove the non-standard flag. Standard flags are: d, g, i, m, s, u, v, y. |
+| `regex-no-obscure-range` | Character class ranges like `[A-z]` include unwanted chars (`[\]^_\``). Use `[A-Za-z]` instead. | Replace obscure ranges with explicit ones: `[A-Za-z]`, `[a-zA-Z0-9]`, etc. |
+| `regex-no-octal` | Octal escapes in regex (`\1`, `\12`) are ambiguous — they could be backreferences or octal character codes. | Use named backreferences (`\k<name>`) or explicit Unicode escapes (`\u{...}`) instead of bare octal sequences. |
+| `regex-no-optional-assertion` | Assertion inside an optional group is effectively ignored and does not change the pattern. | Remove the assertion or change the parent quantifier so the assertion is always evaluated. |
+| `regex-no-potentially-useless-backreference` | Backreference may be useless because some paths to it do not go through the referenced group. | Restructure the regex so all paths to the backreference pass through the referenced capturing group. |
+| `regex-no-standalone-backslash` | Backslash followed by a non-special character in regex is an identity escape — likely a mistake. | Remove the unnecessary backslash or use the correct escape sequence. |
+| `regex-no-trivially-nested-assertion` | Lookaround assertion is trivially nested inside another lookaround of the same kind. | Merge the nested lookaround into its parent or simplify the structure. |
+| `regex-no-trivially-nested-quantifier` | Two quantifiers are trivially nested and can be replaced with a single quantifier. | Merge the nested quantifiers into a single equivalent quantifier. |
+| `regex-no-useless-assertions` | Regex contains an assertion that is always true or always false, making it useless. | Remove the useless assertion or restructure the pattern so the assertion is meaningful. |
+| `regex-no-useless-backreference` | Backreference is always replaced by the empty string because it references itself or a group that has not yet been matched. | Remove the useless backreference or restructure the regex so the referenced group is matched before the backreference. |
+| `regex-no-useless-dollar-replacements` | Replacement string references a capturing group that does not exist in the regex. | Fix the replacement reference to match an existing capturing group, or use `$$` to insert a literal dollar sign. |
+| `regex-no-useless-flag` | Regex flag has no effect because the pattern does not contain anything that would be affected by it. | Remove the unnecessary flag from the regex. |
+| `regex-no-useless-lazy` | Lazy quantifier has no effect when the quantified token can only match a single length. | Remove the `?` after the quantifier — it has no effect here. |
+| `regex-no-useless-quantifier` | Quantifier can only match once or matches an element that is empty, making it useless. | Remove the useless quantifier or restructure the pattern. |
+| `regex-no-useless-set-operand` | Character class set operation has a useless operand that does not affect the result. | Remove the useless operand from the set operation. |
+| `regex-no-useless-string-literal` | String disjunction of single characters in a `v`-flag character class can be simplified. | Replace the string disjunction with a simple character class element. |
+| `regex-no-useless-two-nums-quantifier` | Quantifier `{n,n}` is equivalent to `{n}` — the range is redundant. | Simplify `{3,3}` to `{3}`. |
+| `regex-no-zero-quantifier` | Quantifier `{0}` or `{0,0}` matches nothing — the pattern is likely a mistake. | Remove the quantified sub-expression or fix the quantifier. |
+| `regex-optimal-lookaround-quantifier` | Quantified expression at the edge of a lookaround should only match a constant number of times. | Remove or simplify the quantifier at the start/end of the lookaround expression. |
+| `regex-prefer-predefined-assertion` | Lookaround assertion can be replaced with a simpler predefined assertion like `\b` or `^`/`$`. | Replace the lookaround with the equivalent predefined assertion. |
+| `regex-prefer-set-operation` | Lookaround combined with a character can be expressed more clearly using a set operation. | Replace the lookaround pattern with a `v`-flag character class set operation. |
+| `regex-sort-flags` | Regex flags should be alphabetically sorted for consistency (`dgimsvy`). | Reorder the flags alphabetically: e.g. `/pattern/ig` → `/pattern/gi`. |
 
 ## rust
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `god-object-field-count` | ⚠️ | Struct has too many fields — consider decomposing. | Group related fields into sub-structs to reduce complexity. |
-| `mutex-over-atomic` | ⚠️ | `Mutex` wrapping a primitive type — prefer an atomic type. | Use `AtomicBool`, `AtomicUsize`, etc. instead of `Mutex<bool>`, `Mutex<usize>`. |
-| `no-get-prefix-rust` | ⚠️ | Simple accessor uses `get_` prefix — Rust convention is to omit it. | Rename `get_foo(&self)` to `foo(&self)`. Reserve `get` for fallible or expensive operations. |
-| `rust-anyhow-context-on-question-mark` | ⚠️ | `?` without `.context()` produces bare error messages with no callsite information. | Chain `.context("what you were doing")` before `?` so errors carry actionable context. |
-| `rust-arc-non-send-sync` | ❌ | `Arc<T>` where `T: !Send + !Sync` cannot cross threads. | Either drop the `Arc` (use `Rc<T>` for single-threaded sharing) or replace the inner type with a thread-safe one — `Arc<RefCell<T>>` → `Arc<Mutex<T>>`. Enforced by `clippy::arc_with_non_send_sync` (correctness, on by default). |
-| `rust-asref-path-for-fs-fns` | ⚠️ | Filesystem fn takes a concrete path type instead of `impl AsRef<Path>`. | Change the parameter to `impl AsRef<Path>` (or `P: AsRef<Path>` via a generic) so callers can pass `&str`, `String`, `&Path` or `PathBuf` without converting. Matches `std::fs` conventions and avoids needless allocations at the call site. |
-| `rust-assert-eq-with-bool-literal` | ⚠️ | `assert_eq!` / `assert_ne!` compared against `true` / `false`. | Use `assert!(x)` for `assert_eq!(x, true)` and `assert!(!x)` for `assert_eq!(x, false)`. The eq-form is noisier and produces a worse failure message (it shows `false != true` instead of just the failed condition). |
-| `rust-await-holding-lock` | ❌ | Never hold a MutexGuard across an `.await` point. | Drop the guard before awaiting: copy the needed data out in a tight scope, `drop(guard)`, then await. Locks held across awaits cause deadlocks under tokio's scheduler. Enable `clippy::await_holding_lock`. |
-| `rust-block-on-in-async` | ❌ | `block_on` from inside `async fn` panics the runtime. | Replace `runtime.block_on(future)` with `future.await`. Calling `block_on` while a runtime is already running triggers tokio's `Cannot start a runtime from within a runtime` panic. |
-| `rust-box-dyn-error-without-send-sync` | ⚠️ | `Box<dyn Error>` without `+ Send + Sync` bounds. | A bare `Box<dyn Error>` cannot cross thread boundaries — it can't be sent into a `tokio::spawn` task or returned from a function that's awaited on another runtime worker. Use `Box<dyn Error + Send + Sync + 'static>` (or the `anyhow::Error` alias). |
-| `rust-builder-without-must-use` | ⚠️ | Builder types need `#[must_use]` to catch forgotten `.build()` calls. | Add `#[must_use]` above the struct definition. Without it, callers who forget the final `.build()` get a silent no-op instead of a compiler warning. |
-| `rust-clone-in-iter-chain` | ⚠️ | `.map(\|x\| x.clone())` in an iterator chain — use `.cloned()`. | `Iterator::cloned()` (or `.copied()` for `Copy` types) expresses intent more clearly and is the same in performance. The closure form makes readers ask whether anything else is going on inside the closure. |
-| `rust-collect-then-into-iter` | ⚠️ | `.collect::<Vec<_>>().into_iter()` materialises and immediately re-iterates a collection. | Drop the `.collect()` + `.into_iter()` pair — the preceding iterator chain already produces an iterator. Materialising into `Vec` only to re-iterate allocates a heap buffer for nothing. |
-| `rust-const-for-static-no-interior-mut` | ⚠️ | Use `const` instead of `static` for plain-literal values without interior mutability. | Change `static FOO: T = …;` to `const FOO: T = …;` when `T` has no interior mutability (`Cell`, `Mutex`, `OnceLock`, …) and the value is a literal or `const fn` expression. `const` inlines at every use site; `static` reserves a fixed address you don't need. |
-| `rust-drop-calls-self-lock` | ❌ | `Drop::drop` body calls `.lock()` / `.read()` / `.write()` on a `self.field`. | Acquiring a lock during `Drop` deadlocks if the same lock is already held on the dropping thread, and risks panic if the lock is poisoned. Restructure so locking happens before drop, or store data in a way that doesn't require re-locking on cleanup. |
-| `rust-duration-over-integer-with-unit` | ⚠️ | Prefer `Duration` over integers whose name encodes a time unit. | Replace `window_days: u32` with `window: std::time::Duration`. For config parsing, use a humantime crate or similar to accept "30d" / "24h" at the config boundary. The type then carries the unit through the codebase. |
-| `rust-eprintln-in-library` | ⚠️ | `eprintln!` / `eprint!` invoked from library code. | Library code shouldn't write to stderr directly — consumers can't redirect, configure, or capture it. Use `tracing::warn!` / `tracing::error!` so the consumer's subscriber controls the output. |
-| `rust-explicit-enum-match-arms` | ⚠️ | Wildcard `_` arm on a `match` that looks like it covers an enum. | Replace `_ => …` with the remaining variants explicitly (`Foo::A \| Foo::B => …`). The compile error on enum expansion is the whole point: it forces you to consciously handle each new case. |
-| `rust-explicit-iter-loop` | ⚠️ | Use iterator chains, not raw index loops. | Replace `for i in 0..vec.len() { vec[i] }` with `for x in &vec`. Iterator chains let the compiler vectorize the loop body and eliminate bounds checks. Enable `clippy::needless_range_loop` and `clippy::explicit_iter_loop`. |
-| `rust-hash-partial-eq-mismatch` | ❌ | `Hash` and `PartialEq` are not implemented consistently (one derived, the other manual). | If two values are equal (`a == b`) they MUST produce the same hash. Mixing a derived `Hash` with a manual `PartialEq` (or vice versa) almost always breaks that invariant. Either derive both or implement both manually with care to keep them in sync. |
-| `rust-if-let-mutex-lock` | ❌ | `if let ... = mtx.lock()` extends the lock guard's lifetime to cover the `else` branch. | Temporaries created in the scrutinee of `if let` live for the entire `if/else` expression. Hold the guard in a separate `let` binding so the lock is released before the `else` branch runs, or use `match` with explicit `drop()` calls. |
-| `rust-impl-debug-on-public-types` | ⚠️ | Public structs and enums must derive `Debug`. | Add `#[derive(Debug)]` (or `#[derive(Debug, …)]`) above the type definition. Every public type should be loggable for free, and consumers shouldn't have to wrap your type to get a `Debug` impl. If a field can't be Debug (e.g. a closure), implement `Debug` by hand instead. |
-| `rust-iter-count-vs-len` | ⚠️ | `.iter().count()` walks the whole collection to compute its length. | Use `.len()` directly on the collection — `Vec`, slices, `VecDeque`, `String`, `HashMap`, and `HashSet` all expose it in O(1). `.count()` consumes an iterator linearly. |
-| `rust-large-enum-variant` | ⚠️ | Enum size equals the largest variant — box big variants. | Wrap the large variant's payload in `Box<T>` so the enum stays small. Otherwise every instance of the enum — even the small-variant case — pays the full size cost. Enable `clippy::large_enum_variant`. |
-| `rust-mod-tests-without-cfg-test` | ❌ | `mod tests` must be gated by `#[cfg(test)]`. | Add `#[cfg(test)]` immediately above the `mod tests` declaration. Without it, every test function ships in the release binary — bloat plus a risk of pulling in dev-dependencies that aren't built for release. |
-| `rust-no-allow-without-reason` | ⚠️ | `#[allow(...)]` without a justification comment hides problems silently. | Add a `//` comment on the same line or the line above explaining why the lint is suppressed. |
-| `rust-no-arc-mutex-tree` | ⚠️ | Tree/graph node typed as `Arc<Mutex<_>>` or `Rc<RefCell<_>>`. | Replace the shared-ownership + interior-mutability pattern with an arena (`id_arena`, `indextree`, `slotmap`, `generational-arena`). Nodes become indices into a single `Vec<T>`, which is cheaper, cache-friendly, and makes cycles trivially representable. |
-| `rust-no-as-numeric-cast` | ⚠️ | Ban every `as` cast whose target is a numeric primitive. | Replace `x as u64` with `u64::from(x)` for guaranteed-safe widening, or `u64::try_from(x)?` for fallible narrowing. The goal is to make every integer conversion explicit and searchable — `as` hides the intent. |
-| `rust-no-bool-return-from-fallible` | ⚠️ | Action functions return `Result`, not `bool`. | Change the return type to `Result<T, E>` (use `()` for T if there's no payload). A bool tells the caller something failed but not why — they can't handle the error specifically, only choose to give up or retry blindly. |
-| `rust-no-box-default` | ⚠️ | `Box::new(T::default())` is `Box::<T>::default()`. | Replace `Box::new(T::default())` with `Box::<T>::default()`. The two are equivalent at runtime, but the latter is one allocation step instead of two and reads as the obvious idiom. Enforced by `clippy::box_default`. |
-| `rust-no-dbg-macro` | ❌ | `dbg!()` is a debugging aid that must not ship. | Remove the `dbg!()` call. If you need permanent observability, use `tracing::debug!`/`tracing::info!` with structured fields instead. `dbg!()` writes to stderr unconditionally and can leak PII. |
-| `rust-no-empty-test-fn` | ❌ | `#[test] fn x() {}` is a passing stub that exercises nothing. | Either delete the test or fill it in. An empty test always passes and gives false confidence that the code is covered. |
-| `rust-no-float-for-money` | ❌ | Money fields must not be `f32`/`f64` — IEEE 754 rounding errors corrupt totals. | Use `rust_decimal::Decimal` for arbitrary-precision monetary values, or a newtype around `i64` representing the smallest unit (cents, satoshis, …). Floats accumulate rounding errors and silently break accounting invariants. |
-| `rust-no-format-in-debug-impl` | ⚠️ | `format!` inside `Debug::fmt` allocates an extra `String` per call. | Replace `format!("...", x)` with a direct `write!(f, "...", x)` call. `write!` streams into the formatter's writer; `format!` builds an intermediate `String` that you immediately throw away. |
-| `rust-no-large-tuple-return` | ⚠️ | Function return tuples with 3+ elements should be named structs. | Replace `fn f() -> (A, B, C)` with `fn f() -> Result { … }` where `Result` is a named struct holding the same fields. Tuples force positional reasoning at every call site and make refactors impossible. |
-| `rust-no-linkedlist` | ⚠️ | Prefer `Vec<T>` over `LinkedList<T>` — cache locality wins. | Replace `LinkedList<T>` with `Vec<T>` or `VecDeque<T>`. LinkedList's theoretical O(1) splice is dominated in practice by Vec's cache locality for any realistic size. Enable `clippy::linkedlist`. |
-| `rust-no-lossy-as-cast` | ⚠️ | `as` casts that can truncate or lose precision are silent bugs. | Replace the `as` cast with `try_into()` (returns Result) or `u8::try_from(x)` for integer narrowing. For guaranteed-safe widening casts (`u8` → `u32`), use `From::from(x)` / `x.into()` instead — explicit, documents the conversion is total. |
-| `rust-no-panic-macros` | ❌ | No `panic!` / `todo!` / `unimplemented!` / `unreachable!` in production. | Replace the macro with a typed Result error. `todo!()` and `unimplemented!()` mark placeholders that must not ship. `unreachable!()` should only mark compiler-proven impossible states with a `// Impossible: ...` comment. Tests are exempted — panicking in a `#[test]` is a clean failure. |
-| `rust-no-println-in-async` | ⚠️ | `println!` / `eprintln!` inside async code blocks the runtime. | Replace `println!("…")` / `eprintln!("…")` with a `tracing` macro (`tracing::info!`, `tracing::warn!`, `tracing::error!`). `println!` takes a blocking stdout lock — inside an async task that stalls the reactor and interleaves output from concurrent tasks. Tracing macros are non-blocking and respect subscriber filters/spans. |
-| `rust-no-pub-use-glob` | ⚠️ | `pub use foo::*` re-exports invisibly. | List the re-exports explicitly: `pub use foo::{Bar, Baz};`. Glob re-exports turn every change in `foo` into a silent change to your public API. |
-| `rust-no-static-mut` | ❌ | `static mut` is deprecated and unsafe by design. | Replace `static mut FOO: T = ...` with a safe primitive: `OnceLock<T>`/`LazyLock<T>` for initialize-once values, `Mutex<T>`/`RwLock<T>` for shared mutable state, or `AtomicU64`/`AtomicBool`/etc for primitive counters and flags. |
-| `rust-no-todo-macro` | ❌ | No `todo!()` macro invocations in production code. | Replace `todo!()` with the actual implementation, or with a typed `Result` error if the path is intentionally unsupported. `todo!()` is a placeholder marker — when it ships it turns into a runtime panic. Tests are exempted (panicking inside a `#[test]` is a clean failure mode). |
-| `rust-no-unwrap` | ❌ | No `.unwrap()` / `.expect()` in production code. | Handle the None / Err case explicitly. Use `?` with proper error propagation, or `unwrap_or_else` with a meaningful fallback. `unwrap()` turns runtime conditions into crashes. Tests are exempted — panicking inside a `#[test]` is a clean failure. |
-| `rust-no-unwrap-in-from-impl` | ❌ | `From::from` must be infallible — no `.unwrap()` / `.expect()`. | Switch the trait to `TryFrom`. Its associated `Error` type lets the caller pattern-match on the failure mode instead of panicking. `From` is reserved for total conversions; if you can write `unwrap()`, you don't have a total conversion. |
-| `rust-ord-partial-ord-inconsistent` | ❌ | `Ord` and `PartialOrd` are not implemented consistently (one derived, the other manual). | If both traits are present, the contract requires `partial_cmp(a, b) == Some(cmp(a, b))`. Mixing a derived `Ord` with a manual `PartialOrd` (or vice versa) typically desyncs them. Either derive both or implement both manually with care to keep them aligned. |
-| `rust-panic-in-drop` | ❌ | `Drop::drop` body contains `panic!` / `unwrap` / `expect` / `assert!`. | Panicking inside `Drop` during another panic aborts the process. `Drop` runs on every error path — it must never fail. Log the error, swallow it, or use a fallible alternative invoked before the value is dropped. |
-| `rust-partial-eq-without-eq` | ⚠️ | Type derives `PartialEq` but not `Eq`. | When every field type is provably `Eq` (non-float primitives, known-`Eq` stdlib types, or local Eq-capable types) the type should also derive `Eq`. `Eq` is a marker trait signalling reflexivity (`x == x`), and many APIs (`HashSet`, `BTreeMap` keys via wrapping) require it. A field whose `Eq`-ness cannot be proven — a float (`f32`/`f64`), an imported/unknown type, or a generic type parameter — leaves the type exempt, since adding `Eq` would not compile. |
-| `rust-prefer-arc-clone` | ⚠️ | `.clone()` on an `Arc` is visually identical to a deep clone — use `Arc::clone(&x)` to signal the cheap reference-count bump. | Replace `x.clone()` with `Arc::clone(&x)` to make the intent explicit. |
-| `rust-prefer-channel-over-arc-mutex-vec` | ⚠️ | `Arc<Mutex<Vec<` for collecting task results adds contention. Use `mpsc::channel` instead. | Use `let (tx, rx) = mpsc::channel(); ... tx.send(result); let results: Vec<_> = rx.iter().collect();`. |
-| `rust-prefer-once-lock` | ⚠️ | `lazy_static!` and `once_cell` are superseded by `std::sync::OnceLock`/`LazyLock` (Rust 1.70+). | Replace `lazy_static! { static ref X: T = ... }` with `static X: LazyLock<T> = LazyLock::new(\|\| ...);`. |
-| `rust-prefer-strum` | ⚠️ | Enum has manual `Display` + `FromStr` impls — use `#[derive(strum::Display, strum::EnumString)]` instead. | Add `#[derive(strum::Display, strum::EnumString)]` and remove the manual impls. Add `#[strum(serialize = "...")]` on variants if the string form differs from the variant name. |
-| `rust-prefer-unwrap-or-explicit` | ⚠️ | Ban `.unwrap_or_default()`; require an explicit fallback value. | Replace `.unwrap_or_default()` with `.unwrap_or(0)` / `.unwrap_or(String::new())` / `.unwrap_or_else(\|\| vec![])` — whatever the default is for this type, make it visible at the call site. |
-| `rust-ptr-arg` | ⚠️ | Prefer borrowed slices over borrowed owned types. | Replace `&String` with `&str`, `&Vec<T>` with `&[T]`, `&PathBuf` with `&Path`. The slice form accepts more caller types with no extra cost. Enable `clippy::ptr_arg`. |
-| `rust-pub-enum-without-non-exhaustive` | ⚠️ | `pub enum` without `#[non_exhaustive]` makes new variants a breaking change. | Add `#[non_exhaustive]` above the enum. Downstream crates will need a wildcard `_ => …` arm to match it, which means future-you can add variants without releasing a major version. |
-| `rust-rc-mutex` | ❌ | `Rc<Mutex<T>>` pays the Mutex cost for zero benefit — Rc is !Send. | Replace `Rc<Mutex<T>>` with `Rc<RefCell<T>>` (single-threaded interior mutability, no atomic ops). If you actually need cross-thread sharing, use `Arc<Mutex<T>>` instead. |
-| `rust-redundant-clone` | ⚠️ | Remove `.clone()` calls whose result isn't independently observed. | Move the value instead of cloning it, or borrow it if the caller still needs access. Clones allocate and copy — they're never free. Enable `clippy::redundant_clone`. |
-| `rust-serde-deny-unknown-fields` | ⚠️ | Deserialize-derive structs need `#[serde(deny_unknown_fields)]`. | Add `#[serde(deny_unknown_fields)]` above the struct definition. Without it, typos in input files or API payloads deserialize silently — fields the type doesn't know about are dropped, and the user finds out later. |
-| `rust-string-as-error` | ⚠️ | `Result<T, String>` is stringly-typed and unmatchable. | Define a proper error enum (use `thiserror::Error` for the boilerplate) and use it as the `E` parameter. String errors prevent callers from pattern-matching failure modes and lose all structured context. |
-| `rust-sync-io-in-async` | ❌ | Synchronous I/O calls inside `async fn` block the runtime. | Replace `std::fs::*` with `tokio::fs::*`, `std::net::TcpStream::*` with `tokio::net::TcpStream::*`, etc. If no async equivalent exists, wrap the call in `tokio::task::spawn_blocking(\|\| ...)` so it runs on the dedicated blocking pool. |
-| `rust-thiserror-for-lib` | ⚠️ | Library error types should derive `thiserror::Error` instead of manually implementing `Display`. | Add `#[derive(thiserror::Error)]` and use `#[error("...")]` attributes on enum variants. |
-| `rust-thread-sleep-in-async` | ❌ | `std::thread::sleep` from `async fn` blocks the runtime. | Replace `std::thread::sleep(d)` with `tokio::time::sleep(d).await` (or your runtime's equivalent). The async version yields the worker thread back to the runtime instead of parking it. |
-| `rust-thread-spawn-in-async` | ⚠️ | `std::thread::spawn` invoked inside an `async fn`. | Spawning an OS thread from async code defeats the runtime: the thread can't be cooperatively scheduled or driven by the executor, and CPU-bound work should go through `tokio::task::spawn_blocking` (or `rayon`). Use `tokio::spawn` for futures, `spawn_blocking` for sync work. |
-| `rust-to-string-in-format-arg` | ⚠️ | `.to_string()` inside `format!` / `println!` / `write!` arguments is redundant. | Drop the `.to_string()` — formatting macros already invoke `Display` (or the requested formatter) on each argument. The extra `.to_string()` allocates a `String` only to hand it back to the same trait. |
-| `rust-tokio-spawn-without-handle` | ⚠️ | `tokio::spawn(..)` whose JoinHandle is dropped silently swallows panics. | Capture the JoinHandle and `.await` it, or pass the task through a wrapper like `tokio::spawn(async { if let Err(e) = work().await { tracing::error!(?e); } })`. Fire-and-forget loses every error and every panic. |
-| `rust-unbounded-channel` | ❌ | Unbounded channels can OOM the process. | Use `mpsc::channel(N)` (tokio) or `crossbeam::channel::bounded(N)`. Pick a capacity that bounds memory under load — even N=1024 is infinitely safer than no bound. The producer will `.await` (or block) when full, providing backpressure. |
-| `rust-undocumented-unsafe` | ❌ | Every `unsafe` block must have a `// SAFETY:` comment. | Add a `// SAFETY: ...` comment above every `unsafe { ... }` block explaining the invariants that make the unsafe code sound. The comment is what future debuggers will reach for when memory corruption shows up. |
-| `rust-unit-error-result` | ⚠️ | `Result<T, ()>` discards every error detail. | Define a real error type — even a tiny enum — and use it as the `E` parameter. If absence is the only failure mode, return `Option<T>` instead. `Result<T, ()>` is the worst of both worlds. |
-| `rust-unsafe-ffi-isolation` | ⚠️ | `extern "C"` blocks should be isolated inside a `mod sys`, `mod ffi`, or `mod raw` module. | Move the `extern "C"` block into a dedicated submodule: `mod sys { extern "C" { ... } }`. |
-| `rust-unsafe-impl-without-comment` | ❌ | `unsafe impl` requires a `// SAFETY:` comment. | Add a `// SAFETY: ...` comment immediately above the `unsafe impl` block. Spell out which invariants of the unsafe trait the type upholds — without it, the contract is unauditable. |
-| `rust-vec-with-capacity` | ⚠️ | `Vec::new()` followed by a for-loop with `.push()` reallocates repeatedly. Use `Vec::with_capacity()` when the size is known. | Replace `Vec::new()` with `Vec::with_capacity(source.len())` when iterating a collection of known length. |
-| `rust-workspace-deps-centralized` | ⚠️ | Member crate pins a dependency instead of inheriting from the workspace. | Declare the version once under `[workspace.dependencies]` in the root `Cargo.toml`, then reference it from member crates with `foo = { workspace = true }`. Keeps versions in lockstep and makes bumps a one-file change. |
-| `rust-workspace-lints-shared` | ⚠️ | Workspace lacks `[workspace.lints]` or member crate doesn't inherit it. | In the workspace root `Cargo.toml`, declare a `[workspace.lints.*]` section (clippy, rust, rustdoc). In every member crate, add `[lints]` followed by `workspace = true` to inherit the policy. Prevents per-crate drift of clippy categories and `deny(warnings)`. |
-| `timeout-on-external-command` | ❌ | `Command::new()` without a timeout can hang indefinitely. | Wrap the command execution with a timeout (e.g. `tokio::time::timeout` or a custom helper). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `god-object-field-count` | Struct has too many fields — consider decomposing. | Group related fields into sub-structs to reduce complexity. |
+| `mutex-over-atomic` | `Mutex` wrapping a primitive type — prefer an atomic type. | Use `AtomicBool`, `AtomicUsize`, etc. instead of `Mutex<bool>`, `Mutex<usize>`. |
+| `no-get-prefix-rust` | Simple accessor uses `get_` prefix — Rust convention is to omit it. | Rename `get_foo(&self)` to `foo(&self)`. Reserve `get` for fallible or expensive operations. |
+| `rust-anyhow-context-on-question-mark` | `?` without `.context()` produces bare error messages with no callsite information. | Chain `.context("what you were doing")` before `?` so errors carry actionable context. |
+| `rust-arc-non-send-sync` | `Arc<T>` where `T: !Send + !Sync` cannot cross threads. | Either drop the `Arc` (use `Rc<T>` for single-threaded sharing) or replace the inner type with a thread-safe one — `Arc<RefCell<T>>` → `Arc<Mutex<T>>`. Enforced by `clippy::arc_with_non_send_sync` (correctness, on by default). |
+| `rust-asref-path-for-fs-fns` | Filesystem fn takes a concrete path type instead of `impl AsRef<Path>`. | Change the parameter to `impl AsRef<Path>` (or `P: AsRef<Path>` via a generic) so callers can pass `&str`, `String`, `&Path` or `PathBuf` without converting. Matches `std::fs` conventions and avoids needless allocations at the call site. |
+| `rust-assert-eq-with-bool-literal` | `assert_eq!` / `assert_ne!` compared against `true` / `false`. | Use `assert!(x)` for `assert_eq!(x, true)` and `assert!(!x)` for `assert_eq!(x, false)`. The eq-form is noisier and produces a worse failure message (it shows `false != true` instead of just the failed condition). |
+| `rust-await-holding-lock` | Never hold a MutexGuard across an `.await` point. | Drop the guard before awaiting: copy the needed data out in a tight scope, `drop(guard)`, then await. Locks held across awaits cause deadlocks under tokio's scheduler. Enable `clippy::await_holding_lock`. |
+| `rust-block-on-in-async` | `block_on` from inside `async fn` panics the runtime. | Replace `runtime.block_on(future)` with `future.await`. Calling `block_on` while a runtime is already running triggers tokio's `Cannot start a runtime from within a runtime` panic. |
+| `rust-box-dyn-error-without-send-sync` | `Box<dyn Error>` without `+ Send + Sync` bounds. | A bare `Box<dyn Error>` cannot cross thread boundaries — it can't be sent into a `tokio::spawn` task or returned from a function that's awaited on another runtime worker. Use `Box<dyn Error + Send + Sync + 'static>` (or the `anyhow::Error` alias). |
+| `rust-builder-without-must-use` | Builder types need `#[must_use]` to catch forgotten `.build()` calls. | Add `#[must_use]` above the struct definition. Without it, callers who forget the final `.build()` get a silent no-op instead of a compiler warning. |
+| `rust-clone-in-iter-chain` | `.map(\|x\| x.clone())` in an iterator chain — use `.cloned()`. | `Iterator::cloned()` (or `.copied()` for `Copy` types) expresses intent more clearly and is the same in performance. The closure form makes readers ask whether anything else is going on inside the closure. |
+| `rust-collect-then-into-iter` | `.collect::<Vec<_>>().into_iter()` materialises and immediately re-iterates a collection. | Drop the `.collect()` + `.into_iter()` pair — the preceding iterator chain already produces an iterator. Materialising into `Vec` only to re-iterate allocates a heap buffer for nothing. |
+| `rust-const-for-static-no-interior-mut` | Use `const` instead of `static` for plain-literal values without interior mutability. | Change `static FOO: T = …;` to `const FOO: T = …;` when `T` has no interior mutability (`Cell`, `Mutex`, `OnceLock`, …) and the value is a literal or `const fn` expression. `const` inlines at every use site; `static` reserves a fixed address you don't need. |
+| `rust-drop-calls-self-lock` | `Drop::drop` body calls `.lock()` / `.read()` / `.write()` on a `self.field`. | Acquiring a lock during `Drop` deadlocks if the same lock is already held on the dropping thread, and risks panic if the lock is poisoned. Restructure so locking happens before drop, or store data in a way that doesn't require re-locking on cleanup. |
+| `rust-duration-over-integer-with-unit` | Prefer `Duration` over integers whose name encodes a time unit. | Replace `window_days: u32` with `window: std::time::Duration`. For config parsing, use a humantime crate or similar to accept "30d" / "24h" at the config boundary. The type then carries the unit through the codebase. |
+| `rust-eprintln-in-library` | `eprintln!` / `eprint!` invoked from library code. | Library code shouldn't write to stderr directly — consumers can't redirect, configure, or capture it. Use `tracing::warn!` / `tracing::error!` so the consumer's subscriber controls the output. |
+| `rust-explicit-enum-match-arms` | Wildcard `_` arm on a `match` that looks like it covers an enum. | Replace `_ => …` with the remaining variants explicitly (`Foo::A \| Foo::B => …`). The compile error on enum expansion is the whole point: it forces you to consciously handle each new case. |
+| `rust-explicit-iter-loop` | Use iterator chains, not raw index loops. | Replace `for i in 0..vec.len() { vec[i] }` with `for x in &vec`. Iterator chains let the compiler vectorize the loop body and eliminate bounds checks. Enable `clippy::needless_range_loop` and `clippy::explicit_iter_loop`. |
+| `rust-hash-partial-eq-mismatch` | `Hash` and `PartialEq` are not implemented consistently (one derived, the other manual). | If two values are equal (`a == b`) they MUST produce the same hash. Mixing a derived `Hash` with a manual `PartialEq` (or vice versa) almost always breaks that invariant. Either derive both or implement both manually with care to keep them in sync. |
+| `rust-if-let-mutex-lock` | `if let ... = mtx.lock()` extends the lock guard's lifetime to cover the `else` branch. | Temporaries created in the scrutinee of `if let` live for the entire `if/else` expression. Hold the guard in a separate `let` binding so the lock is released before the `else` branch runs, or use `match` with explicit `drop()` calls. |
+| `rust-impl-debug-on-public-types` | Public structs and enums must derive `Debug`. | Add `#[derive(Debug)]` (or `#[derive(Debug, …)]`) above the type definition. Every public type should be loggable for free, and consumers shouldn't have to wrap your type to get a `Debug` impl. If a field can't be Debug (e.g. a closure), implement `Debug` by hand instead. |
+| `rust-iter-count-vs-len` | `.iter().count()` walks the whole collection to compute its length. | Use `.len()` directly on the collection — `Vec`, slices, `VecDeque`, `String`, `HashMap`, and `HashSet` all expose it in O(1). `.count()` consumes an iterator linearly. |
+| `rust-large-enum-variant` | Enum size equals the largest variant — box big variants. | Wrap the large variant's payload in `Box<T>` so the enum stays small. Otherwise every instance of the enum — even the small-variant case — pays the full size cost. Enable `clippy::large_enum_variant`. |
+| `rust-mod-tests-without-cfg-test` | `mod tests` must be gated by `#[cfg(test)]`. | Add `#[cfg(test)]` immediately above the `mod tests` declaration. Without it, every test function ships in the release binary — bloat plus a risk of pulling in dev-dependencies that aren't built for release. |
+| `rust-no-allow-without-reason` | `#[allow(...)]` without a justification comment hides problems silently. | Add a `//` comment on the same line or the line above explaining why the lint is suppressed. |
+| `rust-no-arc-mutex-tree` | Tree/graph node typed as `Arc<Mutex<_>>` or `Rc<RefCell<_>>`. | Replace the shared-ownership + interior-mutability pattern with an arena (`id_arena`, `indextree`, `slotmap`, `generational-arena`). Nodes become indices into a single `Vec<T>`, which is cheaper, cache-friendly, and makes cycles trivially representable. |
+| `rust-no-as-numeric-cast` | Ban every `as` cast whose target is a numeric primitive. | Replace `x as u64` with `u64::from(x)` for guaranteed-safe widening, or `u64::try_from(x)?` for fallible narrowing. The goal is to make every integer conversion explicit and searchable — `as` hides the intent. |
+| `rust-no-bool-return-from-fallible` | Action functions return `Result`, not `bool`. | Change the return type to `Result<T, E>` (use `()` for T if there's no payload). A bool tells the caller something failed but not why — they can't handle the error specifically, only choose to give up or retry blindly. |
+| `rust-no-box-default` | `Box::new(T::default())` is `Box::<T>::default()`. | Replace `Box::new(T::default())` with `Box::<T>::default()`. The two are equivalent at runtime, but the latter is one allocation step instead of two and reads as the obvious idiom. Enforced by `clippy::box_default`. |
+| `rust-no-dbg-macro` | `dbg!()` is a debugging aid that must not ship. | Remove the `dbg!()` call. If you need permanent observability, use `tracing::debug!`/`tracing::info!` with structured fields instead. `dbg!()` writes to stderr unconditionally and can leak PII. |
+| `rust-no-empty-test-fn` | `#[test] fn x() {}` is a passing stub that exercises nothing. | Either delete the test or fill it in. An empty test always passes and gives false confidence that the code is covered. |
+| `rust-no-float-for-money` | Money fields must not be `f32`/`f64` — IEEE 754 rounding errors corrupt totals. | Use `rust_decimal::Decimal` for arbitrary-precision monetary values, or a newtype around `i64` representing the smallest unit (cents, satoshis, …). Floats accumulate rounding errors and silently break accounting invariants. |
+| `rust-no-format-in-debug-impl` | `format!` inside `Debug::fmt` allocates an extra `String` per call. | Replace `format!("...", x)` with a direct `write!(f, "...", x)` call. `write!` streams into the formatter's writer; `format!` builds an intermediate `String` that you immediately throw away. |
+| `rust-no-large-tuple-return` | Function return tuples with 3+ elements should be named structs. | Replace `fn f() -> (A, B, C)` with `fn f() -> Result { … }` where `Result` is a named struct holding the same fields. Tuples force positional reasoning at every call site and make refactors impossible. |
+| `rust-no-linkedlist` | Prefer `Vec<T>` over `LinkedList<T>` — cache locality wins. | Replace `LinkedList<T>` with `Vec<T>` or `VecDeque<T>`. LinkedList's theoretical O(1) splice is dominated in practice by Vec's cache locality for any realistic size. Enable `clippy::linkedlist`. |
+| `rust-no-lossy-as-cast` | `as` casts that can truncate or lose precision are silent bugs. | Replace the `as` cast with `try_into()` (returns Result) or `u8::try_from(x)` for integer narrowing. For guaranteed-safe widening casts (`u8` → `u32`), use `From::from(x)` / `x.into()` instead — explicit, documents the conversion is total. |
+| `rust-no-panic-macros` | No `panic!` / `todo!` / `unimplemented!` / `unreachable!` in production. | Replace the macro with a typed Result error. `todo!()` and `unimplemented!()` mark placeholders that must not ship. `unreachable!()` should only mark compiler-proven impossible states with a `// Impossible: ...` comment. Tests are exempted — panicking in a `#[test]` is a clean failure. |
+| `rust-no-println-in-async` | `println!` / `eprintln!` inside async code blocks the runtime. | Replace `println!("…")` / `eprintln!("…")` with a `tracing` macro (`tracing::info!`, `tracing::warn!`, `tracing::error!`). `println!` takes a blocking stdout lock — inside an async task that stalls the reactor and interleaves output from concurrent tasks. Tracing macros are non-blocking and respect subscriber filters/spans. |
+| `rust-no-pub-use-glob` | `pub use foo::*` re-exports invisibly. | List the re-exports explicitly: `pub use foo::{Bar, Baz};`. Glob re-exports turn every change in `foo` into a silent change to your public API. |
+| `rust-no-static-mut` | `static mut` is deprecated and unsafe by design. | Replace `static mut FOO: T = ...` with a safe primitive: `OnceLock<T>`/`LazyLock<T>` for initialize-once values, `Mutex<T>`/`RwLock<T>` for shared mutable state, or `AtomicU64`/`AtomicBool`/etc for primitive counters and flags. |
+| `rust-no-todo-macro` | No `todo!()` macro invocations in production code. | Replace `todo!()` with the actual implementation, or with a typed `Result` error if the path is intentionally unsupported. `todo!()` is a placeholder marker — when it ships it turns into a runtime panic. Tests are exempted (panicking inside a `#[test]` is a clean failure mode). |
+| `rust-no-unwrap` | No `.unwrap()` / `.expect()` in production code. | Handle the None / Err case explicitly. Use `?` with proper error propagation, or `unwrap_or_else` with a meaningful fallback. `unwrap()` turns runtime conditions into crashes. Tests are exempted — panicking inside a `#[test]` is a clean failure. |
+| `rust-no-unwrap-in-from-impl` | `From::from` must be infallible — no `.unwrap()` / `.expect()`. | Switch the trait to `TryFrom`. Its associated `Error` type lets the caller pattern-match on the failure mode instead of panicking. `From` is reserved for total conversions; if you can write `unwrap()`, you don't have a total conversion. |
+| `rust-ord-partial-ord-inconsistent` | `Ord` and `PartialOrd` are not implemented consistently (one derived, the other manual). | If both traits are present, the contract requires `partial_cmp(a, b) == Some(cmp(a, b))`. Mixing a derived `Ord` with a manual `PartialOrd` (or vice versa) typically desyncs them. Either derive both or implement both manually with care to keep them aligned. |
+| `rust-panic-in-drop` | `Drop::drop` body contains `panic!` / `unwrap` / `expect` / `assert!`. | Panicking inside `Drop` during another panic aborts the process. `Drop` runs on every error path — it must never fail. Log the error, swallow it, or use a fallible alternative invoked before the value is dropped. |
+| `rust-partial-eq-without-eq` | Type derives `PartialEq` but not `Eq`. | When every field type is provably `Eq` (non-float primitives, known-`Eq` stdlib types, or local Eq-capable types) the type should also derive `Eq`. `Eq` is a marker trait signalling reflexivity (`x == x`), and many APIs (`HashSet`, `BTreeMap` keys via wrapping) require it. A field whose `Eq`-ness cannot be proven — a float (`f32`/`f64`), an imported/unknown type, or a generic type parameter — leaves the type exempt, since adding `Eq` would not compile. |
+| `rust-prefer-arc-clone` | `.clone()` on an `Arc` is visually identical to a deep clone — use `Arc::clone(&x)` to signal the cheap reference-count bump. | Replace `x.clone()` with `Arc::clone(&x)` to make the intent explicit. |
+| `rust-prefer-channel-over-arc-mutex-vec` | `Arc<Mutex<Vec<` for collecting task results adds contention. Use `mpsc::channel` instead. | Use `let (tx, rx) = mpsc::channel(); ... tx.send(result); let results: Vec<_> = rx.iter().collect();`. |
+| `rust-prefer-once-lock` | `lazy_static!` and `once_cell` are superseded by `std::sync::OnceLock`/`LazyLock` (Rust 1.70+). | Replace `lazy_static! { static ref X: T = ... }` with `static X: LazyLock<T> = LazyLock::new(\|\| ...);`. |
+| `rust-prefer-strum` | Enum has manual `Display` + `FromStr` impls — use `#[derive(strum::Display, strum::EnumString)]` instead. | Add `#[derive(strum::Display, strum::EnumString)]` and remove the manual impls. Add `#[strum(serialize = "...")]` on variants if the string form differs from the variant name. |
+| `rust-prefer-unwrap-or-explicit` | Ban `.unwrap_or_default()`; require an explicit fallback value. | Replace `.unwrap_or_default()` with `.unwrap_or(0)` / `.unwrap_or(String::new())` / `.unwrap_or_else(\|\| vec![])` — whatever the default is for this type, make it visible at the call site. |
+| `rust-ptr-arg` | Prefer borrowed slices over borrowed owned types. | Replace `&String` with `&str`, `&Vec<T>` with `&[T]`, `&PathBuf` with `&Path`. The slice form accepts more caller types with no extra cost. Enable `clippy::ptr_arg`. |
+| `rust-pub-enum-without-non-exhaustive` | `pub enum` without `#[non_exhaustive]` makes new variants a breaking change. | Add `#[non_exhaustive]` above the enum. Downstream crates will need a wildcard `_ => …` arm to match it, which means future-you can add variants without releasing a major version. |
+| `rust-rc-mutex` | `Rc<Mutex<T>>` pays the Mutex cost for zero benefit — Rc is !Send. | Replace `Rc<Mutex<T>>` with `Rc<RefCell<T>>` (single-threaded interior mutability, no atomic ops). If you actually need cross-thread sharing, use `Arc<Mutex<T>>` instead. |
+| `rust-redundant-clone` | Remove `.clone()` calls whose result isn't independently observed. | Move the value instead of cloning it, or borrow it if the caller still needs access. Clones allocate and copy — they're never free. Enable `clippy::redundant_clone`. |
+| `rust-serde-deny-unknown-fields` | Deserialize-derive structs need `#[serde(deny_unknown_fields)]`. | Add `#[serde(deny_unknown_fields)]` above the struct definition. Without it, typos in input files or API payloads deserialize silently — fields the type doesn't know about are dropped, and the user finds out later. |
+| `rust-string-as-error` | `Result<T, String>` is stringly-typed and unmatchable. | Define a proper error enum (use `thiserror::Error` for the boilerplate) and use it as the `E` parameter. String errors prevent callers from pattern-matching failure modes and lose all structured context. |
+| `rust-sync-io-in-async` | Synchronous I/O calls inside `async fn` block the runtime. | Replace `std::fs::*` with `tokio::fs::*`, `std::net::TcpStream::*` with `tokio::net::TcpStream::*`, etc. If no async equivalent exists, wrap the call in `tokio::task::spawn_blocking(\|\| ...)` so it runs on the dedicated blocking pool. |
+| `rust-thiserror-for-lib` | Library error types should derive `thiserror::Error` instead of manually implementing `Display`. | Add `#[derive(thiserror::Error)]` and use `#[error("...")]` attributes on enum variants. |
+| `rust-thread-sleep-in-async` | `std::thread::sleep` from `async fn` blocks the runtime. | Replace `std::thread::sleep(d)` with `tokio::time::sleep(d).await` (or your runtime's equivalent). The async version yields the worker thread back to the runtime instead of parking it. |
+| `rust-thread-spawn-in-async` | `std::thread::spawn` invoked inside an `async fn`. | Spawning an OS thread from async code defeats the runtime: the thread can't be cooperatively scheduled or driven by the executor, and CPU-bound work should go through `tokio::task::spawn_blocking` (or `rayon`). Use `tokio::spawn` for futures, `spawn_blocking` for sync work. |
+| `rust-to-string-in-format-arg` | `.to_string()` inside `format!` / `println!` / `write!` arguments is redundant. | Drop the `.to_string()` — formatting macros already invoke `Display` (or the requested formatter) on each argument. The extra `.to_string()` allocates a `String` only to hand it back to the same trait. |
+| `rust-tokio-spawn-without-handle` | `tokio::spawn(..)` whose JoinHandle is dropped silently swallows panics. | Capture the JoinHandle and `.await` it, or pass the task through a wrapper like `tokio::spawn(async { if let Err(e) = work().await { tracing::error!(?e); } })`. Fire-and-forget loses every error and every panic. |
+| `rust-unbounded-channel` | Unbounded channels can OOM the process. | Use `mpsc::channel(N)` (tokio) or `crossbeam::channel::bounded(N)`. Pick a capacity that bounds memory under load — even N=1024 is infinitely safer than no bound. The producer will `.await` (or block) when full, providing backpressure. |
+| `rust-undocumented-unsafe` | Every `unsafe` block must have a `// SAFETY:` comment. | Add a `// SAFETY: ...` comment above every `unsafe { ... }` block explaining the invariants that make the unsafe code sound. The comment is what future debuggers will reach for when memory corruption shows up. |
+| `rust-unit-error-result` | `Result<T, ()>` discards every error detail. | Define a real error type — even a tiny enum — and use it as the `E` parameter. If absence is the only failure mode, return `Option<T>` instead. `Result<T, ()>` is the worst of both worlds. |
+| `rust-unsafe-ffi-isolation` | `extern "C"` blocks should be isolated inside a `mod sys`, `mod ffi`, or `mod raw` module. | Move the `extern "C"` block into a dedicated submodule: `mod sys { extern "C" { ... } }`. |
+| `rust-unsafe-impl-without-comment` | `unsafe impl` requires a `// SAFETY:` comment. | Add a `// SAFETY: ...` comment immediately above the `unsafe impl` block. Spell out which invariants of the unsafe trait the type upholds — without it, the contract is unauditable. |
+| `rust-vec-with-capacity` | `Vec::new()` followed by a for-loop with `.push()` reallocates repeatedly. Use `Vec::with_capacity()` when the size is known. | Replace `Vec::new()` with `Vec::with_capacity(source.len())` when iterating a collection of known length. |
+| `rust-workspace-deps-centralized` | Member crate pins a dependency instead of inheriting from the workspace. | Declare the version once under `[workspace.dependencies]` in the root `Cargo.toml`, then reference it from member crates with `foo = { workspace = true }`. Keeps versions in lockstep and makes bumps a one-file change. |
+| `rust-workspace-lints-shared` | Workspace lacks `[workspace.lints]` or member crate doesn't inherit it. | In the workspace root `Cargo.toml`, declare a `[workspace.lints.*]` section (clippy, rust, rustdoc). In every member crate, add `[lints]` followed by `workspace = true` to inherit the policy. Prevents per-crate drift of clippy categories and `deny(warnings)`. |
+| `timeout-on-external-command` | `Command::new()` without a timeout can hang indefinitely. | Wrap the command execution with a timeout (e.g. `tokio::time::timeout` or a custom helper). |
 
 ## rust > concurrency
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rust-match-lock-guard-scrutinee` | ❌ | `match` scrutinee that locks holds the guard across every arm. | Pull the lock out: `let guard = mtx.lock().unwrap(); let value = guard.field.clone(); drop(guard); match value { … }`. The `match` form holds the guard until the entire `match` expression finishes, so any arm that takes another lock can deadlock. |
-| `rust-send-sync-unsafe-impl-on-pointer-field` | ❌ | `unsafe impl Send/Sync` on a struct with raw-pointer or `Cell`/`RefCell` fields. | Don't hand-wave thread safety. Either use a sync wrapper (`Mutex`, `Atomic*`, `parking_lot::Mutex`) so the auto trait derives correctly, or wrap the raw pointer in `NonNull<T>` + an explicit `// SAFETY:` comment that argues why the access pattern is sound. Replace `Cell` with an `AtomicCell` or `Mutex<T>` for cross-thread use. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-match-lock-guard-scrutinee` | `match` scrutinee that locks holds the guard across every arm. | Pull the lock out: `let guard = mtx.lock().unwrap(); let value = guard.field.clone(); drop(guard); match value { … }`. The `match` form holds the guard until the entire `match` expression finishes, so any arm that takes another lock can deadlock. |
+| `rust-send-sync-unsafe-impl-on-pointer-field` | `unsafe impl Send/Sync` on a struct with raw-pointer or `Cell`/`RefCell` fields. | Don't hand-wave thread safety. Either use a sync wrapper (`Mutex`, `Atomic*`, `parking_lot::Mutex`) so the auto trait derives correctly, or wrap the raw pointer in `NonNull<T>` + an explicit `// SAFETY:` comment that argues why the access pattern is sound. Replace `Cell` with an `AtomicCell` or `Mutex<T>` for cross-thread use. |
 
 ## rust > configuration
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rust-env-var-unwrap-at-runtime` | ❌ | `env::var("X").unwrap()` outside `main` / tests panics deep in business logic. | Read the variable once at startup (in `main` or your config bootstrap) and pass the value through the call graph as a parameter. Inside business logic the failure mode of a missing env var should be a typed error, not a panic. `main` and tests are exempted. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-env-var-unwrap-at-runtime` | `env::var("X").unwrap()` outside `main` / tests panics deep in business logic. | Read the variable once at startup (in `main` or your config bootstrap) and pass the value through the call graph as a parameter. Inside business logic the failure mode of a missing env var should be a typed error, not a panic. `main` and tests are exempted. |
 
 ## rust > correctness
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rust-float-eq-partial-cmp` | ⚠️ | Don't compare floats with `==` / `!=`. | Compare the absolute difference against an epsilon: `(a - b).abs() < f64::EPSILON` for tight tolerance, or a domain-specific epsilon for measurements. For ordering use `a.partial_cmp(&b)`. Float `==` matches bit patterns, not numerical equality, so `0.1 + 0.2 == 0.3` is false. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-float-eq-partial-cmp` | Don't compare floats with `==` / `!=`. | Compare the absolute difference against an epsilon: `(a - b).abs() < f64::EPSILON` for tight tolerance, or a domain-specific epsilon for measurements. For ordering use `a.partial_cmp(&b)`. Float `==` matches bit patterns, not numerical equality, so `0.1 + 0.2 == 0.3` is false. |
 
 ## rust > observability
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rust-prefer-tracing-over-log` | ⚠️ | Use the `tracing` crate instead of `log`. | Replace `use log::…` and `log::{info,warn,error,debug,trace}!` with the equivalent `tracing` macros. `tracing` carries structured fields and span context across `async` boundaries, which `log` does not. The two crates can interoperate via `tracing-log` if you must support an external dependency that emits through `log`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-prefer-tracing-over-log` | Use the `tracing` crate instead of `log`. | Replace `use log::…` and `log::{info,warn,error,debug,trace}!` with the equivalent `tracing` macros. `tracing` carries structured fields and span context across `async` boundaries, which `log` does not. The two crates can interoperate via `tracing-log` if you must support an external dependency that emits through `log`. |
 
 ## rust > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rust-format-args-in-log-macro` | ⚠️ | Don't pass `format!(...)` to log/tracing macros — pass the args directly. | Replace `info!("{}", format!("x = {}", x))` with `info!("x = {}", x)`. The log/tracing macros already accept the same format-args grammar as `format!`, so the inner `format!` allocates a `String` only to be copied into the log buffer. |
-| `rust-loop-collect-into-existing-vec` | ⚠️ | `for x in src { v.push(x); }` should be `v.extend(src)`. | Use `v.extend(src)` (or `v.extend(src.into_iter().map(...))` if you need a transform). `extend` consults the iterator's `size_hint` and reserves capacity in one allocation; the loop form re-grows the `Vec` once per element. |
-| `rust-no-mutex-in-single-threaded` | ⚠️ | `Mutex<T>` outside of `Arc<Mutex<T>>` is usually a `RefCell<T>` — no thread sharing means no reason to pay for a lock. | Replace `Mutex<T>` with `RefCell<T>` when the value is not shared across threads, or wrap it in `Arc<Mutex<T>>` when it is. |
-| `rust-prefer-cow` | ⚠️ | Public functions taking an owned `String` force callers to allocate — prefer `Cow<'_, str>` or `&str`. | Change `pub fn foo(s: String)` to `pub fn foo(s: impl Into<Cow<'_, str>>)` when the function only sometimes needs ownership, or to `&str` when it never does. |
-| `rust-repeated-string-concat-in-loop` | ⚠️ | `String` concatenation inside a loop reallocates per iteration. | Pre-size with `String::with_capacity(estimate)` and `push_str` into it, or collect into `Vec<String>` and use `.join("")`. The bare `s = s + …` form drops and re-allocates on every iteration. |
-| `rust-string-push-str-format` | ⚠️ | `s.push_str(&format!(...))` allocates a throwaway String — use `write!`. | Replace `s.push_str(&format!("..."))` with `write!(s, "...").unwrap()` (or `?` in a fallible context). `format!` allocates a `String` whose only purpose is to be copied into `s`; `write!` writes directly into `s` and avoids the round-trip allocation. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-format-args-in-log-macro` | Don't pass `format!(...)` to log/tracing macros — pass the args directly. | Replace `info!("{}", format!("x = {}", x))` with `info!("x = {}", x)`. The log/tracing macros already accept the same format-args grammar as `format!`, so the inner `format!` allocates a `String` only to be copied into the log buffer. |
+| `rust-loop-collect-into-existing-vec` | `for x in src { v.push(x); }` should be `v.extend(src)`. | Use `v.extend(src)` (or `v.extend(src.into_iter().map(...))` if you need a transform). `extend` consults the iterator's `size_hint` and reserves capacity in one allocation; the loop form re-grows the `Vec` once per element. |
+| `rust-no-mutex-in-single-threaded` | `Mutex<T>` outside of `Arc<Mutex<T>>` is usually a `RefCell<T>` — no thread sharing means no reason to pay for a lock. | Replace `Mutex<T>` with `RefCell<T>` when the value is not shared across threads, or wrap it in `Arc<Mutex<T>>` when it is. |
+| `rust-prefer-cow` | Public functions taking an owned `String` force callers to allocate — prefer `Cow<'_, str>` or `&str`. | Change `pub fn foo(s: String)` to `pub fn foo(s: impl Into<Cow<'_, str>>)` when the function only sometimes needs ownership, or to `&str` when it never does. |
+| `rust-repeated-string-concat-in-loop` | `String` concatenation inside a loop reallocates per iteration. | Pre-size with `String::with_capacity(estimate)` and `push_str` into it, or collect into `Vec<String>` and use `.join("")`. The bare `s = s + …` form drops and re-allocates on every iteration. |
+| `rust-string-push-str-format` | `s.push_str(&format!(...))` allocates a throwaway String — use `write!`. | Replace `s.push_str(&format!("..."))` with `write!(s, "...").unwrap()` (or `?` in a fallible context). `format!` allocates a `String` whose only purpose is to be copied into `s`; `write!` writes directly into `s` and avoids the round-trip allocation. |
 
 ## rust > serde
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rust-serde-untagged-without-explicit-default` | ⚠️ | `#[serde(untagged)]` variant with `Option<T>` field needs `#[serde(default)]`. | Add `#[serde(default)]` to the `Option<T>` field. With `#[serde(untagged)]`, serde tries each variant in source order and picks the first that deserializes — an `Option<T>` field can match an empty input by accident, which silently shadows later variants. The explicit default makes the matching deterministic. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-serde-untagged-without-explicit-default` | `#[serde(untagged)]` variant with `Option<T>` field needs `#[serde(default)]`. | Add `#[serde(default)]` to the `Option<T>` field. With `#[serde(untagged)]`, serde tries each variant in source order and picks the first that deserializes — an `Option<T>` field can match an empty input by accident, which silently shadows later variants. The explicit default makes the matching deterministic. |
 
 ## rust > testing
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `rust-no-sleep-in-test` | ⚠️ | No `thread::sleep` or `tokio::time::sleep` inside tests. | Sleep-based waits make tests slow and flaky. Wait on a condition (channel, signal, polling with a deadline) or inject a clock so the test can advance time deterministically. Tokio offers `tokio::time::pause()` + `advance(d)` for the latter. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-no-sleep-in-test` | No `thread::sleep` or `tokio::time::sleep` inside tests. | Sleep-based waits make tests slow and flaky. Wait on a condition (channel, signal, polling with a deadline) or inject a clock so the test can advance time deterministically. Tokio offers `tokio::time::pause()` + `advance(d)` for the latter. |
 
 ## security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `audit-log-required-fields` | ⚠️ | Audit-log entries must carry enough context to reconstruct the event. | Include `userId`, `timestamp`, and `action` (or equivalents) in every audit log call. |
-| `csv-formula-injection` | ⚠️ | Flags a dynamic CSV cell built without a formula-escape (OWASP CSV/formula injection). | Wrap dynamic cells in a formula-escape helper (e.g. `escapeCsv`) that neutralizes a leading `=`, `+`, `-`, or `@` before joining the row. |
-| `detect-dangerous-redirects` | ❌ | Redirecting to a user-controlled URL enables open-redirect attacks. | Validate the redirect target against an allowlist of known-safe paths or origins before calling `res.redirect(...)`. Never pass `req.query.*`, `req.body.*`, or `req.params.*` straight through. |
-| `detect-option-rejectunauthorized` | ❌ | `rejectUnauthorized: false` disables TLS certificate validation. | Remove the option (it defaults to `true`) or set it to `true`. Disabling certificate validation makes the connection vulnerable to MITM attacks. |
-| `express-session-require-name` | ⚠️ | `session({...})` config is missing the `name` property — the default session cookie name is predictable. | Add name property to session config to avoid default session name |
-| `mysql-no-multiple-statements` | ❌ | `multipleStatements: true` on mysql connections amplifies SQL injection risk. | Don't enable multipleStatements, it amplifies SQL injection risk. |
-| `no-auth-token-in-localstorage` | ❌ | Auth tokens in localStorage are XSS-exfiltratable. | Store auth tokens in httpOnly cookies. The browser attaches them automatically and JavaScript cannot read them, so a successful XSS can't steal the session. |
-| `no-bidi-characters` | ❌ | Invisible Unicode bidi control characters can be used in trojan-source attacks to disguise malicious code. | Remove the bidi control character. If directional formatting is needed, use visible markup instead. |
-| `no-clear-text-protocol` | ❌ | Clear-text protocol detected — use the encrypted equivalent. | Replace http:// with https://, ftp:// with sftp://, telnet:// with ssh://. Clear-text protocols transmit data in the open. |
-| `no-confidential-logging` | ❌ | Logging calls and thrown error messages must not contain sensitive data such as passwords, tokens, or API keys. | Remove or redact sensitive values before logging or throwing. Use structured logging with explicit field allow-lists instead of interpolating raw secrets. |
-| `no-dangerously-set-inner-html` | ❌ | `dangerouslySetInnerHTML` is an XSS vector. | Remove the dangerouslySetInnerHTML prop. If you must render HTML, sanitize it with DOMPurify first and add a comment explaining the content's provenance. |
-| `no-deprecated-cipher` | ❌ | `createCipher()` derives the key from a password using MD5 — use `createCipheriv()` instead. | Replace `crypto.createCipher(algo, password)` with `crypto.createCipheriv(algo, key, iv)`. The deprecated function uses MD5 to derive the key, which is insecure and non-standard. |
-| `no-disable-mustache-escape` | ❌ | Disabling template engine HTML escaping (`escapeMarkup = false`) opens XSS vectors. | Keep HTML escaping enabled. If raw HTML is truly needed, sanitize it explicitly before rendering. |
-| `no-document-domain` | ❌ | Do not assign to `document.domain`. | Avoid writing to `document.domain` — it relaxes the same-origin policy and creates a security hole. Use `postMessage` or CORS-based communication between origins instead. |
-| `no-document-write` | ❌ | Do not call `document.write()` / `document.writeln()`. | Replace `document.write` with DOM APIs (`appendChild`, `innerHTML` with sanitization, or a framework). `document.write` re-opens the document after load and is an XSS vector. |
-| `no-dynamic-template` | ⚠️ | Dynamic HTML construction via innerHTML, document.write, or similar APIs is an XSS vector. | Use safe DOM APIs (`textContent`, `createElement`) or a framework's built-in escaping. Avoid raw HTML injection entirely. |
-| `no-ecb-mode` | ❌ | ECB cipher mode is insecure — identical plaintext blocks produce identical ciphertext. | Use CBC, CTR, or GCM mode instead of ECB. ECB does not provide semantic security because it encrypts identical blocks to the same ciphertext, leaking patterns. |
-| `no-electron-node-integration` | ❌ | `nodeIntegration` in Electron `BrowserWindow`/`BrowserView` exposes Node APIs to renderer content and breaks the sandbox. | Don't enable nodeIntegration in Electron renderer processes |
-| `no-error-details-in-response` | ❌ | Returning `err.message` or `err.stack` leaks internal error details to clients. | Return a generic error message to the client and log the details server-side. |
-| `no-eval` | ❌ | `eval()` enables arbitrary code injection. | Remove `eval()`. Use `JSON.parse()` for data, a proper parser for expressions, or a sandboxed interpreter if dynamic execution is truly needed. |
-| `no-hardcoded-ip` | ❌ | Hardcoded IP address — move to configuration. | Move the IP to an environment variable or config file. Hardcoded IPs break on deploy and leak infrastructure details into source control. |
-| `no-hardcoded-secret` | ❌ | Hardcoded secrets get exfiltrated from source control. | Move the secret to an environment variable or secret store. Rotate the secret immediately — assume it is already compromised if it reached a commit. |
-| `no-hardcoded-secret-signature` | ❌ | Hardcoded secrets in JWT signing or crypto operations leak credentials into source control. | Load signing keys from environment variables or a secrets manager (e.g., `process.env.JWT_SECRET`). |
-| `no-http-import` | ❌ | Import from an insecure `http://` URL. | Use `https://` instead of `http://` for remote imports. |
-| `no-inner-html` | ❌ | Avoid assigning to `.innerHTML` / `.outerHTML`. | Use `textContent` for plain text or `appendChild` for nodes. If HTML is truly required, sanitize it with DOMPurify first — `innerHTML =` is a classic XSS sink. |
-| `no-insecure-jwt` | ❌ | Weak JWT algorithms (`none`, `HS256`) allow token forgery or trivial brute-force. | Use asymmetric algorithms (`RS256`, `ES256`) for JWT verification. Never allow `algorithm: 'none'` and avoid `HS256` unless you control both issuer and verifier. |
-| `no-mass-assignment` | ❌ | Spreading `req.body` directly into a DB operation risks privilege escalation. | Explicitly pick the fields you need from `req.body` instead of spreading it. |
-| `no-open-redirect` | ❌ | Redirecting to a URL from user input creates an open redirect vulnerability. | Validate the redirect target against an allowlist of trusted paths before redirecting. |
-| `no-path-traversal` | ❌ | Using user-controlled input in `fs` calls without sanitization allows path traversal. | Use `path.basename()` or validate against a safe root directory before any `fs` call. |
-| `no-post-message-star` | ❌ | `postMessage` with `"*"` target origin sends messages to any origin. | Specify an explicit target origin instead of `"*"` to prevent cross-origin data leaks. |
-| `no-prototype-pollution` | ❌ | Deep-merging user-supplied objects can pollute `Object.prototype`. | Validate/sanitize input before merging, or use a safe merge that rejects `__proto__` keys. |
-| `no-shell-exec` | ❌ | `exec()` with template literals or `shell: true` is a command injection vector. | Use `execFile()` with a fixed command and an args array, never `shell: true`. |
-| `no-ssrf-fetch` | ❌ | Server-side `fetch()` / `axios` call whose URL comes from request data can be turned into SSRF. | Validate the URL against a host allowlist (and reject internal IPs) before issuing the request. |
-| `no-timing-attack` | ❌ | Direct string comparison of secrets (passwords, tokens, hashes) is vulnerable to timing attacks. | Use a constant-time comparison function like `crypto.timingSafeEqual()` (Node.js) or `constant_time_eq::constant_time_eq` / `subtle::ConstantTimeEq` (Rust). |
-| `no-unsafe-alloc` | ❌ | Avoid `Buffer.allocUnsafe()` and `new Buffer(size)` — they return uninitialized memory. | Use `Buffer.alloc(size)` for zero-filled buffers or `Buffer.from(data)` for initialized data. `allocUnsafe` / `new Buffer(size)` can leak prior heap contents. |
-| `no-unsafe-shell-exec` | ❌ | Shell-exec functions should not receive a dynamic command string. | Use `execFile` / `spawn` with an argv array so arguments aren't re-parsed by the shell. If you need a shell, hard-code the template and pass user input as argv parameters — never interpolate it into the command string. |
-| `no-unsanitized-method` | ❌ | Calling DOM methods that parse HTML with a non-literal argument is an XSS vector. | Avoid dynamic HTML injection, or sanitize input first |
-| `no-unsanitized-property` | ❌ | Assigning a non-literal value to `innerHTML`, `outerHTML`, or `srcdoc` is an XSS vector. | Use textContent, or sanitize HTML before assignment |
-| `no-unvalidated-url-redirect` | ❌ | Client-side redirect from user input creates an open redirect. | Validate the redirect URL against an allowlist before assigning to `location`. |
-| `no-unverified-certificate` | ❌ | Disabling SSL certificate verification enables man-in-the-middle attacks. | Remove `rejectUnauthorized: false` and `NODE_TLS_REJECT_UNAUTHORIZED = '0'`. Use proper CA certificates instead. |
-| `no-unverified-hostname` | ❌ | Disabling TLS hostname verification allows man-in-the-middle attacks. | Remove the `checkServerIdentity` override. Setting it to a no-op function or `null` disables hostname verification, making TLS connections vulnerable to MITM attacks. |
-| `no-weak-cipher` | ❌ | Weak symmetric cipher (DES, RC2, RC4, Blowfish) used in a crypto API call. | Use AES-256-GCM or ChaCha20-Poly1305 instead. |
-| `no-weak-hashing` | ❌ | MD5 and SHA-1 are cryptographically broken — use SHA-256 or stronger. | Replace `createHash('md5')` / `createHash('sha1')` with `createHash('sha256')` or use `crypto.subtle.digest('SHA-256', …)`. |
-| `no-weak-keys` | ❌ | Weak cryptographic key lengths are vulnerable to brute-force attacks. | Use RSA >= 2048 bits and EC >= P-256. Prefer Ed25519 or P-384 for new keys. |
-| `no-weak-ssl` | ❌ | Weak SSL/TLS protocol versions are insecure. | Use TLSv1.2 or TLSv1.3. Older protocols (SSLv2, SSLv3, TLSv1.0, TLSv1.1) have known vulnerabilities. |
-| `no-xml-external-entity` | ❌ | XML parsers without XXE protection are vulnerable to external entity attacks. | Disable external entities: set `noent: false` or `externalEntities: false` when configuring XML parsers. |
-| `security-bcrypt-min-rounds` | ❌ | `bcrypt.hash()` / `bcrypt.hashSync()` must use a cost factor of at least 12. | Raise the second argument (cost / saltRounds) to 12 or higher to slow brute-force attacks. |
-| `security-cookie-no-samesite-none` | ❌ | `SameSite=None` cookies must also set `Secure` — browsers reject them otherwise, and they're cleartext-leakable. | Pair `sameSite: 'none'` with `secure: true` (or write `SameSite=None; Secure` on the raw header). |
-| `security-detect-bidi-characters` | ❌ | Unicode bidirectional override / isolate characters (U+202A..U+202E, U+2066..U+2069) can hide malicious code from readers — the "trojan source" attack. | Delete the bidi control character. If the file genuinely needs bidirectional text (e.g. an RTL UI string), confine those characters to documented translation files away from executable code. |
-| `security-detect-insecure-randomness` | ❌ | `Math.random()` is not cryptographically secure — using it to generate tokens, session ids, passwords or keys is exploitable. | Use `crypto.randomUUID()` / `crypto.getRandomValues(...)` / `crypto.randomBytes(...)`. For passwords specifically, use a KDF library. |
-| `security-detect-non-literal-fs-filename` | ⚠️ | Dynamic path passed to `fs.*` — path traversal vector when the input can be influenced by user data. | Validate / normalize the path against an allowlist before passing it to `fs.*`. Use `path.resolve` + a prefix check, or use a sandboxed FS abstraction. |
-| `security-detect-non-literal-regexp` | ⚠️ | `new RegExp(<dynamic>)` lets user input drive a regex — ReDoS / regex injection risk. | Compile the regex from a static literal, or escape the user input first (no built-in helper — `s.replace(/[.*+?^${}()\|[\]\\]/g, '\\$&')`). |
-| `security-detect-non-literal-require` | ❌ | `require(<dynamic>)` loads a module path computed at runtime — a known supply-chain / RCE vector when the input can be influenced by user data. | Use a static `require("module-name")` literal. If a dynamic import is genuinely needed, validate the path against a whitelist before passing it to `require` / `import()`. |
-| `security-detect-possible-timing-attacks` | ❌ | String equality on a secret / password / token leaks length and partial bytes via timing. | Use a constant-time compare: Node's `crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b))`, or a library like `safe-compare`. |
-| `security-detect-unsafe-regex` | ❌ | Regular expression vulnerable to catastrophic backtracking (ReDoS). | Rewrite the pattern without nested quantifiers and avoid `(a+)+`-style "evil regex" shapes. Consider using a safe regex engine (rust regex crate, RE2) or pre-validate input length. |
-| `security-no-cors-reflect-origin` | ❌ | Reflecting the request `Origin` header into `Access-Control-Allow-Origin` defeats CORS. | Match the request `origin` against an explicit allowlist of trusted origins before echoing it back. Never reflect the raw header value. |
-| `security-no-deserialize-untrusted` | ❌ | Unsafe deserializers (`unserialize`, `deserialize`, `yaml.load`, `pickle.loads`) fed with user input allow RCE. | Use safe parsers: `JSON.parse`, `yaml.safeLoad` / `yaml.load` with `FAILSAFE_SCHEMA`, or validate/whitelist the data before deserializing. |
-| `security-no-password-in-log` | ❌ | Logging variables named `password` / `secret` / `token` leaks credentials to log sinks. | Redact the field before logging (`{ ...user, password: '[REDACTED]' }`) or switch to a logger with field allowlists. |
-| `security-no-sri-missing` | ❌ | `<script src="https://...">` and `<link rel="stylesheet">` from third-party origins must carry an `integrity` attribute (Subresource Integrity). | Add an `integrity="sha384-…"` attribute (and typically `crossOrigin="anonymous"`) so the browser rejects tampered assets. |
-| `security-require-helmet` | ❌ | Express apps must install `helmet()` for default security headers. | Add `app.use(helmet())` after creating the Express app. |
-| `security-require-hsts` | ❌ | Express/HTTP apps must send a `Strict-Transport-Security` header. | Install `helmet()` (enables HSTS by default) or set `Strict-Transport-Security` explicitly via `res.setHeader`. |
-| `security-require-oauth-state` | ❌ | OAuth callback handlers must read and validate the `state` parameter. | Read `state` from the callback request and compare it against the value stored before redirecting to the authorize URL. |
-| `security-require-pkce-oauth` | ❌ | OAuth authorize URLs must include a `code_challenge` (PKCE). | Generate a PKCE verifier/challenge and append `code_challenge` and `code_challenge_method` to the authorize URL. |
-| `security-require-rate-limit-auth` | ❌ | Auth routes (`/login`, `/signup`, `/reset`) must be rate-limited. | Add a rate-limit middleware (e.g. `rateLimit`, `rateLimiter`) to the auth route handler chain. |
-| `serialize-javascript-no-unsafe` | ❌ | `serialize(value, { unsafe: true })` disables HTML escaping (XSS risk). | Don't use unsafe option in serialize-javascript, it disables HTML escaping. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `audit-log-required-fields` | Audit-log entries must carry enough context to reconstruct the event. | Include `userId`, `timestamp`, and `action` (or equivalents) in every audit log call. |
+| `csv-formula-injection` | Flags a dynamic CSV cell built without a formula-escape (OWASP CSV/formula injection). | Wrap dynamic cells in a formula-escape helper (e.g. `escapeCsv`) that neutralizes a leading `=`, `+`, `-`, or `@` before joining the row. |
+| `detect-dangerous-redirects` | Redirecting to a user-controlled URL enables open-redirect attacks. | Validate the redirect target against an allowlist of known-safe paths or origins before calling `res.redirect(...)`. Never pass `req.query.*`, `req.body.*`, or `req.params.*` straight through. |
+| `detect-option-rejectunauthorized` | `rejectUnauthorized: false` disables TLS certificate validation. | Remove the option (it defaults to `true`) or set it to `true`. Disabling certificate validation makes the connection vulnerable to MITM attacks. |
+| `express-session-require-name` | `session({...})` config is missing the `name` property — the default session cookie name is predictable. | Add name property to session config to avoid default session name |
+| `mysql-no-multiple-statements` | `multipleStatements: true` on mysql connections amplifies SQL injection risk. | Don't enable multipleStatements, it amplifies SQL injection risk. |
+| `no-auth-token-in-localstorage` | Auth tokens in localStorage are XSS-exfiltratable. | Store auth tokens in httpOnly cookies. The browser attaches them automatically and JavaScript cannot read them, so a successful XSS can't steal the session. |
+| `no-bidi-characters` | Invisible Unicode bidi control characters can be used in trojan-source attacks to disguise malicious code. | Remove the bidi control character. If directional formatting is needed, use visible markup instead. |
+| `no-clear-text-protocol` | Clear-text protocol detected — use the encrypted equivalent. | Replace http:// with https://, ftp:// with sftp://, telnet:// with ssh://. Clear-text protocols transmit data in the open. |
+| `no-confidential-logging` | Logging calls and thrown error messages must not contain sensitive data such as passwords, tokens, or API keys. | Remove or redact sensitive values before logging or throwing. Use structured logging with explicit field allow-lists instead of interpolating raw secrets. |
+| `no-dangerously-set-inner-html` | `dangerouslySetInnerHTML` is an XSS vector. | Remove the dangerouslySetInnerHTML prop. If you must render HTML, sanitize it with DOMPurify first and add a comment explaining the content's provenance. |
+| `no-deprecated-cipher` | `createCipher()` derives the key from a password using MD5 — use `createCipheriv()` instead. | Replace `crypto.createCipher(algo, password)` with `crypto.createCipheriv(algo, key, iv)`. The deprecated function uses MD5 to derive the key, which is insecure and non-standard. |
+| `no-disable-mustache-escape` | Disabling template engine HTML escaping (`escapeMarkup = false`) opens XSS vectors. | Keep HTML escaping enabled. If raw HTML is truly needed, sanitize it explicitly before rendering. |
+| `no-document-domain` | Do not assign to `document.domain`. | Avoid writing to `document.domain` — it relaxes the same-origin policy and creates a security hole. Use `postMessage` or CORS-based communication between origins instead. |
+| `no-document-write` | Do not call `document.write()` / `document.writeln()`. | Replace `document.write` with DOM APIs (`appendChild`, `innerHTML` with sanitization, or a framework). `document.write` re-opens the document after load and is an XSS vector. |
+| `no-dynamic-template` | Dynamic HTML construction via innerHTML, document.write, or similar APIs is an XSS vector. | Use safe DOM APIs (`textContent`, `createElement`) or a framework's built-in escaping. Avoid raw HTML injection entirely. |
+| `no-ecb-mode` | ECB cipher mode is insecure — identical plaintext blocks produce identical ciphertext. | Use CBC, CTR, or GCM mode instead of ECB. ECB does not provide semantic security because it encrypts identical blocks to the same ciphertext, leaking patterns. |
+| `no-electron-node-integration` | `nodeIntegration` in Electron `BrowserWindow`/`BrowserView` exposes Node APIs to renderer content and breaks the sandbox. | Don't enable nodeIntegration in Electron renderer processes |
+| `no-error-details-in-response` | Returning `err.message` or `err.stack` leaks internal error details to clients. | Return a generic error message to the client and log the details server-side. |
+| `no-eval` | `eval()` enables arbitrary code injection. | Remove `eval()`. Use `JSON.parse()` for data, a proper parser for expressions, or a sandboxed interpreter if dynamic execution is truly needed. |
+| `no-hardcoded-ip` | Hardcoded IP address — move to configuration. | Move the IP to an environment variable or config file. Hardcoded IPs break on deploy and leak infrastructure details into source control. |
+| `no-hardcoded-secret` | Hardcoded secrets get exfiltrated from source control. | Move the secret to an environment variable or secret store. Rotate the secret immediately — assume it is already compromised if it reached a commit. |
+| `no-hardcoded-secret-signature` | Hardcoded secrets in JWT signing or crypto operations leak credentials into source control. | Load signing keys from environment variables or a secrets manager (e.g., `process.env.JWT_SECRET`). |
+| `no-http-import` | Import from an insecure `http://` URL. | Use `https://` instead of `http://` for remote imports. |
+| `no-inner-html` | Avoid assigning to `.innerHTML` / `.outerHTML`. | Use `textContent` for plain text or `appendChild` for nodes. If HTML is truly required, sanitize it with DOMPurify first — `innerHTML =` is a classic XSS sink. |
+| `no-insecure-jwt` | Weak JWT algorithms (`none`, `HS256`) allow token forgery or trivial brute-force. | Use asymmetric algorithms (`RS256`, `ES256`) for JWT verification. Never allow `algorithm: 'none'` and avoid `HS256` unless you control both issuer and verifier. |
+| `no-mass-assignment` | Spreading `req.body` directly into a DB operation risks privilege escalation. | Explicitly pick the fields you need from `req.body` instead of spreading it. |
+| `no-open-redirect` | Redirecting to a URL from user input creates an open redirect vulnerability. | Validate the redirect target against an allowlist of trusted paths before redirecting. |
+| `no-path-traversal` | Using user-controlled input in `fs` calls without sanitization allows path traversal. | Use `path.basename()` or validate against a safe root directory before any `fs` call. |
+| `no-post-message-star` | `postMessage` with `"*"` target origin sends messages to any origin. | Specify an explicit target origin instead of `"*"` to prevent cross-origin data leaks. |
+| `no-prototype-pollution` | Deep-merging user-supplied objects can pollute `Object.prototype`. | Validate/sanitize input before merging, or use a safe merge that rejects `__proto__` keys. |
+| `no-shell-exec` | `exec()` with template literals or `shell: true` is a command injection vector. | Use `execFile()` with a fixed command and an args array, never `shell: true`. |
+| `no-ssrf-fetch` | Server-side `fetch()` / `axios` call whose URL comes from request data can be turned into SSRF. | Validate the URL against a host allowlist (and reject internal IPs) before issuing the request. |
+| `no-timing-attack` | Direct string comparison of secrets (passwords, tokens, hashes) is vulnerable to timing attacks. | Use a constant-time comparison function like `crypto.timingSafeEqual()` (Node.js) or `constant_time_eq::constant_time_eq` / `subtle::ConstantTimeEq` (Rust). |
+| `no-unsafe-alloc` | Avoid `Buffer.allocUnsafe()` and `new Buffer(size)` — they return uninitialized memory. | Use `Buffer.alloc(size)` for zero-filled buffers or `Buffer.from(data)` for initialized data. `allocUnsafe` / `new Buffer(size)` can leak prior heap contents. |
+| `no-unsafe-shell-exec` | Shell-exec functions should not receive a dynamic command string. | Use `execFile` / `spawn` with an argv array so arguments aren't re-parsed by the shell. If you need a shell, hard-code the template and pass user input as argv parameters — never interpolate it into the command string. |
+| `no-unsanitized-method` | Calling DOM methods that parse HTML with a non-literal argument is an XSS vector. | Avoid dynamic HTML injection, or sanitize input first |
+| `no-unsanitized-property` | Assigning a non-literal value to `innerHTML`, `outerHTML`, or `srcdoc` is an XSS vector. | Use textContent, or sanitize HTML before assignment |
+| `no-unvalidated-url-redirect` | Client-side redirect from user input creates an open redirect. | Validate the redirect URL against an allowlist before assigning to `location`. |
+| `no-unverified-certificate` | Disabling SSL certificate verification enables man-in-the-middle attacks. | Remove `rejectUnauthorized: false` and `NODE_TLS_REJECT_UNAUTHORIZED = '0'`. Use proper CA certificates instead. |
+| `no-unverified-hostname` | Disabling TLS hostname verification allows man-in-the-middle attacks. | Remove the `checkServerIdentity` override. Setting it to a no-op function or `null` disables hostname verification, making TLS connections vulnerable to MITM attacks. |
+| `no-weak-cipher` | Weak symmetric cipher (DES, RC2, RC4, Blowfish) used in a crypto API call. | Use AES-256-GCM or ChaCha20-Poly1305 instead. |
+| `no-weak-hashing` | MD5 and SHA-1 are cryptographically broken — use SHA-256 or stronger. | Replace `createHash('md5')` / `createHash('sha1')` with `createHash('sha256')` or use `crypto.subtle.digest('SHA-256', …)`. |
+| `no-weak-keys` | Weak cryptographic key lengths are vulnerable to brute-force attacks. | Use RSA >= 2048 bits and EC >= P-256. Prefer Ed25519 or P-384 for new keys. |
+| `no-weak-ssl` | Weak SSL/TLS protocol versions are insecure. | Use TLSv1.2 or TLSv1.3. Older protocols (SSLv2, SSLv3, TLSv1.0, TLSv1.1) have known vulnerabilities. |
+| `no-xml-external-entity` | XML parsers without XXE protection are vulnerable to external entity attacks. | Disable external entities: set `noent: false` or `externalEntities: false` when configuring XML parsers. |
+| `security-bcrypt-min-rounds` | `bcrypt.hash()` / `bcrypt.hashSync()` must use a cost factor of at least 12. | Raise the second argument (cost / saltRounds) to 12 or higher to slow brute-force attacks. |
+| `security-cookie-no-samesite-none` | `SameSite=None` cookies must also set `Secure` — browsers reject them otherwise, and they're cleartext-leakable. | Pair `sameSite: 'none'` with `secure: true` (or write `SameSite=None; Secure` on the raw header). |
+| `security-detect-bidi-characters` | Unicode bidirectional override / isolate characters (U+202A..U+202E, U+2066..U+2069) can hide malicious code from readers — the "trojan source" attack. | Delete the bidi control character. If the file genuinely needs bidirectional text (e.g. an RTL UI string), confine those characters to documented translation files away from executable code. |
+| `security-detect-insecure-randomness` | `Math.random()` is not cryptographically secure — using it to generate tokens, session ids, passwords or keys is exploitable. | Use `crypto.randomUUID()` / `crypto.getRandomValues(...)` / `crypto.randomBytes(...)`. For passwords specifically, use a KDF library. |
+| `security-detect-non-literal-fs-filename` | Dynamic path passed to `fs.*` — path traversal vector when the input can be influenced by user data. | Validate / normalize the path against an allowlist before passing it to `fs.*`. Use `path.resolve` + a prefix check, or use a sandboxed FS abstraction. |
+| `security-detect-non-literal-regexp` | `new RegExp(<dynamic>)` lets user input drive a regex — ReDoS / regex injection risk. | Compile the regex from a static literal, or escape the user input first (no built-in helper — `s.replace(/[.*+?^${}()\|[\]\\]/g, '\\$&')`). |
+| `security-detect-non-literal-require` | `require(<dynamic>)` loads a module path computed at runtime — a known supply-chain / RCE vector when the input can be influenced by user data. | Use a static `require("module-name")` literal. If a dynamic import is genuinely needed, validate the path against a whitelist before passing it to `require` / `import()`. |
+| `security-detect-possible-timing-attacks` | String equality on a secret / password / token leaks length and partial bytes via timing. | Use a constant-time compare: Node's `crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b))`, or a library like `safe-compare`. |
+| `security-detect-unsafe-regex` | Regular expression vulnerable to catastrophic backtracking (ReDoS). | Rewrite the pattern without nested quantifiers and avoid `(a+)+`-style "evil regex" shapes. Consider using a safe regex engine (rust regex crate, RE2) or pre-validate input length. |
+| `security-no-cors-reflect-origin` | Reflecting the request `Origin` header into `Access-Control-Allow-Origin` defeats CORS. | Match the request `origin` against an explicit allowlist of trusted origins before echoing it back. Never reflect the raw header value. |
+| `security-no-deserialize-untrusted` | Unsafe deserializers (`unserialize`, `deserialize`, `yaml.load`, `pickle.loads`) fed with user input allow RCE. | Use safe parsers: `JSON.parse`, `yaml.safeLoad` / `yaml.load` with `FAILSAFE_SCHEMA`, or validate/whitelist the data before deserializing. |
+| `security-no-password-in-log` | Logging variables named `password` / `secret` / `token` leaks credentials to log sinks. | Redact the field before logging (`{ ...user, password: '[REDACTED]' }`) or switch to a logger with field allowlists. |
+| `security-no-sri-missing` | `<script src="https://...">` and `<link rel="stylesheet">` from third-party origins must carry an `integrity` attribute (Subresource Integrity). | Add an `integrity="sha384-…"` attribute (and typically `crossOrigin="anonymous"`) so the browser rejects tampered assets. |
+| `security-require-helmet` | Express apps must install `helmet()` for default security headers. | Add `app.use(helmet())` after creating the Express app. |
+| `security-require-hsts` | Express/HTTP apps must send a `Strict-Transport-Security` header. | Install `helmet()` (enables HSTS by default) or set `Strict-Transport-Security` explicitly via `res.setHeader`. |
+| `security-require-oauth-state` | OAuth callback handlers must read and validate the `state` parameter. | Read `state` from the callback request and compare it against the value stored before redirecting to the authorize URL. |
+| `security-require-pkce-oauth` | OAuth authorize URLs must include a `code_challenge` (PKCE). | Generate a PKCE verifier/challenge and append `code_challenge` and `code_challenge_method` to the authorize URL. |
+| `security-require-rate-limit-auth` | Auth routes (`/login`, `/signup`, `/reset`) must be rate-limited. | Add a rate-limit middleware (e.g. `rateLimit`, `rateLimiter`) to the auth route handler chain. |
+| `serialize-javascript-no-unsafe` | `serialize(value, { unsafe: true })` disables HTML escaping (XSS risk). | Don't use unsafe option in serialize-javascript, it disables HTML escaping. |
 
 ## security > api-design
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `api-no-unbounded-input-field` | ⚠️ | API input fields without `.max(...)` are unbounded resource sinks. | Add a `.max(N)` constraint to every `z.string()` / `z.number()` / `z.array()` in body schemas. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `api-no-unbounded-input-field` | API input fields without `.max(...)` are unbounded resource sinks. | Add a `.max(N)` constraint to every `z.string()` / `z.number()` / `z.array()` in body schemas. |
 
 ## security > code-quality
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `os-command` | ❌ | Detects potential OS command injection via exec/spawn with dynamic input. | Use `execFile`/`spawnSync` with separate arguments array, never interpolate user input into shell commands. |
-| `post-message-origin` | ❌ | Requires explicit target origin in `postMessage()` calls. | Specify a target origin instead of `'*'`: `postMessage(data, 'https://example.com')`. |
-| `xpath-injection` | ❌ | Detects potential XPath injection via dynamic query strings. | Use parameterized XPath queries or escape user input. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `os-command` | Detects potential OS command injection via exec/spawn with dynamic input. | Use `execFile`/`spawnSync` with separate arguments array, never interpolate user input into shell commands. |
+| `post-message-origin` | Requires explicit target origin in `postMessage()` calls. | Specify a target origin instead of `'*'`: `postMessage(data, 'https://example.com')`. |
+| `xpath-injection` | Detects potential XPath injection via dynamic query strings. | Use parameterized XPath queries or escape user input. |
 
 ## security > regex
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `regex-no-slow-pattern` | ⚠️ | Regex has nested quantifiers that can cause catastrophic backtracking (ReDoS). | Refactor to avoid nested quantifiers like `(a+)+`, `(a*)*`, `(a+)*`, `(.*)*`. Use atomic groups, possessive quantifiers, or restructure the pattern. |
-| `regex-no-super-linear-move` | ⚠️ | Regex quantifier can cause quadratic runtime on certain inputs. | Refactor the quantifier to avoid super-linear backtracking. Use atomic groups or restructure the pattern. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `regex-no-slow-pattern` | Regex has nested quantifiers that can cause catastrophic backtracking (ReDoS). | Refactor to avoid nested quantifiers like `(a+)+`, `(a*)*`, `(a+)*`, `(.*)*`. Use atomic groups, possessive quantifiers, or restructure the pattern. |
+| `regex-no-super-linear-move` | Regex quantifier can cause quadratic runtime on certain inputs. | Refactor the quantifier to avoid super-linear backtracking. Use atomic groups or restructure the pattern. |
 
 ## shadcn
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `shadcn-button-icon-data-attr` | ⚠️ | Icons inside `<Button>` must use `data-icon` instead of `mr-2`/`ml-2` for positioning. | Replace `className="mr-2"` with `data-icon="inline-start"` (and `ml-2` with `data-icon="inline-end"`). |
-| `shadcn-no-custom-badge` | ⚠️ | Badge-shaped `<span>` drifts from the shadcn design system — use `<Badge>`. | Replace `<span className="rounded-full bg-…">` with `<Badge variant="…">`. |
-| `shadcn-no-custom-skeleton` | ⚠️ | Custom skeletons built from `animate-pulse` drift from the shadcn design tokens. | Replace `<div className="animate-pulse …">` with `<Skeleton className="…" />`. |
-| `shadcn-no-hr-use-separator` | ⚠️ | Raw `<hr>` bypasses shadcn theming — use the `<Separator />` component. | Replace `<hr />` with `<Separator />` (or `<Separator orientation="vertical" />`). |
-| `shadcn-no-manual-dark-overrides` | ⚠️ | Manual `dark:` color overrides reintroduce the duplication shadcn tokens eliminate. | Replace the light/dark pair (e.g. `bg-white dark:bg-gray-900`) with a semantic token like `bg-background`. |
-| `shadcn-no-manual-zindex-overlays` | ⚠️ | Do not set `z-*` on shadcn overlay primitives — they own the stacking order. | Remove the `z-*` utility; if a layering issue remains, adjust the stacking of surrounding non-overlay elements instead. |
-| `shadcn-no-raw-tailwind-colors` | ⚠️ | Raw Tailwind color utilities break shadcn theming — use semantic tokens instead. | Replace `bg-blue-500`/`text-gray-600` with `bg-primary`/`text-muted-foreground` and the theme variables they resolve to. |
-| `shadcn-no-space-x-y` | ⚠️ | `space-x-*` / `space-y-*` produce brittle layouts — use flex/grid + gap-* instead. | Replace `space-x-2` with `flex gap-2` and `space-y-4` with `flex flex-col gap-4`. |
-| `shadcn-no-toggle-group-manual` | ⚠️ | Manual `.map()` → `<Button variant={selected === x ? ... : ...}>` is a toggle group in disguise. | Replace with `<ToggleGroup value={selected}>` + `<ToggleGroupItem value="x">`. |
-| `shadcn-tabs-trigger-in-list` | ❌ | `<TabsTrigger>` must live inside `<TabsList>` for correct keyboard navigation and ARIA roles. | Wrap the triggers in a `<TabsList>` sibling of the `<TabsContent>` panels. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `shadcn-button-icon-data-attr` | Icons inside `<Button>` must use `data-icon` instead of `mr-2`/`ml-2` for positioning. | Replace `className="mr-2"` with `data-icon="inline-start"` (and `ml-2` with `data-icon="inline-end"`). |
+| `shadcn-no-custom-badge` | Badge-shaped `<span>` drifts from the shadcn design system — use `<Badge>`. | Replace `<span className="rounded-full bg-…">` with `<Badge variant="…">`. |
+| `shadcn-no-custom-skeleton` | Custom skeletons built from `animate-pulse` drift from the shadcn design tokens. | Replace `<div className="animate-pulse …">` with `<Skeleton className="…" />`. |
+| `shadcn-no-hr-use-separator` | Raw `<hr>` bypasses shadcn theming — use the `<Separator />` component. | Replace `<hr />` with `<Separator />` (or `<Separator orientation="vertical" />`). |
+| `shadcn-no-manual-dark-overrides` | Manual `dark:` color overrides reintroduce the duplication shadcn tokens eliminate. | Replace the light/dark pair (e.g. `bg-white dark:bg-gray-900`) with a semantic token like `bg-background`. |
+| `shadcn-no-manual-zindex-overlays` | Do not set `z-*` on shadcn overlay primitives — they own the stacking order. | Remove the `z-*` utility; if a layering issue remains, adjust the stacking of surrounding non-overlay elements instead. |
+| `shadcn-no-raw-tailwind-colors` | Raw Tailwind color utilities break shadcn theming — use semantic tokens instead. | Replace `bg-blue-500`/`text-gray-600` with `bg-primary`/`text-muted-foreground` and the theme variables they resolve to. |
+| `shadcn-no-space-x-y` | `space-x-*` / `space-y-*` produce brittle layouts — use flex/grid + gap-* instead. | Replace `space-x-2` with `flex gap-2` and `space-y-4` with `flex flex-col gap-4`. |
+| `shadcn-no-toggle-group-manual` | Manual `.map()` → `<Button variant={selected === x ? ... : ...}>` is a toggle group in disguise. | Replace with `<ToggleGroup value={selected}>` + `<ToggleGroupItem value="x">`. |
+| `shadcn-tabs-trigger-in-list` | `<TabsTrigger>` must live inside `<TabsList>` for correct keyboard navigation and ARIA roles. | Wrap the triggers in a `<TabsList>` sibling of the `<TabsContent>` panels. |
 
 ## shadcn > accessibility
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `shadcn-avatar-requires-fallback` | ⚠️ | `<Avatar>` must contain an `<AvatarFallback>` so broken images degrade gracefully. | Add an `<AvatarFallback>` child (initials, icon, or empty circle) alongside `<AvatarImage>`. |
-| `shadcn-dialog-requires-title` | ❌ | `<DialogContent>` must render a `<DialogTitle>` for screen readers. | Add a `<DialogTitle>` inside the dialog; use `VisuallyHidden` to keep it off-screen if needed. |
-| `shadcn-sheet-requires-title` | ❌ | `<SheetContent>` must render a `<SheetTitle>` for screen readers. | Add a `<SheetTitle>` inside the sheet; use `VisuallyHidden` to keep it off-screen if needed. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `shadcn-avatar-requires-fallback` | `<Avatar>` must contain an `<AvatarFallback>` so broken images degrade gracefully. | Add an `<AvatarFallback>` child (initials, icon, or empty circle) alongside `<AvatarImage>`. |
+| `shadcn-dialog-requires-title` | `<DialogContent>` must render a `<DialogTitle>` for screen readers. | Add a `<DialogTitle>` inside the dialog; use `VisuallyHidden` to keep it off-screen if needed. |
+| `shadcn-sheet-requires-title` | `<SheetContent>` must render a `<SheetTitle>` for screen readers. | Add a `<SheetTitle>` inside the sheet; use `VisuallyHidden` to keep it off-screen if needed. |
 
 ## solid > correctness
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-solid-destructured-props` | ⚠️ | Solid component props must not be destructured — it breaks reactivity. | Keep the single `props` parameter and access fields with `props.foo`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-solid-destructured-props` | Solid component props must not be destructured — it breaks reactivity. | Keep the single `props` parameter and access fields with `props.foo`. |
 
 ## solid > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `use-solid-for-component` | ⚠️ | Prefer Solid's `<For>` component over `array.map()` to render lists in JSX. | Replace `{items.map(item => <li />)}` with `<For each={items}>{item => <li />}</For>`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `use-solid-for-component` | Prefer Solid's `<For>` component over `array.map()` to render lists in JSX. | Replace `{items.map(item => <li />)}` with `<For each={items}>{item => <li />}</For>`. |
 
 ## sql
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `sql-add-constraint-not-valid` | ⚠️ | ALTER TABLE ADD CONSTRAINT must use NOT VALID then a separate VALIDATE. | Split the migration: first `ALTER TABLE t ADD CONSTRAINT ... NOT VALID`, then in a later step `ALTER TABLE t VALIDATE CONSTRAINT ...`. Otherwise the ADD takes an AccessExclusiveLock while scanning the whole table. |
-| `sql-advisory-lock-prefer-xact` | ⚠️ | `pg_advisory_lock` holds until session ends, leaking if the connection is reused. Use `pg_advisory_xact_lock` instead. | Replace `pg_advisory_lock(key)` with `pg_advisory_xact_lock(key)` — it auto-releases at transaction end. |
-| `sql-boolean-column-prefix` | ⚠️ | BOOLEAN columns should be prefixed with `is_` or `has_`. | Rename `active BOOLEAN` -> `is_active BOOLEAN`, `admin BOOLEAN` -> `is_admin BOOLEAN`. The prefix makes boolean semantics obvious at call sites. |
-| `sql-constraint-naming-convention` | ⚠️ | Constraints must follow `{table}_{col}_{suffix}` where suffix is pk\|fk\|key\|chk\|exl\|idx\|pkey\|fkey. | Name constraints explicitly: `CONSTRAINT user_email_key UNIQUE (email)`, `CONSTRAINT order_user_id_fk FOREIGN KEY ...`. Deterministic names simplify migrations and error messages. |
-| `sql-fk-naming-convention` | ⚠️ | Foreign keys must be named `{from_table}_{from_col}_{to_table}_{to_col}_fk`. | Use a full FK name like `order_user_id_user_id_fk` — it makes both sides of the join visible in error messages and migration logs. |
-| `sql-index-needs-rationale-comment` | ⚠️ | `CREATE INDEX` without a SQL comment explaining why the index exists. | Prefix the `CREATE INDEX` with an SQL comment (`-- Accelerates the dashboard timeline query filtered by user_id, ordered by created_at DESC`) explaining which query the index supports. Without this note, nobody dares drop the index even when the underlying query is gone. |
-| `sql-jsonb-not-json` | ⚠️ | `JSON` stores raw text and re-parses on every read; `JSONB` is the binary, indexable form. | Use `JSONB` unless you genuinely need to preserve key order or whitespace. `JSONB` supports GIN indexes, path operators, and is faster for every operation except a single insert. |
-| `sql-no-between-timestamp` | ⚠️ | `BETWEEN` with timestamps causes off-by-one bugs (inclusive both sides). | Replace `BETWEEN start AND end` with `>= start AND < end`. BETWEEN is inclusive on both sides — midnight rows get counted twice. |
-| `sql-no-disable-autovacuum` | ⚠️ | Disabling autovacuum on a table causes bloat and XID wraparound. | Do not set `autovacuum_enabled = false`. If the default is too aggressive, tune `autovacuum_vacuum_scale_factor` / `autovacuum_vacuum_threshold` instead. |
-| `sql-no-drop-column-without-expand` | ⚠️ | `DROP COLUMN` without a prior deprecation release breaks running deploys. | Mark the column unused in a previous release (stop writing/reading it from the app), ship, *then* `DROP COLUMN` in a later migration. Dropping live columns invalidates cached query plans in every connected client. |
-| `sql-no-float-for-money` | ❌ | `FLOAT`/`DOUBLE`/`REAL` near monetary columns — use `NUMERIC` for money. | Replace `FLOAT`/`DOUBLE PRECISION`/`REAL` with `NUMERIC(precision, scale)` for any column that holds money, prices, or financial amounts. Floating-point arithmetic introduces rounding errors that compound over transactions. |
-| `sql-no-function-on-indexed-column` | ⚠️ | Wrapping a column in a function inside WHERE kills index sargability. | Avoid `WHERE date_trunc('day', created_at) = ...` / `WHERE LOWER(email) = ...`. Store the normalized form, or add a functional index. |
-| `sql-no-is-deleted-boolean` | ⚠️ | Use `deleted_at TIMESTAMPTZ` instead of `is_deleted BOOLEAN`. | Soft-delete markers should carry *when* it happened: `deleted_at TIMESTAMPTZ NULL`. A nullable timestamp encodes both the boolean and the event time. |
-| `sql-no-like-wildcard-prefix` | ⚠️ | `LIKE '%...'` prevents index usage — use full-text search instead. | Replace `LIKE '%term%'` with a TSVECTOR + GIN index and `@@` operator. Leading wildcards force a sequential scan on every row. |
-| `sql-no-now-in-transaction` | ⚠️ | `NOW()` inside a transaction freezes at BEGIN time — use `clock_timestamp()` for real-time values. | `NOW()`/`CURRENT_TIMESTAMP` return the transaction start time. For per-statement wall-clock, use `clock_timestamp()`. |
-| `sql-no-offset-pagination` | ⚠️ | `OFFSET` pagination is O(N) on deep pages — use cursor-based (keyset) pagination. | Replace `LIMIT N OFFSET M` with cursor-based pagination: `WHERE id > :last_id ORDER BY id LIMIT N`. OFFSET scans and discards M rows every time. |
-| `sql-no-pg-enum` | ❌ | PostgreSQL `CREATE TYPE ... AS ENUM` — can't remove values once added. | Replace PG enums with a CHECK constraint (`status TEXT CHECK(status IN ('a','b','c'))`) or a lookup table. PG enums can't have values removed — they're append-only, which makes rollbacks impossible. |
-| `sql-no-rename-column` | ⚠️ | `ALTER TABLE ... RENAME COLUMN` breaks running deploys. | Use expand-contract: add the new column, dual-write from the app, backfill, switch reads, drop the old column in a later release. A single RENAME COLUMN is a breaking change for any process with cached query plans. |
-| `sql-no-reserved-keyword-identifiers` | ⚠️ | PostgreSQL reserved words must not be used as table or column names. | Rename identifiers like `user`, `order`, `group`, `table` — otherwise every reference requires double-quoting, which leaks into ORMs and breaks silently. |
-| `sql-no-select-star` | ⚠️ | `SELECT *` wastes bandwidth and prevents covering indexes. | List columns explicitly: `SELECT id, name, email` instead of `SELECT *`. Explicit columns enable index-only scans and make the API contract visible. |
-| `sql-no-select-then-insert-race` | ⚠️ | Sequential SELECT + INSERT on the same key is a TOCTOU race. | Use `INSERT ... ON CONFLICT (key) DO NOTHING` (or `DO UPDATE`) in a single statement. Two round-trips let concurrent writers insert between the SELECT and INSERT. |
-| `sql-no-serial-use-identity` | ⚠️ | `SERIAL`/`BIGSERIAL`/`SMALLSERIAL` create implicit sequences with surprising ownership and permission semantics. | Use `GENERATED ALWAYS AS IDENTITY` (or `GENERATED BY DEFAULT AS IDENTITY`). Identity columns are SQL-standard, own their sequences cleanly, and survive `pg_dump --data-only` correctly. |
-| `sql-no-truncate-in-app` | ⚠️ | `TRUNCATE` bypasses triggers, FK checks, and row-level audit. | Use `DELETE FROM table` so triggers, FK cascades and audit logs fire. `TRUNCATE` belongs to ops-only maintenance scripts, not application queries. |
-| `sql-no-union-when-union-all` | ⚠️ | `UNION` forces a dedup sort; prefer `UNION ALL` when rows are already unique. | If both sides include a primary key or are otherwise guaranteed distinct, use `UNION ALL`. The dedup step in `UNION` requires a hash or sort across the combined set. |
-| `sql-no-uuidv4-primary-key` | ⚠️ | UUIDv4 primary keys fragment B-tree indexes and bloat storage. | Use UUIDv7 (time-ordered) for globally-unique keys, or `BIGINT GENERATED ALWAYS AS IDENTITY` for local sequential keys. Avoid `gen_random_uuid()` / `uuid_generate_v4()` on primary keys. |
-| `sql-no-varchar` | ❌ | `VARCHAR(N)` / `CHAR(N)` provides no perf benefit in PostgreSQL — use `TEXT` with a CHECK constraint. | Replace `VARCHAR(N)` with `TEXT` + `CHECK(length(col) <= N)`. PostgreSQL has no length-based optimisation for VARCHAR; the N is enforced with the same trigger overhead as a CHECK. |
-| `sql-nullable-requires-comment` | ⚠️ | Nullable columns must have a `--` comment explaining why NULL is allowed. | Add a `-- reason: <why this can be NULL>` comment on the preceding line. |
-| `sql-prefer-exists-over-in` | ⚠️ | `WHERE x IN (SELECT ...)` — prefer `EXISTS` which exits on first match. | Replace `WHERE col IN (SELECT ...)` with `WHERE EXISTS (SELECT 1 FROM ... WHERE ...)`. EXISTS short-circuits on the first match; IN must materialize the entire subquery. |
-| `sql-recursive-cte-no-termination` | ⚠️ | `WITH RECURSIVE` without a `CYCLE` clause or depth guard can run forever on cyclic graphs. | Add a `CYCLE` clause (PostgreSQL 14+) or guard the recursive term with a depth column (`WHERE depth < N`). Cycles in the data are easy to introduce by accident. |
-| `sql-require-search-path` | ⚠️ | Migration files must set `search_path` or use schema-qualified identifiers. | Start migrations with `SET search_path = pg_catalog, public;` or qualify every identifier (`public.user`, `pg_catalog.setval`). An attacker with CREATE on any schema in search_path can shadow functions. |
-| `sql-require-transaction-timeout` | ⚠️ | DB connection pool config should set `statement_timeout` and `idle_in_transaction_session_timeout` to prevent runaway queries. | Add `statement_timeout: '30s'` and `idle_in_transaction_session_timeout: '60s'` to the pool config. |
-| `sql-singular-table-names` | ⚠️ | Table names should be singular nouns. | Rename `users` -> `user`, `orders` -> `order`. Singular table names match the row-as-entity model and keep joins readable. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `sql-add-constraint-not-valid` | ALTER TABLE ADD CONSTRAINT must use NOT VALID then a separate VALIDATE. | Split the migration: first `ALTER TABLE t ADD CONSTRAINT ... NOT VALID`, then in a later step `ALTER TABLE t VALIDATE CONSTRAINT ...`. Otherwise the ADD takes an AccessExclusiveLock while scanning the whole table. |
+| `sql-advisory-lock-prefer-xact` | `pg_advisory_lock` holds until session ends, leaking if the connection is reused. Use `pg_advisory_xact_lock` instead. | Replace `pg_advisory_lock(key)` with `pg_advisory_xact_lock(key)` — it auto-releases at transaction end. |
+| `sql-boolean-column-prefix` | BOOLEAN columns should be prefixed with `is_` or `has_`. | Rename `active BOOLEAN` -> `is_active BOOLEAN`, `admin BOOLEAN` -> `is_admin BOOLEAN`. The prefix makes boolean semantics obvious at call sites. |
+| `sql-constraint-naming-convention` | Constraints must follow `{table}_{col}_{suffix}` where suffix is pk\|fk\|key\|chk\|exl\|idx\|pkey\|fkey. | Name constraints explicitly: `CONSTRAINT user_email_key UNIQUE (email)`, `CONSTRAINT order_user_id_fk FOREIGN KEY ...`. Deterministic names simplify migrations and error messages. |
+| `sql-fk-naming-convention` | Foreign keys must be named `{from_table}_{from_col}_{to_table}_{to_col}_fk`. | Use a full FK name like `order_user_id_user_id_fk` — it makes both sides of the join visible in error messages and migration logs. |
+| `sql-index-needs-rationale-comment` | `CREATE INDEX` without a SQL comment explaining why the index exists. | Prefix the `CREATE INDEX` with an SQL comment (`-- Accelerates the dashboard timeline query filtered by user_id, ordered by created_at DESC`) explaining which query the index supports. Without this note, nobody dares drop the index even when the underlying query is gone. |
+| `sql-jsonb-not-json` | `JSON` stores raw text and re-parses on every read; `JSONB` is the binary, indexable form. | Use `JSONB` unless you genuinely need to preserve key order or whitespace. `JSONB` supports GIN indexes, path operators, and is faster for every operation except a single insert. |
+| `sql-no-between-timestamp` | `BETWEEN` with timestamps causes off-by-one bugs (inclusive both sides). | Replace `BETWEEN start AND end` with `>= start AND < end`. BETWEEN is inclusive on both sides — midnight rows get counted twice. |
+| `sql-no-disable-autovacuum` | Disabling autovacuum on a table causes bloat and XID wraparound. | Do not set `autovacuum_enabled = false`. If the default is too aggressive, tune `autovacuum_vacuum_scale_factor` / `autovacuum_vacuum_threshold` instead. |
+| `sql-no-drop-column-without-expand` | `DROP COLUMN` without a prior deprecation release breaks running deploys. | Mark the column unused in a previous release (stop writing/reading it from the app), ship, *then* `DROP COLUMN` in a later migration. Dropping live columns invalidates cached query plans in every connected client. |
+| `sql-no-float-for-money` | `FLOAT`/`DOUBLE`/`REAL` near monetary columns — use `NUMERIC` for money. | Replace `FLOAT`/`DOUBLE PRECISION`/`REAL` with `NUMERIC(precision, scale)` for any column that holds money, prices, or financial amounts. Floating-point arithmetic introduces rounding errors that compound over transactions. |
+| `sql-no-function-on-indexed-column` | Wrapping a column in a function inside WHERE kills index sargability. | Avoid `WHERE date_trunc('day', created_at) = ...` / `WHERE LOWER(email) = ...`. Store the normalized form, or add a functional index. |
+| `sql-no-is-deleted-boolean` | Use `deleted_at TIMESTAMPTZ` instead of `is_deleted BOOLEAN`. | Soft-delete markers should carry *when* it happened: `deleted_at TIMESTAMPTZ NULL`. A nullable timestamp encodes both the boolean and the event time. |
+| `sql-no-like-wildcard-prefix` | `LIKE '%...'` prevents index usage — use full-text search instead. | Replace `LIKE '%term%'` with a TSVECTOR + GIN index and `@@` operator. Leading wildcards force a sequential scan on every row. |
+| `sql-no-now-in-transaction` | `NOW()` inside a transaction freezes at BEGIN time — use `clock_timestamp()` for real-time values. | `NOW()`/`CURRENT_TIMESTAMP` return the transaction start time. For per-statement wall-clock, use `clock_timestamp()`. |
+| `sql-no-offset-pagination` | `OFFSET` pagination is O(N) on deep pages — use cursor-based (keyset) pagination. | Replace `LIMIT N OFFSET M` with cursor-based pagination: `WHERE id > :last_id ORDER BY id LIMIT N`. OFFSET scans and discards M rows every time. |
+| `sql-no-pg-enum` | PostgreSQL `CREATE TYPE ... AS ENUM` — can't remove values once added. | Replace PG enums with a CHECK constraint (`status TEXT CHECK(status IN ('a','b','c'))`) or a lookup table. PG enums can't have values removed — they're append-only, which makes rollbacks impossible. |
+| `sql-no-rename-column` | `ALTER TABLE ... RENAME COLUMN` breaks running deploys. | Use expand-contract: add the new column, dual-write from the app, backfill, switch reads, drop the old column in a later release. A single RENAME COLUMN is a breaking change for any process with cached query plans. |
+| `sql-no-reserved-keyword-identifiers` | PostgreSQL reserved words must not be used as table or column names. | Rename identifiers like `user`, `order`, `group`, `table` — otherwise every reference requires double-quoting, which leaks into ORMs and breaks silently. |
+| `sql-no-select-star` | `SELECT *` wastes bandwidth and prevents covering indexes. | List columns explicitly: `SELECT id, name, email` instead of `SELECT *`. Explicit columns enable index-only scans and make the API contract visible. |
+| `sql-no-select-then-insert-race` | Sequential SELECT + INSERT on the same key is a TOCTOU race. | Use `INSERT ... ON CONFLICT (key) DO NOTHING` (or `DO UPDATE`) in a single statement. Two round-trips let concurrent writers insert between the SELECT and INSERT. |
+| `sql-no-serial-use-identity` | `SERIAL`/`BIGSERIAL`/`SMALLSERIAL` create implicit sequences with surprising ownership and permission semantics. | Use `GENERATED ALWAYS AS IDENTITY` (or `GENERATED BY DEFAULT AS IDENTITY`). Identity columns are SQL-standard, own their sequences cleanly, and survive `pg_dump --data-only` correctly. |
+| `sql-no-truncate-in-app` | `TRUNCATE` bypasses triggers, FK checks, and row-level audit. | Use `DELETE FROM table` so triggers, FK cascades and audit logs fire. `TRUNCATE` belongs to ops-only maintenance scripts, not application queries. |
+| `sql-no-union-when-union-all` | `UNION` forces a dedup sort; prefer `UNION ALL` when rows are already unique. | If both sides include a primary key or are otherwise guaranteed distinct, use `UNION ALL`. The dedup step in `UNION` requires a hash or sort across the combined set. |
+| `sql-no-uuidv4-primary-key` | UUIDv4 primary keys fragment B-tree indexes and bloat storage. | Use UUIDv7 (time-ordered) for globally-unique keys, or `BIGINT GENERATED ALWAYS AS IDENTITY` for local sequential keys. Avoid `gen_random_uuid()` / `uuid_generate_v4()` on primary keys. |
+| `sql-no-varchar` | `VARCHAR(N)` / `CHAR(N)` provides no perf benefit in PostgreSQL — use `TEXT` with a CHECK constraint. | Replace `VARCHAR(N)` with `TEXT` + `CHECK(length(col) <= N)`. PostgreSQL has no length-based optimisation for VARCHAR; the N is enforced with the same trigger overhead as a CHECK. |
+| `sql-nullable-requires-comment` | Nullable columns must have a `--` comment explaining why NULL is allowed. | Add a `-- reason: <why this can be NULL>` comment on the preceding line. |
+| `sql-prefer-exists-over-in` | `WHERE x IN (SELECT ...)` — prefer `EXISTS` which exits on first match. | Replace `WHERE col IN (SELECT ...)` with `WHERE EXISTS (SELECT 1 FROM ... WHERE ...)`. EXISTS short-circuits on the first match; IN must materialize the entire subquery. |
+| `sql-recursive-cte-no-termination` | `WITH RECURSIVE` without a `CYCLE` clause or depth guard can run forever on cyclic graphs. | Add a `CYCLE` clause (PostgreSQL 14+) or guard the recursive term with a depth column (`WHERE depth < N`). Cycles in the data are easy to introduce by accident. |
+| `sql-require-search-path` | Migration files must set `search_path` or use schema-qualified identifiers. | Start migrations with `SET search_path = pg_catalog, public;` or qualify every identifier (`public.user`, `pg_catalog.setval`). An attacker with CREATE on any schema in search_path can shadow functions. |
+| `sql-require-transaction-timeout` | DB connection pool config should set `statement_timeout` and `idle_in_transaction_session_timeout` to prevent runaway queries. | Add `statement_timeout: '30s'` and `idle_in_transaction_session_timeout: '60s'` to the pool config. |
+| `sql-singular-table-names` | Table names should be singular nouns. | Rename `users` -> `user`, `orders` -> `order`. Singular table names match the row-as-entity model and keep joins readable. |
 
 ## sql > concurrency
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `sql-no-for-update-without-skip-locked` | ⚠️ | `SELECT ... FOR UPDATE` without `SKIP LOCKED` or `NOWAIT` blocks every concurrent worker behind one slow transaction. | For job-queue / work-stealing patterns use `FOR UPDATE SKIP LOCKED`. For fail-fast contention use `FOR UPDATE NOWAIT`. Plain `FOR UPDATE` is rarely what you want in concurrent code. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `sql-no-for-update-without-skip-locked` | `SELECT ... FOR UPDATE` without `SKIP LOCKED` or `NOWAIT` blocks every concurrent worker behind one slow transaction. | For job-queue / work-stealing patterns use `FOR UPDATE SKIP LOCKED`. For fail-fast contention use `FOR UPDATE NOWAIT`. Plain `FOR UPDATE` is rarely what you want in concurrent code. |
 
 ## sql > constraints
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `sql-check-constraint-no-volatile-function` | ❌ | `CHECK` constraints with volatile functions (`NOW()`, `random()`, …) violate the relational model — the constraint may pass on insert but fail on dump/restore. | Move time-based validation into a trigger or application code. CHECK constraints must be deterministic: PostgreSQL is allowed to assume they always evaluate to the same answer for the same row. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `sql-check-constraint-no-volatile-function` | `CHECK` constraints with volatile functions (`NOW()`, `random()`, …) violate the relational model — the constraint may pass on insert but fail on dump/restore. | Move time-based validation into a trigger or application code. CHECK constraints must be deterministic: PostgreSQL is allowed to assume they always evaluate to the same answer for the same row. |
 
 ## sql > indexing
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `sql-index-on-low-cardinality-boolean` | ⚠️ | A B-tree index on a boolean column rarely helps — selectivity is too low for the planner to pick it. | Use a partial index (`CREATE INDEX ... WHERE flag = TRUE`) targeting the rarer value, or drop the index entirely. Plain B-tree on `BOOLEAN` is almost never used. |
-| `sql-text-search-missing-language` | ⚠️ | `to_tsvector(col)` without an explicit language depends on `default_text_search_config`, which is environment-dependent and not IMMUTABLE. | Pass the language explicitly: `to_tsvector('english', col)`. The two-argument form is IMMUTABLE and can be used in expression indexes. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `sql-index-on-low-cardinality-boolean` | A B-tree index on a boolean column rarely helps — selectivity is too low for the planner to pick it. | Use a partial index (`CREATE INDEX ... WHERE flag = TRUE`) targeting the rarer value, or drop the index entirely. Plain B-tree on `BOOLEAN` is almost never used. |
+| `sql-text-search-missing-language` | `to_tsvector(col)` without an explicit language depends on `default_text_search_config`, which is environment-dependent and not IMMUTABLE. | Pass the language explicitly: `to_tsvector('english', col)`. The two-argument form is IMMUTABLE and can be used in expression indexes. |
 
 ## sql > migrations
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `sql-add-not-null-without-default` | ⚠️ | `ALTER COLUMN ... SET NOT NULL` performs a full table scan under an `ACCESS EXCLUSIVE` lock. | Use the expand/contract pattern: add a `CHECK (col IS NOT NULL) NOT VALID` constraint, then `VALIDATE CONSTRAINT` (which only takes a SHARE UPDATE EXCLUSIVE lock). Drop the check and add `SET NOT NULL` last. |
-| `sql-alter-column-type-unsafe` | ⚠️ | `ALTER COLUMN ... TYPE` without a `USING` clause may force a full table rewrite. | Add a `USING` clause that lets PostgreSQL skip the rewrite when the cast is binary-compatible, or follow the expand/contract pattern: add a new column, backfill, swap, drop the old column. |
-| `sql-create-index-concurrently` | ⚠️ | `CREATE INDEX` without `CONCURRENTLY` takes an `ACCESS EXCLUSIVE` lock, blocking all table access. | Use `CREATE INDEX CONCURRENTLY` for production migrations. Run outside a transaction block. |
-| `sql-create-index-in-transaction` | ❌ | `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block. | Move `CREATE INDEX CONCURRENTLY` outside of `BEGIN`/`COMMIT`. Most migration tools have an option to disable the implicit transaction wrapper for a single migration. |
-| `sql-drop-table-no-cascade-warning` | ⚠️ | `DROP TABLE` without `IF EXISTS` fails noisily on rerun, and `DROP TABLE ... CASCADE` silently destroys dependent objects. | Add `IF EXISTS` so reruns are idempotent. Avoid `CASCADE` — drop dependents explicitly so the migration documents what gets removed. |
-| `sql-pg-enum-with-alter-type-add-value` | ❌ | `ALTER TYPE ... ADD VALUE` cannot run inside a transaction block before PostgreSQL 12, and even on newer versions the new value is not usable in the same transaction. | Run `ALTER TYPE ... ADD VALUE` outside `BEGIN`/`COMMIT`. If you need the new value within a transaction, prefer a CHECK-constrained text column over a true ENUM. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `sql-add-not-null-without-default` | `ALTER COLUMN ... SET NOT NULL` performs a full table scan under an `ACCESS EXCLUSIVE` lock. | Use the expand/contract pattern: add a `CHECK (col IS NOT NULL) NOT VALID` constraint, then `VALIDATE CONSTRAINT` (which only takes a SHARE UPDATE EXCLUSIVE lock). Drop the check and add `SET NOT NULL` last. |
+| `sql-alter-column-type-unsafe` | `ALTER COLUMN ... TYPE` without a `USING` clause may force a full table rewrite. | Add a `USING` clause that lets PostgreSQL skip the rewrite when the cast is binary-compatible, or follow the expand/contract pattern: add a new column, backfill, swap, drop the old column. |
+| `sql-create-index-concurrently` | `CREATE INDEX` without `CONCURRENTLY` takes an `ACCESS EXCLUSIVE` lock, blocking all table access. | Use `CREATE INDEX CONCURRENTLY` for production migrations. Run outside a transaction block. |
+| `sql-create-index-in-transaction` | `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block. | Move `CREATE INDEX CONCURRENTLY` outside of `BEGIN`/`COMMIT`. Most migration tools have an option to disable the implicit transaction wrapper for a single migration. |
+| `sql-drop-table-no-cascade-warning` | `DROP TABLE` without `IF EXISTS` fails noisily on rerun, and `DROP TABLE ... CASCADE` silently destroys dependent objects. | Add `IF EXISTS` so reruns are idempotent. Avoid `CASCADE` — drop dependents explicitly so the migration documents what gets removed. |
+| `sql-pg-enum-with-alter-type-add-value` | `ALTER TYPE ... ADD VALUE` cannot run inside a transaction block before PostgreSQL 12, and even on newer versions the new value is not usable in the same transaction. | Run `ALTER TYPE ... ADD VALUE` outside `BEGIN`/`COMMIT`. If you need the new value within a transaction, prefer a CHECK-constrained text column over a true ENUM. |
 
 ## style
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `top-level-function` | ⚠️ | Top-level arrow-function variables hide their name in stack traces and prevent hoisting — use a function declaration instead. | Replace `const foo = (…) => { … }` at module scope with `function foo(…) { … }`. Keep arrow functions for callbacks and inline expressions. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `top-level-function` | Top-level arrow-function variables hide their name in stack traces and prevent hoisting — use a function declaration instead. | Replace `const foo = (…) => { … }` at module scope with `function foo(…) { … }`. Keep arrow functions for callbacks and inline expressions. |
 
 ## tailwind
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tailwind-enforce-consistent-important-position` | ⚠️ | Mixing `!class` and `class!` for the !important variant is inconsistent and harder to grep for. | Pick the prefix form (`!text-red-500`) — it's the documented Tailwind v4 syntax — and use it everywhere. |
-| `tailwind-enforces-negative-arbitrary-values` | ⚠️ | Negative arbitrary Tailwind values should live inside the brackets, not on the utility prefix. | Use top-[-1px] instead of -top-[1px] |
-| `tailwind-no-apply-for-variants` | ⚠️ | `@apply` outside `@layer base` defeats Tailwind's purging and specificity model. | Compose classes in JSX/HTML instead, or use CSS variables for theming. Reserve `@apply` for `@layer base` resets only. |
-| `tailwind-no-arbitrary-value` | ⚠️ | Arbitrary values `[…]` bypass design system tokens — each one is a small drift away from the design. | Replace the arbitrary value with the matching design token. Add a custom token in `tailwind.config.ts` if the value is genuinely needed in multiple places. |
-| `tailwind-no-arbitrary-z-index` | ⚠️ | Arbitrary z-index values `z-[n]` bypass the design token scale. | Use a design token (`z-10`, `z-50`) or define a custom token in `tailwind.config.ts`. |
-| `tailwind-no-conflicting-classes` | ⚠️ | Mutually exclusive Tailwind classes produce unpredictable styles. | Keep only the intended utility. For example, `p-4 p-6` — remove one of the two padding values. |
-| `tailwind-no-deprecated-classes` | ⚠️ | Deprecated Tailwind v2/v3 utility classes should be replaced by their v3/v4 equivalents. | Replace the deprecated utility with the listed replacement (e.g. `flex-grow-0` → `grow-0`, `overflow-ellipsis` → `text-ellipsis`). |
-| `tailwind-no-duplicate-classes` | ⚠️ | Duplicate CSS classes in className/class attributes are redundant and confusing. | Remove the duplicate class. Each utility should appear at most once. |
-| `tailwind-no-dynamic-class` | ⚠️ | Dynamic Tailwind classes are purged from the stylesheet. | Use a static map instead of string interpolation: `const colors = { blue: 'bg-blue-500', red: 'bg-red-500' }; colors[color]`. Tailwind's purge only sees full static strings, so `bg-${color}-500` never ships. |
-| `tailwind-no-important-modifier` | ⚠️ | The Tailwind `!` important modifier signals a specificity fight, not a real fix. | Fix the specificity issue instead of using `!` — restructure class order or use a more specific selector. |
-| `tailwind-no-legacy-directives` | ⚠️ | Forbid `@tailwind base/components/utilities` (v3 syntax). | Replace the three `@tailwind` directives with a single `@import "tailwindcss";` at the top of your entry stylesheet (Tailwind v4). |
-| `tailwind-no-magic-spacing` | ⚠️ | Arbitrary pixel spacing like `p-[13px]` breaks design-token consistency. | Use the standard spacing scale (`p-1` = 4px, `p-2` = 8px, etc.) or arbitrary values that are multiples of 4. |
-| `tailwind-no-manual-dark-variants` | ⚠️ | Forbid manual `dark:` color variants paired with raw palette colors. | Replace `bg-white dark:bg-zinc-900` with a semantic token like `bg-background` that already resolves per theme. |
-| `tailwind-no-raw-color-utilities` | ⚠️ | Forbid raw palette color utilities (bg-white, text-gray-900, bg-blue-500). | Use semantic design tokens (bg-background, text-foreground, bg-primary, text-muted-foreground) so theming and dark mode stay centralized. |
-| `tailwind-no-restricted-classes` | ⚠️ | User-configured blocklist of Tailwind classes — typically used to ban legacy spacing tokens, ad-hoc colors, or deprecated utility names. | Use the project-approved equivalent. If the class is needed for a one-off, escape via the project's design-token override mechanism. |
-| `tailwind-no-tailwindcss-animate` | ⚠️ | Forbid imports from `tailwindcss-animate`; use `tw-animate-css` instead. | Uninstall `tailwindcss-animate` and install `tw-animate-css`, then replace the import / plugin entry accordingly. |
-| `tailwind-no-unnecessary-whitespace` | ⚠️ | Multiple consecutive spaces in className/class attributes are unnecessary. | Remove extra whitespace in class strings |
-| `tailwind-prefer-cn-utility` | ⚠️ | Ternary or concatenation in `className` should use `cn()` or `clsx()` for readability. | Replace `className={x ? 'a' : 'b'}` with `className={cn('a', { b: x })}`. |
-| `tailwind-prefer-shorthand` | ⚠️ | Collapse redundant Tailwind utility pairs into their shorthand form (e.g. `px-2 py-2` → `p-2`). | Replace pairs like `pt-N pb-N` with `py-N`, `pl-N pr-N` with `px-N`, and `px-N py-N` with `p-N`. |
-| `tailwind-prefer-size-shorthand` | ⚠️ | `w-X h-X` with equal values can be written as `size-X`. | Replace `w-4 h-4` with `size-4` (Tailwind v3.4+). |
-| `tailwind-read-theme-before-classes` | ⚠️ | Arbitrary Tailwind values (`p-[13px]`, `bg-[#abc]`) are used without the file referencing `tailwind.config` / `resolveConfig` / `theme(...)`. | Either switch to a design-token class (`p-4`, `bg-brand`) or import the theme via `resolveConfig(tailwindConfig)` / `theme('spacing.4')` so the arbitrary value stays in sync with the config. |
-| `tailwind-require-responsive-grid` | ⚠️ | `grid-cols-2+` without a responsive variant compresses on mobile. | Use `grid-cols-1 md:grid-cols-3` (mobile-first) instead of `grid-cols-3`. |
-| `tailwind-require-responsive-text` | ⚠️ | Headings with `text-4xl+` must also declare a responsive size variant. | Scale the heading down on mobile, e.g. `text-2xl md:text-4xl` instead of just `text-4xl`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tailwind-enforce-consistent-important-position` | Mixing `!class` and `class!` for the !important variant is inconsistent and harder to grep for. | Pick the prefix form (`!text-red-500`) — it's the documented Tailwind v4 syntax — and use it everywhere. |
+| `tailwind-enforces-negative-arbitrary-values` | Negative arbitrary Tailwind values should live inside the brackets, not on the utility prefix. | Use top-[-1px] instead of -top-[1px] |
+| `tailwind-no-apply-for-variants` | `@apply` outside `@layer base` defeats Tailwind's purging and specificity model. | Compose classes in JSX/HTML instead, or use CSS variables for theming. Reserve `@apply` for `@layer base` resets only. |
+| `tailwind-no-arbitrary-value` | Arbitrary values `[…]` bypass design system tokens — each one is a small drift away from the design. | Replace the arbitrary value with the matching design token. Add a custom token in `tailwind.config.ts` if the value is genuinely needed in multiple places. |
+| `tailwind-no-arbitrary-z-index` | Arbitrary z-index values `z-[n]` bypass the design token scale. | Use a design token (`z-10`, `z-50`) or define a custom token in `tailwind.config.ts`. |
+| `tailwind-no-conflicting-classes` | Mutually exclusive Tailwind classes produce unpredictable styles. | Keep only the intended utility. For example, `p-4 p-6` — remove one of the two padding values. |
+| `tailwind-no-deprecated-classes` | Deprecated Tailwind v2/v3 utility classes should be replaced by their v3/v4 equivalents. | Replace the deprecated utility with the listed replacement (e.g. `flex-grow-0` → `grow-0`, `overflow-ellipsis` → `text-ellipsis`). |
+| `tailwind-no-duplicate-classes` | Duplicate CSS classes in className/class attributes are redundant and confusing. | Remove the duplicate class. Each utility should appear at most once. |
+| `tailwind-no-dynamic-class` | Dynamic Tailwind classes are purged from the stylesheet. | Use a static map instead of string interpolation: `const colors = { blue: 'bg-blue-500', red: 'bg-red-500' }; colors[color]`. Tailwind's purge only sees full static strings, so `bg-${color}-500` never ships. |
+| `tailwind-no-important-modifier` | The Tailwind `!` important modifier signals a specificity fight, not a real fix. | Fix the specificity issue instead of using `!` — restructure class order or use a more specific selector. |
+| `tailwind-no-legacy-directives` | Forbid `@tailwind base/components/utilities` (v3 syntax). | Replace the three `@tailwind` directives with a single `@import "tailwindcss";` at the top of your entry stylesheet (Tailwind v4). |
+| `tailwind-no-magic-spacing` | Arbitrary pixel spacing like `p-[13px]` breaks design-token consistency. | Use the standard spacing scale (`p-1` = 4px, `p-2` = 8px, etc.) or arbitrary values that are multiples of 4. |
+| `tailwind-no-manual-dark-variants` | Forbid manual `dark:` color variants paired with raw palette colors. | Replace `bg-white dark:bg-zinc-900` with a semantic token like `bg-background` that already resolves per theme. |
+| `tailwind-no-raw-color-utilities` | Forbid raw palette color utilities (bg-white, text-gray-900, bg-blue-500). | Use semantic design tokens (bg-background, text-foreground, bg-primary, text-muted-foreground) so theming and dark mode stay centralized. |
+| `tailwind-no-restricted-classes` | User-configured blocklist of Tailwind classes — typically used to ban legacy spacing tokens, ad-hoc colors, or deprecated utility names. | Use the project-approved equivalent. If the class is needed for a one-off, escape via the project's design-token override mechanism. |
+| `tailwind-no-tailwindcss-animate` | Forbid imports from `tailwindcss-animate`; use `tw-animate-css` instead. | Uninstall `tailwindcss-animate` and install `tw-animate-css`, then replace the import / plugin entry accordingly. |
+| `tailwind-no-unnecessary-whitespace` | Multiple consecutive spaces in className/class attributes are unnecessary. | Remove extra whitespace in class strings |
+| `tailwind-prefer-cn-utility` | Ternary or concatenation in `className` should use `cn()` or `clsx()` for readability. | Replace `className={x ? 'a' : 'b'}` with `className={cn('a', { b: x })}`. |
+| `tailwind-prefer-shorthand` | Collapse redundant Tailwind utility pairs into their shorthand form (e.g. `px-2 py-2` → `p-2`). | Replace pairs like `pt-N pb-N` with `py-N`, `pl-N pr-N` with `px-N`, and `px-N py-N` with `p-N`. |
+| `tailwind-prefer-size-shorthand` | `w-X h-X` with equal values can be written as `size-X`. | Replace `w-4 h-4` with `size-4` (Tailwind v3.4+). |
+| `tailwind-read-theme-before-classes` | Arbitrary Tailwind values (`p-[13px]`, `bg-[#abc]`) are used without the file referencing `tailwind.config` / `resolveConfig` / `theme(...)`. | Either switch to a design-token class (`p-4`, `bg-brand`) or import the theme via `resolveConfig(tailwindConfig)` / `theme('spacing.4')` so the arbitrary value stays in sync with the config. |
+| `tailwind-require-responsive-grid` | `grid-cols-2+` without a responsive variant compresses on mobile. | Use `grid-cols-1 md:grid-cols-3` (mobile-first) instead of `grid-cols-3`. |
+| `tailwind-require-responsive-text` | Headings with `text-4xl+` must also declare a responsive size variant. | Scale the heading down on mobile, e.g. `text-2xl md:text-4xl` instead of just `text-4xl`. |
 
 ## tailwind > accessibility
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tailwind-min-touch-target` | ⚠️ | Interactive elements should be ~44x44px minimum (WCAG 2.5.5). | Bump padding / height so the touch target reaches 44px (e.g. `h-11 px-4`, or `min-h-11 min-w-11` for icon buttons). |
-| `tailwind-no-negative-z-index-on-interactive` | ❌ | Negative `z-index` on interactive elements blocks pointer events. | Remove the `-z-*` class, or use a stacking context wrapper. |
-| `tailwind-no-overflow-hidden-on-focus-container` | ⚠️ | `overflow-hidden` clips focus rings on focusable children. | Use `overflow-clip` (Tailwind 3.1+) or move clipping to a wrapper that doesn't host focusable children. |
-| `tailwind-no-text-size-below-12px` | ⚠️ | Text below 12px fails accessibility audits and is hard to read. | Use `text-xs` (12px) or larger. |
-| `tailwind-require-focus-ring` | ⚠️ | Interactive elements must carry a `focus:ring-*` class for keyboard a11y. | Add `focus:ring-2` (and ideally `focus:ring-offset-2`, `focus:outline-none`) to buttons, anchors, inputs, selects, textareas, and role=button elements. |
-| `tailwind-require-motion-reduce` | ⚠️ | Elements with `transition-*` / `animate-*` must also declare a `motion-reduce:*` variant. | Add `motion-reduce:transition-none` (or `motion-reduce:animate-none`) so users with `prefers-reduced-motion: reduce` are respected. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tailwind-min-touch-target` | Interactive elements should be ~44x44px minimum (WCAG 2.5.5). | Bump padding / height so the touch target reaches 44px (e.g. `h-11 px-4`, or `min-h-11 min-w-11` for icon buttons). |
+| `tailwind-no-negative-z-index-on-interactive` | Negative `z-index` on interactive elements blocks pointer events. | Remove the `-z-*` class, or use a stacking context wrapper. |
+| `tailwind-no-overflow-hidden-on-focus-container` | `overflow-hidden` clips focus rings on focusable children. | Use `overflow-clip` (Tailwind 3.1+) or move clipping to a wrapper that doesn't host focusable children. |
+| `tailwind-no-text-size-below-12px` | Text below 12px fails accessibility audits and is hard to read. | Use `text-xs` (12px) or larger. |
+| `tailwind-require-focus-ring` | Interactive elements must carry a `focus:ring-*` class for keyboard a11y. | Add `focus:ring-2` (and ideally `focus:ring-offset-2`, `focus:outline-none`) to buttons, anchors, inputs, selects, textareas, and role=button elements. |
+| `tailwind-require-motion-reduce` | Elements with `transition-*` / `animate-*` must also declare a `motion-reduce:*` variant. | Add `motion-reduce:transition-none` (or `motion-reduce:animate-none`) so users with `prefers-reduced-motion: reduce` are respected. |
 
 ## tailwind > i18n
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tailwind-enforce-logical-properties` | ⚠️ | Physical directional spacing (`ml-`, `mr-`, `pl-`, `pr-`) doesn't flip in RTL — prefer logical (`ms-`, `me-`, `ps-`, `pe-`). | Replace `ml-4` with `ms-4`, `pr-2` with `pe-2`, etc. The logical pair flips automatically when the writing direction is RTL. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tailwind-enforce-logical-properties` | Physical directional spacing (`ml-`, `mr-`, `pl-`, `pr-`) doesn't flip in RTL — prefer logical (`ms-`, `me-`, `ps-`, `pe-`). | Replace `ml-4` with `ms-4`, `pr-2` with `pe-2`, etc. The logical pair flips automatically when the writing direction is RTL. |
 
 ## tailwind > mobile
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tailwind-no-w-screen-h-screen-on-mobile` | ⚠️ | `w-screen` / `h-screen` cause layout jumps when the mobile URL bar collapses. | Use `w-full` / `min-h-dvh` (dynamic viewport units) instead. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tailwind-no-w-screen-h-screen-on-mobile` | `w-screen` / `h-screen` cause layout jumps when the mobile URL bar collapses. | Use `w-full` / `min-h-dvh` (dynamic viewport units) instead. |
 
 ## tailwind > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tailwind-no-transition-all-layout` | ⚠️ | Forbid `transition-all` with width/height/top/left utilities — causes layout thrash. | Animate via `translate-*` + `transition-transform` or `opacity-*` + `transition-opacity`. These are composited and never trigger layout. |
-| `tailwind-require-aspect-ratio-on-media` | ⚠️ | `<img>` / `<video>` without `aspect-*` or width+height causes layout shift. | Add a Tailwind `aspect-*` class (e.g. `aspect-video`) or both `width` and `height` attributes. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tailwind-no-transition-all-layout` | Forbid `transition-all` with width/height/top/left utilities — causes layout thrash. | Animate via `translate-*` + `transition-transform` or `opacity-*` + `transition-opacity`. These are composited and never trigger layout. |
+| `tailwind-require-aspect-ratio-on-media` | `<img>` / `<video>` without `aspect-*` or width+height causes layout shift. | Add a Tailwind `aspect-*` class (e.g. `aspect-video`) or both `width` and `height` attributes. |
 
 ## tanstack
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tanstack-query-array-key` | ❌ | TanStack Query keys must be arrays, not strings. | Wrap the string in brackets: `queryKey: ['todos']`. v5 requires arrays, and hierarchical invalidation (`invalidateQueries({ queryKey: ['todos'] })`) only works on array keys. |
-| `tanstack-query-dehydrate-no-pending-in-ssr` | ⚠️ | Calling `dehydrate(...)` while `prefetchQuery` is still pending serializes empty state. | `await` every `prefetchQuery(...)` before `dehydrate(queryClient)`. |
-| `tanstack-query-fn-must-throw-on-error` | ⚠️ | `queryFn` must throw on HTTP errors so TanStack Query can retry and surface them. | Check `res.ok` and throw: `if (!res.ok) throw new Error(...)`. |
-| `tanstack-query-no-async-query-fn-without-await` | ⚠️ | `queryFn: async () => fetch(...)` returns an unconsumed Response. | Await the fetch and parse the body inside the query function: `queryFn: async () => { const r = await fetch(url); return r.json(); }`. |
-| `tanstack-query-no-cache-time` | ⚠️ | `cacheTime` was renamed to `gcTime` in TanStack Query v5. | Replace `cacheTime` with `gcTime`. |
-| `tanstack-query-no-deprecated-props` | ❌ | Deprecated TanStack Query props from v4. | Migrate to v5 names: `cacheTime` → `gcTime`, `useErrorBoundary` → `throwOnError`. `onSuccess`/`onError`/`onSettled` are removed from `useQuery` — use `useEffect` instead (mutation callbacks still work). |
-| `tanstack-query-no-enabled-true` | ⚠️ | `enabled: true` is the default in TanStack Query and should be omitted. | Remove `enabled: true` — queries are enabled by default. |
-| `tanstack-query-no-is-loading` | ⚠️ | `isLoading` was removed from `useMutation` results in TanStack Query v5 (renamed to `isPending`). | Replace `isLoading` with `isPending` on the `useMutation` result. |
-| `tanstack-query-no-keep-previous-data-prop` | ⚠️ | `keepPreviousData: true` was replaced by `placeholderData: keepPreviousData` in v5. | Import `keepPreviousData` from `@tanstack/react-query` and use `placeholderData: keepPreviousData`. |
-| `tanstack-query-no-query-callbacks` | ⚠️ | `onSuccess`/`onError`/`onSettled` callbacks on `useQuery` were removed in v5. | Move side-effects to `useEffect` watching the query result. |
-| `tanstack-query-no-query-in-render-loop` | ❌ | `useQuery` inside `.map()` creates one subscription per row. | Move the query out of the loop. Fetch the parent collection once, or use `useQueries` with a key per row. |
-| `tanstack-query-no-set-query-data-without-key-factory` | ⚠️ | `setQueryData` with an inline array key is invisible to refactors. | Use a query key factory: `setQueryData(userKeys.detail(id), data)`. |
-| `tanstack-query-no-use-error-boundary` | ⚠️ | `useErrorBoundary` was removed in TanStack Query v5. | Use the `throwOnError` option instead. |
-| `tanstack-query-prefer-key-factory` | ⚠️ | Inline dynamic `queryKey` arrays should use a key factory for consistency. | Define a key factory: `const todoKeys = { detail: (id: string) => ['todos', id] as const }` and use `todoKeys.detail(id)`. |
-| `tanstack-query-prefer-query-options` | ⚠️ | Inline `queryKey`/`queryFn` objects should be extracted to `queryOptions()` factories for reuse. | Use `queryOptions({ queryKey: [...], queryFn: ... })` and import the factory where needed. |
-| `tanstack-query-require-stale-time` | ⚠️ | `QueryClient` without a default `staleTime` refetches on every mount. | Add `defaultOptions: { queries: { staleTime: 60_000 } }` to `QueryClient`. |
-| `tanstack-query-select-must-be-stable` | ⚠️ | Inline `select:` arrow rebuilds each render and re-runs the selector. | Wrap the selector with `useCallback` or hoist it to module scope. |
-| `tanstack-router-search-no-use-state-for-url-state` | ⚠️ | Filter / page / sort state belongs in the URL, not in `useState`. | Use TanStack Router's `Route.useSearch()` and `navigate({ search })` so the state survives reloads and is shareable. |
-| `tanstack-start-no-client-import-in-server-fn` | ❌ | Client-only React imports in a `.functions.ts` or `.server.ts` file — server functions cannot use browser APIs. | Move client-only logic out of server-function files. Only import server-safe deps. |
-| `tanstack-start-no-server-import-in-isomorphic-entry` | ⚠️ | Server-only packages (`@sentry/node`, `node:*`, `bun:*`, `pg`) statically imported in a TanStack Start isomorphic entry ship Node code into the client bundle. | Move the import behind an `if (import.meta.env.SSR)`-gated dynamic `import()`, or relocate it to a server-only module. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tanstack-query-array-key` | TanStack Query keys must be arrays, not strings. | Wrap the string in brackets: `queryKey: ['todos']`. v5 requires arrays, and hierarchical invalidation (`invalidateQueries({ queryKey: ['todos'] })`) only works on array keys. |
+| `tanstack-query-dehydrate-no-pending-in-ssr` | Calling `dehydrate(...)` while `prefetchQuery` is still pending serializes empty state. | `await` every `prefetchQuery(...)` before `dehydrate(queryClient)`. |
+| `tanstack-query-fn-must-throw-on-error` | `queryFn` must throw on HTTP errors so TanStack Query can retry and surface them. | Check `res.ok` and throw: `if (!res.ok) throw new Error(...)`. |
+| `tanstack-query-no-async-query-fn-without-await` | `queryFn: async () => fetch(...)` returns an unconsumed Response. | Await the fetch and parse the body inside the query function: `queryFn: async () => { const r = await fetch(url); return r.json(); }`. |
+| `tanstack-query-no-cache-time` | `cacheTime` was renamed to `gcTime` in TanStack Query v5. | Replace `cacheTime` with `gcTime`. |
+| `tanstack-query-no-deprecated-props` | Deprecated TanStack Query props from v4. | Migrate to v5 names: `cacheTime` → `gcTime`, `useErrorBoundary` → `throwOnError`. `onSuccess`/`onError`/`onSettled` are removed from `useQuery` — use `useEffect` instead (mutation callbacks still work). |
+| `tanstack-query-no-enabled-true` | `enabled: true` is the default in TanStack Query and should be omitted. | Remove `enabled: true` — queries are enabled by default. |
+| `tanstack-query-no-is-loading` | `isLoading` was removed from `useMutation` results in TanStack Query v5 (renamed to `isPending`). | Replace `isLoading` with `isPending` on the `useMutation` result. |
+| `tanstack-query-no-keep-previous-data-prop` | `keepPreviousData: true` was replaced by `placeholderData: keepPreviousData` in v5. | Import `keepPreviousData` from `@tanstack/react-query` and use `placeholderData: keepPreviousData`. |
+| `tanstack-query-no-query-callbacks` | `onSuccess`/`onError`/`onSettled` callbacks on `useQuery` were removed in v5. | Move side-effects to `useEffect` watching the query result. |
+| `tanstack-query-no-query-in-render-loop` | `useQuery` inside `.map()` creates one subscription per row. | Move the query out of the loop. Fetch the parent collection once, or use `useQueries` with a key per row. |
+| `tanstack-query-no-set-query-data-without-key-factory` | `setQueryData` with an inline array key is invisible to refactors. | Use a query key factory: `setQueryData(userKeys.detail(id), data)`. |
+| `tanstack-query-no-use-error-boundary` | `useErrorBoundary` was removed in TanStack Query v5. | Use the `throwOnError` option instead. |
+| `tanstack-query-prefer-key-factory` | Inline dynamic `queryKey` arrays should use a key factory for consistency. | Define a key factory: `const todoKeys = { detail: (id: string) => ['todos', id] as const }` and use `todoKeys.detail(id)`. |
+| `tanstack-query-prefer-query-options` | Inline `queryKey`/`queryFn` objects should be extracted to `queryOptions()` factories for reuse. | Use `queryOptions({ queryKey: [...], queryFn: ... })` and import the factory where needed. |
+| `tanstack-query-require-stale-time` | `QueryClient` without a default `staleTime` refetches on every mount. | Add `defaultOptions: { queries: { staleTime: 60_000 } }` to `QueryClient`. |
+| `tanstack-query-select-must-be-stable` | Inline `select:` arrow rebuilds each render and re-runs the selector. | Wrap the selector with `useCallback` or hoist it to module scope. |
+| `tanstack-router-search-no-use-state-for-url-state` | Filter / page / sort state belongs in the URL, not in `useState`. | Use TanStack Router's `Route.useSearch()` and `navigate({ search })` so the state survives reloads and is shareable. |
+| `tanstack-start-no-client-import-in-server-fn` | Client-only React imports in a `.functions.ts` or `.server.ts` file — server functions cannot use browser APIs. | Move client-only logic out of server-function files. Only import server-safe deps. |
+| `tanstack-start-no-server-import-in-isomorphic-entry` | Server-only packages (`@sentry/node`, `node:*`, `bun:*`, `pg`) statically imported in a TanStack Start isomorphic entry ship Node code into the client bundle. | Move the import behind an `if (import.meta.env.SSR)`-gated dynamic `import()`, or relocate it to a server-only module. |
 
 ## tanstack > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tanstack-start-loader-stale-time` | ⚠️ | Loader `staleTime` too short — data will refetch during navigation. | Set `staleTime: 5000` or more (ms) on `ensureQueryData` loader calls to cover navigation duration. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tanstack-start-loader-stale-time` | Loader `staleTime` too short — data will refetch during navigation. | Set `staleTime: 5000` or more (ms) on `ensureQueryData` loader calls to cover navigation duration. |
 
 ## tanstack-query
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tanstack-query-dependent-needs-enabled` | ⚠️ | Dependent queries (queryFn reads a possibly-undefined value) must set `enabled`. | Add `enabled: !!value` (or a more precise guard) so the query doesn't fire until the dependency is defined. |
-| `tanstack-query-infinite-initial-page-param` | ❌ | `useInfiniteQuery` and `infiniteQueryOptions` require `initialPageParam` in v5. | Add `initialPageParam` to the options object: `useInfiniteQuery({ queryKey, queryFn, initialPageParam: 0, getNextPageParam })`. |
-| `tanstack-query-invalidate-after-mutation` | ⚠️ | A mutation performing a write request must invalidate or update the cache. | Add `onSuccess` or `onSettled` that calls `queryClient.invalidateQueries(...)` or `queryClient.setQueryData(...)` so dependent queries refetch. |
-| `tanstack-query-key-includes-params` | ❌ | `queryKey` must include every non-parameter identifier referenced by `queryFn`. | Add the missing identifier(s) to the `queryKey` array so the cache is keyed on every dynamic input. Example: `useQuery({ queryKey: ['user', userId], queryFn: () => fetchUser(userId) })`. |
-| `tanstack-query-max-pages-requires-both` | ❌ | `maxPages` on an infinite query requires both `getNextPageParam` and `getPreviousPageParam`. | Define both page-param functions, or remove `maxPages` — with only one, refetching the oldest pages is impossible. |
-| `tanstack-query-no-enabled-on-suspense` | ❌ | `useSuspenseQuery` does not support `enabled`. | Conditionally render the component that calls `useSuspenseQuery` instead, or fall back to `useQuery` when you need to gate the request. |
-| `tanstack-query-no-global-onerror-v5` | ❌ | `defaultOptions.queries.onError` was removed in v5 — use `QueryCache({ onError })`. | Move the global error handler to the QueryCache: `new QueryClient({ queryCache: new QueryCache({ onError }) })`. |
-| `tanstack-query-no-query-in-effect` | ⚠️ | TanStack Query hook called inside `useEffect`. | Call `useQuery` at the top level of the component — it manages its own subscriptions, refetching, and cleanup. |
-| `tanstack-query-no-rest-destructuring` | ⚠️ | Rest destructuring on a TanStack Query result subscribes to every field. | Destructure only the fields you actually need (e.g. `data`, `isLoading`) instead of using `...rest`. |
-| `tanstack-query-no-v4-import-path` | ❌ | The package `react-query` is the v3 / v4 name — v5 lives at `@tanstack/react-query`. | Replace the import with `@tanstack/react-query` (and remove the old `react-query` dependency). |
-| `tanstack-query-no-void-query-fn` | ⚠️ | `queryFn` must return data — a void / undefined return causes silent cache misses and `data: undefined` everywhere. | Return the parsed response from `queryFn`. If you only need a side effect, use `useMutation` instead. |
-| `tanstack-query-object-syntax` | ❌ | TanStack Query v5 requires object syntax: `useQuery({ queryKey, queryFn })`. | Replace the positional form `useQuery(key, fn, opts)` with `useQuery({ queryKey: key, queryFn: fn, ...opts })`. |
-| `tanstack-query-pass-signal-to-fetch` | ⚠️ | A `queryFn` that destructures `{ signal }` should forward it to `fetch` for cancellation. | Pass the signal through: `fetch(url, { signal })`. Otherwise in-flight requests won't be aborted when the query is cancelled. |
-| `tanstack-query-prefer-suspense-query` | ⚠️ | `useQuery` followed by `if (isLoading\|isPending) return …` should use `useSuspenseQuery` instead. | Replace `useQuery` with `useSuspenseQuery`, remove the early-return branch, and wrap the caller tree in a `<Suspense fallback={...}>` boundary. `data` will be guaranteed defined. |
-| `tanstack-query-serializable-key` | ❌ | Query keys must be structurally serializable — no functions, Dates, Symbols, or class instances. | Serialize the value first: use `date.toISOString()` instead of `new Date()`, a string tag instead of a Symbol, and a plain identifier instead of a closure or class instance. |
-| `tanstack-query-stable-client` | ⚠️ | `new QueryClient()` inside a component recreates the cache every render. | Hoist `new QueryClient()` to module scope, or wrap it in `useState(() => new QueryClient())` / `useRef`. |
-| `tanstack-query-test-retry-false` | ⚠️ | In test files, `new QueryClient` must disable retries to keep tests fast and deterministic. | Set `defaultOptions: { queries: { retry: false } }` when instantiating `QueryClient` inside a test. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tanstack-query-dependent-needs-enabled` | Dependent queries (queryFn reads a possibly-undefined value) must set `enabled`. | Add `enabled: !!value` (or a more precise guard) so the query doesn't fire until the dependency is defined. |
+| `tanstack-query-infinite-initial-page-param` | `useInfiniteQuery` and `infiniteQueryOptions` require `initialPageParam` in v5. | Add `initialPageParam` to the options object: `useInfiniteQuery({ queryKey, queryFn, initialPageParam: 0, getNextPageParam })`. |
+| `tanstack-query-invalidate-after-mutation` | A mutation performing a write request must invalidate or update the cache. | Add `onSuccess` or `onSettled` that calls `queryClient.invalidateQueries(...)` or `queryClient.setQueryData(...)` so dependent queries refetch. |
+| `tanstack-query-key-includes-params` | `queryKey` must include every non-parameter identifier referenced by `queryFn`. | Add the missing identifier(s) to the `queryKey` array so the cache is keyed on every dynamic input. Example: `useQuery({ queryKey: ['user', userId], queryFn: () => fetchUser(userId) })`. |
+| `tanstack-query-max-pages-requires-both` | `maxPages` on an infinite query requires both `getNextPageParam` and `getPreviousPageParam`. | Define both page-param functions, or remove `maxPages` — with only one, refetching the oldest pages is impossible. |
+| `tanstack-query-no-enabled-on-suspense` | `useSuspenseQuery` does not support `enabled`. | Conditionally render the component that calls `useSuspenseQuery` instead, or fall back to `useQuery` when you need to gate the request. |
+| `tanstack-query-no-global-onerror-v5` | `defaultOptions.queries.onError` was removed in v5 — use `QueryCache({ onError })`. | Move the global error handler to the QueryCache: `new QueryClient({ queryCache: new QueryCache({ onError }) })`. |
+| `tanstack-query-no-query-in-effect` | TanStack Query hook called inside `useEffect`. | Call `useQuery` at the top level of the component — it manages its own subscriptions, refetching, and cleanup. |
+| `tanstack-query-no-rest-destructuring` | Rest destructuring on a TanStack Query result subscribes to every field. | Destructure only the fields you actually need (e.g. `data`, `isLoading`) instead of using `...rest`. |
+| `tanstack-query-no-v4-import-path` | The package `react-query` is the v3 / v4 name — v5 lives at `@tanstack/react-query`. | Replace the import with `@tanstack/react-query` (and remove the old `react-query` dependency). |
+| `tanstack-query-no-void-query-fn` | `queryFn` must return data — a void / undefined return causes silent cache misses and `data: undefined` everywhere. | Return the parsed response from `queryFn`. If you only need a side effect, use `useMutation` instead. |
+| `tanstack-query-object-syntax` | TanStack Query v5 requires object syntax: `useQuery({ queryKey, queryFn })`. | Replace the positional form `useQuery(key, fn, opts)` with `useQuery({ queryKey: key, queryFn: fn, ...opts })`. |
+| `tanstack-query-pass-signal-to-fetch` | A `queryFn` that destructures `{ signal }` should forward it to `fetch` for cancellation. | Pass the signal through: `fetch(url, { signal })`. Otherwise in-flight requests won't be aborted when the query is cancelled. |
+| `tanstack-query-prefer-suspense-query` | `useQuery` followed by `if (isLoading\|isPending) return …` should use `useSuspenseQuery` instead. | Replace `useQuery` with `useSuspenseQuery`, remove the early-return branch, and wrap the caller tree in a `<Suspense fallback={...}>` boundary. `data` will be guaranteed defined. |
+| `tanstack-query-serializable-key` | Query keys must be structurally serializable — no functions, Dates, Symbols, or class instances. | Serialize the value first: use `date.toISOString()` instead of `new Date()`, a string tag instead of a Symbol, and a plain identifier instead of a closure or class instance. |
+| `tanstack-query-stable-client` | `new QueryClient()` inside a component recreates the cache every render. | Hoist `new QueryClient()` to module scope, or wrap it in `useState(() => new QueryClient())` / `useRef`. |
+| `tanstack-query-test-retry-false` | In test files, `new QueryClient` must disable retries to keep tests fast and deterministic. | Set `defaultOptions: { queries: { retry: false } }` when instantiating `QueryClient` inside a test. |
 
 ## tanstack-start
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tanstack-start-api-route-json-helper` | ⚠️ | Use `json()` from `@tanstack/react-start`, not `new Response(JSON.stringify(...))`. | Replace `new Response(JSON.stringify(data), { headers: ... })` with `json(data)` — it sets the correct Content-Type and is safer to type. |
-| `tanstack-start-no-date-now-in-render` | ⚠️ | `Date.now()`, `new Date()`, `Math.random()` in render cause hydration mismatches. | Compute non-deterministic values inside a `useEffect`, a loader, or a server function. |
-| `tanstack-start-no-fetch-to-own-api` | ⚠️ | Don't `fetch('/api/...')` your own app; call a server function. | Replace in-app `fetch('/api/...')` calls with a typed `createServerFn` call — you gain type safety and skip the HTTP round-trip on SSR. |
-| `tanstack-start-no-window-in-render` | ⚠️ | `window.*` / `document.*` in render breaks SSR. | Read from `window`/`document` inside a `useEffect` or behind a `typeof window !== 'undefined'` guard. |
-| `tanstack-start-require-validate-search` | ⚠️ | Routes calling `Route.useSearch()` must define `validateSearch:` on the route. | Add `validateSearch: z.object({ ... })` to the `createFileRoute()` options. |
-| `tanstack-start-route-protection-beforeload` | ⚠️ | Protect routes with `beforeLoad` + `throw redirect()`, not `useEffect` + `navigate`. | Move the auth check to `beforeLoad` and `throw redirect({ to: '/login' })`. This runs before render and avoids the protected UI flashing. |
-| `tanstack-start-server-fn-post-for-mutations` | ⚠️ | Mutation-named server functions must use `method: 'POST'`. | Pass `{ method: 'POST' }` to `createServerFn` when the fn performs create/update/delete/login/logout side effects. |
-| `tanstack-start-server-fn-use-notfound` | ⚠️ | Server functions should throw `notFound()` rather than a generic Error. | Replace `throw new Error('not found')` with `throw notFound()` so the router renders the proper 404 boundary. |
-| `tanstack-start-session-cookie-httponly` | ⚠️ | `useSession({ cookie })` must set `httpOnly: true`. | Add `httpOnly: true` to the cookie config so session cookies cannot be read from JavaScript (XSS mitigation). |
-| `tanstack-start-session-cookie-samesite` | ⚠️ | `useSession({ cookie })` must set `sameSite` to `'lax'` or `'strict'`. | Add `sameSite: 'lax'` (default) or `sameSite: 'strict'` to the cookie config to mitigate CSRF. |
-| `tanstack-start-session-cookie-secure` | ⚠️ | `useSession({ cookie })` must set `secure`. | Add `secure: true` (or `secure: process.env.NODE_ENV === 'production'`) so the cookie is only sent over HTTPS. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tanstack-start-api-route-json-helper` | Use `json()` from `@tanstack/react-start`, not `new Response(JSON.stringify(...))`. | Replace `new Response(JSON.stringify(data), { headers: ... })` with `json(data)` — it sets the correct Content-Type and is safer to type. |
+| `tanstack-start-no-date-now-in-render` | `Date.now()`, `new Date()`, `Math.random()` in render cause hydration mismatches. | Compute non-deterministic values inside a `useEffect`, a loader, or a server function. |
+| `tanstack-start-no-fetch-to-own-api` | Don't `fetch('/api/...')` your own app; call a server function. | Replace in-app `fetch('/api/...')` calls with a typed `createServerFn` call — you gain type safety and skip the HTTP round-trip on SSR. |
+| `tanstack-start-no-window-in-render` | `window.*` / `document.*` in render breaks SSR. | Read from `window`/`document` inside a `useEffect` or behind a `typeof window !== 'undefined'` guard. |
+| `tanstack-start-require-validate-search` | Routes calling `Route.useSearch()` must define `validateSearch:` on the route. | Add `validateSearch: z.object({ ... })` to the `createFileRoute()` options. |
+| `tanstack-start-route-protection-beforeload` | Protect routes with `beforeLoad` + `throw redirect()`, not `useEffect` + `navigate`. | Move the auth check to `beforeLoad` and `throw redirect({ to: '/login' })`. This runs before render and avoids the protected UI flashing. |
+| `tanstack-start-server-fn-post-for-mutations` | Mutation-named server functions must use `method: 'POST'`. | Pass `{ method: 'POST' }` to `createServerFn` when the fn performs create/update/delete/login/logout side effects. |
+| `tanstack-start-server-fn-use-notfound` | Server functions should throw `notFound()` rather than a generic Error. | Replace `throw new Error('not found')` with `throw notFound()` so the router renders the proper 404 boundary. |
+| `tanstack-start-session-cookie-httponly` | `useSession({ cookie })` must set `httpOnly: true`. | Add `httpOnly: true` to the cookie config so session cookies cannot be read from JavaScript (XSS mitigation). |
+| `tanstack-start-session-cookie-samesite` | `useSession({ cookie })` must set `sameSite` to `'lax'` or `'strict'`. | Add `sameSite: 'lax'` (default) or `sameSite: 'strict'` to the cookie config to mitigate CSRF. |
+| `tanstack-start-session-cookie-secure` | `useSession({ cookie })` must set `secure`. | Add `secure: true` (or `secure: process.env.NODE_ENV === 'production'`) so the cookie is only sent over HTTPS. |
 
 ## tanstack-start > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `tanstack-start-server-fn-requires-auth` | ⚠️ | `createServerFn` handlers with DB mutations must verify authentication. | Call `getSession()` or `auth()` at the top of the handler and throw if no session. |
-| `tanstack-start-server-fn-requires-validation` | ⚠️ | `createServerFn` handlers must validate their input with `.input()` or `.safeParse()`. | Chain `.input(z.object({...}))` before `.handler(...)` to validate at the RPC boundary. |
-| `tanstack-start-session-secret-min-length` | ⚠️ | `useSession({ password })` must be at least 32 characters. | Read the secret from an environment variable, or use a literal of at least 32 characters to prevent brute-force attacks on the session cookie. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `tanstack-start-server-fn-requires-auth` | `createServerFn` handlers with DB mutations must verify authentication. | Call `getSession()` or `auth()` at the top of the handler and throw if no session. |
+| `tanstack-start-server-fn-requires-validation` | `createServerFn` handlers must validate their input with `.input()` or `.safeParse()`. | Chain `.input(z.object({...}))` before `.handler(...)` to validate at the RPC boundary. |
+| `tanstack-start-session-secret-min-length` | `useSession({ password })` must be at least 32 characters. | Read the secret from an environment variable, or use a literal of at least 32 characters to prevent brute-force attacks on the session cookie. |
 
 ## testing
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `assertions-in-tests` | ❌ | Test functions must contain at least one assertion. | Add `expect(...)`, `assert(...)`, `.should(...)`, `.toBe(...)`, `.toEqual(...)`, `.toMatch(...)`, or `.toThrow(...)` to the test body. |
-| `inverted-assertion-arguments` | ⚠️ | Expected and actual arguments in assertion are inverted. | Use `expect(variable).toBe(literal)` — the expected value goes in the matcher, not in `expect()`. |
-| `no-alias-methods` | ⚠️ | Jest/Vitest alias matchers should be replaced by their canonical form. | Use canonical matcher name |
-| `no-done-callback` | ⚠️ | Test callbacks that take a `done` parameter use the legacy async style. | Use async/await instead of done callback. |
-| `no-empty-test-file` | ❌ | Test file contains no test assertions — dead weight in the test suite. | Add test cases or remove the file. A test file without `test(`, `it(`, `describe(`, or `expect(` provides no value and clutters the test suite. |
-| `no-fire-event` | ⚠️ | `fireEvent.click` dispatches a single synthetic click — `userEvent.click` reproduces the full pointer/focus sequence a real browser fires. | Replace `fireEvent.click(el)` with `userEvent.click(el)` from `@testing-library/user-event`. Other `fireEvent.*` methods (`focus`, `blur`, `keyDown`, `change`, pointer events, ...) are left alone — they have no clean `userEvent` equivalent and are the right tool for testing low-level focus, keyboard or debounce behaviour. |
-| `no-focused-test` | ❌ | `.only` disables every other test in the suite. | Remove `.only` from the test. Committing a focused test silently disables the rest of the suite, making CI green while regressions slip through. |
-| `no-identical-title` | ⚠️ | Duplicate test or describe titles within the same scope hide which assertion actually failed. | Use unique test titles. |
-| `no-import-node-test` | ⚠️ | Importing from `node:test` alongside vitest/jest mixes test runners. | Don't mix node:test with vitest/jest |
-| `no-incomplete-assertions` | ❌ | Assertion chain is missing the actual matcher. | Complete the assertion with a matcher: `expect(x).toBe(...)`, `.toEqual(...)`, `.toThrow()`, etc. Bare `expect(x);` or `expect(x).not;` tests nothing. |
-| `no-interpolation-in-snapshots` | ⚠️ | Template literals passed to snapshot matchers should not contain interpolation. | Don't use interpolation in snapshot matchers |
-| `no-manual-rtl-cleanup` | ⚠️ | Importing `cleanup` from `@testing-library/react` in Vitest causes double cleanup. | Remove the `cleanup` import and any `afterEach(cleanup)` call. Vitest with `@testing-library/react` runs cleanup automatically after each test. Manual cleanup causes double cleanup which can mask unmount bugs. |
-| `no-match-snapshot` | ⚠️ | Snapshot assertions are a maintenance trap. | Replace `toMatchSnapshot()` with specific assertions on the fields that matter. Snapshots break on unrelated refactors and get blindly updated, losing all assertion value. Exception: files whose path contains `contract`, `serial`, `wire`, `protocol`, `snapshot`, `upgrade`, `codemod`, `migration`, or `transform` are exempt — snapshots pin a protocol/wire-format contract, test the snapshot mechanism itself, or assert the exact output of a code transformation (where the output IS the spec), and are the correct tool there. |
-| `no-mock-fetch-directly` | ⚠️ | Mocking `fetch`/`axios` directly couples tests to the HTTP client implementation. | Use MSW (`msw`) to intercept at the network level instead of `vi.mock('axios')` or `global.fetch = vi.fn()`. MSW handlers are reusable, work with any HTTP client, and test real request/response cycles. Switching HTTP clients won't break your tests. |
-| `no-mocks-import` | ⚠️ | Do not import directly from a `__mocks__` directory. | Let Jest/Vitest auto-resolve mocks, don't import from __mocks__ directly |
-| `no-negated-tohavebeencalledwith` | ⚠️ | Disallow negated `toHaveBeenCalledWith` assertions, which pass whenever the mock was called with any other arguments and so never fail. | Use `expect(fn).not.toHaveBeenCalled()` or assert over `fn.mock.calls` |
-| `no-page-click-deprecated` | ⚠️ | `page.click(selector)` is deprecated — use `page.locator(selector).click()`. | Replace `page.click(selector)` with `page.locator(selector).click()`. The locator API auto-waits and auto-retries, and the direct page methods are deprecated in Playwright. |
-| `no-same-argument-assert` | ❌ | Asserting a value equals itself is always true and tests nothing. | Use different expected and actual values: `expect(actual).toBe(expected)` where `actual` and `expected` are distinct. |
-| `no-test-logic` | ⚠️ | Tests with `if`/`for`/`while`/`switch` are testing the test, not the code. | Remove control-flow logic from test bodies. Use `test.each()` for data-driven tests, extract shared setup to `beforeEach`, and write one assertion path per test. Logic in tests hides which branch actually ran, making failures hard to diagnose. |
-| `no-test-prefixes` | ⚠️ | `ftest`/`fdescribe`/`fit`/`xtest`/`xdescribe`/`xit` focus or skip tests via prefix. | Use .only or .skip modifiers instead of f/x prefixes |
-| `no-test-return-statement` | ⚠️ | Disallow `return` statements inside `test`/`it` callbacks. | Remove return statement from test, use expect assertions |
-| `no-unused-locators` | ⚠️ | Playwright locator declared but never used — no action or assertion is called on it. | Either use the locator (call an action like `.click()`, `.fill()`, or an assertion like `expect(locator).toBeVisible()`), or remove the declaration. |
-| `no-wait-for-timeout` | ❌ | `waitForTimeout` is a flaky sleep — wait for network or UI state instead. | Replace `await page.waitForTimeout(ms)` with a web-first assertion like `await expect(locator).toBeVisible()` or `await page.waitForResponse(url)`. Fixed sleeps cause flaky tests on slow CI and waste time on fast machines. |
-| `playwright-expect-expect` | ⚠️ | Test has no assertions — every test should verify behaviour. | Add at least one `expect()` call inside the test body. |
-| `playwright-max-expects` | ⚠️ | Too many assertions in a single test — split into focused tests. | Keep each test to ≤ 5 `expect()` calls. Extract additional assertions into separate test cases. |
-| `playwright-max-nested-describe` | ⚠️ | Deeply nested `describe` blocks reduce readability. | Flatten the describe hierarchy to at most 5 levels deep. |
-| `playwright-missing-await` | ❌ | Playwright async method call is missing `await`. | Add `await` before the Playwright call. Without it the operation runs detached, causing flaky tests and race conditions. |
-| `playwright-no-commented-out-tests` | ⚠️ | Commented-out tests are dead code that hides missing coverage. | Remove the commented-out test or re-enable it. Use `.skip()` if you need to temporarily disable it. |
-| `playwright-no-conditional-expect` | ⚠️ | `expect()` inside `if`/`switch`/`catch` may silently skip — tests must assert unconditionally. | Move the `expect()` call out of the conditional branch. A conditional assertion can silently pass when the branch is never taken, giving false confidence. Structure the test so the expected state is deterministic. |
-| `playwright-no-conditional-in-test` | ⚠️ | Conditional logic in tests makes them non-deterministic. | Remove `if`/`switch`/ternary from the test body. Write separate tests for each branch. |
-| `playwright-no-duplicate-hooks` | ⚠️ | Duplicate hooks in a describe block are confusing and error-prone. | Merge the duplicate hooks into a single hook call. |
-| `playwright-no-duplicate-slow` | ⚠️ | `test.slow()` should only be called once per test. | Remove the duplicate `test.slow()` call. |
-| `playwright-no-element-handle` | ⚠️ | `page.$()` / `page.$$()` return ElementHandles, which are deprecated in favor of Locators. | Replace `page.$('selector')` with `page.locator('selector')` and `page.$$('selector')` with `page.locator('selector').all()`. Locators auto-wait and retry, while ElementHandles are stale references that break on re-renders. |
-| `playwright-no-eval` | ⚠️ | `$eval` / `$$eval` evaluate arbitrary code against the DOM — brittle and hard to debug. | Use `page.locator(...)` with web-first assertions like `toHaveText` / `toHaveAttribute` instead. |
-| `playwright-no-force-option` | ⚠️ | `force: true` bypasses Playwright's actionability checks, hiding real UI issues. | Remove `force: true` from the action options. If the element is not actionable, fix the underlying page state instead of bypassing the check — forcing clicks masks real accessibility and timing bugs. |
-| `playwright-no-hooks` | ⚠️ | Hooks add implicit shared state between tests. | Replace hooks with explicit helper functions called in each test body. |
-| `playwright-no-nested-step` | ⚠️ | Nested `test.step()` calls make test flow hard to follow. | Flatten steps so they are sequential instead of nested. |
-| `playwright-no-networkidle` | ⚠️ | `networkidle` is fragile — it waits for no network activity for 500 ms, which is race-prone. | Replace `networkidle` with a web-first assertion like `await expect(locator).toBeVisible()` or wait for a specific response with `page.waitForResponse()`. The `networkidle` strategy is timing-based and fails on pages with polling, analytics, or websockets. |
-| `playwright-no-nth-methods` | ⚠️ | `.first()`, `.last()`, `.nth()` create fragile locators. | Use a more specific locator (e.g. `getByRole`, `getByTestId`) instead of positional methods. |
-| `playwright-no-page-pause` | ❌ | `page.pause()` is a debug-only API that halts test execution. | Remove `page.pause()`. It opens the Playwright Inspector and blocks execution indefinitely — CI will hang until it times out. |
-| `playwright-no-raw-locators` | ⚠️ | `page.locator('css-selector')` is brittle — prefer `getByRole`, `getByText`, etc. | Replace `page.locator('.btn')` with `page.getByRole('button')` or `page.getByText('Submit')`. Semantic locators are resilient to markup changes and align with how users find elements on the page. |
-| `playwright-no-skipped-test` | ⚠️ | Skipped tests silently erode coverage. | Remove the `.skip()` annotation, fix the test, or delete it if it's no longer relevant. |
-| `playwright-no-slowed-test` | ⚠️ | Unconditional `test.slow()` hides an optimization opportunity. | Remove `test.slow()` and speed up the test, or make it conditional with `test.slow(condition, reason)`. |
-| `playwright-no-standalone-expect` | ⚠️ | `expect()` outside a test body never runs as an assertion. | Move the `expect()` call inside a `test()` or `it()` block. |
-| `playwright-no-unsafe-references` | ⚠️ | `page.evaluate()` runs in the browser — outer-scope variables are not available unless passed as the second argument. | Pass captured variables as the second argument to `page.evaluate((arg) => { ... }, arg)`. Variables from the Node.js scope are not serialized into the browser context automatically — they will be `undefined` at runtime. |
-| `playwright-no-useless-await` | ⚠️ | Unnecessary `await` on synchronous Playwright methods. | Remove the `await` — this method does not return a Promise. |
-| `playwright-no-useless-not` | ⚠️ | Using `.not.toBeVisible()` when `.toBeHidden()` exists is needlessly indirect. | Use the direct matcher instead of negating: `toBeHidden` instead of `not.toBeVisible`, `toBeDisabled` instead of `not.toBeEnabled`. |
-| `playwright-no-wait-for-navigation` | ⚠️ | `page.waitForNavigation()` is discouraged — use `waitForURL` instead. | Replace `waitForNavigation()` with `page.waitForURL(url)` or a web-first assertion. |
-| `playwright-no-wait-for-selector` | ⚠️ | `page.waitForSelector()` is discouraged — use web-first assertions. | Replace `waitForSelector` with a locator-based assertion like `await expect(page.locator(…)).toBeVisible()`. |
-| `playwright-no-wait-for-timeout` | ⚠️ | `page.waitForTimeout()` introduces fragile fixed sleeps in tests. | Use web-first assertions or waitFor* with conditions instead of arbitrary timeouts |
-| `playwright-prefer-comparison-matcher` | ⚠️ | Use built-in comparison matchers instead of comparing manually. | Replace `expect(a > b).toBe(true)` with `expect(a).toBeGreaterThan(b)`. |
-| `playwright-prefer-equality-matcher` | ⚠️ | Use an equality matcher instead of `expect(a === b).toBe(true)`. | Replace with `expect(a).toBe(b)` or `expect(a).toEqual(b)`. |
-| `playwright-prefer-hooks-in-order` | ⚠️ | Hooks should follow the lifecycle order: beforeAll, beforeEach, afterEach, afterAll. | Reorder hooks to: `beforeAll` > `beforeEach` > `afterEach` > `afterAll`. |
-| `playwright-prefer-hooks-on-top` | ⚠️ | Hooks should come before any test cases. | Move hooks above the first `test()` / `it()` call. |
-| `playwright-prefer-native-locators` | ⚠️ | `locator('[role="button"]')` should be `getByRole('button')` — use Playwright's built-in locators. | Replace attribute-selector locators with Playwright's built-in locator methods: `[role=...]` → `getByRole()`, `[placeholder=...]` → `getByPlaceholder()`, `[alt=...]` → `getByAltText()`, `[title=...]` → `getByTitle()`, `[data-testid=...]` → `getByTestId()`. Built-in locators are more readable and provide better error messages. |
-| `playwright-prefer-strict-equal` | ⚠️ | Prefer `toStrictEqual()` for more predictable deep equality checks. | Replace `toEqual()` with `toStrictEqual()`. |
-| `playwright-prefer-to-be` | ⚠️ | Use `toBe()` for primitives — `toEqual` does unnecessary deep comparison. | Replace `toEqual(primitive)` with `toBe(primitive)`. Use `toBeNull()`, `toBeUndefined()`, `toBeNaN()`, `toBeDefined()` for their respective values. |
-| `playwright-prefer-to-contain` | ⚠️ | Use `toContain()` instead of `expect(arr.includes(x)).toBe(true)`. | Replace `expect(arr.includes(x)).toBe(true)` with `expect(arr).toContain(x)`. |
-| `playwright-prefer-to-have-count` | ⚠️ | Prefer `expect(locator).toHaveCount(n)` over `expect(await locator.count()).toBe(n)`. | Use expect(locator).toHaveCount(n) for web-first assertion |
-| `playwright-prefer-web-first-assertions` | ⚠️ | `expect(await locator.isVisible()).toBe(true)` does not auto-retry — use web-first assertions. | Replace `expect(await el.isVisible()).toBe(true)` with `await expect(el).toBeVisible()`. Web-first assertions auto-retry until the condition is met or the timeout expires, making tests more reliable. |
-| `prefer-called-exactly-once-with` | ⚠️ | Prefer `toHaveBeenCalledExactlyOnceWith(args)` over separate `toHaveBeenCalledTimes(1)` + `toHaveBeenCalledWith(args)` assertions. | Use toHaveBeenCalledExactlyOnceWith(args) instead of separate assertions |
-| `prefer-called-with` | ⚠️ | Prefer `toHaveBeenCalledWith(...)` over bare `toHaveBeenCalled()` to assert specific arguments. | Use toHaveBeenCalledWith() to assert specific arguments |
-| `prefer-expect-resolves` | ⚠️ | Prefer `await expect(promise).resolves` over `expect(await promise)`. | Use await expect(promise).resolves instead of expect(await promise) |
-| `prefer-mock-promise-shorthand` | ⚠️ | Prefer `.mockResolvedValue(x)` / `.mockRejectedValue(x)` over `.mockImplementation(() => Promise.resolve/reject(x))`. | Use mockResolvedValue/mockRejectedValue instead |
-| `prefer-mock-return-shorthand` | ⚠️ | Prefer `.mockReturnValue(x)` over `.mockImplementation(() => x)`. | Use mockReturnValue(x) instead of mockImplementation(() => x) |
-| `prefer-spy-on` | ⚠️ | Reassigning `obj.method = vi.fn()`/`jest.fn()` replaces the original implementation and is harder to restore than a spy. | Use vi.spyOn(obj, 'method') instead of reassigning to vi.fn() |
-| `prefer-to-have-length` | ⚠️ | Use `toHaveLength(n)` instead of asserting on `.length` with `toBe`/`toEqual`. | Use expect(x).toHaveLength(n) instead |
-| `prefer-todo` | ⚠️ | Empty test body — use `test.todo` to mark unimplemented tests. | Use test.todo('description') for placeholder tests |
-| `require-hook` | ⚠️ | Side effects at the top level of a test file run once at import time instead of inside a hook — tests cannot reset that state. | Move side effects into beforeEach/beforeAll hooks |
-| `require-to-throw-message` | ⚠️ | Require an expected error message argument on `.toThrow()` / `.toThrowError()`. | Provide expected error message to toThrow() |
-| `test-check-exception` | ⚠️ | `.toThrow()` without specifying what to check. | Specify the expected error: `.toThrow(TypeError)`, `.toThrow('message')`, or `.toThrow(/regex/)`. Bare `.toThrow()` passes for any error, hiding bugs. |
-| `testing-no-concurrent-without-context-expect` | ⚠️ | test.concurrent must destructure { expect } from the test context — the module-level expect is not scoped per concurrent test. | Destructure expect from the test context: test.concurrent('...', ({ expect }) => { ... }) |
-| `testing-no-conditional-assertion` | ⚠️ | Assertions inside if-branches silently skip when the branch is not taken — the test passes but checks nothing. | Make the assertion unconditional. If the branch depends on input, split into separate tests or use expect.soft / describe.each. |
-| `testing-no-mocking-internal-modules` | ⚠️ | Mocking a relative internal module couples tests to implementation details. | Mock only external boundaries (HTTP, DB, third-party SDKs). Refactor so the collaborator is injected, or rely on the real internal module. |
-| `testing-no-mocktimers-without-restore` | ⚠️ | useFakeTimers() without a matching useRealTimers() in afterEach/afterAll leaks mocked timers into sibling tests. | Call vi.useRealTimers() (or jest.useRealTimers()) in afterEach/afterAll to restore the real timers. |
-| `testing-no-real-external-service` | ❌ | Test makes a real network call to an external service — intercept it with MSW instead. | Mock the external service with MSW (or equivalent) — never hit the real endpoint from tests. |
-| `testing-no-shared-state` | ⚠️ | Top-level let/var mutated across test() blocks without being reset in beforeEach — tests become order-dependent. | Move the variable inside each test, or reset it in beforeEach(). Prefer fresh state per test over shared mutable state. |
-| `testing-no-stubglobal-without-restore` | ⚠️ | stubGlobal/stubEnv without unstubAllGlobals/unstubAllEnvs leaks mocked globals into sibling tests. | Call vi.unstubAllGlobals() (or vi.unstubAllEnvs()) in afterEach/afterAll — or enable unstubGlobals/unstubEnvs in the Vitest config. |
-| `testing-no-try-catch-swallow` | ⚠️ | Empty catch around the act phase masks the very errors the test is meant to surface. | Either let the error propagate, or assert on it with expect(() => fn()).toThrow(...) / expect(promise).rejects.toThrow(...). |
-| `testing-no-undefined-mock-var` | ⚠️ | `jest.fn()` / `vi.fn()` stored in a variable but never configured with `mockReturnValue` / `mockResolvedValue` / `mockImplementation` always returns `undefined`. | Configure the mock with `.mockReturnValue(...)`, `.mockResolvedValue(...)` or `.mockImplementation(...)`, or pass an implementation to `jest.fn(impl)`. |
-| `testing-prefer-msw` | ⚠️ | Mocking HTTP clients directly is brittle — use MSW to intercept at the network layer. | Replace `vi.mock('axios')` / `jest.mock('node-fetch')` / `global.fetch = vi.fn()` with an MSW request handler. |
-| `testing-prefer-test-each` | ⚠️ | Looping over `test` / `it` hides failures — use `test.each` so each row is its own named case. | Replace `for (const row of cases) { test(..., () => {...}) }` with `test.each(cases)(..., (row) => {...})`. |
-| `testing-require-testid-kebab-case` | ⚠️ | data-testid / data-test values must be kebab-case for consistent, selector-safe querying. | Use lowercase letters, digits, and hyphens only (e.g. 'submit-button', 'user-card-name'). |
-| `valid-describe-callback` | ⚠️ | `describe` callback must be a synchronous function with no parameters and no return value. | describe callback must be sync function with no parameters and no return |
-| `valid-expect` | ⚠️ | `expect()` must be called with at least one argument. | Pass the value under test to `expect(value)` before the matcher. |
-| `valid-expect-in-promise` | ⚠️ | Assertions in Promise `.then()`/`.catch()` must be returned or awaited. | Return or await the Promise chain containing the `expect()` call. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `assertions-in-tests` | Test functions must contain at least one assertion. | Add `expect(...)`, `assert(...)`, `.should(...)`, `.toBe(...)`, `.toEqual(...)`, `.toMatch(...)`, or `.toThrow(...)` to the test body. |
+| `inverted-assertion-arguments` | Expected and actual arguments in assertion are inverted. | Use `expect(variable).toBe(literal)` — the expected value goes in the matcher, not in `expect()`. |
+| `no-alias-methods` | Jest/Vitest alias matchers should be replaced by their canonical form. | Use canonical matcher name |
+| `no-done-callback` | Test callbacks that take a `done` parameter use the legacy async style. | Use async/await instead of done callback. |
+| `no-empty-test-file` | Test file contains no test assertions — dead weight in the test suite. | Add test cases or remove the file. A test file without `test(`, `it(`, `describe(`, or `expect(` provides no value and clutters the test suite. |
+| `no-fire-event` | `fireEvent.click` dispatches a single synthetic click — `userEvent.click` reproduces the full pointer/focus sequence a real browser fires. | Replace `fireEvent.click(el)` with `userEvent.click(el)` from `@testing-library/user-event`. Other `fireEvent.*` methods (`focus`, `blur`, `keyDown`, `change`, pointer events, ...) are left alone — they have no clean `userEvent` equivalent and are the right tool for testing low-level focus, keyboard or debounce behaviour. |
+| `no-focused-test` | `.only` disables every other test in the suite. | Remove `.only` from the test. Committing a focused test silently disables the rest of the suite, making CI green while regressions slip through. |
+| `no-identical-title` | Duplicate test or describe titles within the same scope hide which assertion actually failed. | Use unique test titles. |
+| `no-import-node-test` | Importing from `node:test` alongside vitest/jest mixes test runners. | Don't mix node:test with vitest/jest |
+| `no-incomplete-assertions` | Assertion chain is missing the actual matcher. | Complete the assertion with a matcher: `expect(x).toBe(...)`, `.toEqual(...)`, `.toThrow()`, etc. Bare `expect(x);` or `expect(x).not;` tests nothing. |
+| `no-interpolation-in-snapshots` | Template literals passed to snapshot matchers should not contain interpolation. | Don't use interpolation in snapshot matchers |
+| `no-manual-rtl-cleanup` | Importing `cleanup` from `@testing-library/react` in Vitest causes double cleanup. | Remove the `cleanup` import and any `afterEach(cleanup)` call. Vitest with `@testing-library/react` runs cleanup automatically after each test. Manual cleanup causes double cleanup which can mask unmount bugs. |
+| `no-match-snapshot` | Snapshot assertions are a maintenance trap. | Replace `toMatchSnapshot()` with specific assertions on the fields that matter. Snapshots break on unrelated refactors and get blindly updated, losing all assertion value. Exception: files whose path contains `contract`, `serial`, `wire`, `protocol`, `snapshot`, `upgrade`, `codemod`, `migration`, or `transform` are exempt — snapshots pin a protocol/wire-format contract, test the snapshot mechanism itself, or assert the exact output of a code transformation (where the output IS the spec), and are the correct tool there. |
+| `no-mock-fetch-directly` | Mocking `fetch`/`axios` directly couples tests to the HTTP client implementation. | Use MSW (`msw`) to intercept at the network level instead of `vi.mock('axios')` or `global.fetch = vi.fn()`. MSW handlers are reusable, work with any HTTP client, and test real request/response cycles. Switching HTTP clients won't break your tests. |
+| `no-mocks-import` | Do not import directly from a `__mocks__` directory. | Let Jest/Vitest auto-resolve mocks, don't import from __mocks__ directly |
+| `no-negated-tohavebeencalledwith` | Disallow negated `toHaveBeenCalledWith` assertions, which pass whenever the mock was called with any other arguments and so never fail. | Use `expect(fn).not.toHaveBeenCalled()` or assert over `fn.mock.calls` |
+| `no-page-click-deprecated` | `page.click(selector)` is deprecated — use `page.locator(selector).click()`. | Replace `page.click(selector)` with `page.locator(selector).click()`. The locator API auto-waits and auto-retries, and the direct page methods are deprecated in Playwright. |
+| `no-same-argument-assert` | Asserting a value equals itself is always true and tests nothing. | Use different expected and actual values: `expect(actual).toBe(expected)` where `actual` and `expected` are distinct. |
+| `no-test-logic` | Tests with `if`/`for`/`while`/`switch` are testing the test, not the code. | Remove control-flow logic from test bodies. Use `test.each()` for data-driven tests, extract shared setup to `beforeEach`, and write one assertion path per test. Logic in tests hides which branch actually ran, making failures hard to diagnose. |
+| `no-test-prefixes` | `ftest`/`fdescribe`/`fit`/`xtest`/`xdescribe`/`xit` focus or skip tests via prefix. | Use .only or .skip modifiers instead of f/x prefixes |
+| `no-test-return-statement` | Disallow `return` statements inside `test`/`it` callbacks. | Remove return statement from test, use expect assertions |
+| `no-unused-locators` | Playwright locator declared but never used — no action or assertion is called on it. | Either use the locator (call an action like `.click()`, `.fill()`, or an assertion like `expect(locator).toBeVisible()`), or remove the declaration. |
+| `no-wait-for-timeout` | `waitForTimeout` is a flaky sleep — wait for network or UI state instead. | Replace `await page.waitForTimeout(ms)` with a web-first assertion like `await expect(locator).toBeVisible()` or `await page.waitForResponse(url)`. Fixed sleeps cause flaky tests on slow CI and waste time on fast machines. |
+| `playwright-expect-expect` | Test has no assertions — every test should verify behaviour. | Add at least one `expect()` call inside the test body. |
+| `playwright-max-expects` | Too many assertions in a single test — split into focused tests. | Keep each test to ≤ 5 `expect()` calls. Extract additional assertions into separate test cases. |
+| `playwright-max-nested-describe` | Deeply nested `describe` blocks reduce readability. | Flatten the describe hierarchy to at most 5 levels deep. |
+| `playwright-missing-await` | Playwright async method call is missing `await`. | Add `await` before the Playwright call. Without it the operation runs detached, causing flaky tests and race conditions. |
+| `playwright-no-commented-out-tests` | Commented-out tests are dead code that hides missing coverage. | Remove the commented-out test or re-enable it. Use `.skip()` if you need to temporarily disable it. |
+| `playwright-no-conditional-expect` | `expect()` inside `if`/`switch`/`catch` may silently skip — tests must assert unconditionally. | Move the `expect()` call out of the conditional branch. A conditional assertion can silently pass when the branch is never taken, giving false confidence. Structure the test so the expected state is deterministic. |
+| `playwright-no-conditional-in-test` | Conditional logic in tests makes them non-deterministic. | Remove `if`/`switch`/ternary from the test body. Write separate tests for each branch. |
+| `playwright-no-duplicate-hooks` | Duplicate hooks in a describe block are confusing and error-prone. | Merge the duplicate hooks into a single hook call. |
+| `playwright-no-duplicate-slow` | `test.slow()` should only be called once per test. | Remove the duplicate `test.slow()` call. |
+| `playwright-no-element-handle` | `page.$()` / `page.$$()` return ElementHandles, which are deprecated in favor of Locators. | Replace `page.$('selector')` with `page.locator('selector')` and `page.$$('selector')` with `page.locator('selector').all()`. Locators auto-wait and retry, while ElementHandles are stale references that break on re-renders. |
+| `playwright-no-eval` | `$eval` / `$$eval` evaluate arbitrary code against the DOM — brittle and hard to debug. | Use `page.locator(...)` with web-first assertions like `toHaveText` / `toHaveAttribute` instead. |
+| `playwright-no-force-option` | `force: true` bypasses Playwright's actionability checks, hiding real UI issues. | Remove `force: true` from the action options. If the element is not actionable, fix the underlying page state instead of bypassing the check — forcing clicks masks real accessibility and timing bugs. |
+| `playwright-no-hooks` | Hooks add implicit shared state between tests. | Replace hooks with explicit helper functions called in each test body. |
+| `playwright-no-nested-step` | Nested `test.step()` calls make test flow hard to follow. | Flatten steps so they are sequential instead of nested. |
+| `playwright-no-networkidle` | `networkidle` is fragile — it waits for no network activity for 500 ms, which is race-prone. | Replace `networkidle` with a web-first assertion like `await expect(locator).toBeVisible()` or wait for a specific response with `page.waitForResponse()`. The `networkidle` strategy is timing-based and fails on pages with polling, analytics, or websockets. |
+| `playwright-no-nth-methods` | `.first()`, `.last()`, `.nth()` create fragile locators. | Use a more specific locator (e.g. `getByRole`, `getByTestId`) instead of positional methods. |
+| `playwright-no-page-pause` | `page.pause()` is a debug-only API that halts test execution. | Remove `page.pause()`. It opens the Playwright Inspector and blocks execution indefinitely — CI will hang until it times out. |
+| `playwright-no-raw-locators` | `page.locator('css-selector')` is brittle — prefer `getByRole`, `getByText`, etc. | Replace `page.locator('.btn')` with `page.getByRole('button')` or `page.getByText('Submit')`. Semantic locators are resilient to markup changes and align with how users find elements on the page. |
+| `playwright-no-skipped-test` | Skipped tests silently erode coverage. | Remove the `.skip()` annotation, fix the test, or delete it if it's no longer relevant. |
+| `playwright-no-slowed-test` | Unconditional `test.slow()` hides an optimization opportunity. | Remove `test.slow()` and speed up the test, or make it conditional with `test.slow(condition, reason)`. |
+| `playwright-no-standalone-expect` | `expect()` outside a test body never runs as an assertion. | Move the `expect()` call inside a `test()` or `it()` block. |
+| `playwright-no-unsafe-references` | `page.evaluate()` runs in the browser — outer-scope variables are not available unless passed as the second argument. | Pass captured variables as the second argument to `page.evaluate((arg) => { ... }, arg)`. Variables from the Node.js scope are not serialized into the browser context automatically — they will be `undefined` at runtime. |
+| `playwright-no-useless-await` | Unnecessary `await` on synchronous Playwright methods. | Remove the `await` — this method does not return a Promise. |
+| `playwright-no-useless-not` | Using `.not.toBeVisible()` when `.toBeHidden()` exists is needlessly indirect. | Use the direct matcher instead of negating: `toBeHidden` instead of `not.toBeVisible`, `toBeDisabled` instead of `not.toBeEnabled`. |
+| `playwright-no-wait-for-navigation` | `page.waitForNavigation()` is discouraged — use `waitForURL` instead. | Replace `waitForNavigation()` with `page.waitForURL(url)` or a web-first assertion. |
+| `playwright-no-wait-for-selector` | `page.waitForSelector()` is discouraged — use web-first assertions. | Replace `waitForSelector` with a locator-based assertion like `await expect(page.locator(…)).toBeVisible()`. |
+| `playwright-no-wait-for-timeout` | `page.waitForTimeout()` introduces fragile fixed sleeps in tests. | Use web-first assertions or waitFor* with conditions instead of arbitrary timeouts |
+| `playwright-prefer-comparison-matcher` | Use built-in comparison matchers instead of comparing manually. | Replace `expect(a > b).toBe(true)` with `expect(a).toBeGreaterThan(b)`. |
+| `playwright-prefer-equality-matcher` | Use an equality matcher instead of `expect(a === b).toBe(true)`. | Replace with `expect(a).toBe(b)` or `expect(a).toEqual(b)`. |
+| `playwright-prefer-hooks-in-order` | Hooks should follow the lifecycle order: beforeAll, beforeEach, afterEach, afterAll. | Reorder hooks to: `beforeAll` > `beforeEach` > `afterEach` > `afterAll`. |
+| `playwright-prefer-hooks-on-top` | Hooks should come before any test cases. | Move hooks above the first `test()` / `it()` call. |
+| `playwright-prefer-native-locators` | `locator('[role="button"]')` should be `getByRole('button')` — use Playwright's built-in locators. | Replace attribute-selector locators with Playwright's built-in locator methods: `[role=...]` → `getByRole()`, `[placeholder=...]` → `getByPlaceholder()`, `[alt=...]` → `getByAltText()`, `[title=...]` → `getByTitle()`, `[data-testid=...]` → `getByTestId()`. Built-in locators are more readable and provide better error messages. |
+| `playwright-prefer-strict-equal` | Prefer `toStrictEqual()` for more predictable deep equality checks. | Replace `toEqual()` with `toStrictEqual()`. |
+| `playwright-prefer-to-be` | Use `toBe()` for primitives — `toEqual` does unnecessary deep comparison. | Replace `toEqual(primitive)` with `toBe(primitive)`. Use `toBeNull()`, `toBeUndefined()`, `toBeNaN()`, `toBeDefined()` for their respective values. |
+| `playwright-prefer-to-contain` | Use `toContain()` instead of `expect(arr.includes(x)).toBe(true)`. | Replace `expect(arr.includes(x)).toBe(true)` with `expect(arr).toContain(x)`. |
+| `playwright-prefer-to-have-count` | Prefer `expect(locator).toHaveCount(n)` over `expect(await locator.count()).toBe(n)`. | Use expect(locator).toHaveCount(n) for web-first assertion |
+| `playwright-prefer-web-first-assertions` | `expect(await locator.isVisible()).toBe(true)` does not auto-retry — use web-first assertions. | Replace `expect(await el.isVisible()).toBe(true)` with `await expect(el).toBeVisible()`. Web-first assertions auto-retry until the condition is met or the timeout expires, making tests more reliable. |
+| `prefer-called-exactly-once-with` | Prefer `toHaveBeenCalledExactlyOnceWith(args)` over separate `toHaveBeenCalledTimes(1)` + `toHaveBeenCalledWith(args)` assertions. | Use toHaveBeenCalledExactlyOnceWith(args) instead of separate assertions |
+| `prefer-called-with` | Prefer `toHaveBeenCalledWith(...)` over bare `toHaveBeenCalled()` to assert specific arguments. | Use toHaveBeenCalledWith() to assert specific arguments |
+| `prefer-expect-resolves` | Prefer `await expect(promise).resolves` over `expect(await promise)`. | Use await expect(promise).resolves instead of expect(await promise) |
+| `prefer-mock-promise-shorthand` | Prefer `.mockResolvedValue(x)` / `.mockRejectedValue(x)` over `.mockImplementation(() => Promise.resolve/reject(x))`. | Use mockResolvedValue/mockRejectedValue instead |
+| `prefer-mock-return-shorthand` | Prefer `.mockReturnValue(x)` over `.mockImplementation(() => x)`. | Use mockReturnValue(x) instead of mockImplementation(() => x) |
+| `prefer-spy-on` | Reassigning `obj.method = vi.fn()`/`jest.fn()` replaces the original implementation and is harder to restore than a spy. | Use vi.spyOn(obj, 'method') instead of reassigning to vi.fn() |
+| `prefer-to-have-length` | Use `toHaveLength(n)` instead of asserting on `.length` with `toBe`/`toEqual`. | Use expect(x).toHaveLength(n) instead |
+| `prefer-todo` | Empty test body — use `test.todo` to mark unimplemented tests. | Use test.todo('description') for placeholder tests |
+| `require-hook` | Side effects at the top level of a test file run once at import time instead of inside a hook — tests cannot reset that state. | Move side effects into beforeEach/beforeAll hooks |
+| `require-to-throw-message` | Require an expected error message argument on `.toThrow()` / `.toThrowError()`. | Provide expected error message to toThrow() |
+| `test-check-exception` | `.toThrow()` without specifying what to check. | Specify the expected error: `.toThrow(TypeError)`, `.toThrow('message')`, or `.toThrow(/regex/)`. Bare `.toThrow()` passes for any error, hiding bugs. |
+| `testing-no-concurrent-without-context-expect` | test.concurrent must destructure { expect } from the test context — the module-level expect is not scoped per concurrent test. | Destructure expect from the test context: test.concurrent('...', ({ expect }) => { ... }) |
+| `testing-no-conditional-assertion` | Assertions inside if-branches silently skip when the branch is not taken — the test passes but checks nothing. | Make the assertion unconditional. If the branch depends on input, split into separate tests or use expect.soft / describe.each. |
+| `testing-no-mocking-internal-modules` | Mocking a relative internal module couples tests to implementation details. | Mock only external boundaries (HTTP, DB, third-party SDKs). Refactor so the collaborator is injected, or rely on the real internal module. |
+| `testing-no-mocktimers-without-restore` | useFakeTimers() without a matching useRealTimers() in afterEach/afterAll leaks mocked timers into sibling tests. | Call vi.useRealTimers() (or jest.useRealTimers()) in afterEach/afterAll to restore the real timers. |
+| `testing-no-real-external-service` | Test makes a real network call to an external service — intercept it with MSW instead. | Mock the external service with MSW (or equivalent) — never hit the real endpoint from tests. |
+| `testing-no-shared-state` | Top-level let/var mutated across test() blocks without being reset in beforeEach — tests become order-dependent. | Move the variable inside each test, or reset it in beforeEach(). Prefer fresh state per test over shared mutable state. |
+| `testing-no-stubglobal-without-restore` | stubGlobal/stubEnv without unstubAllGlobals/unstubAllEnvs leaks mocked globals into sibling tests. | Call vi.unstubAllGlobals() (or vi.unstubAllEnvs()) in afterEach/afterAll — or enable unstubGlobals/unstubEnvs in the Vitest config. |
+| `testing-no-try-catch-swallow` | Empty catch around the act phase masks the very errors the test is meant to surface. | Either let the error propagate, or assert on it with expect(() => fn()).toThrow(...) / expect(promise).rejects.toThrow(...). |
+| `testing-no-undefined-mock-var` | `jest.fn()` / `vi.fn()` stored in a variable but never configured with `mockReturnValue` / `mockResolvedValue` / `mockImplementation` always returns `undefined`. | Configure the mock with `.mockReturnValue(...)`, `.mockResolvedValue(...)` or `.mockImplementation(...)`, or pass an implementation to `jest.fn(impl)`. |
+| `testing-prefer-msw` | Mocking HTTP clients directly is brittle — use MSW to intercept at the network layer. | Replace `vi.mock('axios')` / `jest.mock('node-fetch')` / `global.fetch = vi.fn()` with an MSW request handler. |
+| `testing-prefer-test-each` | Looping over `test` / `it` hides failures — use `test.each` so each row is its own named case. | Replace `for (const row of cases) { test(..., () => {...}) }` with `test.each(cases)(..., (row) => {...})`. |
+| `testing-require-testid-kebab-case` | data-testid / data-test values must be kebab-case for consistent, selector-safe querying. | Use lowercase letters, digits, and hyphens only (e.g. 'submit-button', 'user-card-name'). |
+| `valid-describe-callback` | `describe` callback must be a synchronous function with no parameters and no return value. | describe callback must be sync function with no parameters and no return |
+| `valid-expect` | `expect()` must be called with at least one argument. | Pass the value under test to `expect(value)` before the matcher. |
+| `valid-expect-in-promise` | Assertions in Promise `.then()`/`.catch()` must be returned or awaited. | Return or await the Promise chain containing the `expect()` call. |
 
 ## testing > jest
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `jest-consistent-test-it` | ⚠️ | Within a single test file, use `it` and `test` consistently — pick one of the two equivalent forms instead of mixing them. | Pick one form for this file and convert the others to match: use `it(...)` everywhere, or `test(...)` everywhere. Mixing `it(...)` and `test(...)` in the same file makes the test output read inconsistently. |
-| `jest-no-export` | ❌ | Don't `export` (or `module.exports`) from a file that contains tests. | Remove the export from the test file. Exporting from a test file makes test runners treat it as a module others import, which can re-run the tests and leak helpers. Move any shared code into a separate non-test file and import it from there. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `jest-consistent-test-it` | Within a single test file, use `it` and `test` consistently — pick one of the two equivalent forms instead of mixing them. | Pick one form for this file and convert the others to match: use `it(...)` everywhere, or `test(...)` everywhere. Mixing `it(...)` and `test(...)` in the same file makes the test output read inconsistently. |
+| `jest-no-export` | Don't `export` (or `module.exports`) from a file that contains tests. | Remove the export from the test file. Exporting from a test file makes test runners treat it as a module others import, which can re-run the tests and leak helpers. Move any shared code into a separate non-test file and import it from there. |
 
 ## testing > playwright
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `playwright-no-focused-test` | ❌ | `.only` on Playwright `test` / `test.describe` skips the rest of the suite. | Remove `.only` before committing. Use Playwright's `--grep` flag to isolate a test temporarily. |
-| `playwright-require-top-level-describe` | ⚠️ | Bare `test(...)` at module top makes reports harder to scan — wrap related tests in `test.describe(...)`. | Group tests in a `test.describe("<feature>", () => { ... })` block. Each `test()` lives inside one describe. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `playwright-no-focused-test` | `.only` on Playwright `test` / `test.describe` skips the rest of the suite. | Remove `.only` before committing. Use Playwright's `--grep` flag to isolate a test temporarily. |
+| `playwright-require-top-level-describe` | Bare `test(...)` at module top makes reports harder to scan — wrap related tests in `test.describe(...)`. | Group tests in a `test.describe("<feature>", () => { ... })` block. Each `test()` lives inside one describe. |
 
 ## testing > testing-library
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `testing-library-await-async-queries` | ❌ | `findBy*` / `findAllBy*` queries return a Promise — used without `await` they resolve to an unwrapped Promise object. | `await screen.findByText("x")` (or `.then(...)`). For sync lookups use `getBy*` / `queryBy*` instead. |
-| `testing-library-no-debugging-utils` | ⚠️ | Debug helpers (`screen.debug()`, `prettyDOM()`, `logRoles()`) left in committed tests pollute CI output. | Delete the debug call before committing, or wrap it in `if (process.env.DEBUG)` if it's a temporary affordance. |
-| `testing-library-prefer-screen-queries` | ⚠️ | Destructuring `getBy*` / `findBy*` from `render(...)` is the legacy form — prefer `screen.getBy*` for stable refactoring. | Stop destructuring from `render(...)` — call `render(<UI/>)` for its side effect and use `screen.getBy*` / `screen.findBy*` everywhere. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `testing-library-await-async-queries` | `findBy*` / `findAllBy*` queries return a Promise — used without `await` they resolve to an unwrapped Promise object. | `await screen.findByText("x")` (or `.then(...)`). For sync lookups use `getBy*` / `queryBy*` instead. |
+| `testing-library-no-debugging-utils` | Debug helpers (`screen.debug()`, `prettyDOM()`, `logRoles()`) left in committed tests pollute CI output. | Delete the debug call before committing, or wrap it in `if (process.env.DEBUG)` if it's a temporary affordance. |
+| `testing-library-prefer-screen-queries` | Destructuring `getBy*` / `findBy*` from `render(...)` is the legacy form — prefer `screen.getBy*` for stable refactoring. | Stop destructuring from `render(...)` — call `render(<UI/>)` for its side effect and use `screen.getBy*` / `screen.findBy*` everywhere. |
 
 ## testing > vitest
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `vitest-no-commented-out-tests` | ⚠️ | Commented-out `test(...)` / `it(...)` / `describe(...)` is dead code with mock value. | Delete the commented test, or move it back behind `.skip` if it's a known-failing case worth tracking. |
-| `vitest-no-disabled-tests` | ⚠️ | Disabled tests (`xtest`, `xit`, `xdescribe`, `.skip`) silently erode coverage. | Re-enable the test, fix the underlying issue, or delete it if it's no longer relevant. |
-| `vitest-no-done-callback` | ❌ | Vitest does not support the legacy Jest `done` callback — the test will silently never finish. | Return a Promise or mark the callback `async` and `await` the assertions. Drop the `done` parameter. |
-| `vitest-no-focused-tests` | ❌ | `.only` on `test`, `it`, or `describe` skips the rest of the suite — usually a left-over from local debugging. | Remove `.only` before committing. If you really want to isolate a test, use the runner's `--testNamePattern` flag instead. |
-| `vitest-no-identical-title` | ❌ | Two `test()` / `it()` blocks with the same title inside the same describe scope: vitest runs them both, but the test reporter merges them so only one result is visible. | Make every test title unique within its describe scope, even if you have to add a discriminator like `"… with empty input"`. |
-| `vitest-no-standalone-expect` | ❌ | `expect(...)` outside any `test` / `it` / `describe` block runs at import time, not as a test. | Move the `expect` inside a `test(...)` / `it(...)` body. If it's setup verification, use `beforeAll(...)` instead. |
-| `vitest-no-test-return-statement` | ⚠️ | Returning a non-Promise value from a test callback is silently discarded. | Drop the `return`. If you need a Promise, mark the callback `async` and `await` the value. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `vitest-no-commented-out-tests` | Commented-out `test(...)` / `it(...)` / `describe(...)` is dead code with mock value. | Delete the commented test, or move it back behind `.skip` if it's a known-failing case worth tracking. |
+| `vitest-no-disabled-tests` | Disabled tests (`xtest`, `xit`, `xdescribe`, `.skip`) silently erode coverage. | Re-enable the test, fix the underlying issue, or delete it if it's no longer relevant. |
+| `vitest-no-done-callback` | Vitest does not support the legacy Jest `done` callback — the test will silently never finish. | Return a Promise or mark the callback `async` and `await` the assertions. Drop the `done` parameter. |
+| `vitest-no-focused-tests` | `.only` on `test`, `it`, or `describe` skips the rest of the suite — usually a left-over from local debugging. | Remove `.only` before committing. If you really want to isolate a test, use the runner's `--testNamePattern` flag instead. |
+| `vitest-no-identical-title` | Two `test()` / `it()` blocks with the same title inside the same describe scope: vitest runs them both, but the test reporter merges them so only one result is visible. | Make every test title unique within its describe scope, even if you have to add a discriminator like `"… with empty input"`. |
+| `vitest-no-standalone-expect` | `expect(...)` outside any `test` / `it` / `describe` block runs at import time, not as a test. | Move the `expect` inside a `test(...)` / `it(...)` body. If it's setup verification, use `beforeAll(...)` instead. |
+| `vitest-no-test-return-statement` | Returning a non-Promise value from a test callback is silently discarded. | Drop the `return`. If you need a Promise, mark the callback `async` and `await` the value. |
 
 ## typescript
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `consistent-type-imports` | ❌ | Import types with `import type` so the bundler can strip them. | Prefix the import with `import type` when every binding is only used as a type. This lets the bundler elide the import entirely. |
-| `constructor-super` | ❌ | Derived classes must call `super()`; base classes must not. | Add a `super(...)` call in any class that `extends` another, and remove `super()` from classes with no superclass. The wrong shape throws at runtime. |
-| `eqeqeq` | ❌ | Use === over == to avoid type coercion surprises. | Replace `==` with `===` (and `!=` with `!==`). Loose equality triggers implicit coercion rules that hide bugs. |
-| `import/no-mutable-exports` | ❌ | Exported bindings must be immutable. | Replace `export let foo = ...` with `export const foo = ...`. Mutable exports create invisible cross-module coupling. |
-| `max-depth` | ❌ | Nesting beyond 2 levels is a smell. | Flatten via early return, extract a helper, or invert the condition. Deep nesting hides the happy path. |
-| `max-nested-callbacks` | ⚠️ | Deeply nested callbacks are unreadable. | Flatten nested callbacks by extracting named functions or switching to async/await. Past three levels the control flow is hard to follow. |
-| `max-params` | ❌ | Functions should take at most 4 positional arguments. | If you need more than 4 parameters, pack them into an options object — named fields carry intent where positional arguments don't. |
-| `no-alert` | ❌ | `alert`, `confirm`, and `prompt` block the UI thread. | Replace `alert`/`confirm`/`prompt` with a non-blocking UI component. These browser dialogs freeze the page and rarely belong in shipped code. |
-| `no-async-promise-executor` | ❌ | The `Promise` executor must not be `async`. | Remove `async` from the `new Promise(async (resolve) => ...)` executor. Errors thrown inside an async executor are swallowed and never reject the promise. |
-| `no-class-assign` | ❌ | A class binding must not be reassigned. | Don't assign to a `class` declaration's name. Reassigning it shadows the class and is almost always a mistake. |
-| `no-compare-neg-zero` | ❌ | Comparing against `-0` is misleading. | Replace `x === -0` with `Object.is(x, -0)`. The `===` operator treats `-0` and `0` as equal, so the comparison never does what it looks like. |
-| `no-conditional-async-return` | ⚠️ | Function returns `T` on one branch and `Promise<T>` on another — always return a promise for consistency. | If the function is async, every branch must return a value (or `await` a promise). If sync, don't return a promise on some branches. |
-| `no-console` | ❌ | `console` calls leak into production. | Remove the `console.*` call or route it through a real logger. Stray console output clutters production logs and can leak data. |
-| `no-const-assign` | ❌ | A `const` binding cannot be reassigned. | Reassigning a `const` throws a TypeError at runtime. Declare the variable with `let` if it genuinely needs to change. |
-| `no-constant-binary-expression` | ❌ | A binary expression with a constant operand has no effect. | Fix the expression — a constant side means a comparison or short-circuit always resolves the same way, which is usually a typo such as `a === b === c`. |
-| `no-debugger` | ❌ | `debugger` statements must not be committed. | Remove the `debugger` statement. It halts execution wherever devtools are open and never belongs in shipped code. |
-| `no-div-regex` | ⚠️ | A regex starting with `/=` reads like a division. | Escape the leading equals sign as `/\=.../`. A bare `/=` at the start of a regex literal is easy to misread as the `/=` operator. |
-| `no-double-cast` | ❌ | Double casts `as X as Y` hide misaligned types. | Remove the double cast and fix the real misalignment. Either align the producer's type with the consumer's, or validate the value at the boundary using a type guard or Zod schema that actually checks the runtime shape. |
-| `no-dupe-keys` | ❌ | Duplicate object keys silently overwrite each other. | Remove or rename the duplicate key. Later keys win, so the earlier value is silently discarded. |
-| `no-duplicate-case` | ❌ | Duplicate `case` labels make later branches dead. | Remove or correct the duplicate `case` value. The second identical label can never be reached. |
-| `no-duplicate-in-composite` | ⚠️ | Duplicate types in a union or intersection are redundant. | Remove the duplicate type from the composite. `A \| A` simplifies to `A`. |
-| `no-else-return` | ❌ | Prefer guard clauses over else-after-return. | Remove the `else` after a `return` and de-indent the trailing block. Early returns keep the happy path at the leftmost level. |
-| `no-empty` | ❌ | Empty blocks — including empty `catch` — must be justified. | Either handle the case or add a comment naming why the block is intentionally empty. Silent empty blocks rot into bugs. |
-| `no-empty-pattern` | ❌ | An empty destructuring pattern binds nothing. | Replace the empty `{}`/`[]` with the names you meant to extract, or drop the destructuring. `const {} = x` is almost always a mistake. |
-| `no-enum` | ❌ | TypeScript enums emit runtime code and don't narrow cleanly. | Replace `enum` with `const X = { ... } as const satisfies Record<string, string>` for config, or a discriminated union with a `type`/`kind` field for tagged data. |
-| `no-eq-null` | ❌ | Use `===`/`!==` when comparing with `null`. | Replace `== null` with `=== null`. Loose `== null` quietly matches both `null` and `undefined`; make that intent explicit instead. |
-| `no-evolving-types` | ⚠️ | Variable may implicitly evolve into the `any` type. | Add an explicit type annotation or a concrete initializer to pin the type. |
-| `no-ex-assign` | ❌ | Don't reassign the caught exception. | Use a new local variable instead of assigning to the `catch (e)` binding. Overwriting it loses the original error and confuses debugging. |
-| `no-extra-boolean-cast` | ⚠️ | Redundant boolean casts add noise. | Drop the extra `!!` or `Boolean()` in a context that already coerces to boolean, such as an `if` condition. It is pure noise. |
-| `no-extra-label` | ⚠️ | A label on a loop with no nested target is useless. | Remove the label when `break`/`continue` would target the same loop anyway. Labels only earn their keep when breaking out of an outer loop. |
-| `no-fallthrough` | ❌ | A `switch` case must not silently fall through. | Add a `break`/`return`, or an explicit `// fallthrough` comment when it is intentional. Accidental fallthrough runs the next case's code. |
-| `no-func-assign` | ❌ | A function declaration must not be reassigned. | Don't assign to the name of a `function` declaration. Overwriting it is almost always a bug; use a separate variable instead. |
-| `no-function-overloads` | ⚠️ | Overload signatures don't constrain the implementation. | Replace overloads with a union parameter type or a generic signature. Overloads are purely ambient declarations — the compiler checks the implementation against the last signature only, which hides bugs. |
-| `no-import-assign` | ❌ | Imported bindings are read-only. | Don't assign to an imported binding or namespace. Imports are immutable live bindings; assigning to them throws in modules. |
-| `no-inferred-any` | ⚠️ | Detect likely untyped patterns that infer `any`. | Add an explicit type annotation or use `as T` / `satisfies T` after `JSON.parse()` and `.json()` calls. Avoid `const x: any =` — use a concrete type or `unknown`. |
-| `no-inline-param-type` | ⚠️ | Inline object types in parameters resist reuse and refactoring. | Extract the inline type to a named `type` declaration above the function. A named type has an identity, can be shared across call sites, and shows up in IDE hover. |
-| `no-irregular-whitespace` | ❌ | Irregular whitespace characters break tooling. | Replace non-standard whitespace such as a non-breaking or zero-width space with a regular space. Invisible characters cause confusing parse and diff errors. |
-| `no-json-parse-cast` | ❌ | `JSON.parse(x) as T` is a lie — validate the runtime shape. | Replace the cast with runtime validation: `const parsed = UserSchema.safeParse(JSON.parse(raw))` (Zod) or a hand-written type guard that inspects the value. |
-| `no-label-var` | ❌ | A label must not share a name with an in-scope variable. | Rename the label or the variable. Reusing the same name makes `break name` ambiguous to readers. |
-| `no-lone-blocks` | ⚠️ | A standalone block with no block-scoped declarations is dead structure. | Remove the redundant `{ }`. A bare block only matters when it scopes `let`/`const`/`class`; otherwise it just adds indentation. |
-| `no-multi-assign` | ⚠️ | Chained assignments hide what is being set. | Split `a = b = c` into separate statements. Chained assignment obscures which variables are declared and which are mutated. |
-| `no-multi-str` | ⚠️ | Escaping a newline to span a string is error-prone. | Use a template literal or string concatenation instead of a `\` line continuation. A trailing space after the backslash silently breaks it. |
-| `no-new` | ❌ | `new` used only for side effects throws the object away. | Assign the `new X()` result to a variable, or call a plain function if you only want side effects. A bare `new` signals a misused constructor. |
-| `no-nullish-default-on-input` | ⚠️ | Defaulting function parameters silently paves over invalid input. | Don't use `??` or `\|\|` to default a function parameter. Validate at the boundary: if the input is invalid, return a Result error. Silent defaults turn caller bugs into silent wrong answers. |
-| `no-obj-calls` | ❌ | Global namespace objects are not callable. | Don't call `Math()`, `JSON()`, `Reflect()`, and the like — they are namespaces, not functions, so calling them throws a TypeError. |
-| `no-param-reassign` | ❌ | Reassigning function parameters mutates the caller's data. | Copy the argument into a local `let` if you need to mutate it. Mutating params silently surprises callers. |
-| `no-process-global` | ⚠️ | Usage of the Node `process` global is discouraged — it is hard for tools to statically analyze. | Import `process` explicitly with `import process from "node:process";` instead of relying on the implicit global. |
-| `no-redundant-optional` | ⚠️ | `prop?: Type \| undefined` — the `?` already implies `\| undefined` (unless tsconfig sets `exactOptionalPropertyTypes`). | Remove `\| undefined` from the type, or remove the `?` from the property name. |
-| `no-return-type-any` | ❌ | Functions with explicit `: any` return type defeat type safety. | Replace `: any` with a specific return type or use `unknown` if the type is truly dynamic. |
-| `no-self-assign` | ❌ | Assigning a variable to itself does nothing. | Remove the `x = x` assignment or fix the typo — you likely meant a different value or property. |
-| `no-self-compare` | ❌ | Comparing a value with itself is trivially true or false. | Replace `x === x` with the intended operands. The only real use, NaN detection, is clearer as `Number.isNaN(x)`. |
-| `no-sequences` | ⚠️ | The comma operator hides multiple expressions in one. | Split comma-separated expressions into separate statements. The comma operator evaluates each and returns the last, which surprises most readers. |
-| `no-setter-return` | ❌ | A setter's return value is discarded. | Remove the `return value` from the setter — it has no effect. Use a plain method if you need to return something. |
-| `no-template-curly-in-string` | ❌ | `${...}` in a regular string is not interpolated. | Switch the quotes to backticks to make it a template literal, or remove the `${}` if it was meant literally. In a normal string it stays verbatim text. |
-| `no-this-before-super` | ❌ | `this` must not be used before `super()` in a derived constructor. | Move every `this` access after the `super()` call. Touching `this` before the base constructor runs throws a ReferenceError. |
-| `no-this-in-static` | ⚠️ | A bare `this` value (or `super`) in a static context refers to the class, not an instance — usually a mistake. | Use the class name for a bare `this` and the parent class name for `super`; member access through `this` (`this.x`, `new this()`) stays valid for inherited statics. |
-| `no-type-assertion` | ❌ | Bans all `as T` type assertions. | Use `satisfies T` for validation, type guards for narrowing, or generics for polymorphism. |
-| `no-typeof-prefer-schema` | ⚠️ | Validating the shape of freshly-deserialized data (`JSON.parse`, `response.json()`) with chained `typeof` checks is error-prone — use a schema validator (zod, valibot, …). | Replace the chained `typeof` checks with a schema parsed at the boundary, e.g. `const User = z.object({ name: z.string(), age: z.number() }); User.parse(data)`. A single `typeof x === 'string'` narrowing is fine — this targets multi-property shape checks. |
-| `no-unassigned-vars` | ❌ | A variable that is read but never assigned is always undefined. | Assign the variable a value or remove it. A `let`/`var` that is only ever read holds `undefined`, usually a forgotten assignment. |
-| `no-unreachable` | ❌ | Code after a terminating statement never runs. | Remove the unreachable statements after a `return`/`throw`/`break`/`continue`, or fix the control flow that strands them. |
-| `no-unused-labels` | ❌ | A label that is never referenced is dead. | Remove the unused label. If you meant to jump to it, add the matching `break`/`continue`. |
-| `no-useless-catch` | ❌ | A catch that only rethrows is pointless. | If the catch block just rethrows the original error, remove it — the error propagates identically without the ceremony. |
-| `no-useless-intersection` | ⚠️ | Intersecting with `unknown` or `never` is useless — `& unknown` is a no-op, `& never` collapses to `never`. | Remove `& unknown` (no-op) or simplify `Foo & never` to `never`. |
-| `no-useless-rename` | ⚠️ | Renaming a binding to the same name is redundant. | Simplify `{ foo: foo }` to `{ foo }` in imports, exports, and destructuring. Renaming a binding to itself is pure noise. |
-| `no-var` | ❌ | Never declare variables with `var`. | Replace `var` with `const` (or `let` only when the binding actually needs to be reassigned). |
-| `object-shorthand` | ⚠️ | Use shorthand for object properties and methods. | Write `{ foo }` instead of `{ foo: foo }` and `{ method() {} }` instead of `{ method: function () {} }`. Shorthand is the consistent, modern form. |
-| `operator-assignment` | ⚠️ | Prefer compound assignment operators. | Replace `x = x + 1` with `x += 1`, and likewise for the other operators. Shorthand states the intent and avoids repeating the target. |
-| `option-vs-result` | ⚠️ | Functions named `find*`/`get*` returning `null`/`undefined` should use an Option type. | Wrap the return value in an Option/Result type instead of returning bare `null` or `undefined`. This makes the absence of a value explicit in the type system. |
-| `oxc/misrefactored-assign-op` | ❌ | oxc native lint — opinionated perf/correctness checks. | Assignment operator is misrefactored — verify the operand order. `x -= y` is not the same as `x = y - x`. |
-| `oxc/no-accumulating-spread` | ❌ | oxc native lint — opinionated perf/correctness checks. | Accumulating spreads in a loop is O(n²) — rewrite as a single `[...a, ...b, ...c]` at the end, or push-then-spread once. |
-| `oxc/no-barrel-file` | ❌ | oxc native lint — opinionated perf/correctness checks. | Barrel files (`index.ts` re-exporting everything) defeat tree-shaking and create cyclic deps. Import from the source module directly. |
-| `prefer-const` | ❌ | Prefer `const` over `let` when the binding is never reassigned. | Change `let` to `const` for bindings that are assigned once. The intent becomes explicit and accidental reassignment becomes a compile error. |
-| `prefer-type-guard` | ⚠️ | Functions named `isX` returning `boolean` with `typeof`/`instanceof` should use type predicates. | Change the return type from `: boolean` to `: x is Type` to enable type narrowing at call sites. |
-| `prefer-type-over-interface` | ⚠️ | Prefer `type` over `interface` unless you need extension. | Replace `interface X { ... }` with `type X = { ... }`. Types support unions, intersections, mapped types, and conditional types. Keep `interface` only when you need `extends` or declaration merging. |
-| `promise/always-return` | ❌ | Promise discipline — avoid classic async footguns. | Every `.then(cb)` must return a value. Returning nothing breaks chain composition. |
-| `promise/catch-or-return` | ❌ | Promise discipline — avoid classic async footguns. | Every promise chain must end with `.catch(...)` or be returned so the caller can handle rejection. Unhandled rejections crash. |
-| `promise/no-multiple-resolved` | ❌ | Promise discipline — avoid classic async footguns. | Don't call resolve/reject more than once in a Promise executor. Only the first call has effect; the rest silently vanishes. |
-| `promise/no-nesting` | ❌ | Promise discipline — avoid classic async footguns. | Don't nest `.then()` inside `.then()`. Flatten via await or return the inner promise from the outer callback. |
-| `promise/no-return-in-finally` | ❌ | Promise discipline — avoid classic async footguns. | Don't `return` from `.finally()`. The return value is discarded and misleads readers about the chain's result. |
-| `promise/no-return-wrap` | ❌ | Promise discipline — avoid classic async footguns. | Don't `return Promise.resolve(x)` inside `.then()` — just `return x`. The then-chain already wraps non-promise values. |
-| `promise/param-names` | ❌ | Promise discipline — avoid classic async footguns. | Name Promise executor parameters `resolve` and `reject`. Any other names confuse reviewers. |
-| `public-static-readonly` | ⚠️ | `public static` fields without `readonly` allow accidental mutation. | Add `readonly` to `public static` fields: `public static readonly X = ...`. |
-| `redundant-type-aliases` | ⚠️ | `type X = Y` where Y is a single type adds no structure — it's just renaming. | Use the original type directly, or add structure (union, intersection, generics) to justify the alias. |
-| `symbol-description` | ⚠️ | Every `Symbol()` should carry a description. | Pass a description to `Symbol('...')`. The description is the only thing that identifies a symbol when debugging. |
-| `ts-adjacent-overload-signatures` | ⚠️ | Function overload signatures must be consecutive for readability. | Move all overload signatures for the same function name next to each other. |
-| `ts-ban-ts-comment` | ⚠️ | `@ts-ignore` and `@ts-nocheck` suppress compiler errors and hide bugs. | Fix the underlying type error, or use `@ts-expect-error` with a description. |
-| `ts-ban-tslint-comment` | ⚠️ | TSLint comments are obsolete — the project has been deprecated in favour of ESLint. | Remove the `tslint:` comment directive. |
-| `ts-bounded-recursive-generic` | ⚠️ | Recursive conditional or mapped type lacks a depth parameter; it can blow up the type checker. | Add a depth accumulator (e.g. `D extends 0 ? ... : Recurse<Next<D>, ...>`) to bound recursion. |
-| `ts-branded-type-no-direct-cast` | ⚠️ | Branded types must be constructed through a validator function, not via a direct `as` cast. | Route the value through the brand's dedicated validator (e.g. `parseUserId(x)`) which returns the branded type after checking invariants. |
-| `ts-class-literal-property-style` | ⚠️ | Enforce that literals on classes are exposed in a consistent style (fields vs getters). | Use `readonly` fields for literals instead of trivial getter methods (default), or vice versa. |
-| `ts-class-methods-use-this` | ⚠️ | Class methods that don't use `this` should be static or extracted to a standalone function. | Add `static` to the method, move it to a standalone function, or use `this` in the body. |
-| `ts-consistent-generic-constructors` | ⚠️ | Generic type arguments should be on the constructor, not the variable annotation. | Move the type argument from the type annotation to the constructor: `new Map<K, V>()` instead of `const m: Map<K, V> = new Map()`. |
-| `ts-consistent-indexed-object-style` | ⚠️ | Prefer `Record<K, V>` over manual index signature `{ [key: K]: V }` for consistency. | Replace the index signature with `Record<K, V>`. |
-| `ts-consistent-type-assertions` | ⚠️ | Enforce consistent type assertion style (`as T` vs `<T>`). | Use `as T` syntax instead of angle-bracket `<T>` assertions for consistency. |
-| `ts-consistent-type-exports` | ⚠️ | Type-only exports should use `export type` rather than `export`. | Replace `export { Foo }` with `export type { Foo }` when only types are re-exported. |
-| `ts-consistent-type-imports` | ⚠️ | Type-only imports should use `import type` rather than `import`. | Replace `import { Foo }` with `import type { Foo }` when only types are imported. |
-| `ts-declare-global-requires-export` | ❌ | `declare global` only augments the global scope when the file is a module; needs at least `export {}`. | Add `export {};` at the end of the file so TypeScript treats it as a module and the `declare global` block takes effect. |
-| `ts-default-param-last` | ⚠️ | Default parameters should be last to allow callers to omit them positionally. | Move parameters with default values to the end of the parameter list. |
-| `ts-explicit-function-return-type` | ⚠️ | Require explicit return types on functions and class methods. | Add an explicit `: ReturnType` annotation after the parameter list. Explicit return types make function contracts visible and prevent silent drift when the implementation changes. |
-| `ts-explicit-module-boundary-types` | ⚠️ | Require explicit argument types on exported functions and class methods. | Annotate every parameter of any exported function. Exported signatures are the module's public contract — inferred types drift silently as the implementation changes and surprise downstream consumers. Return types are handled by `ts-explicit-function-return-type`. |
-| `ts-init-declarations` | ⚠️ | Variables should be initialized at declaration — uninitialized declarations are error-prone. | Add an initializer to the variable declaration, or use `declare` for ambient contexts. |
-| `ts-member-ordering` | ⚠️ | Class and interface members should follow a consistent order: signatures, fields, constructors, methods. | Re-order members: put signatures first, then fields, then constructors, then methods. |
-| `ts-method-signature-style` | ⚠️ | Shorthand method signatures in interfaces are less safe than property signatures — they allow unsafe variance. | Use a property signature with a function type: `foo: (x: string) => void` instead of `foo(x: string): void`. |
-| `ts-no-array-constructor` | ⚠️ | Generic `Array` constructor is ambiguous — use array literal notation `[]`. | Use `[]` or `Array.from()` instead. `Array<T>()` with type arguments is acceptable. |
-| `ts-no-as-narrowing` | ⚠️ | `as` should not be used to narrow types; use type predicates or `in` checks. | Replace `x as NarrowType` with a user-defined type guard (`x is NarrowType`) or an `in`/`typeof`/`instanceof` check. |
-| `ts-no-assert-never-in-default` | ⚠️ | `switch { default: throw }` without an exhaustive `never` check goes stale when union variants are added. | Replace `default: throw new Error(...)` with `default: return assertNever(x);` (or `const _exhaustive: never = x;`) so TypeScript flags the missing case at compile time. |
-| `ts-no-confusing-non-null-assertion` | ⚠️ | `a! == b` looks confusingly like `a !== b`. | Remove the `!` or wrap the left side in parentheses: `(a!) == b`. |
-| `ts-no-const-enum` | ⚠️ | `const enum` declarations are inlined and incompatible with isolatedModules. | Use regular enum or union types instead of const enum |
-| `ts-no-dupe-class-members` | ❌ | Duplicate class members shadow earlier definitions and indicate a bug. | Remove or rename the duplicate class member. TS method overloads (without a body) are allowed. |
-| `ts-no-duplicate-enum-values` | ⚠️ | Duplicate enum member values cause silent shadowing at runtime. | Assign unique values to each enum member. |
-| `ts-no-duplicate-type-constituents` | ⚠️ | Duplicate members in a union or intersection are dead — TS resolves them to the same type but readers and refactors can be confused. | Remove the duplicate type member. Use an alias if the repetition signals a missing concept. |
-| `ts-no-dynamic-delete` | ⚠️ | Using `delete` on a computed key is error-prone — use `Map` or `Set` instead. | Remove the dynamic `delete` and use a `Map`/`Set`, or delete a static key. |
-| `ts-no-empty-function` | ⚠️ | Empty functions are often a sign of incomplete refactoring. | Add a comment explaining why the function is intentionally empty, or remove it. |
-| `ts-no-empty-object-type` | ⚠️ | `{}` as a type matches any non-nullish value — it almost never means what you think. | Use `Record<string, never>` for an empty object, `object` for any object, or `unknown` for any value. |
-| `ts-no-enum-object-literal-pattern` | ⚠️ | Indexing an `as const` enum-shaped object with an arbitrary string defeats the narrow type. | Cast the index to `keyof typeof X` (`X[k as keyof typeof X]`), or convert the object to a real enum / discriminated map and accept the narrow keys explicitly. |
-| `ts-no-explicit-any` | ⚠️ | Explicit `any` disables type checking — use `unknown` or a precise type. | Replace `any` with `unknown` (when the value's shape is unknown — forces narrowing at use site), or with a precise type / generic when known. |
-| `ts-no-export-equal` | ⚠️ | CommonJS-style `export = ...` — prefer ES module exports. | Use ES module exports: `export default` or named exports. |
-| `ts-no-extra-non-null-assertion` | ⚠️ | Extra non-null assertions (`!!`) are redundant and confusing. | Remove the extra `!` — a single non-null assertion is sufficient. |
-| `ts-no-extraneous-class` | ⚠️ | Classes with only static members or an empty body should be plain objects or modules. | Use a module/namespace, plain object, or standalone functions instead. |
-| `ts-no-implicit-any-catch` | ⚠️ | catch binding without an explicit type annotation falls back to implicit any. | Add explicit type annotation: catch (e: unknown) |
-| `ts-no-import-type-side-effects` | ⚠️ | Inline `type` qualifiers on every specifier leave a side-effect import at runtime. | Use a top-level `import type { ... }` instead of `import { type A, type B }`. |
-| `ts-no-inferrable-types` | ⚠️ | Explicit types on variables initialized with literals are redundant — TypeScript infers them. | Remove the type annotation and let TypeScript infer the type. |
-| `ts-no-invalid-this` | ⚠️ | `this` used outside a class or class-like object is likely a bug. | Move the code into a class method, or use an explicit parameter instead of `this`. |
-| `ts-no-invalid-void-type` | ⚠️ | `void` is only valid as a return type or generic type argument. | Use `undefined` instead of `void` outside of return types. |
-| `ts-no-large-string-union` | ⚠️ | String-literal union has more than 50 members; consider a branded string or enum. | Replace the union with a branded string type, a const object + `keyof typeof`, or an enum. Huge unions slow the compiler and produce useless error messages. |
-| `ts-no-loop-func` | ⚠️ | Functions declared inside loops often cause bugs due to closures capturing the loop variable by reference. | Move the function outside the loop, or use `let`/`const` in a `for` loop to create a new binding per iteration. |
-| `ts-no-misused-new` | ⚠️ | Classes use `constructor()`, not `new()`. Interfaces use `new()`, not `constructor()`. | In a class, rename `new` to `constructor`. In an interface, use `new(): Type` instead of `constructor(): Type`. |
-| `ts-no-misused-promises` | ⚠️ | Async function passed to a callback slot that expects void — the returned Promise is dropped. | Either drop the `async` and use `.then(...)` explicitly, or wrap the body in a `void (async () => { ... })()` IIFE so the unhandled Promise is intentional. |
-| `ts-no-mixed-decorator-systems` | ❌ | File mixes standard decorators with `reflect-metadata`/experimentalDecorators usage. | Pick one decorator system per file — remove the `reflect-metadata` import or the standard decorator, or split the code across two files. |
-| `ts-no-mixed-enums` | ⚠️ | Enums mixing numeric and string members produce confusing inference and serialization. | Pick one shape per enum — all string members, or all numeric. If the enum needs both kinds of values, split it into two enums. |
-| `ts-no-mixed-sync-async-returns` | ⚠️ | Functions must not conditionally return sync or Promise values — pick one. | Make the function `async` so it always returns a Promise, or extract the sync path to a separate function. |
-| `ts-no-mixed-types` | ⚠️ | Interfaces and type aliases should not mix property signatures with method signatures. | Use consistent signatures: either all properties or all methods. |
-| `ts-no-namespace` | ⚠️ | TypeScript `namespace` is a legacy construct — use ES modules instead. | Replace the `namespace` with ES module exports (`export` / `import`). |
-| `ts-no-narrowing-across-closures` | ⚠️ | Narrowed variables lose their refinement inside `setTimeout`/`.then`/event handler callbacks. | Assign the narrowed value to a `const` inside the current scope, then reference the const from the callback. |
-| `ts-no-non-null-asserted-nullish-coalescing` | ⚠️ | `x! ?? y` is contradictory — `!` asserts non-null, `??` handles null. | Remove the `!` (let `??` do its job) or remove the `??` (if the value is never null). |
-| `ts-no-non-null-asserted-optional-chain` | ⚠️ | Non-null assertion after optional chain contradicts its purpose. | Remove the `!` — the optional chain already handles the nullish case. |
-| `ts-no-non-null-assertion` | ⚠️ | Non-null assertions (`value!`) suppress compiler checks and can hide real nullability bugs. | Narrow the type with a check (`if (value)`), use optional chaining (`value?.x`), or rework the types so the value is known to be non-null. |
-| `ts-no-object-keys-typed-loop` | ⚠️ | `Object.keys(obj).forEach(k => obj[k])` is type-unsound — TS widens to `any`. | Use `for (const [k, v] of Object.entries(obj))`, or cast: `(Object.keys(obj) as Array<keyof typeof obj>).forEach(...)`. |
-| `ts-no-redeclare` | ⚠️ | Redeclaring a variable in the same scope shadows the previous declaration silently. | Remove the duplicate declaration or rename the variable. |
-| `ts-no-restricted-imports` | ⚠️ | Disallow imports whose module specifier matches a configured pattern list. | Replace the restricted import with the recommended alternative, or remove the pattern from `[rules.ts-no-restricted-imports] patterns` in `comply.toml`. |
-| `ts-no-restricted-types` | ⚠️ | Certain types are banned by project convention or because better alternatives exist. | Replace the restricted type with the recommended alternative. |
-| `ts-no-shadow` | ⚠️ | Variable shadowing makes code harder to reason about and can lead to bugs. | Rename the inner variable to avoid shadowing the outer one. |
-| `ts-no-this-alias` | ⚠️ | Assigning `this` to a variable is a legacy pattern — use arrow functions instead. | Use an arrow function to capture `this` lexically. |
-| `ts-no-unnecessary-parameter-property-assignment` | ⚠️ | Assigning `this.x = x` in a constructor is redundant when `x` is already a parameter property. | Remove the redundant assignment — the parameter property already handles it. |
-| `ts-no-unnecessary-type-constraint` | ⚠️ | `<T extends any>` and `<T extends unknown>` are unnecessary — all types already extend these. | Remove the `extends any` or `extends unknown` constraint. |
-| `ts-no-unsafe-declaration-merging` | ⚠️ | Unsafe declaration merging between classes and interfaces. | Rename one of the declarations so they don't merge. |
-| `ts-no-unsafe-function-type` | ⚠️ | The built-in `Function` type is unsafe — it accepts any callable and loses signature information. | Replace `Function` with a precise function signature like `(arg: T) => U` or `() => void`. |
-| `ts-no-unused-expressions` | ⚠️ | Expression statements that produce a value but discard it are likely mistakes. | Assign the result to a variable, use it as a condition, or remove the statement. |
-| `ts-no-unused-generic-parameter` | ⚠️ | Generic type parameter is not referenced anywhere in the function signature. | Remove the unused type parameter, or reference it from a parameter/return type so it actually contributes to inference. |
-| `ts-no-unused-private-class-members` | ⚠️ | Private class members that are never used are dead code. | Remove the unused private member or use it. |
-| `ts-no-unused-vars` | ⚠️ | Declared variables that are never used are dead code. | Remove the unused variable or prefix with `_` to indicate intentional non-use. |
-| `ts-no-use-before-define` | ⚠️ | Using variables before their definition leads to confusing code and potential TDZ errors. | Move the declaration before its first usage, or restructure the code. |
-| `ts-no-useless-constructor` | ⚠️ | Empty constructors that only call `super()` are unnecessary. | Remove the constructor — the default behaviour is identical. |
-| `ts-no-useless-empty-export` | ⚠️ | `export {}` is unnecessary when the file already has other exports. | Remove the `export {}` statement. |
-| `ts-no-void-returning-assigned` | ⚠️ | Storing the return value of a known void function — the variable is always `undefined`. | Drop the assignment, or — if you wanted the side-effect's return — call the right function (e.g. `.map` instead of `.forEach`). |
-| `ts-no-wrapper-object-types` | ⚠️ | Use lowercase primitives (`string`, `number`, `boolean`) instead of wrapper object types. | Replace `String` with `string`, `Number` with `number`, `Boolean` with `boolean`, `Object` with `object`, `Symbol` with `symbol`, `BigInt` with `bigint`. |
-| `ts-only-throw-error` | ⚠️ | Only `Error` instances should be thrown — primitives and plain objects lose stack traces. | Throw `new Error(...)` (or a subclass) rather than a string, number, or object literal. |
-| `ts-overload-signature-order` | ⚠️ | Function overload signatures should be ordered from most specific to most general. | Reorder the overloads so earlier signatures have more parameters or narrower types; TypeScript matches top-to-bottom and a general signature first shadows the specific one. |
-| `ts-prefer-as-const` | ⚠️ | Casting to a literal type (`as "foo"`, `as 42`) loses the link to the value — use `as const` instead. | Replace `value as "literal"` with `value as const`. The const assertion preserves the literal type without forcing the cast. |
-| `ts-prefer-for-of` | ⚠️ | A `for` loop whose index is only used for array access can be a simpler `for-of`. | Replace the `for` loop with `for (const item of array)`. |
-| `ts-prefer-function-type` | ⚠️ | An interface with only a call signature should be a function type. | Replace `interface Fn { (): T }` with `type Fn = () => T`. |
-| `ts-prefer-interface-extends` | ⚠️ | Prefer `interface X extends A, B` to `type X = A & B` for object composition. | Convert the type alias to an interface with `extends`. Interfaces give better error messages, support declaration merging, and compile faster. |
-| `ts-prefer-literal-enum-member` | ⚠️ | Enum members should be initialized with literal values, not computed expressions. | Replace the computed expression with a literal string or number value. |
-| `ts-prefer-nullish-coalescing` | ⚠️ | `a \|\| b` treats every falsy value (`0`, `""`, `false`) as missing. `a ?? b` only triggers on `null` / `undefined`. | Use `??` when you mean "fall back when null or undefined". Keep `\|\|` when you genuinely want any falsy value to short-circuit (rare). |
-| `ts-prefer-optional-chain` | ⚠️ | `a && a.b && a.b.c` is verbose and order-sensitive — `a?.b?.c` reads better and short-circuits the same way. | Use optional chaining `?.` for property and call access on possibly-nullish values. |
-| `ts-prefer-promise-reject-errors` | ⚠️ | `Promise.reject()` should receive an `Error` instance, not a primitive or plain object. | Call `Promise.reject(new Error('...'))` instead of passing a string, number, or object literal. |
-| `ts-prefer-satisfies` | ⚠️ | `as Type` on object/array literal widens the type — use `satisfies` instead. | Replace `{...} as Type` with `{...} satisfies Type`. `satisfies` validates the literal without losing the narrow inferred type. |
-| `ts-prefer-using-declaration` | ⚠️ | try/finally with a single cleanup call is replaceable by `using` / `await using` (TS 5.2+). | Declare the resource with `using res = ...` and let the runtime call dispose. |
-| `ts-triple-slash-reference` | ⚠️ | Triple-slash `path` references to source modules are legacy — use ES `import`. | Replace `/// <reference path="./mod.ts" />` with an ES `import` declaration. (`types`/`lib` references and `path` references to `.d.ts` declaration files have no ESM equivalent and are not flagged.) |
-| `ts-unified-signatures` | ⚠️ | Function overload signatures that differ by a single parameter should be unified with a union or optional parameter. | Merge the overload signatures into one using a union type or an optional parameter. |
-| `typescript/array-type` | ❌ | Use `T[]` consistently for arrays. | Prefer `T[]` over `Array<T>`. Mixing the two styles creates pointless review churn. |
-| `typescript/no-require-imports` | ❌ | Use ES module imports, not CommonJS `require`. | Replace `const x = require('x')` with `import x from 'x'`. require() bypasses the type system and tree-shaking. |
-| `typescript/no-unsafe-function-type` | ❌ | The bare `Function` type accepts any signature. | Replace `Function` with a specific function type like `(arg: X) => Y`. Bare `Function` offers no type safety. |
-| `typescript/no-unsafe-type-assertion` | ❌ | Unsafe `as` assertions bypass the type checker. | Replace the assertion with a proper type guard or narrow via runtime validation before treating the value as the target type. |
-| `typescript/prefer-as-const` | ❌ | Use `as const` to pin literal types. | Replace `as 'literal'` with `as const` — more concise and preserves the literal type across refactors. |
-| `typescript/prefer-ts-expect-error` | ❌ | Use `@ts-expect-error` instead of `@ts-ignore`. | Replace `@ts-ignore` with `@ts-expect-error`. The latter errors when the suppressed issue is fixed, preventing bit-rot. |
-| `unicorn/no-array-for-each` | ❌ | Prefer `for...of` loops over `Array.forEach`. | Replace `.forEach(x => ...)` with `for (const x of arr)`. forEach can't break/continue and confuses async flows. |
-| `unicorn/prefer-array-flat-map` | ❌ | Use `flatMap` instead of `map().flat()`. | Chain `.flatMap(...)` once instead of `.map(...).flat()` — one pass instead of two. |
-| `use-type-alias` | ⚠️ | Repeated complex inline type annotations should be extracted into a type alias. | Create a `type` alias for the repeated annotation and use it in all positions. |
-| `vars-on-top` | ⚠️ | `var` declarations should sit at the top of their scope. | Move `var` declarations to the top of the function so the code matches their hoisted semantics — or better, switch to `let`/`const`. |
-| `yoda` | ⚠️ | Yoda conditions read backwards. | Write `value === 'literal'`, not `'literal' === value`. Putting the variable first reads naturally. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `consistent-type-imports` | Import types with `import type` so the bundler can strip them. | Prefix the import with `import type` when every binding is only used as a type. This lets the bundler elide the import entirely. |
+| `constructor-super` | Derived classes must call `super()`; base classes must not. | Add a `super(...)` call in any class that `extends` another, and remove `super()` from classes with no superclass. The wrong shape throws at runtime. |
+| `eqeqeq` | Use === over == to avoid type coercion surprises. | Replace `==` with `===` (and `!=` with `!==`). Loose equality triggers implicit coercion rules that hide bugs. |
+| `import/no-mutable-exports` | Exported bindings must be immutable. | Replace `export let foo = ...` with `export const foo = ...`. Mutable exports create invisible cross-module coupling. |
+| `max-depth` | Nesting beyond 2 levels is a smell. | Flatten via early return, extract a helper, or invert the condition. Deep nesting hides the happy path. |
+| `max-nested-callbacks` | Deeply nested callbacks are unreadable. | Flatten nested callbacks by extracting named functions or switching to async/await. Past three levels the control flow is hard to follow. |
+| `max-params` | Functions should take at most 4 positional arguments. | If you need more than 4 parameters, pack them into an options object — named fields carry intent where positional arguments don't. |
+| `no-alert` | `alert`, `confirm`, and `prompt` block the UI thread. | Replace `alert`/`confirm`/`prompt` with a non-blocking UI component. These browser dialogs freeze the page and rarely belong in shipped code. |
+| `no-async-promise-executor` | The `Promise` executor must not be `async`. | Remove `async` from the `new Promise(async (resolve) => ...)` executor. Errors thrown inside an async executor are swallowed and never reject the promise. |
+| `no-class-assign` | A class binding must not be reassigned. | Don't assign to a `class` declaration's name. Reassigning it shadows the class and is almost always a mistake. |
+| `no-compare-neg-zero` | Comparing against `-0` is misleading. | Replace `x === -0` with `Object.is(x, -0)`. The `===` operator treats `-0` and `0` as equal, so the comparison never does what it looks like. |
+| `no-conditional-async-return` | Function returns `T` on one branch and `Promise<T>` on another — always return a promise for consistency. | If the function is async, every branch must return a value (or `await` a promise). If sync, don't return a promise on some branches. |
+| `no-console` | `console` calls leak into production. | Remove the `console.*` call or route it through a real logger. Stray console output clutters production logs and can leak data. |
+| `no-const-assign` | A `const` binding cannot be reassigned. | Reassigning a `const` throws a TypeError at runtime. Declare the variable with `let` if it genuinely needs to change. |
+| `no-constant-binary-expression` | A binary expression with a constant operand has no effect. | Fix the expression — a constant side means a comparison or short-circuit always resolves the same way, which is usually a typo such as `a === b === c`. |
+| `no-debugger` | `debugger` statements must not be committed. | Remove the `debugger` statement. It halts execution wherever devtools are open and never belongs in shipped code. |
+| `no-div-regex` | A regex starting with `/=` reads like a division. | Escape the leading equals sign as `/\=.../`. A bare `/=` at the start of a regex literal is easy to misread as the `/=` operator. |
+| `no-double-cast` | Double casts `as X as Y` hide misaligned types. | Remove the double cast and fix the real misalignment. Either align the producer's type with the consumer's, or validate the value at the boundary using a type guard or Zod schema that actually checks the runtime shape. |
+| `no-dupe-keys` | Duplicate object keys silently overwrite each other. | Remove or rename the duplicate key. Later keys win, so the earlier value is silently discarded. |
+| `no-duplicate-case` | Duplicate `case` labels make later branches dead. | Remove or correct the duplicate `case` value. The second identical label can never be reached. |
+| `no-duplicate-in-composite` | Duplicate types in a union or intersection are redundant. | Remove the duplicate type from the composite. `A \| A` simplifies to `A`. |
+| `no-else-return` | Prefer guard clauses over else-after-return. | Remove the `else` after a `return` and de-indent the trailing block. Early returns keep the happy path at the leftmost level. |
+| `no-empty` | Empty blocks — including empty `catch` — must be justified. | Either handle the case or add a comment naming why the block is intentionally empty. Silent empty blocks rot into bugs. |
+| `no-empty-pattern` | An empty destructuring pattern binds nothing. | Replace the empty `{}`/`[]` with the names you meant to extract, or drop the destructuring. `const {} = x` is almost always a mistake. |
+| `no-enum` | TypeScript enums emit runtime code and don't narrow cleanly. | Replace `enum` with `const X = { ... } as const satisfies Record<string, string>` for config, or a discriminated union with a `type`/`kind` field for tagged data. |
+| `no-eq-null` | Use `===`/`!==` when comparing with `null`. | Replace `== null` with `=== null`. Loose `== null` quietly matches both `null` and `undefined`; make that intent explicit instead. |
+| `no-evolving-types` | Variable may implicitly evolve into the `any` type. | Add an explicit type annotation or a concrete initializer to pin the type. |
+| `no-ex-assign` | Don't reassign the caught exception. | Use a new local variable instead of assigning to the `catch (e)` binding. Overwriting it loses the original error and confuses debugging. |
+| `no-extra-boolean-cast` | Redundant boolean casts add noise. | Drop the extra `!!` or `Boolean()` in a context that already coerces to boolean, such as an `if` condition. It is pure noise. |
+| `no-extra-label` | A label on a loop with no nested target is useless. | Remove the label when `break`/`continue` would target the same loop anyway. Labels only earn their keep when breaking out of an outer loop. |
+| `no-fallthrough` | A `switch` case must not silently fall through. | Add a `break`/`return`, or an explicit `// fallthrough` comment when it is intentional. Accidental fallthrough runs the next case's code. |
+| `no-func-assign` | A function declaration must not be reassigned. | Don't assign to the name of a `function` declaration. Overwriting it is almost always a bug; use a separate variable instead. |
+| `no-function-overloads` | Overload signatures don't constrain the implementation. | Replace overloads with a union parameter type or a generic signature. Overloads are purely ambient declarations — the compiler checks the implementation against the last signature only, which hides bugs. |
+| `no-import-assign` | Imported bindings are read-only. | Don't assign to an imported binding or namespace. Imports are immutable live bindings; assigning to them throws in modules. |
+| `no-inferred-any` | Detect likely untyped patterns that infer `any`. | Add an explicit type annotation or use `as T` / `satisfies T` after `JSON.parse()` and `.json()` calls. Avoid `const x: any =` — use a concrete type or `unknown`. |
+| `no-inline-param-type` | Inline object types in parameters resist reuse and refactoring. | Extract the inline type to a named `type` declaration above the function. A named type has an identity, can be shared across call sites, and shows up in IDE hover. |
+| `no-irregular-whitespace` | Irregular whitespace characters break tooling. | Replace non-standard whitespace such as a non-breaking or zero-width space with a regular space. Invisible characters cause confusing parse and diff errors. |
+| `no-json-parse-cast` | `JSON.parse(x) as T` is a lie — validate the runtime shape. | Replace the cast with runtime validation: `const parsed = UserSchema.safeParse(JSON.parse(raw))` (Zod) or a hand-written type guard that inspects the value. |
+| `no-label-var` | A label must not share a name with an in-scope variable. | Rename the label or the variable. Reusing the same name makes `break name` ambiguous to readers. |
+| `no-lone-blocks` | A standalone block with no block-scoped declarations is dead structure. | Remove the redundant `{ }`. A bare block only matters when it scopes `let`/`const`/`class`; otherwise it just adds indentation. |
+| `no-multi-assign` | Chained assignments hide what is being set. | Split `a = b = c` into separate statements. Chained assignment obscures which variables are declared and which are mutated. |
+| `no-multi-str` | Escaping a newline to span a string is error-prone. | Use a template literal or string concatenation instead of a `\` line continuation. A trailing space after the backslash silently breaks it. |
+| `no-new` | `new` used only for side effects throws the object away. | Assign the `new X()` result to a variable, or call a plain function if you only want side effects. A bare `new` signals a misused constructor. |
+| `no-nullish-default-on-input` | Defaulting function parameters silently paves over invalid input. | Don't use `??` or `\|\|` to default a function parameter. Validate at the boundary: if the input is invalid, return a Result error. Silent defaults turn caller bugs into silent wrong answers. |
+| `no-obj-calls` | Global namespace objects are not callable. | Don't call `Math()`, `JSON()`, `Reflect()`, and the like — they are namespaces, not functions, so calling them throws a TypeError. |
+| `no-param-reassign` | Reassigning function parameters mutates the caller's data. | Copy the argument into a local `let` if you need to mutate it. Mutating params silently surprises callers. |
+| `no-process-global` | Usage of the Node `process` global is discouraged — it is hard for tools to statically analyze. | Import `process` explicitly with `import process from "node:process";` instead of relying on the implicit global. |
+| `no-redundant-optional` | `prop?: Type \| undefined` — the `?` already implies `\| undefined` (unless tsconfig sets `exactOptionalPropertyTypes`). | Remove `\| undefined` from the type, or remove the `?` from the property name. |
+| `no-return-type-any` | Functions with explicit `: any` return type defeat type safety. | Replace `: any` with a specific return type or use `unknown` if the type is truly dynamic. |
+| `no-self-assign` | Assigning a variable to itself does nothing. | Remove the `x = x` assignment or fix the typo — you likely meant a different value or property. |
+| `no-self-compare` | Comparing a value with itself is trivially true or false. | Replace `x === x` with the intended operands. The only real use, NaN detection, is clearer as `Number.isNaN(x)`. |
+| `no-sequences` | The comma operator hides multiple expressions in one. | Split comma-separated expressions into separate statements. The comma operator evaluates each and returns the last, which surprises most readers. |
+| `no-setter-return` | A setter's return value is discarded. | Remove the `return value` from the setter — it has no effect. Use a plain method if you need to return something. |
+| `no-template-curly-in-string` | `${...}` in a regular string is not interpolated. | Switch the quotes to backticks to make it a template literal, or remove the `${}` if it was meant literally. In a normal string it stays verbatim text. |
+| `no-this-before-super` | `this` must not be used before `super()` in a derived constructor. | Move every `this` access after the `super()` call. Touching `this` before the base constructor runs throws a ReferenceError. |
+| `no-this-in-static` | A bare `this` value (or `super`) in a static context refers to the class, not an instance — usually a mistake. | Use the class name for a bare `this` and the parent class name for `super`; member access through `this` (`this.x`, `new this()`) stays valid for inherited statics. |
+| `no-type-assertion` | Bans all `as T` type assertions. | Use `satisfies T` for validation, type guards for narrowing, or generics for polymorphism. |
+| `no-typeof-prefer-schema` | Validating the shape of freshly-deserialized data (`JSON.parse`, `response.json()`) with chained `typeof` checks is error-prone — use a schema validator (zod, valibot, …). | Replace the chained `typeof` checks with a schema parsed at the boundary, e.g. `const User = z.object({ name: z.string(), age: z.number() }); User.parse(data)`. A single `typeof x === 'string'` narrowing is fine — this targets multi-property shape checks. |
+| `no-unassigned-vars` | A variable that is read but never assigned is always undefined. | Assign the variable a value or remove it. A `let`/`var` that is only ever read holds `undefined`, usually a forgotten assignment. |
+| `no-unreachable` | Code after a terminating statement never runs. | Remove the unreachable statements after a `return`/`throw`/`break`/`continue`, or fix the control flow that strands them. |
+| `no-unused-labels` | A label that is never referenced is dead. | Remove the unused label. If you meant to jump to it, add the matching `break`/`continue`. |
+| `no-useless-catch` | A catch that only rethrows is pointless. | If the catch block just rethrows the original error, remove it — the error propagates identically without the ceremony. |
+| `no-useless-intersection` | Intersecting with `unknown` or `never` is useless — `& unknown` is a no-op, `& never` collapses to `never`. | Remove `& unknown` (no-op) or simplify `Foo & never` to `never`. |
+| `no-useless-rename` | Renaming a binding to the same name is redundant. | Simplify `{ foo: foo }` to `{ foo }` in imports, exports, and destructuring. Renaming a binding to itself is pure noise. |
+| `no-var` | Never declare variables with `var`. | Replace `var` with `const` (or `let` only when the binding actually needs to be reassigned). |
+| `object-shorthand` | Use shorthand for object properties and methods. | Write `{ foo }` instead of `{ foo: foo }` and `{ method() {} }` instead of `{ method: function () {} }`. Shorthand is the consistent, modern form. |
+| `operator-assignment` | Prefer compound assignment operators. | Replace `x = x + 1` with `x += 1`, and likewise for the other operators. Shorthand states the intent and avoids repeating the target. |
+| `option-vs-result` | Functions named `find*`/`get*` returning `null`/`undefined` should use an Option type. | Wrap the return value in an Option/Result type instead of returning bare `null` or `undefined`. This makes the absence of a value explicit in the type system. |
+| `oxc/misrefactored-assign-op` | oxc native lint — opinionated perf/correctness checks. | Assignment operator is misrefactored — verify the operand order. `x -= y` is not the same as `x = y - x`. |
+| `oxc/no-accumulating-spread` | oxc native lint — opinionated perf/correctness checks. | Accumulating spreads in a loop is O(n²) — rewrite as a single `[...a, ...b, ...c]` at the end, or push-then-spread once. |
+| `oxc/no-barrel-file` | oxc native lint — opinionated perf/correctness checks. | Barrel files (`index.ts` re-exporting everything) defeat tree-shaking and create cyclic deps. Import from the source module directly. |
+| `prefer-const` | Prefer `const` over `let` when the binding is never reassigned. | Change `let` to `const` for bindings that are assigned once. The intent becomes explicit and accidental reassignment becomes a compile error. |
+| `prefer-type-guard` | Functions named `isX` returning `boolean` with `typeof`/`instanceof` should use type predicates. | Change the return type from `: boolean` to `: x is Type` to enable type narrowing at call sites. |
+| `prefer-type-over-interface` | Prefer `type` over `interface` unless you need extension. | Replace `interface X { ... }` with `type X = { ... }`. Types support unions, intersections, mapped types, and conditional types. Keep `interface` only when you need `extends` or declaration merging. |
+| `promise/always-return` | Promise discipline — avoid classic async footguns. | Every `.then(cb)` must return a value. Returning nothing breaks chain composition. |
+| `promise/catch-or-return` | Promise discipline — avoid classic async footguns. | Every promise chain must end with `.catch(...)` or be returned so the caller can handle rejection. Unhandled rejections crash. |
+| `promise/no-multiple-resolved` | Promise discipline — avoid classic async footguns. | Don't call resolve/reject more than once in a Promise executor. Only the first call has effect; the rest silently vanishes. |
+| `promise/no-nesting` | Promise discipline — avoid classic async footguns. | Don't nest `.then()` inside `.then()`. Flatten via await or return the inner promise from the outer callback. |
+| `promise/no-return-in-finally` | Promise discipline — avoid classic async footguns. | Don't `return` from `.finally()`. The return value is discarded and misleads readers about the chain's result. |
+| `promise/no-return-wrap` | Promise discipline — avoid classic async footguns. | Don't `return Promise.resolve(x)` inside `.then()` — just `return x`. The then-chain already wraps non-promise values. |
+| `promise/param-names` | Promise discipline — avoid classic async footguns. | Name Promise executor parameters `resolve` and `reject`. Any other names confuse reviewers. |
+| `public-static-readonly` | `public static` fields without `readonly` allow accidental mutation. | Add `readonly` to `public static` fields: `public static readonly X = ...`. |
+| `redundant-type-aliases` | `type X = Y` where Y is a single type adds no structure — it's just renaming. | Use the original type directly, or add structure (union, intersection, generics) to justify the alias. |
+| `symbol-description` | Every `Symbol()` should carry a description. | Pass a description to `Symbol('...')`. The description is the only thing that identifies a symbol when debugging. |
+| `ts-adjacent-overload-signatures` | Function overload signatures must be consecutive for readability. | Move all overload signatures for the same function name next to each other. |
+| `ts-ban-ts-comment` | `@ts-ignore` and `@ts-nocheck` suppress compiler errors and hide bugs. | Fix the underlying type error, or use `@ts-expect-error` with a description. |
+| `ts-ban-tslint-comment` | TSLint comments are obsolete — the project has been deprecated in favour of ESLint. | Remove the `tslint:` comment directive. |
+| `ts-bounded-recursive-generic` | Recursive conditional or mapped type lacks a depth parameter; it can blow up the type checker. | Add a depth accumulator (e.g. `D extends 0 ? ... : Recurse<Next<D>, ...>`) to bound recursion. |
+| `ts-branded-type-no-direct-cast` | Branded types must be constructed through a validator function, not via a direct `as` cast. | Route the value through the brand's dedicated validator (e.g. `parseUserId(x)`) which returns the branded type after checking invariants. |
+| `ts-class-literal-property-style` | Enforce that literals on classes are exposed in a consistent style (fields vs getters). | Use `readonly` fields for literals instead of trivial getter methods (default), or vice versa. |
+| `ts-class-methods-use-this` | Class methods that don't use `this` should be static or extracted to a standalone function. | Add `static` to the method, move it to a standalone function, or use `this` in the body. |
+| `ts-consistent-generic-constructors` | Generic type arguments should be on the constructor, not the variable annotation. | Move the type argument from the type annotation to the constructor: `new Map<K, V>()` instead of `const m: Map<K, V> = new Map()`. |
+| `ts-consistent-indexed-object-style` | Prefer `Record<K, V>` over manual index signature `{ [key: K]: V }` for consistency. | Replace the index signature with `Record<K, V>`. |
+| `ts-consistent-type-assertions` | Enforce consistent type assertion style (`as T` vs `<T>`). | Use `as T` syntax instead of angle-bracket `<T>` assertions for consistency. |
+| `ts-consistent-type-exports` | Type-only exports should use `export type` rather than `export`. | Replace `export { Foo }` with `export type { Foo }` when only types are re-exported. |
+| `ts-consistent-type-imports` | Type-only imports should use `import type` rather than `import`. | Replace `import { Foo }` with `import type { Foo }` when only types are imported. |
+| `ts-declare-global-requires-export` | `declare global` only augments the global scope when the file is a module; needs at least `export {}`. | Add `export {};` at the end of the file so TypeScript treats it as a module and the `declare global` block takes effect. |
+| `ts-default-param-last` | Default parameters should be last to allow callers to omit them positionally. | Move parameters with default values to the end of the parameter list. |
+| `ts-explicit-function-return-type` | Require explicit return types on functions and class methods. | Add an explicit `: ReturnType` annotation after the parameter list. Explicit return types make function contracts visible and prevent silent drift when the implementation changes. |
+| `ts-explicit-module-boundary-types` | Require explicit argument types on exported functions and class methods. | Annotate every parameter of any exported function. Exported signatures are the module's public contract — inferred types drift silently as the implementation changes and surprise downstream consumers. Return types are handled by `ts-explicit-function-return-type`. |
+| `ts-init-declarations` | Variables should be initialized at declaration — uninitialized declarations are error-prone. | Add an initializer to the variable declaration, or use `declare` for ambient contexts. |
+| `ts-member-ordering` | Class and interface members should follow a consistent order: signatures, fields, constructors, methods. | Re-order members: put signatures first, then fields, then constructors, then methods. |
+| `ts-method-signature-style` | Shorthand method signatures in interfaces are less safe than property signatures — they allow unsafe variance. | Use a property signature with a function type: `foo: (x: string) => void` instead of `foo(x: string): void`. |
+| `ts-no-array-constructor` | Generic `Array` constructor is ambiguous — use array literal notation `[]`. | Use `[]` or `Array.from()` instead. `Array<T>()` with type arguments is acceptable. |
+| `ts-no-as-narrowing` | `as` should not be used to narrow types; use type predicates or `in` checks. | Replace `x as NarrowType` with a user-defined type guard (`x is NarrowType`) or an `in`/`typeof`/`instanceof` check. |
+| `ts-no-assert-never-in-default` | `switch { default: throw }` without an exhaustive `never` check goes stale when union variants are added. | Replace `default: throw new Error(...)` with `default: return assertNever(x);` (or `const _exhaustive: never = x;`) so TypeScript flags the missing case at compile time. |
+| `ts-no-confusing-non-null-assertion` | `a! == b` looks confusingly like `a !== b`. | Remove the `!` or wrap the left side in parentheses: `(a!) == b`. |
+| `ts-no-const-enum` | `const enum` declarations are inlined and incompatible with isolatedModules. | Use regular enum or union types instead of const enum |
+| `ts-no-dupe-class-members` | Duplicate class members shadow earlier definitions and indicate a bug. | Remove or rename the duplicate class member. TS method overloads (without a body) are allowed. |
+| `ts-no-duplicate-enum-values` | Duplicate enum member values cause silent shadowing at runtime. | Assign unique values to each enum member. |
+| `ts-no-duplicate-type-constituents` | Duplicate members in a union or intersection are dead — TS resolves them to the same type but readers and refactors can be confused. | Remove the duplicate type member. Use an alias if the repetition signals a missing concept. |
+| `ts-no-dynamic-delete` | Using `delete` on a computed key is error-prone — use `Map` or `Set` instead. | Remove the dynamic `delete` and use a `Map`/`Set`, or delete a static key. |
+| `ts-no-empty-function` | Empty functions are often a sign of incomplete refactoring. | Add a comment explaining why the function is intentionally empty, or remove it. |
+| `ts-no-empty-object-type` | `{}` as a type matches any non-nullish value — it almost never means what you think. | Use `Record<string, never>` for an empty object, `object` for any object, or `unknown` for any value. |
+| `ts-no-enum-object-literal-pattern` | Indexing an `as const` enum-shaped object with an arbitrary string defeats the narrow type. | Cast the index to `keyof typeof X` (`X[k as keyof typeof X]`), or convert the object to a real enum / discriminated map and accept the narrow keys explicitly. |
+| `ts-no-explicit-any` | Explicit `any` disables type checking — use `unknown` or a precise type. | Replace `any` with `unknown` (when the value's shape is unknown — forces narrowing at use site), or with a precise type / generic when known. |
+| `ts-no-export-equal` | CommonJS-style `export = ...` — prefer ES module exports. | Use ES module exports: `export default` or named exports. |
+| `ts-no-extra-non-null-assertion` | Extra non-null assertions (`!!`) are redundant and confusing. | Remove the extra `!` — a single non-null assertion is sufficient. |
+| `ts-no-extraneous-class` | Classes with only static members or an empty body should be plain objects or modules. | Use a module/namespace, plain object, or standalone functions instead. |
+| `ts-no-implicit-any-catch` | catch binding without an explicit type annotation falls back to implicit any. | Add explicit type annotation: catch (e: unknown) |
+| `ts-no-import-type-side-effects` | Inline `type` qualifiers on every specifier leave a side-effect import at runtime. | Use a top-level `import type { ... }` instead of `import { type A, type B }`. |
+| `ts-no-inferrable-types` | Explicit types on variables initialized with literals are redundant — TypeScript infers them. | Remove the type annotation and let TypeScript infer the type. |
+| `ts-no-invalid-this` | `this` used outside a class or class-like object is likely a bug. | Move the code into a class method, or use an explicit parameter instead of `this`. |
+| `ts-no-invalid-void-type` | `void` is only valid as a return type or generic type argument. | Use `undefined` instead of `void` outside of return types. |
+| `ts-no-large-string-union` | String-literal union has more than 50 members; consider a branded string or enum. | Replace the union with a branded string type, a const object + `keyof typeof`, or an enum. Huge unions slow the compiler and produce useless error messages. |
+| `ts-no-loop-func` | Functions declared inside loops often cause bugs due to closures capturing the loop variable by reference. | Move the function outside the loop, or use `let`/`const` in a `for` loop to create a new binding per iteration. |
+| `ts-no-misused-new` | Classes use `constructor()`, not `new()`. Interfaces use `new()`, not `constructor()`. | In a class, rename `new` to `constructor`. In an interface, use `new(): Type` instead of `constructor(): Type`. |
+| `ts-no-misused-promises` | Async function passed to a callback slot that expects void — the returned Promise is dropped. | Either drop the `async` and use `.then(...)` explicitly, or wrap the body in a `void (async () => { ... })()` IIFE so the unhandled Promise is intentional. |
+| `ts-no-mixed-decorator-systems` | File mixes standard decorators with `reflect-metadata`/experimentalDecorators usage. | Pick one decorator system per file — remove the `reflect-metadata` import or the standard decorator, or split the code across two files. |
+| `ts-no-mixed-enums` | Enums mixing numeric and string members produce confusing inference and serialization. | Pick one shape per enum — all string members, or all numeric. If the enum needs both kinds of values, split it into two enums. |
+| `ts-no-mixed-sync-async-returns` | Functions must not conditionally return sync or Promise values — pick one. | Make the function `async` so it always returns a Promise, or extract the sync path to a separate function. |
+| `ts-no-mixed-types` | Interfaces and type aliases should not mix property signatures with method signatures. | Use consistent signatures: either all properties or all methods. |
+| `ts-no-namespace` | TypeScript `namespace` is a legacy construct — use ES modules instead. | Replace the `namespace` with ES module exports (`export` / `import`). |
+| `ts-no-narrowing-across-closures` | Narrowed variables lose their refinement inside `setTimeout`/`.then`/event handler callbacks. | Assign the narrowed value to a `const` inside the current scope, then reference the const from the callback. |
+| `ts-no-non-null-asserted-nullish-coalescing` | `x! ?? y` is contradictory — `!` asserts non-null, `??` handles null. | Remove the `!` (let `??` do its job) or remove the `??` (if the value is never null). |
+| `ts-no-non-null-asserted-optional-chain` | Non-null assertion after optional chain contradicts its purpose. | Remove the `!` — the optional chain already handles the nullish case. |
+| `ts-no-non-null-assertion` | Non-null assertions (`value!`) suppress compiler checks and can hide real nullability bugs. | Narrow the type with a check (`if (value)`), use optional chaining (`value?.x`), or rework the types so the value is known to be non-null. |
+| `ts-no-object-keys-typed-loop` | `Object.keys(obj).forEach(k => obj[k])` is type-unsound — TS widens to `any`. | Use `for (const [k, v] of Object.entries(obj))`, or cast: `(Object.keys(obj) as Array<keyof typeof obj>).forEach(...)`. |
+| `ts-no-redeclare` | Redeclaring a variable in the same scope shadows the previous declaration silently. | Remove the duplicate declaration or rename the variable. |
+| `ts-no-restricted-imports` | Disallow imports whose module specifier matches a configured pattern list. | Replace the restricted import with the recommended alternative, or remove the pattern from `[rules.ts-no-restricted-imports] patterns` in `comply.toml`. |
+| `ts-no-restricted-types` | Certain types are banned by project convention or because better alternatives exist. | Replace the restricted type with the recommended alternative. |
+| `ts-no-shadow` | Variable shadowing makes code harder to reason about and can lead to bugs. | Rename the inner variable to avoid shadowing the outer one. |
+| `ts-no-this-alias` | Assigning `this` to a variable is a legacy pattern — use arrow functions instead. | Use an arrow function to capture `this` lexically. |
+| `ts-no-unnecessary-parameter-property-assignment` | Assigning `this.x = x` in a constructor is redundant when `x` is already a parameter property. | Remove the redundant assignment — the parameter property already handles it. |
+| `ts-no-unnecessary-type-constraint` | `<T extends any>` and `<T extends unknown>` are unnecessary — all types already extend these. | Remove the `extends any` or `extends unknown` constraint. |
+| `ts-no-unsafe-declaration-merging` | Unsafe declaration merging between classes and interfaces. | Rename one of the declarations so they don't merge. |
+| `ts-no-unsafe-function-type` | The built-in `Function` type is unsafe — it accepts any callable and loses signature information. | Replace `Function` with a precise function signature like `(arg: T) => U` or `() => void`. |
+| `ts-no-unused-expressions` | Expression statements that produce a value but discard it are likely mistakes. | Assign the result to a variable, use it as a condition, or remove the statement. |
+| `ts-no-unused-generic-parameter` | Generic type parameter is not referenced anywhere in the function signature. | Remove the unused type parameter, or reference it from a parameter/return type so it actually contributes to inference. |
+| `ts-no-unused-private-class-members` | Private class members that are never used are dead code. | Remove the unused private member or use it. |
+| `ts-no-unused-vars` | Declared variables that are never used are dead code. | Remove the unused variable or prefix with `_` to indicate intentional non-use. |
+| `ts-no-use-before-define` | Using variables before their definition leads to confusing code and potential TDZ errors. | Move the declaration before its first usage, or restructure the code. |
+| `ts-no-useless-constructor` | Empty constructors that only call `super()` are unnecessary. | Remove the constructor — the default behaviour is identical. |
+| `ts-no-useless-empty-export` | `export {}` is unnecessary when the file already has other exports. | Remove the `export {}` statement. |
+| `ts-no-void-returning-assigned` | Storing the return value of a known void function — the variable is always `undefined`. | Drop the assignment, or — if you wanted the side-effect's return — call the right function (e.g. `.map` instead of `.forEach`). |
+| `ts-no-wrapper-object-types` | Use lowercase primitives (`string`, `number`, `boolean`) instead of wrapper object types. | Replace `String` with `string`, `Number` with `number`, `Boolean` with `boolean`, `Object` with `object`, `Symbol` with `symbol`, `BigInt` with `bigint`. |
+| `ts-only-throw-error` | Only `Error` instances should be thrown — primitives and plain objects lose stack traces. | Throw `new Error(...)` (or a subclass) rather than a string, number, or object literal. |
+| `ts-overload-signature-order` | Function overload signatures should be ordered from most specific to most general. | Reorder the overloads so earlier signatures have more parameters or narrower types; TypeScript matches top-to-bottom and a general signature first shadows the specific one. |
+| `ts-prefer-as-const` | Casting to a literal type (`as "foo"`, `as 42`) loses the link to the value — use `as const` instead. | Replace `value as "literal"` with `value as const`. The const assertion preserves the literal type without forcing the cast. |
+| `ts-prefer-for-of` | A `for` loop whose index is only used for array access can be a simpler `for-of`. | Replace the `for` loop with `for (const item of array)`. |
+| `ts-prefer-function-type` | An interface with only a call signature should be a function type. | Replace `interface Fn { (): T }` with `type Fn = () => T`. |
+| `ts-prefer-interface-extends` | Prefer `interface X extends A, B` to `type X = A & B` for object composition. | Convert the type alias to an interface with `extends`. Interfaces give better error messages, support declaration merging, and compile faster. |
+| `ts-prefer-literal-enum-member` | Enum members should be initialized with literal values, not computed expressions. | Replace the computed expression with a literal string or number value. |
+| `ts-prefer-nullish-coalescing` | `a \|\| b` treats every falsy value (`0`, `""`, `false`) as missing. `a ?? b` only triggers on `null` / `undefined`. | Use `??` when you mean "fall back when null or undefined". Keep `\|\|` when you genuinely want any falsy value to short-circuit (rare). |
+| `ts-prefer-optional-chain` | `a && a.b && a.b.c` is verbose and order-sensitive — `a?.b?.c` reads better and short-circuits the same way. | Use optional chaining `?.` for property and call access on possibly-nullish values. |
+| `ts-prefer-promise-reject-errors` | `Promise.reject()` should receive an `Error` instance, not a primitive or plain object. | Call `Promise.reject(new Error('...'))` instead of passing a string, number, or object literal. |
+| `ts-prefer-satisfies` | `as Type` on object/array literal widens the type — use `satisfies` instead. | Replace `{...} as Type` with `{...} satisfies Type`. `satisfies` validates the literal without losing the narrow inferred type. |
+| `ts-prefer-using-declaration` | try/finally with a single cleanup call is replaceable by `using` / `await using` (TS 5.2+). | Declare the resource with `using res = ...` and let the runtime call dispose. |
+| `ts-triple-slash-reference` | Triple-slash `path` references to source modules are legacy — use ES `import`. | Replace `/// <reference path="./mod.ts" />` with an ES `import` declaration. (`types`/`lib` references and `path` references to `.d.ts` declaration files have no ESM equivalent and are not flagged.) |
+| `ts-unified-signatures` | Function overload signatures that differ by a single parameter should be unified with a union or optional parameter. | Merge the overload signatures into one using a union type or an optional parameter. |
+| `typescript/array-type` | Use `T[]` consistently for arrays. | Prefer `T[]` over `Array<T>`. Mixing the two styles creates pointless review churn. |
+| `typescript/no-require-imports` | Use ES module imports, not CommonJS `require`. | Replace `const x = require('x')` with `import x from 'x'`. require() bypasses the type system and tree-shaking. |
+| `typescript/no-unsafe-function-type` | The bare `Function` type accepts any signature. | Replace `Function` with a specific function type like `(arg: X) => Y`. Bare `Function` offers no type safety. |
+| `typescript/no-unsafe-type-assertion` | Unsafe `as` assertions bypass the type checker. | Replace the assertion with a proper type guard or narrow via runtime validation before treating the value as the target type. |
+| `typescript/prefer-as-const` | Use `as const` to pin literal types. | Replace `as 'literal'` with `as const` — more concise and preserves the literal type across refactors. |
+| `typescript/prefer-ts-expect-error` | Use `@ts-expect-error` instead of `@ts-ignore`. | Replace `@ts-ignore` with `@ts-expect-error`. The latter errors when the suppressed issue is fixed, preventing bit-rot. |
+| `unicorn/no-array-for-each` | Prefer `for...of` loops over `Array.forEach`. | Replace `.forEach(x => ...)` with `for (const x of arr)`. forEach can't break/continue and confuses async flows. |
+| `unicorn/prefer-array-flat-map` | Use `flatMap` instead of `map().flat()`. | Chain `.flatMap(...)` once instead of `.map(...).flat()` — one pass instead of two. |
+| `use-type-alias` | Repeated complex inline type annotations should be extracted into a type alias. | Create a `type` alias for the repeated annotation and use it in all positions. |
+| `vars-on-top` | `var` declarations should sit at the top of their scope. | Move `var` declarations to the top of the function so the code matches their hoisted semantics — or better, switch to `let`/`const`. |
+| `yoda` | Yoda conditions read backwards. | Write `value === 'literal'`, not `'literal' === value`. Putting the variable first reads naturally. |
 
 ## typescript > async
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `ts-no-floating-promise-in-array-method` | ⚠️ | `.forEach(async ...)` / `.map(async ...)` floats promises — the iteration completes before the async work does. | Use `for (const x of arr) { await fn(x); }` for sequential work, or `await Promise.all(arr.map(async (x) => fn(x)))` for parallel work. |
-| `ts-no-promise-void-function-misuse` | ⚠️ | Async callback passed to a void-return slot — rejections become unhandled. | Wrap the callback: `setTimeout(() => { void asyncFn(); }, 100)`. For `.forEach`, switch to `for ... of` with `await` or `Promise.all(arr.map(async ...))`. |
-| `ts-no-redundant-async` | ⚠️ | `async function f() { return await x; }` is redundant — the wrapper adds no behaviour over `function f() { return x; }`. | Drop `async` and `await`, or keep them only when you need a try/catch around the awaited expression. |
-| `ts-prefer-promise-with-resolvers` | ⚠️ | An executor that leaks `resolve`/`reject` out of its scope is better written with `Promise.withResolvers()`, which returns `{ promise, resolve, reject }` directly. | Replace `new Promise((resolve, reject) => { ... })` with `const { promise, resolve, reject } = Promise.withResolvers();` and call `resolve`/`reject` from wherever you previously did. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `ts-no-floating-promise-in-array-method` | `.forEach(async ...)` / `.map(async ...)` floats promises — the iteration completes before the async work does. | Use `for (const x of arr) { await fn(x); }` for sequential work, or `await Promise.all(arr.map(async (x) => fn(x)))` for parallel work. |
+| `ts-no-promise-void-function-misuse` | Async callback passed to a void-return slot — rejections become unhandled. | Wrap the callback: `setTimeout(() => { void asyncFn(); }, 100)`. For `.forEach`, switch to `for ... of` with `await` or `Promise.all(arr.map(async ...))`. |
+| `ts-no-redundant-async` | `async function f() { return await x; }` is redundant — the wrapper adds no behaviour over `function f() { return x; }`. | Drop `async` and `await`, or keep them only when you need a try/catch around the awaited expression. |
+| `ts-prefer-promise-with-resolvers` | An executor that leaks `resolve`/`reject` out of its scope is better written with `Promise.withResolvers()`, which returns `{ promise, resolve, reject }` directly. | Replace `new Promise((resolve, reject) => { ... })` with `const { promise, resolve, reject } = Promise.withResolvers();` and call `resolve`/`reject` from wherever you previously did. |
 
 ## typescript > code-quality
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `prefer-promise-all` | ⚠️ | Sequential `await` on independent async calls creates an unnecessary waterfall. | Wrap independent calls in `Promise.all([...])` to run them concurrently. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `prefer-promise-all` | Sequential `await` on independent async calls creates an unnecessary waterfall. | Wrap independent calls in `Promise.all([...])` to run them concurrently. |
 
 ## typescript > jsdoc
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `jsdoc-missing-example` | ⚠️ | Exported function JSDoc must include an @example block. | Add an `@example` block under the description showing a real call AND its return value: `@example\n  const r = foo(42);\n  // => 'forty-two'`. Examples are the fastest way for callers to understand the API. |
-| `jsdoc-needs-description` | ⚠️ | JSDoc block has tags but no description. | Add a prose description to the JSDoc block. Tags alone don't explain what the function does or why. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `jsdoc-missing-example` | Exported function JSDoc must include an @example block. | Add an `@example` block under the description showing a real call AND its return value: `@example\n  const r = foo(42);\n  // => 'forty-two'`. Examples are the fastest way for callers to understand the API. |
+| `jsdoc-needs-description` | JSDoc block has tags but no description. | Add a prose description to the JSDoc block. Tags alone don't explain what the function does or why. |
 
 ## typescript > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-unchecked-json-parse` | ⚠️ | `JSON.parse()` returns `any` — validate it before use. | Pipe the result through a Zod schema (`.safeParse` / `.parse`) or a type guard before using it. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-unchecked-json-parse` | `JSON.parse()` returns `any` — validate it before use. | Pipe the result through a Zod schema (`.safeParse` / `.parse`) or a type guard before using it. |
 
 ## typescript > type-aware
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `await-thenable` | ❌ | `await` on a non-thenable value has no effect. | Remove the `await` or ensure the value is a Promise. |
-| `ban-ts-comment` | ❌ | `@ts-ignore` and `@ts-nocheck` suppress type errors dangerously. | Fix the type error instead of suppressing it. |
-| `ban-types` | ❌ | `Object`, `{}`, `Function` are too loose — use specific types. | Use `object`, `Record<>`, or explicit function signatures. |
-| `class-literal-property-style` | ❌ | Use `readonly x = 5` instead of getter for constants. | Replace getter with readonly property. |
-| `consistent-generic-constructors` | ❌ | Specify type arguments on constructor: `new Map<K, V>()`. | Move type arguments to constructor call. |
-| `consistent-return` | ❌ | Function should either always return a value or never. | Add return statements to all branches or none. |
-| `consistent-type-exports` | ❌ | Type-only exports should use `export type`. | Add the `type` keyword: `export type { Foo }`. |
-| `dot-notation` | ❌ | `obj["prop"]` should be `obj.prop` when possible. | Use dot notation for known property names. |
-| `explicit-function-return-type` | ❌ | Function should have an explicit return type. | Add a return type annotation: `function f(): T { }`. |
-| `explicit-module-boundary-types` | ❌ | Exported function should have explicit parameter and return types. | Add type annotations to all parameters and return type. |
-| `no-base-to-string` | ❌ | `.toString()` on object without override returns `[object Object]`. | Implement custom `.toString()` or use JSON.stringify. |
-| `no-confusing-void-expression` | ❌ | Void expression used where a value is expected. | Don't use void expression as a value. |
-| `no-deprecated` | ❌ | Using deprecated API that may be removed in future. | Replace with the recommended alternative. |
-| `no-duplicate-enum-values` | ❌ | Enum has duplicate values — likely a copy-paste error. | Use unique values for each enum member. |
-| `no-duplicate-type-constituents` | ❌ | `A \| A` has duplicate — likely a copy-paste error. | Remove the duplicate type constituent. |
-| `no-duplicate-type-definition` | ⚠️ | Two or more named types share an identical object shape — a likely copy-paste. | Consolidate the structurally identical types into a single shared type. |
-| `no-empty-interface` | ❌ | Empty interface has no members — use `type` or remove it. | Add members, use `type = {}`, or remove the interface. |
-| `no-empty-object-type` | ❌ | `{}` matches any non-nullish value — probably not intended. | Use `object`, `Record<string, unknown>`, or a specific type. |
-| `no-extraneous-class` | ❌ | Class with only static members should be a plain object/module. | Export functions directly instead of static class methods. |
-| `no-floating-promises` | ❌ | Promises must be awaited, caught, or explicitly voided. | Add `await`, `.catch()`, or `void` prefix. |
-| `no-for-in-array` | ❌ | `for...in` iterates over array indices as strings, not values. | Use `for...of` or `.forEach()` instead. |
-| `no-implied-eval` | ❌ | `setTimeout("code")` executes string as code like eval. | Pass a function instead of a string. |
-| `no-import-type-side-effects` | ❌ | `import type` should not have side effects. | Split type imports from value imports. |
-| `no-invalid-void-type` | ❌ | `void` is only valid as a return type, not a variable type. | Use `undefined` for variables, `void` only for returns. |
-| `no-meaningless-void-operator` | ❌ | `void x` has no effect — the value is already discarded. | Remove the `void` operator. |
-| `no-misused-new` | ❌ | Interface with `new()` or class with `constructor` type is wrong. | Use proper constructor signature. |
-| `no-misused-promises` | ❌ | Promise used in a void context or as a boolean condition. | Await the promise or check its resolved value explicitly. |
-| `no-misused-spread` | ❌ | Spread `...x` on incompatible type loses data. | Ensure spread is used on the correct type. |
-| `no-mixed-enums` | ❌ | Enum mixes string and number members, which is confusing. | Use either all string or all number members. |
-| `no-namespace` | ❌ | TypeScript namespaces are legacy — use ES modules. | Convert namespace to ES module exports. |
-| `no-non-null-asserted-nullish-coalescing` | ❌ | `x! ?? y` is contradictory — `!` asserts non-null. | Remove the `!` or the `??`. |
-| `no-redundant-nullish-coalescing-null` | ⚠️ | `?? null` / `?? undefined` is redundant when the left operand's type already includes that nullish value. | Drop the `?? null` (or `?? undefined`) — it cannot change the value or the type. |
-| `no-redundant-type-constituents` | ❌ | `string \| "foo"` is redundant — the literal is subsumed. | Remove the redundant type constituent. |
-| `no-require-imports` | ❌ | `require()` is CommonJS — use ES `import`. | Replace with `import x from 'module'`. |
-| `no-this-alias` | ❌ | `const self = this` is legacy — use arrow functions. | Replace callback with arrow function to preserve `this`. |
-| `no-unnecessary-boolean-literal-compare` | ❌ | `x === true` is verbose — use `x` directly. | Remove the comparison: `if (x)` instead of `if (x === true)`. |
-| `no-unnecessary-condition` | ❌ | Condition is always truthy or always falsy based on types. | Remove the condition or fix the type. |
-| `no-unnecessary-parameter-property-assignment` | ❌ | `this.x = x` is redundant when `x` is a parameter property. | Remove the assignment — parameter property handles it. |
-| `no-unnecessary-template-expression` | ❌ | `` `${x}` `` is verbose when `x` is already a string. | Use `x` directly without template literal. |
-| `no-unnecessary-type-assertion` | ❌ | Type assertion `as T` is unnecessary — value is already that type. | Remove the type assertion. |
-| `no-unnecessary-type-constraint` | ❌ | `<T extends unknown>` is redundant — `unknown` is the default. | Remove the constraint: `<T>`. |
-| `no-unnecessary-type-conversion` | ❌ | `String(x)` is unnecessary when `x` is already a string. | Remove the conversion. |
-| `no-unnecessary-type-parameters` | ❌ | Type parameter is never used or could be `unknown`. | Remove the unused type parameter. |
-| `no-unsafe-argument` | ❌ | Passing `any` to a typed parameter defeats type safety. | Add a type assertion or fix the source of `any`. |
-| `no-unsafe-assignment` | ❌ | Assigning `any` to a typed variable defeats type safety. | Add a type assertion or fix the source of `any`. |
-| `no-unsafe-call` | ❌ | Calling a value typed as `any` is unsafe. | Add proper types or use a type guard. |
-| `no-unsafe-declaration-merging` | ❌ | Interface/class merging can bypass type checking. | Avoid declaration merging or use separate types. |
-| `no-unsafe-enum-comparison` | ❌ | Comparing enum with non-enum value is error-prone. | Compare with enum members only. |
-| `no-unsafe-function-type` | ❌ | The `Function` type accepts any function — use explicit signatures. | Replace with a specific function type: `(arg: T) => R`. |
-| `no-unsafe-member-access` | ❌ | Accessing a member on `any` is unsafe. | Add proper types or use a type guard. |
-| `no-unsafe-return` | ❌ | Returning `any` from a typed function defeats type safety. | Add a type assertion or fix the source of `any`. |
-| `no-unsafe-unary-minus` | ❌ | Unary minus on non-number type is error-prone. | Ensure the operand is a number. |
-| `no-useless-empty-export` | ❌ | `export {}` has no effect in a module. | Remove the empty export. |
-| `no-var-requires` | ❌ | `const x = require()` is CommonJS — use ES `import`. | Replace with `import x from 'module'`. |
-| `no-wrapper-object-types` | ❌ | `String` should be `string` — use primitive types. | Use lowercase primitive: `string`, `number`, `boolean`. |
-| `only-throw-error` | ❌ | Throwing a non-Error value loses stack trace information. | Throw an Error instance: `throw new Error(message)`. |
-| `prefer-as-const` | ❌ | `"foo" as const` is cleaner than `"foo" as "foo"`. | Use `as const` for literal assertions. |
-| `prefer-find` | ❌ | `.filter()[0]` is less efficient than `.find()`. | Use `.find()` to get the first matching element. |
-| `prefer-for-of` | ❌ | `for (const x of arr)` is cleaner than index-based loop. | Use `for...of` when you don't need the index. |
-| `prefer-function-type` | ❌ | `() => T` is cleaner than `{ (): T }`. | Use arrow function type syntax. |
-| `prefer-includes` | ❌ | `.indexOf() !== -1` is less readable than `.includes()`. | Use `.includes()` for membership checks. |
-| `prefer-nullish-coalescing` | ❌ | Use `??` instead of `\|\|` to only coalesce `null`/`undefined`. | Replace `\|\|` with `??` to avoid falsy-value bugs. |
-| `prefer-optional-chain` | ❌ | Use `?.` instead of `&& x.y` for cleaner null checks. | Replace `x && x.y` with `x?.y`. |
-| `prefer-promise-reject-errors` | ❌ | `Promise.reject()` should receive an Error, not a primitive. | Pass an Error instance: `Promise.reject(new Error(msg))`. |
-| `prefer-regexp-exec` | ❌ | `.exec()` is faster than `.match()` for single matches. | Use `regex.exec(str)` instead of `str.match(regex)`. |
-| `prefer-return-this-type` | ❌ | Method returning `this` should use `this` return type. | Change return type to `this` for method chaining. |
-| `prefer-string-starts-ends-with` | ❌ | `.indexOf() === 0` is less readable than `.startsWith()`. | Use `.startsWith()` or `.endsWith()`. |
-| `promise-function-async` | ❌ | Function returns a Promise but is not marked `async`. | Add the `async` keyword to the function declaration. |
-| `related-getter-setter-pairs` | ❌ | Getter and setter have incompatible types. | Ensure getter return type matches setter parameter type. |
-| `require-array-sort-compare` | ❌ | `.sort()` without a comparator converts elements to strings. | Provide an explicit comparator: `.sort((a, b) => a - b)`. |
-| `restrict-plus-operands` | ❌ | `+` operator between incompatible types may cause unexpected coercion. | Ensure both operands are the same type. |
-| `restrict-template-expressions` | ❌ | Interpolating `any` or complex objects in templates is error-prone. | Convert to string explicitly or add proper types. |
-| `return-await` | ❌ | `return await` is unnecessary outside of try/catch. | Remove `await` from the return statement. |
-| `strict-void-return` | ❌ | Function declared void but caller expects a value. | Fix the return type or don't use the return value. |
-| `switch-exhaustiveness-check` | ❌ | Switch statement does not handle all union members. | Add cases for missing union members or a default case. |
-| `triple-slash-reference` | ❌ | `/// <reference>` is legacy — use `import`. | Replace with ES import statement. |
-| `ts-no-in-operator` | ⚠️ | The `in` operator probes the shape of an unvalidated `unknown`/`any` value by hand instead of parsing it. | Parse the external input with a schema (e.g. Zod) to obtain a typed value. `in` is fine on an already-typed value, a caught error, or inside a user-defined type predicate (`x is T`). |
-| `ts-no-typeof-operator` | ⚠️ | `typeof` on an `any` value sniffs at runtime in place of typing it — the `any` means the type was lost. | Give the value a real type, or narrow it from `unknown` (typeof-narrowing an honest `unknown` is fine — `any` is the smell). Also fine: an environment guard (`typeof window`), a caught error, a `z.preprocess` normaliser, or inside a user-defined type predicate (`x is T`). |
-| `unbound-method` | ❌ | Method passed as callback loses its `this` binding. | Bind the method: `.bind(this)` or use an arrow function. |
-| `unified-signatures` | ❌ | Overloads can be unified into a single signature. | Use union type in single signature instead of overloads. |
-| `use-unknown-in-catch-callback-variable` | ❌ | Catch callback parameter should be `unknown`, not `any`. | Type the catch parameter as `unknown` and narrow it. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `await-thenable` | `await` on a non-thenable value has no effect. | Remove the `await` or ensure the value is a Promise. |
+| `ban-ts-comment` | `@ts-ignore` and `@ts-nocheck` suppress type errors dangerously. | Fix the type error instead of suppressing it. |
+| `ban-types` | `Object`, `{}`, `Function` are too loose — use specific types. | Use `object`, `Record<>`, or explicit function signatures. |
+| `class-literal-property-style` | Use `readonly x = 5` instead of getter for constants. | Replace getter with readonly property. |
+| `consistent-generic-constructors` | Specify type arguments on constructor: `new Map<K, V>()`. | Move type arguments to constructor call. |
+| `consistent-return` | Function should either always return a value or never. | Add return statements to all branches or none. |
+| `consistent-type-exports` | Type-only exports should use `export type`. | Add the `type` keyword: `export type { Foo }`. |
+| `dot-notation` | `obj["prop"]` should be `obj.prop` when possible. | Use dot notation for known property names. |
+| `explicit-function-return-type` | Function should have an explicit return type. | Add a return type annotation: `function f(): T { }`. |
+| `explicit-module-boundary-types` | Exported function should have explicit parameter and return types. | Add type annotations to all parameters and return type. |
+| `no-base-to-string` | `.toString()` on object without override returns `[object Object]`. | Implement custom `.toString()` or use JSON.stringify. |
+| `no-confusing-void-expression` | Void expression used where a value is expected. | Don't use void expression as a value. |
+| `no-deprecated` | Using deprecated API that may be removed in future. | Replace with the recommended alternative. |
+| `no-duplicate-enum-values` | Enum has duplicate values — likely a copy-paste error. | Use unique values for each enum member. |
+| `no-duplicate-type-constituents` | `A \| A` has duplicate — likely a copy-paste error. | Remove the duplicate type constituent. |
+| `no-duplicate-type-definition` | Two or more named types share an identical object shape — a likely copy-paste. | Consolidate the structurally identical types into a single shared type. |
+| `no-empty-interface` | Empty interface has no members — use `type` or remove it. | Add members, use `type = {}`, or remove the interface. |
+| `no-empty-object-type` | `{}` matches any non-nullish value — probably not intended. | Use `object`, `Record<string, unknown>`, or a specific type. |
+| `no-extraneous-class` | Class with only static members should be a plain object/module. | Export functions directly instead of static class methods. |
+| `no-floating-promises` | Promises must be awaited, caught, or explicitly voided. | Add `await`, `.catch()`, or `void` prefix. |
+| `no-for-in-array` | `for...in` iterates over array indices as strings, not values. | Use `for...of` or `.forEach()` instead. |
+| `no-implied-eval` | `setTimeout("code")` executes string as code like eval. | Pass a function instead of a string. |
+| `no-import-type-side-effects` | `import type` should not have side effects. | Split type imports from value imports. |
+| `no-invalid-void-type` | `void` is only valid as a return type, not a variable type. | Use `undefined` for variables, `void` only for returns. |
+| `no-meaningless-void-operator` | `void x` has no effect — the value is already discarded. | Remove the `void` operator. |
+| `no-misused-new` | Interface with `new()` or class with `constructor` type is wrong. | Use proper constructor signature. |
+| `no-misused-promises` | Promise used in a void context or as a boolean condition. | Await the promise or check its resolved value explicitly. |
+| `no-misused-spread` | Spread `...x` on incompatible type loses data. | Ensure spread is used on the correct type. |
+| `no-mixed-enums` | Enum mixes string and number members, which is confusing. | Use either all string or all number members. |
+| `no-namespace` | TypeScript namespaces are legacy — use ES modules. | Convert namespace to ES module exports. |
+| `no-non-null-asserted-nullish-coalescing` | `x! ?? y` is contradictory — `!` asserts non-null. | Remove the `!` or the `??`. |
+| `no-redundant-nullish-coalescing-null` | `?? null` / `?? undefined` is redundant when the left operand's type already includes that nullish value. | Drop the `?? null` (or `?? undefined`) — it cannot change the value or the type. |
+| `no-redundant-type-constituents` | `string \| "foo"` is redundant — the literal is subsumed. | Remove the redundant type constituent. |
+| `no-require-imports` | `require()` is CommonJS — use ES `import`. | Replace with `import x from 'module'`. |
+| `no-this-alias` | `const self = this` is legacy — use arrow functions. | Replace callback with arrow function to preserve `this`. |
+| `no-unnecessary-boolean-literal-compare` | `x === true` is verbose — use `x` directly. | Remove the comparison: `if (x)` instead of `if (x === true)`. |
+| `no-unnecessary-condition` | Condition is always truthy or always falsy based on types. | Remove the condition or fix the type. |
+| `no-unnecessary-parameter-property-assignment` | `this.x = x` is redundant when `x` is a parameter property. | Remove the assignment — parameter property handles it. |
+| `no-unnecessary-template-expression` | `` `${x}` `` is verbose when `x` is already a string. | Use `x` directly without template literal. |
+| `no-unnecessary-type-assertion` | Type assertion `as T` is unnecessary — value is already that type. | Remove the type assertion. |
+| `no-unnecessary-type-constraint` | `<T extends unknown>` is redundant — `unknown` is the default. | Remove the constraint: `<T>`. |
+| `no-unnecessary-type-conversion` | `String(x)` is unnecessary when `x` is already a string. | Remove the conversion. |
+| `no-unnecessary-type-parameters` | Type parameter is never used or could be `unknown`. | Remove the unused type parameter. |
+| `no-unsafe-argument` | Passing `any` to a typed parameter defeats type safety. | Add a type assertion or fix the source of `any`. |
+| `no-unsafe-assignment` | Assigning `any` to a typed variable defeats type safety. | Add a type assertion or fix the source of `any`. |
+| `no-unsafe-call` | Calling a value typed as `any` is unsafe. | Add proper types or use a type guard. |
+| `no-unsafe-declaration-merging` | Interface/class merging can bypass type checking. | Avoid declaration merging or use separate types. |
+| `no-unsafe-enum-comparison` | Comparing enum with non-enum value is error-prone. | Compare with enum members only. |
+| `no-unsafe-function-type` | The `Function` type accepts any function — use explicit signatures. | Replace with a specific function type: `(arg: T) => R`. |
+| `no-unsafe-member-access` | Accessing a member on `any` is unsafe. | Add proper types or use a type guard. |
+| `no-unsafe-return` | Returning `any` from a typed function defeats type safety. | Add a type assertion or fix the source of `any`. |
+| `no-unsafe-unary-minus` | Unary minus on non-number type is error-prone. | Ensure the operand is a number. |
+| `no-useless-empty-export` | `export {}` has no effect in a module. | Remove the empty export. |
+| `no-var-requires` | `const x = require()` is CommonJS — use ES `import`. | Replace with `import x from 'module'`. |
+| `no-wrapper-object-types` | `String` should be `string` — use primitive types. | Use lowercase primitive: `string`, `number`, `boolean`. |
+| `only-throw-error` | Throwing a non-Error value loses stack trace information. | Throw an Error instance: `throw new Error(message)`. |
+| `prefer-as-const` | `"foo" as const` is cleaner than `"foo" as "foo"`. | Use `as const` for literal assertions. |
+| `prefer-find` | `.filter()[0]` is less efficient than `.find()`. | Use `.find()` to get the first matching element. |
+| `prefer-for-of` | `for (const x of arr)` is cleaner than index-based loop. | Use `for...of` when you don't need the index. |
+| `prefer-function-type` | `() => T` is cleaner than `{ (): T }`. | Use arrow function type syntax. |
+| `prefer-includes` | `.indexOf() !== -1` is less readable than `.includes()`. | Use `.includes()` for membership checks. |
+| `prefer-nullish-coalescing` | Use `??` instead of `\|\|` to only coalesce `null`/`undefined`. | Replace `\|\|` with `??` to avoid falsy-value bugs. |
+| `prefer-optional-chain` | Use `?.` instead of `&& x.y` for cleaner null checks. | Replace `x && x.y` with `x?.y`. |
+| `prefer-promise-reject-errors` | `Promise.reject()` should receive an Error, not a primitive. | Pass an Error instance: `Promise.reject(new Error(msg))`. |
+| `prefer-regexp-exec` | `.exec()` is faster than `.match()` for single matches. | Use `regex.exec(str)` instead of `str.match(regex)`. |
+| `prefer-return-this-type` | Method returning `this` should use `this` return type. | Change return type to `this` for method chaining. |
+| `prefer-string-starts-ends-with` | `.indexOf() === 0` is less readable than `.startsWith()`. | Use `.startsWith()` or `.endsWith()`. |
+| `promise-function-async` | Function returns a Promise but is not marked `async`. | Add the `async` keyword to the function declaration. |
+| `related-getter-setter-pairs` | Getter and setter have incompatible types. | Ensure getter return type matches setter parameter type. |
+| `require-array-sort-compare` | `.sort()` without a comparator converts elements to strings. | Provide an explicit comparator: `.sort((a, b) => a - b)`. |
+| `restrict-plus-operands` | `+` operator between incompatible types may cause unexpected coercion. | Ensure both operands are the same type. |
+| `restrict-template-expressions` | Interpolating `any` or complex objects in templates is error-prone. | Convert to string explicitly or add proper types. |
+| `return-await` | `return await` is unnecessary outside of try/catch. | Remove `await` from the return statement. |
+| `strict-void-return` | Function declared void but caller expects a value. | Fix the return type or don't use the return value. |
+| `switch-exhaustiveness-check` | Switch statement does not handle all union members. | Add cases for missing union members or a default case. |
+| `triple-slash-reference` | `/// <reference>` is legacy — use `import`. | Replace with ES import statement. |
+| `ts-no-in-operator` | The `in` operator probes the shape of an unvalidated `unknown`/`any` value by hand instead of parsing it. | Parse the external input with a schema (e.g. Zod) to obtain a typed value. `in` is fine on an already-typed value, a caught error, or inside a user-defined type predicate (`x is T`). |
+| `ts-no-typeof-operator` | `typeof` on an `any` value sniffs at runtime in place of typing it — the `any` means the type was lost. | Give the value a real type, or narrow it from `unknown` (typeof-narrowing an honest `unknown` is fine — `any` is the smell). Also fine: an environment guard (`typeof window`), a caught error, a `z.preprocess` normaliser, or inside a user-defined type predicate (`x is T`). |
+| `unbound-method` | Method passed as callback loses its `this` binding. | Bind the method: `.bind(this)` or use an arrow function. |
+| `unified-signatures` | Overloads can be unified into a single signature. | Use union type in single signature instead of overloads. |
+| `use-unknown-in-catch-callback-variable` | Catch callback parameter should be `unknown`, not `any`. | Type the catch parameter as `unknown` and narrow it. |
 
 ## ui
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `ui-animate-presence-requires-exit` | ⚠️ | `<motion.*>` rendered inside `<AnimatePresence>` must define an `exit` prop to animate on unmount. | Add `exit={{ ... }}` that mirrors the `initial` prop so the component animates out. |
-| `ui-animate-transform-opacity-only` | ⚠️ | Animations should only target `transform` and `opacity`; other properties trigger layout/paint. | Rewrite the `@keyframes` to animate `transform` / `opacity`; use layout tricks or FLIP instead of animating top/left/width/height/margin/padding. |
-| `ui-antialiased-on-root` | ⚠️ | The root element should set `-webkit-font-smoothing: antialiased` for crisp text on macOS/iOS. | Add `-webkit-font-smoothing: antialiased;` to `html`, `body`, or `:root`. |
-| `ui-concentric-border-radius` | ⚠️ | A child with `border-radius` inside a rounded + padded parent should use `calc(parent-radius - parent-padding)`. | Express the child radius via `calc(var(--radius) - var(--padding))` to stay concentric. |
-| `ui-exit-duration-shorter-enter` | ⚠️ | The `exit` transition of a `motion.*` component should be at most as long as the enter transition. | Lower the exit `duration` (or raise the enter `duration`) so the element dismisses as fast as or faster than it appears. |
-| `ui-hover-gated-media-query` | ⚠️ | `:hover` rules that move/transform should be gated by `@media (hover: hover) and (pointer: fine)`. | Wrap the `:hover { transform/scale … }` declaration in `@media (hover: hover) and (pointer: fine) { ... }`. |
-| `ui-no-dark-mode-glow` | ⚠️ | Colored box-shadow glow on a dark background — prefer subtle neutral shadows. | Use a neutral shadow (e.g. `rgba(0,0,0,0.3)`) or a very subtle tinted shadow instead of a bright glow effect. |
-| `ui-no-display-none-exit` | ⚠️ | `display: none` can't be animated; a class/state that toggles it blocks the exit transition. | Pair `display: none` with `opacity: 0` and `transform: translate...` (or use `visibility`) so the exit can be animated. |
-| `ui-no-gradient-text` | ⚠️ | Gradient text (`background-clip: text` + gradient) is hard to read and often inaccessible. | Use a solid text color for readability. If the gradient is essential for branding, ensure WCAG contrast ratio is met. |
-| `ui-no-inline-bounce-easing` | ⚠️ | Bounce/elastic easing in inline styles — use `ease-out` or a smooth deceleration curve. | Replace bounce/elastic/wobble easing with `ease-out` or `cubic-bezier(0.16, 1, 0.3, 1)` for a modern feel. |
-| `ui-no-inline-exhaustive-style` | ⚠️ | Inline `style` object with too many properties — extract to a CSS class. | Move the styles to a CSS module, Tailwind classes, or a styled component. Inline styles with many properties hurt readability and prevent reuse. |
-| `ui-no-justified-text` | ⚠️ | `textAlign: 'justify'` without `hyphens: 'auto'` — produces rivers of whitespace. | Either drop `textAlign: 'justify'` or pair it with `hyphens: 'auto'` so the browser can break long words and avoid awkward spacing. |
-| `ui-no-keyframes-for-interruptible` | ⚠️ | Class-toggled (state-driven) animations should use `transition`; `@keyframes` can't interrupt mid-flight. | Replace the `@keyframes` + `animation:` pair with `transition` on the same properties so toggles interpolate from the current value. |
-| `ui-no-large-animated-blur` | ⚠️ | Inline `filter: blur(Npx)` with N > 20 — expensive, escalates with radius and layer size, can exhaust GPU memory on mobile. | Reduce the blur radius below 20px, or composite the blur statically into a background image. |
-| `ui-no-layout-property-animation` | ⚠️ | Inline `transition` references a layout-triggering property — animating layout causes per-frame layout recalculation. | Animate `transform`, `opacity`, `color`, `background`, or `filter` instead — they don't trigger layout. |
-| `ui-no-long-transition-duration` | ⚠️ | Inline `transitionDuration`/`animationDuration` above 1s — feels sluggish. | Keep UI transitions under 1s (typically 150-400ms). Long durations block interaction and harm perceived performance. |
-| `ui-no-permanent-will-change` | ⚠️ | Inline `willChange` is permanent — `will-change` should be applied dynamically, not baked into static styles. | Apply `will-change` only during the active animation (e.g. on hover/focus) and remove it after, or set it to `'auto'`. |
-| `ui-no-pure-black` | ⚠️ | Pure black (`#000`, `rgb(0,0,0)`, `black`) looks harsh on screens — prefer a near-black. | Use a slightly warmer/softer tone such as `#0a0a0a` or an OKLCH near-black. |
-| `ui-no-scale-from-zero` | ⚠️ | Inline `transform: scale(0)` causes subpixel rendering blur and makes elements appear from nowhere. | Use `scale(0.95)` with `opacity: 0` for a smoother, more natural entrance. |
-| `ui-no-scroll-trigger-markers-prod` | ⚠️ | `markers: true` in a ScrollTrigger config ships debug overlays to production. | Gate it: `markers: process.env.NODE_ENV !== "production"`. |
-| `ui-no-side-tab-border` | ⚠️ | `borderLeft` / `borderRight` alongside a `borderBottom` indicator on a tab — the side borders compete with the active-tab affordance. | Drop the side borders and keep only the `borderBottom` (or use a dedicated active-state indicator). |
-| `ui-no-tiny-text` | ⚠️ | Inline `fontSize` below 12px — too small for comfortable reading. | Use a fontSize of at least 12px, or rely on a typography scale defined in your design system. |
-| `ui-no-transition-all` | ⚠️ | Using `transition: all` animates every changed property, causing jank and unintended motion. | List properties explicitly: `transition: transform 200ms, opacity 200ms;`. |
-| `ui-no-wide-letter-spacing` | ⚠️ | Inline `letterSpacing` above 0.05em — hurts readability. | Keep `letterSpacing` at or below 0.05em for body text. Reserve wider tracking for short uppercase headings only. |
-| `ui-no-z-index-9999` | ⚠️ | `z-index` value above 100 — use a structured layering system instead. | Define z-index layers as named constants (e.g. `Z_MODAL = 50`, `Z_TOOLTIP = 60`) and keep values under 100. |
-| `ui-stagger-children-cap` | ⚠️ | `staggerChildren` should stay ≤ 0.05s (50ms); larger values make lists feel sluggish. | Reduce `staggerChildren` to 0.05 or less, or drop it entirely. |
-| `ui-tabular-nums-on-data` | ⚠️ | Elements rendering numeric data (counters, prices, metrics) should use `tabular-nums` so digits don't shift width between ticks. | Add `font-variant-numeric: tabular-nums` (or Tailwind `tabular-nums`) to the element's className. |
-| `ui-text-balance-headings` | ⚠️ | Heading selectors (h1-h6) should declare `text-wrap: balance` to avoid orphan words. | Add `text-wrap: balance;` to the heading rule. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `ui-animate-presence-requires-exit` | `<motion.*>` rendered inside `<AnimatePresence>` must define an `exit` prop to animate on unmount. | Add `exit={{ ... }}` that mirrors the `initial` prop so the component animates out. |
+| `ui-animate-transform-opacity-only` | Animations should only target `transform` and `opacity`; other properties trigger layout/paint. | Rewrite the `@keyframes` to animate `transform` / `opacity`; use layout tricks or FLIP instead of animating top/left/width/height/margin/padding. |
+| `ui-antialiased-on-root` | The root element should set `-webkit-font-smoothing: antialiased` for crisp text on macOS/iOS. | Add `-webkit-font-smoothing: antialiased;` to `html`, `body`, or `:root`. |
+| `ui-concentric-border-radius` | A child with `border-radius` inside a rounded + padded parent should use `calc(parent-radius - parent-padding)`. | Express the child radius via `calc(var(--radius) - var(--padding))` to stay concentric. |
+| `ui-exit-duration-shorter-enter` | The `exit` transition of a `motion.*` component should be at most as long as the enter transition. | Lower the exit `duration` (or raise the enter `duration`) so the element dismisses as fast as or faster than it appears. |
+| `ui-hover-gated-media-query` | `:hover` rules that move/transform should be gated by `@media (hover: hover) and (pointer: fine)`. | Wrap the `:hover { transform/scale … }` declaration in `@media (hover: hover) and (pointer: fine) { ... }`. |
+| `ui-no-dark-mode-glow` | Colored box-shadow glow on a dark background — prefer subtle neutral shadows. | Use a neutral shadow (e.g. `rgba(0,0,0,0.3)`) or a very subtle tinted shadow instead of a bright glow effect. |
+| `ui-no-display-none-exit` | `display: none` can't be animated; a class/state that toggles it blocks the exit transition. | Pair `display: none` with `opacity: 0` and `transform: translate...` (or use `visibility`) so the exit can be animated. |
+| `ui-no-gradient-text` | Gradient text (`background-clip: text` + gradient) is hard to read and often inaccessible. | Use a solid text color for readability. If the gradient is essential for branding, ensure WCAG contrast ratio is met. |
+| `ui-no-inline-bounce-easing` | Bounce/elastic easing in inline styles — use `ease-out` or a smooth deceleration curve. | Replace bounce/elastic/wobble easing with `ease-out` or `cubic-bezier(0.16, 1, 0.3, 1)` for a modern feel. |
+| `ui-no-inline-exhaustive-style` | Inline `style` object with too many properties — extract to a CSS class. | Move the styles to a CSS module, Tailwind classes, or a styled component. Inline styles with many properties hurt readability and prevent reuse. |
+| `ui-no-justified-text` | `textAlign: 'justify'` without `hyphens: 'auto'` — produces rivers of whitespace. | Either drop `textAlign: 'justify'` or pair it with `hyphens: 'auto'` so the browser can break long words and avoid awkward spacing. |
+| `ui-no-keyframes-for-interruptible` | Class-toggled (state-driven) animations should use `transition`; `@keyframes` can't interrupt mid-flight. | Replace the `@keyframes` + `animation:` pair with `transition` on the same properties so toggles interpolate from the current value. |
+| `ui-no-large-animated-blur` | Inline `filter: blur(Npx)` with N > 20 — expensive, escalates with radius and layer size, can exhaust GPU memory on mobile. | Reduce the blur radius below 20px, or composite the blur statically into a background image. |
+| `ui-no-layout-property-animation` | Inline `transition` references a layout-triggering property — animating layout causes per-frame layout recalculation. | Animate `transform`, `opacity`, `color`, `background`, or `filter` instead — they don't trigger layout. |
+| `ui-no-long-transition-duration` | Inline `transitionDuration`/`animationDuration` above 1s — feels sluggish. | Keep UI transitions under 1s (typically 150-400ms). Long durations block interaction and harm perceived performance. |
+| `ui-no-permanent-will-change` | Inline `willChange` is permanent — `will-change` should be applied dynamically, not baked into static styles. | Apply `will-change` only during the active animation (e.g. on hover/focus) and remove it after, or set it to `'auto'`. |
+| `ui-no-pure-black` | Pure black (`#000`, `rgb(0,0,0)`, `black`) looks harsh on screens — prefer a near-black. | Use a slightly warmer/softer tone such as `#0a0a0a` or an OKLCH near-black. |
+| `ui-no-scale-from-zero` | Inline `transform: scale(0)` causes subpixel rendering blur and makes elements appear from nowhere. | Use `scale(0.95)` with `opacity: 0` for a smoother, more natural entrance. |
+| `ui-no-scroll-trigger-markers-prod` | `markers: true` in a ScrollTrigger config ships debug overlays to production. | Gate it: `markers: process.env.NODE_ENV !== "production"`. |
+| `ui-no-side-tab-border` | `borderLeft` / `borderRight` alongside a `borderBottom` indicator on a tab — the side borders compete with the active-tab affordance. | Drop the side borders and keep only the `borderBottom` (or use a dedicated active-state indicator). |
+| `ui-no-tiny-text` | Inline `fontSize` below 12px — too small for comfortable reading. | Use a fontSize of at least 12px, or rely on a typography scale defined in your design system. |
+| `ui-no-transition-all` | Using `transition: all` animates every changed property, causing jank and unintended motion. | List properties explicitly: `transition: transform 200ms, opacity 200ms;`. |
+| `ui-no-wide-letter-spacing` | Inline `letterSpacing` above 0.05em — hurts readability. | Keep `letterSpacing` at or below 0.05em for body text. Reserve wider tracking for short uppercase headings only. |
+| `ui-no-z-index-9999` | `z-index` value above 100 — use a structured layering system instead. | Define z-index layers as named constants (e.g. `Z_MODAL = 50`, `Z_TOOLTIP = 60`) and keep values under 100. |
+| `ui-stagger-children-cap` | `staggerChildren` should stay ≤ 0.05s (50ms); larger values make lists feel sluggish. | Reduce `staggerChildren` to 0.05 or less, or drop it entirely. |
+| `ui-tabular-nums-on-data` | Elements rendering numeric data (counters, prices, metrics) should use `tabular-nums` so digits don't shift width between ticks. | Add `font-variant-numeric: tabular-nums` (or Tailwind `tabular-nums`) to the element's className. |
+| `ui-text-balance-headings` | Heading selectors (h1-h6) should declare `text-wrap: balance` to avoid orphan words. | Add `text-wrap: balance;` to the heading rule. |
 
 ## vue
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `no-vue-data-object-declaration` | ⚠️ | A Vue component's `data` option was declared as an object instead of a function. | Declare `data` as a function returning the object (`data() { return { … } }`) so each component instance gets its own state. |
-| `no-vue-reserved-keys` | ⚠️ | A Vue-reserved key was used in a component's data, computed, methods, or props. | Rename the key: Vue reserves the `$` prefix (e.g. `$el`, `$emit`) and the `_` prefix in `data` for internal use. |
-| `no-vue-reserved-props` | ⚠️ | A Vue-reserved name (`key` or `ref`) was declared as a component prop. | Rename the prop: Vue reserves `key` and `ref` for template binding, so they cannot be used as prop names. |
-| `no-vue-v-on-number-values` | ❌ | Number (`keyCode`) modifiers on Vue `v-on` directives are deprecated and removed in Vue 3. | Replace the numeric modifier with a named key modifier (e.g. `@keyup.enter`) or check the key code inside the handler. |
-| `use-vue-define-macros-order` | ⚠️ | A Vue compiler macro in `<script setup>` is out of order. | Order the compiler macros as configured (default `defineModel`, `defineProps`, `defineEmits`) and place them before any non-macro statements. |
-| `use-vue-hyphenated-attributes` | ⚠️ | Template attribute and prop names should be hyphenated (kebab-case). | Rename the attribute to kebab-case, e.g. `:some-prop` instead of `:someProp`. |
-| `use-vue-valid-template-root` | ❌ | The root `<template>` must contain content, unless it carries a `src` attribute in which case it must be empty. | Add content inside the root `<template>`, or remove its content when using a `src` attribute. |
-| `use-vue-valid-v-bind` | ❌ | `v-bind` bindings must have a value and only use the `prop`, `camel`, `sync`, or `attr` modifiers. | Give the `v-bind` directive a value and drop any modifier outside `prop`, `camel`, `sync`, and `attr`. |
-| `use-vue-valid-v-else-if` | ❌ | `v-else-if` must have a value, no argument or modifiers, no sibling `v-if`/`v-else` on the same element, and a preceding sibling element with `v-if`/`v-else-if`. | Give `v-else-if` a value expression, drop any argument or modifier, keep it on its own element, and place it after an element with `v-if`/`v-else-if`. |
-| `use-vue-valid-v-pre` | ❌ | `v-pre` must be a bare directive with no argument, no modifiers, and no value. | Use `v-pre` on its own, dropping any argument, modifier, or value. |
-| `vue-button-has-type` | ⚠️ | `<button>` without an explicit `type` attribute defaults to `submit`, which may cause unexpected form submissions. | Add an explicit `type` attribute (`button`, `submit`, or `reset`) to every `<button>` element. |
-| `vue-checked-requires-onchange` | ⚠️ | `checked` attribute without `v-model` or `@change` makes the input uncontrollable. | Add `v-model` or an `@change` handler. Without either, the checkbox/radio is frozen. |
-| `vue-component-pascal-case` | ⚠️ | User-defined components in Vue templates must use PascalCase. | Rename the component tag to PascalCase (e.g. `<MyComponent>`). |
-| `vue-computed-no-side-effects` | ❌ | `computed()` must be pure — no emits, logs, API calls, mutations, or assignments. | Move side effects to a `watch`, an event handler, or an action. `computed` should only derive a value. |
-| `vue-custom-directive-v-prefix` | ❌ | Local directives declared in `<script setup>` must start with `v` + capital letter. | Rename `focus` → `vFocus`; `<script setup>` treats `vFoo` bindings as directives. |
-| `vue-define-model-over-modelvalue` | ⚠️ | `defineProps<{ modelValue }>` + `update:modelValue` is superseded by `defineModel` in Vue 3.4+. | Replace the `modelValue` prop and `update:modelValue` emit with `const model = defineModel()`. |
-| `vue-inject-key-typed` | ⚠️ | String keys in `provide()`/`inject()` lose type information. | Declare `const MY_KEY: InjectionKey<T> = Symbol('my-key')` and pass it to provide/inject. |
-| `vue-markraw-for-third-party` | ⚠️ | Wrap third-party instances (Chart.js, maps, editors, ...) in `markRaw()`. | Storing a third-party object in a `ref()` or `reactive()` makes Vue walk its entire internal state with Proxies — that breaks libraries and murders performance. Wrap the instance: `chart.value = markRaw(new Chart(...))`. |
-| `vue-next-tick-promise` | ⚠️ | Vue `nextTick` was called with a callback instead of using its returned Promise. | Drop the callback and await the Promise: `await nextTick()` (or `nextTick().then(…)`). |
-| `vue-no-adjacent-inline-elements` | ⚠️ | Adjacent inline elements without whitespace between them. | Add a space or wrapper between adjacent inline elements. |
-| `vue-no-array-index-key` | ⚠️ | Array index used as `:key` in `v-for` breaks on reorder. | Use a stable id from the data as the key instead of the loop index. |
-| `vue-no-async-in-computed-properties` | ❌ | Vue `computed()` getters must be synchronous — an async getter returns a Promise that the template renders as `[object Promise]`. | Move the async work to a `watch` or an action and store the resolved value in a ref. The `computed` should derive from synchronous state. |
-| `vue-no-comment-textnodes` | ⚠️ | JS-style comments in Vue template text are rendered as visible text. | Use `<!-- comment -->` for HTML comments in Vue templates. |
-| `vue-no-duplicate-props` | ⚠️ | Duplicate attributes on a Vue template element — the last one silently wins. | Remove the duplicate attribute. |
-| `vue-no-duplicate-v-if` | ⚠️ | Two opposite `v-if` conditions should be `v-if`/`v-else`. | Replace `v-if="x"` + `v-if="!x"` with `v-if="x"` / `v-else`. Two separate `v-if` directives evaluate independently — if the condition changes between the two evaluations, both render or neither does. |
-| `vue-no-filter-sort-in-template` | ⚠️ | `v-for` over `.filter()`/`.sort()` re-runs on every render. | Extract to a `computed()` so the derived list is cached until its inputs change. |
-| `vue-no-import-compiler-macros` | ⚠️ | Don't import Vue compiler macros — they are globally available. | Remove the import of `defineProps`/`defineEmits`/`defineModel` (and other compiler macros) from `vue`. The Vue compiler injects them automatically inside `<script setup>`; importing them is redundant and breaks the macro transform. |
-| `vue-no-invalid-html-attribute` | ⚠️ | Invalid value in HTML `rel` attribute. | Use a valid `rel` value (`noopener`, `noreferrer`, `stylesheet`, etc.). |
-| `vue-no-mutate-prop` | ⚠️ | Don't mutate a prop directly — props are one-way. | Emit an event or copy the prop into a local ref to mutate. |
-| `vue-no-namespace` | ❌ | Namespaced elements (`<ns:tag>`) are not standard in Vue templates. | Use a different naming pattern for components. |
-| `vue-no-options-api` | ❌ | Use Composition API (`<script setup>`), not Options API. | Replace `export default { data(), methods, computed }` with `<script setup lang="ts">` using `ref()`, `computed()`, and plain functions. Options API is legacy in Vue 3. |
-| `vue-no-reactive-destructure` | ❌ | Destructuring `reactive()` breaks reactivity — use `toRefs()` or `ref()`. | `const { count } = reactive({ count: 0 })` copies the primitive — `count` is now a plain number, not reactive. Use `const { count } = toRefs(state)` to get a ref that stays connected, or use `ref()` directly for each field. |
-| `vue-no-ref-as-operand` | ❌ | Using a Vue 3 `ref` directly in an arithmetic / comparison expression compares the wrapper object, not the underlying value. | Unwrap with `.value`: `count.value + 1`, not `count + 1`. The ref is an object — JS coerces it to `[object Object]` in string contexts and to NaN in numeric ones. |
-| `vue-no-setup-props-reactivity-loss` | ❌ | Destructuring `defineProps()` in `<script setup>` strips reactivity from the props. | Keep the props object intact: `const props = defineProps<...>()` and read `props.foo`. Reactive destructure requires the Vue 3.5+ reactive-props transform. |
-| `vue-no-ssr-globals-in-setup` | ❌ | `window`, `document`, `localStorage`, `navigator` at the top of `<script setup>` crashes during SSR. | Move the access into `onMounted(() => { ... })` — SSR renders `<script setup>` but not lifecycle hooks. |
-| `vue-no-unescaped-entities` | ⚠️ | Unescaped entities in Vue template text can cause unexpected rendering. | Replace the character with its HTML entity. |
-| `vue-no-usestore-top-level` | ❌ | Calling another `useXxxStore()` at the top of a store setup pins Pinia initialization order. | Move the `useOtherStore()` call inside an action or getter so it resolves at use time. |
-| `vue-no-v-if-with-v-for` | ❌ | `v-if` and `v-for` on the same element have ambiguous priority and are a Vue anti-pattern. | Move the `v-if` to a wrapper `<template>` around the `v-for`, or filter the list in a computed. |
-| `vue-no-value-on-reactive` | ❌ | `.value` on a `reactive()` variable is undefined — only refs need `.value`. | Remove `.value` — reactive proxies expose their keys directly: `state.count`, not `state.value.count`. |
-| `vue-no-watch-reactive-property` | ❌ | `watch(state.prop, ...)` passes a snapshot — the watcher fires once then never again. | Use a getter: `watch(() => state.prop, ...)`, or destructure with `toRefs`. |
-| `vue-pinia-store-to-refs` | ⚠️ | Destructuring a Pinia store without `storeToRefs()` loses reactivity. | Use `const { count } = storeToRefs(useCounterStore())` to preserve reactivity. |
-| `vue-prefer-computed` | ⚠️ | Use `computed()` when a watcher only assigns a derived value to another ref. | A `watch(src, () => { target.value = fn(src.value) })` pattern is a derived value — use `const target = computed(() => fn(src.value))` instead. `computed()` is lazy, cached, and cannot desync. |
-| `vue-prefer-shorthand-v-bind` | ⚠️ | Bound attributes should use the `:` shorthand instead of longhand `v-bind:`. | Replace `v-bind:foo="bar"` with `:foo="bar"`. |
-| `vue-prefer-shorthand-v-on` | ⚠️ | Event bindings should use the `@` shorthand instead of longhand `v-on:`. | Replace `v-on:click="onClick"` with `@click="onClick"`. |
-| `vue-prefer-v-else` | ⚠️ | Consecutive `v-if="X"` and `v-if="!X"` should use `v-else`. | Replace the second `v-if="!X"` with `v-else`. |
-| `vue-props-no-spread-multi` | ⚠️ | Same `v-bind` spread applied multiple times on a Vue element. | Remove the duplicate spread. |
-| `vue-ref-value-in-script` | ❌ | Reading a `ref()` in `<script>` without `.value` compares the Ref object, not its value. | Access `.value` on refs inside `<script>`: `if (count.value > 0)`. Auto-unwrapping only happens in templates. |
-| `vue-require-lifecycle-cleanup` | ⚠️ | `onMounted` with `addEventListener` must have a matching `onUnmounted` with `removeEventListener`. | Add `onUnmounted(() => element.removeEventListener(...))` to clean up. |
-| `vue-return-in-computed-property` | ❌ | A `computed()` callback that never returns a value resolves to `undefined`. | Return the derived value from the callback — `computed(() => a.value + b.value)` or, with a block body, an explicit `return`. |
-| `vue-scoped-styles-preferred` | ⚠️ | `<style>` without `scoped` leaks selectors globally. | Add `scoped` to the `<style>` tag unless the styles are intentionally global. |
-| `vue-script-setup-required` | ⚠️ | `<script>` without `setup` attribute uses Options-API-style Composition API — use `<script setup>` instead. | Change `<script lang="ts">` to `<script setup lang="ts">` and remove the `setup()` function. |
-| `vue-self-closing-comp` | ⚠️ | Components without children should use self-closing syntax in Vue templates. | Replace `<Foo></Foo>` with `<Foo />`. |
-| `vue-setup-store-return-all` | ❌ | A Pinia `defineStore('x', () => { ... })` must return every reactive state and computed. | Return every `ref`, `reactive`, and `computed` declared in the setup — otherwise they are unusable outside. |
-| `vue-sfc-section-order` | ⚠️ | SFC sections must be ordered: `<script setup>` → `<template>` → `<style>`. | Reorder sections: script first, template second, style last. |
-| `vue-typed-define-props-emits` | ⚠️ | In `lang="ts"` SFCs, `defineProps({ ... })` / `defineEmits([...])` lose type inference. | Use the type form: `defineProps<{ ... }>()` / `defineEmits<{ (e: 'x'): void }>()`. |
-| `vue-url-state-for-filters` | ⚠️ | Store filter/pagination state in the URL, not in local `ref()`. | Filters, pagination, search, and sort state should survive a page reload and be shareable by URL. Use `useUrlSearchParams` from VueUse (or your router's query) instead of a local `ref()`. |
-| `vue-use-template-ref` | ⚠️ | `ref(null)` as a template ref is superseded by `useTemplateRef('name')` in Vue 3.5+. | Replace `const el = ref(null)` + `ref="el"` with `const el = useTemplateRef('el')`. |
-| `vue-v-for-needs-stable-key` | ❌ | v-for `:key` must use a stable identifier, not the loop index. | Replace `:key="index"` / `:key="i"` with a stable id from the data: `:key="item.id"`. Index keys cause Vue to reuse the wrong DOM when items reorder, filter, or get inserted. |
-| `vue-v-memo-requires-v-for` | ⚠️ | `v-memo="[]"` without `v-for` never re-renders — that's exactly what `v-once` states directly. | Replace standalone `v-memo="[]"` with `v-once`, or give `v-memo` a real dependency array. |
-| `vue-valid-v-cloak` | ❌ | `v-cloak` must be a bare directive with no argument, no modifiers, and no value. | Use `v-cloak` on its own, dropping any argument, modifier, or value. |
-| `vue-valid-v-for` | ❌ | `v-for` must have a value, no argument or modifiers, identifier-only secondary aliases, and a `:key` that uses its iteration variables (required on custom components). | Give `v-for` a `alias in iterable` value with no argument or modifier, keep extra aliases as plain identifiers, and add a `:key` referencing an iteration variable. |
-| `vue-valid-v-if` | ❌ | `v-if` must have a value and no argument, no modifiers, and no sibling `v-else`/`v-else-if` directive on the same element. | Give `v-if` a value expression, drop any argument or modifier, and move `v-else`/`v-else-if` to a separate sibling element. |
-| `vue-valid-v-on` | ❌ | `v-on` (or its `@` shorthand) must name an event, use only known modifiers, and provide a handler expression. | Give `v-on` an event name (e.g. `v-on:click`), remove or correct unknown modifiers, and add a handler expression (e.g. `@click="onClick"`). |
-| `vue-valid-v-once` | ❌ | `v-once` must be a bare directive with no argument, no modifiers, and no value. | Use `v-once` on its own, dropping any argument, modifier, or value. |
-| `vue-valid-v-text` | ❌ | `v-text` must have a value and no argument or modifiers. | Give `v-text` a value expression (e.g. `v-text="msg"`) and drop any argument or modifier. |
-| `vue-void-elements-no-children` | ⚠️ | Void HTML elements (`<br>`, `<img>`, `<input>`) cannot have children. | Remove children from void elements. |
-| `vue-watch-immediate-over-onmounted` | ⚠️ | A `watch` paired with an `onMounted` that runs the same callback duplicates logic. | Drop the `onMounted` and pass `{ immediate: true }` to the watch. |
-| `vue-withdefaults-factory` | ❌ | Array/object defaults in `withDefaults` must be factory functions — otherwise the default is shared. | Use `items: () => []` / `config: () => ({})` — a literal `[]` or `{}` is the same object across instances. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-vue-data-object-declaration` | A Vue component's `data` option was declared as an object instead of a function. | Declare `data` as a function returning the object (`data() { return { … } }`) so each component instance gets its own state. |
+| `no-vue-reserved-keys` | A Vue-reserved key was used in a component's data, computed, methods, or props. | Rename the key: Vue reserves the `$` prefix (e.g. `$el`, `$emit`) and the `_` prefix in `data` for internal use. |
+| `no-vue-reserved-props` | A Vue-reserved name (`key` or `ref`) was declared as a component prop. | Rename the prop: Vue reserves `key` and `ref` for template binding, so they cannot be used as prop names. |
+| `no-vue-v-on-number-values` | Number (`keyCode`) modifiers on Vue `v-on` directives are deprecated and removed in Vue 3. | Replace the numeric modifier with a named key modifier (e.g. `@keyup.enter`) or check the key code inside the handler. |
+| `use-vue-define-macros-order` | A Vue compiler macro in `<script setup>` is out of order. | Order the compiler macros as configured (default `defineModel`, `defineProps`, `defineEmits`) and place them before any non-macro statements. |
+| `use-vue-hyphenated-attributes` | Template attribute and prop names should be hyphenated (kebab-case). | Rename the attribute to kebab-case, e.g. `:some-prop` instead of `:someProp`. |
+| `use-vue-valid-template-root` | The root `<template>` must contain content, unless it carries a `src` attribute in which case it must be empty. | Add content inside the root `<template>`, or remove its content when using a `src` attribute. |
+| `use-vue-valid-v-bind` | `v-bind` bindings must have a value and only use the `prop`, `camel`, `sync`, or `attr` modifiers. | Give the `v-bind` directive a value and drop any modifier outside `prop`, `camel`, `sync`, and `attr`. |
+| `use-vue-valid-v-else-if` | `v-else-if` must have a value, no argument or modifiers, no sibling `v-if`/`v-else` on the same element, and a preceding sibling element with `v-if`/`v-else-if`. | Give `v-else-if` a value expression, drop any argument or modifier, keep it on its own element, and place it after an element with `v-if`/`v-else-if`. |
+| `use-vue-valid-v-pre` | `v-pre` must be a bare directive with no argument, no modifiers, and no value. | Use `v-pre` on its own, dropping any argument, modifier, or value. |
+| `vue-button-has-type` | `<button>` without an explicit `type` attribute defaults to `submit`, which may cause unexpected form submissions. | Add an explicit `type` attribute (`button`, `submit`, or `reset`) to every `<button>` element. |
+| `vue-checked-requires-onchange` | `checked` attribute without `v-model` or `@change` makes the input uncontrollable. | Add `v-model` or an `@change` handler. Without either, the checkbox/radio is frozen. |
+| `vue-component-pascal-case` | User-defined components in Vue templates must use PascalCase. | Rename the component tag to PascalCase (e.g. `<MyComponent>`). |
+| `vue-computed-no-side-effects` | `computed()` must be pure — no emits, logs, API calls, mutations, or assignments. | Move side effects to a `watch`, an event handler, or an action. `computed` should only derive a value. |
+| `vue-custom-directive-v-prefix` | Local directives declared in `<script setup>` must start with `v` + capital letter. | Rename `focus` → `vFocus`; `<script setup>` treats `vFoo` bindings as directives. |
+| `vue-define-model-over-modelvalue` | `defineProps<{ modelValue }>` + `update:modelValue` is superseded by `defineModel` in Vue 3.4+. | Replace the `modelValue` prop and `update:modelValue` emit with `const model = defineModel()`. |
+| `vue-inject-key-typed` | String keys in `provide()`/`inject()` lose type information. | Declare `const MY_KEY: InjectionKey<T> = Symbol('my-key')` and pass it to provide/inject. |
+| `vue-markraw-for-third-party` | Wrap third-party instances (Chart.js, maps, editors, ...) in `markRaw()`. | Storing a third-party object in a `ref()` or `reactive()` makes Vue walk its entire internal state with Proxies — that breaks libraries and murders performance. Wrap the instance: `chart.value = markRaw(new Chart(...))`. |
+| `vue-next-tick-promise` | Vue `nextTick` was called with a callback instead of using its returned Promise. | Drop the callback and await the Promise: `await nextTick()` (or `nextTick().then(…)`). |
+| `vue-no-adjacent-inline-elements` | Adjacent inline elements without whitespace between them. | Add a space or wrapper between adjacent inline elements. |
+| `vue-no-array-index-key` | Array index used as `:key` in `v-for` breaks on reorder. | Use a stable id from the data as the key instead of the loop index. |
+| `vue-no-async-in-computed-properties` | Vue `computed()` getters must be synchronous — an async getter returns a Promise that the template renders as `[object Promise]`. | Move the async work to a `watch` or an action and store the resolved value in a ref. The `computed` should derive from synchronous state. |
+| `vue-no-comment-textnodes` | JS-style comments in Vue template text are rendered as visible text. | Use `<!-- comment -->` for HTML comments in Vue templates. |
+| `vue-no-duplicate-props` | Duplicate attributes on a Vue template element — the last one silently wins. | Remove the duplicate attribute. |
+| `vue-no-duplicate-v-if` | Two opposite `v-if` conditions should be `v-if`/`v-else`. | Replace `v-if="x"` + `v-if="!x"` with `v-if="x"` / `v-else`. Two separate `v-if` directives evaluate independently — if the condition changes between the two evaluations, both render or neither does. |
+| `vue-no-filter-sort-in-template` | `v-for` over `.filter()`/`.sort()` re-runs on every render. | Extract to a `computed()` so the derived list is cached until its inputs change. |
+| `vue-no-import-compiler-macros` | Don't import Vue compiler macros — they are globally available. | Remove the import of `defineProps`/`defineEmits`/`defineModel` (and other compiler macros) from `vue`. The Vue compiler injects them automatically inside `<script setup>`; importing them is redundant and breaks the macro transform. |
+| `vue-no-invalid-html-attribute` | Invalid value in HTML `rel` attribute. | Use a valid `rel` value (`noopener`, `noreferrer`, `stylesheet`, etc.). |
+| `vue-no-mutate-prop` | Don't mutate a prop directly — props are one-way. | Emit an event or copy the prop into a local ref to mutate. |
+| `vue-no-namespace` | Namespaced elements (`<ns:tag>`) are not standard in Vue templates. | Use a different naming pattern for components. |
+| `vue-no-options-api` | Use Composition API (`<script setup>`), not Options API. | Replace `export default { data(), methods, computed }` with `<script setup lang="ts">` using `ref()`, `computed()`, and plain functions. Options API is legacy in Vue 3. |
+| `vue-no-reactive-destructure` | Destructuring `reactive()` breaks reactivity — use `toRefs()` or `ref()`. | `const { count } = reactive({ count: 0 })` copies the primitive — `count` is now a plain number, not reactive. Use `const { count } = toRefs(state)` to get a ref that stays connected, or use `ref()` directly for each field. |
+| `vue-no-ref-as-operand` | Using a Vue 3 `ref` directly in an arithmetic / comparison expression compares the wrapper object, not the underlying value. | Unwrap with `.value`: `count.value + 1`, not `count + 1`. The ref is an object — JS coerces it to `[object Object]` in string contexts and to NaN in numeric ones. |
+| `vue-no-setup-props-reactivity-loss` | Destructuring `defineProps()` in `<script setup>` strips reactivity from the props. | Keep the props object intact: `const props = defineProps<...>()` and read `props.foo`. Reactive destructure requires the Vue 3.5+ reactive-props transform. |
+| `vue-no-ssr-globals-in-setup` | `window`, `document`, `localStorage`, `navigator` at the top of `<script setup>` crashes during SSR. | Move the access into `onMounted(() => { ... })` — SSR renders `<script setup>` but not lifecycle hooks. |
+| `vue-no-unescaped-entities` | Unescaped entities in Vue template text can cause unexpected rendering. | Replace the character with its HTML entity. |
+| `vue-no-usestore-top-level` | Calling another `useXxxStore()` at the top of a store setup pins Pinia initialization order. | Move the `useOtherStore()` call inside an action or getter so it resolves at use time. |
+| `vue-no-v-if-with-v-for` | `v-if` and `v-for` on the same element have ambiguous priority and are a Vue anti-pattern. | Move the `v-if` to a wrapper `<template>` around the `v-for`, or filter the list in a computed. |
+| `vue-no-value-on-reactive` | `.value` on a `reactive()` variable is undefined — only refs need `.value`. | Remove `.value` — reactive proxies expose their keys directly: `state.count`, not `state.value.count`. |
+| `vue-no-watch-reactive-property` | `watch(state.prop, ...)` passes a snapshot — the watcher fires once then never again. | Use a getter: `watch(() => state.prop, ...)`, or destructure with `toRefs`. |
+| `vue-pinia-store-to-refs` | Destructuring a Pinia store without `storeToRefs()` loses reactivity. | Use `const { count } = storeToRefs(useCounterStore())` to preserve reactivity. |
+| `vue-prefer-computed` | Use `computed()` when a watcher only assigns a derived value to another ref. | A `watch(src, () => { target.value = fn(src.value) })` pattern is a derived value — use `const target = computed(() => fn(src.value))` instead. `computed()` is lazy, cached, and cannot desync. |
+| `vue-prefer-shorthand-v-bind` | Bound attributes should use the `:` shorthand instead of longhand `v-bind:`. | Replace `v-bind:foo="bar"` with `:foo="bar"`. |
+| `vue-prefer-shorthand-v-on` | Event bindings should use the `@` shorthand instead of longhand `v-on:`. | Replace `v-on:click="onClick"` with `@click="onClick"`. |
+| `vue-prefer-v-else` | Consecutive `v-if="X"` and `v-if="!X"` should use `v-else`. | Replace the second `v-if="!X"` with `v-else`. |
+| `vue-props-no-spread-multi` | Same `v-bind` spread applied multiple times on a Vue element. | Remove the duplicate spread. |
+| `vue-ref-value-in-script` | Reading a `ref()` in `<script>` without `.value` compares the Ref object, not its value. | Access `.value` on refs inside `<script>`: `if (count.value > 0)`. Auto-unwrapping only happens in templates. |
+| `vue-require-lifecycle-cleanup` | `onMounted` with `addEventListener` must have a matching `onUnmounted` with `removeEventListener`. | Add `onUnmounted(() => element.removeEventListener(...))` to clean up. |
+| `vue-return-in-computed-property` | A `computed()` callback that never returns a value resolves to `undefined`. | Return the derived value from the callback — `computed(() => a.value + b.value)` or, with a block body, an explicit `return`. |
+| `vue-scoped-styles-preferred` | `<style>` without `scoped` leaks selectors globally. | Add `scoped` to the `<style>` tag unless the styles are intentionally global. |
+| `vue-script-setup-required` | `<script>` without `setup` attribute uses Options-API-style Composition API — use `<script setup>` instead. | Change `<script lang="ts">` to `<script setup lang="ts">` and remove the `setup()` function. |
+| `vue-self-closing-comp` | Components without children should use self-closing syntax in Vue templates. | Replace `<Foo></Foo>` with `<Foo />`. |
+| `vue-setup-store-return-all` | A Pinia `defineStore('x', () => { ... })` must return every reactive state and computed. | Return every `ref`, `reactive`, and `computed` declared in the setup — otherwise they are unusable outside. |
+| `vue-sfc-section-order` | SFC sections must be ordered: `<script setup>` → `<template>` → `<style>`. | Reorder sections: script first, template second, style last. |
+| `vue-typed-define-props-emits` | In `lang="ts"` SFCs, `defineProps({ ... })` / `defineEmits([...])` lose type inference. | Use the type form: `defineProps<{ ... }>()` / `defineEmits<{ (e: 'x'): void }>()`. |
+| `vue-url-state-for-filters` | Store filter/pagination state in the URL, not in local `ref()`. | Filters, pagination, search, and sort state should survive a page reload and be shareable by URL. Use `useUrlSearchParams` from VueUse (or your router's query) instead of a local `ref()`. |
+| `vue-use-template-ref` | `ref(null)` as a template ref is superseded by `useTemplateRef('name')` in Vue 3.5+. | Replace `const el = ref(null)` + `ref="el"` with `const el = useTemplateRef('el')`. |
+| `vue-v-for-needs-stable-key` | v-for `:key` must use a stable identifier, not the loop index. | Replace `:key="index"` / `:key="i"` with a stable id from the data: `:key="item.id"`. Index keys cause Vue to reuse the wrong DOM when items reorder, filter, or get inserted. |
+| `vue-v-memo-requires-v-for` | `v-memo="[]"` without `v-for` never re-renders — that's exactly what `v-once` states directly. | Replace standalone `v-memo="[]"` with `v-once`, or give `v-memo` a real dependency array. |
+| `vue-valid-v-cloak` | `v-cloak` must be a bare directive with no argument, no modifiers, and no value. | Use `v-cloak` on its own, dropping any argument, modifier, or value. |
+| `vue-valid-v-for` | `v-for` must have a value, no argument or modifiers, identifier-only secondary aliases, and a `:key` that uses its iteration variables (required on custom components). | Give `v-for` a `alias in iterable` value with no argument or modifier, keep extra aliases as plain identifiers, and add a `:key` referencing an iteration variable. |
+| `vue-valid-v-if` | `v-if` must have a value and no argument, no modifiers, and no sibling `v-else`/`v-else-if` directive on the same element. | Give `v-if` a value expression, drop any argument or modifier, and move `v-else`/`v-else-if` to a separate sibling element. |
+| `vue-valid-v-on` | `v-on` (or its `@` shorthand) must name an event, use only known modifiers, and provide a handler expression. | Give `v-on` an event name (e.g. `v-on:click`), remove or correct unknown modifiers, and add a handler expression (e.g. `@click="onClick"`). |
+| `vue-valid-v-once` | `v-once` must be a bare directive with no argument, no modifiers, and no value. | Use `v-once` on its own, dropping any argument, modifier, or value. |
+| `vue-valid-v-text` | `v-text` must have a value and no argument or modifiers. | Give `v-text` a value expression (e.g. `v-text="msg"`) and drop any argument or modifier. |
+| `vue-void-elements-no-children` | Void HTML elements (`<br>`, `<img>`, `<input>`) cannot have children. | Remove children from void elements. |
+| `vue-watch-immediate-over-onmounted` | A `watch` paired with an `onMounted` that runs the same callback duplicates logic. | Drop the `onMounted` and pass `{ immediate: true }` to the watch. |
+| `vue-withdefaults-factory` | Array/object defaults in `withDefaults` must be factory functions — otherwise the default is shared. | Use `items: () => []` / `config: () => ({})` — a literal `[]` or `{}` is the same object across instances. |
 
 ## vue > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `vue-iframe-missing-sandbox` | ⚠️ | `<iframe>` without a `sandbox` attribute is a security risk. | Add a `sandbox` attribute to restrict the iframe capabilities. |
-| `vue-no-script-url` | ❌ | `javascript:` URLs in Vue template attributes are an XSS vector. | Use a `@click` handler instead of a `javascript:` URL. |
-| `vue-no-target-blank` | ⚠️ | Opening links in a new tab without `rel=noopener` is a security risk. | Add `rel=noopener` (or `rel=noreferrer`) when using `target=_blank`. |
-| `vue-no-v-html-unsafe` | ❌ | `v-html` without sanitization is an XSS vector. | Wrap the value in `DOMPurify.sanitize(...)` before binding with `v-html`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `vue-iframe-missing-sandbox` | `<iframe>` without a `sandbox` attribute is a security risk. | Add a `sandbox` attribute to restrict the iframe capabilities. |
+| `vue-no-script-url` | `javascript:` URLs in Vue template attributes are an XSS vector. | Use a `@click` handler instead of a `javascript:` URL. |
+| `vue-no-target-blank` | Opening links in a new tab without `rel=noopener` is a security risk. | Add `rel=noopener` (or `rel=noreferrer`) when using `target=_blank`. |
+| `vue-no-v-html-unsafe` | `v-html` without sanitization is an XSS vector. | Wrap the value in `DOMPurify.sanitize(...)` before binding with `v-html`. |
 
 ## xstate
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `xstate-entry-exit-action` | ⚠️ | `entry` and `exit` must be a string, a function, or an array of those. | Use `entry: 'actionName'`, `entry: () => {}`, or `entry: ['a', 'b']`. Do not pass a plain object. |
-| `xstate-event-names` | ⚠️ | XState event names must be SCREAMING_SNAKE_CASE. | Rename the event key to uppercase letters, digits, and underscores (e.g. `NEXT`, `FETCH_DATA`). |
-| `xstate-invoke-usage` | ⚠️ | `invoke` must be an object (or array of objects) with at least a `src` property. | Add `src` to the invoke object. Optional keys: `onDone`, `onError`, `id`, `input`, `systemId`. |
-| `xstate-no-async-guard` | ❌ | XState `guard`/`cond` properties must be synchronous — async functions are not supported. | Guards must be synchronous, use actors for async logic |
-| `xstate-no-imperative-action` | ⚠️ | `send()` / `raise()` must only be called inside an action context. | Wrap the call in an action (e.g. `actions: [send(...)]` or inside an action function), not at top level or in module scope. |
-| `xstate-no-infinite-loop` | ❌ | XState `always` transitions without a guard that stay in (or re-target) the same state cause infinite evaluation loops. | Add guard to always transition or target different state |
-| `xstate-no-inline-implementation` | ⚠️ | Inline functions as XState `actions`, `guards`, or `services` hinder reuse and testing. | Use named actions/guards/services instead of inline functions |
-| `xstate-no-invalid-conditional-action` | ⚠️ | XState `choose(...)` branches must declare both a `guard`/`cond` and `actions` property. | choose() branches must have guard/cond and actions properties |
-| `xstate-no-invalid-state-props` | ⚠️ | Unknown property on an XState state node — likely a typo or misplaced config. | Use only valid XState state node properties |
-| `xstate-no-invalid-transition-props` | ⚠️ | Transition objects in XState `on` handlers must only use known properties. | Use only valid XState transition properties |
-| `xstate-no-misplaced-on-transition` | ⚠️ | XState `on` must live on state nodes, not inside `invoke` or directly under `states`. | on property must be on state nodes, not inside invoke or states object directly |
-| `xstate-no-ondone-outside-compound-state` | ⚠️ | XState `onDone` is only valid on compound states (with nested `states`) or invoking states (with `invoke`). | onDone only valid on compound states (with states) or invoking states (with invoke) |
-| `xstate-spawn-usage` | ⚠️ | `spawn()` must be called inside an `assign()` action. | spawn() must be called inside assign() action |
-| `xstate-state-names` | ⚠️ | State names inside `states: { ... }` must be camelCase or snake_case. | Rename the state key so it starts with a lowercase letter and uses camelCase or snake_case (e.g. `idle`, `fetchingData`, `fetching_data`). |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `xstate-entry-exit-action` | `entry` and `exit` must be a string, a function, or an array of those. | Use `entry: 'actionName'`, `entry: () => {}`, or `entry: ['a', 'b']`. Do not pass a plain object. |
+| `xstate-event-names` | XState event names must be SCREAMING_SNAKE_CASE. | Rename the event key to uppercase letters, digits, and underscores (e.g. `NEXT`, `FETCH_DATA`). |
+| `xstate-invoke-usage` | `invoke` must be an object (or array of objects) with at least a `src` property. | Add `src` to the invoke object. Optional keys: `onDone`, `onError`, `id`, `input`, `systemId`. |
+| `xstate-no-async-guard` | XState `guard`/`cond` properties must be synchronous — async functions are not supported. | Guards must be synchronous, use actors for async logic |
+| `xstate-no-imperative-action` | `send()` / `raise()` must only be called inside an action context. | Wrap the call in an action (e.g. `actions: [send(...)]` or inside an action function), not at top level or in module scope. |
+| `xstate-no-infinite-loop` | XState `always` transitions without a guard that stay in (or re-target) the same state cause infinite evaluation loops. | Add guard to always transition or target different state |
+| `xstate-no-inline-implementation` | Inline functions as XState `actions`, `guards`, or `services` hinder reuse and testing. | Use named actions/guards/services instead of inline functions |
+| `xstate-no-invalid-conditional-action` | XState `choose(...)` branches must declare both a `guard`/`cond` and `actions` property. | choose() branches must have guard/cond and actions properties |
+| `xstate-no-invalid-state-props` | Unknown property on an XState state node — likely a typo or misplaced config. | Use only valid XState state node properties |
+| `xstate-no-invalid-transition-props` | Transition objects in XState `on` handlers must only use known properties. | Use only valid XState transition properties |
+| `xstate-no-misplaced-on-transition` | XState `on` must live on state nodes, not inside `invoke` or directly under `states`. | on property must be on state nodes, not inside invoke or states object directly |
+| `xstate-no-ondone-outside-compound-state` | XState `onDone` is only valid on compound states (with nested `states`) or invoking states (with `invoke`). | onDone only valid on compound states (with states) or invoking states (with invoke) |
+| `xstate-spawn-usage` | `spawn()` must be called inside an `assign()` action. | spawn() must be called inside assign() action |
+| `xstate-state-names` | State names inside `states: { ... }` must be camelCase or snake_case. | Rename the state key so it starts with a lowercase letter and uses camelCase or snake_case (e.g. `idle`, `fetchingData`, `fetching_data`). |
 
 ## zod
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `zod-brand-ids` | ⚠️ | ID-like `z.string()` fields (`id`, `userId`, `post_id`) in API/entity schemas benefit from `.brand<"...">()` so distinct IDs are not assignable to each other. | Chain `.brand<"UserId">()` (or a matching brand tag) onto the schema: `z.string().uuid().brand<"UserId">()`. Then `type UserId = z.infer<typeof userId>` produces a nominal type so a `PostId` cannot be passed where a `UserId` is expected. |
-| `zod-consistent-import-source` | ⚠️ | Imports from non-standard zod subpaths (e.g., `zod/src/...`, `zod/dist/...`) circumvent the public API and cause inconsistent schemas across the codebase. Official versioned entry points (`zod/v3`, `zod/v4`, `zod/v4-mini`) are allowed. | Use consistent import source for zod |
-| `zod-no-any` | ⚠️ | `z.any()` disables validation and type narrowing. | Replace `z.any()` with `z.unknown()`. The runtime behavior is the same (everything accepted) but the TypeScript type is `unknown`, forcing downstream code to narrow before using the value. |
-| `zod-no-coerce-on-financial` | ⚠️ | `z.coerce.number()` silently accepts `"NaN"`, `" 1.2 "`, and empty strings — catastrophic for money/price/amount/currency fields. | Parse the input explicitly: `z.string().regex(/^\d+(\.\d{1,2})?$/).transform(Number)`, and reject anything else with a clear error. |
-| `zod-no-empty-custom-schema` | ⚠️ | `z.custom()` without a validator function accepts any value. | Provide a validator function to z.custom() |
-| `zod-no-manual-types` | ⚠️ | A hand-written `type` that duplicates the keys of a nearby `z.object({...})` will drift from the schema and defeat runtime validation guarantees. | Derive the type with `type T = z.infer<typeof Schema>` so the type always matches the schema. |
-| `zod-no-number-schema-with-int` | ⚠️ | Use `z.int()` instead of `z.number().int()` in Zod v4+. | Use z.int() instead of z.number().int() in Zod v4+ |
-| `zod-no-optional-and-default-together` | ⚠️ | Chaining `.optional()` and `.default()` on the same schema is redundant. | Pick one: `.default(x)` already makes the field effectively optional (missing input → default). Remove the `.optional()` call — combining the two makes the schema accept `undefined` without applying the default, which is almost never intended. |
-| `zod-no-optional-nullable-chain` | ⚠️ | `.optional().nullable()` should be written as `.nullish()` for clarity. | Replace `.optional().nullable()` or `.nullable().optional()` with `.nullish()`. |
-| `zod-no-safeparse-without-check` | ❌ | Reading `.data` from `safeParse` without checking `.success` ignores validation errors. | Branch on `result.success` first, or use `.parse()` and let it throw. |
-| `zod-no-schema-in-hot-path` | ⚠️ | Building a Zod schema inside a React render, a loop body, or a request handler allocates a new schema on every call — schemas are expensive to construct and should be cached. | Hoist `z.object({...})` / `z.string()` to module scope and reference the same schema instance from your render / handler. |
-| `zod-no-string-schema-with-uuid` | ⚠️ | `z.string().uuid()` is deprecated in Zod v4 — use the top-level `z.uuid()` schema. | Use z.uuid() instead of z.string().uuid() in Zod v4+ |
-| `zod-no-throw-in-refine` | ⚠️ | `throw` inside `.refine()` / `.superRefine()` bypasses Zod's issue aggregation and surfaces as an unhandled exception instead of a validation error. | Use ctx.addIssue() in superRefine, or return false in refine |
-| `zod-no-transform-in-record-key` | ⚠️ | `.transform()` inside a `z.record()` key schema mutates the object key after validation, causing parse/serialize asymmetry. | Don't use transforms in record key schemas |
-| `zod-no-unknown-schema` | ⚠️ | `z.unknown()` accepts anything — the schema provides no validation. | Replace `z.unknown()` with a concrete schema that describes the expected shape (e.g. `z.object({...})`, `z.string()`, `z.array(...)`). If the value truly is unknown until runtime, validate it at the boundary where the shape becomes known. |
-| `zod-patch-schema-require-non-empty` | ⚠️ | An all-optional Zod schema for a PATCH/Edit/Update body accepts an empty `{}`, validating a request that updates nothing. | Add a `.refine(o => Object.keys(o).length >= 1, { error: "At least one field required" })` guard so the schema rejects an empty body, or make at least one field required. |
-| `zod-prefer-discriminated-union` | ⚠️ | `z.union([z.object({...}), ...])` with shared discriminant fields should use `z.discriminatedUnion()`. | Use `z.discriminatedUnion('type', [...])` for faster parsing and better error messages. |
-| `zod-prefer-enum-over-literal-union` | ⚠️ | `z.union([z.literal('a'), z.literal('b')])` with only string literals should use `z.enum([...])`. | Use z.enum(['a', 'b']) instead of z.union with literals |
-| `zod-prefer-error-over-message` | ⚠️ | Zod v4's error-customization key is bidirectional: `z.*` calls and `.refine` options take `error` (a string `message` there is the deprecated v3 spelling), while `ctx.addIssue({ ... })` takes `message` (an `error` key there is silently dropped). | In a `z.*`/`.refine` call rename `message` to `error` (e.g. `z.string({ error: '...' })`); in `ctx.addIssue({ ... })` rename `error` to `message`. |
-| `zod-prefer-extend-over-merge` | ⚠️ | `.merge()` is removed in Zod v4 — `.extend()` is the canonical way to augment an object schema. | Replace `A.merge(B)` with `A.extend(B.shape)` (or inline the fields). |
-| `zod-prefer-loose-object` | ⚠️ | `z.object({...}).passthrough()` is replaced by the top-level `z.looseObject(...)` factory in Zod v4. | Replace `z.object({...}).passthrough()` with `z.looseObject({...})`. |
-| `zod-prefer-overwrite-v4` | ⚠️ | `.transform()` widens the output type to whatever the callback returns, which breaks `z.input` vs `z.output` parity. When the callback returns a value of the same shape, Zod v4's `.overwrite()` keeps the input type intact. | Replace `.transform(fn)` with `.overwrite(fn)` whenever `fn` returns the same shape as its input (e.g. `s => s.trim()`, `n => Math.round(n)`). |
-| `zod-prefer-strict-object` | ⚠️ | `z.object({...}).strict()` is deprecated in Zod v4 — the strictness is a top-level factory, not a chained modifier. | Replace `z.object({...}).strict()` with `z.strictObject({...})`. |
-| `zod-prefer-stringbool` | ⚠️ | `z.coerce.boolean()` only checks truthiness — any non-empty string (including `"false"`) becomes `true`, which breaks HTML form inputs and query strings. | Use `z.stringbool()` (Zod v4) to parse `"true"/"false"/"1"/"0"` robustly, or write an explicit `.transform()` with allowed values. |
-| `zod-prefer-top-level-format` | ⚠️ | Zod v4 top-level format helpers are shorter and faster. | Replace `z.string().email()` with `z.email()`, `z.string().url()` with `z.url()`, `z.number().int()` with `z.int()`, and similar chains. Top-level helpers are tree-shakeable. |
-| `zod-record-two-args` | ⚠️ | `z.record(valueSchema)` is removed in Zod v4 — the single-arg form leaves the key type implicit and makes migrations painful. | Pass both arguments explicitly: `z.record(z.string(), valueSchema)`. Use a branded or enum key schema when you want a narrower key type. |
-| `zod-refine-requires-path` | ⚠️ | `z.object().refine()` without `path:` attaches the error to the whole object, not a specific field. | Add `path: ['fieldName']` to the refine options so form errors appear on the correct field. |
-| `zod-require-error-messages` | ⚠️ | `.refine()` without an error message produces unhelpful validation errors. | Add `{ error: 'descriptive error' }` as the second argument to `.refine()` (Zod v4 renamed the `message` param to `error`). |
-| `zod-require-input-for-transforms` | ⚠️ | `z.infer<typeof Schema>` returns the *output* type of a schema. For schemas that use `.transform()`, the input shape (what the user actually types into a form) differs from the output. | Use `z.input<typeof Schema>` for form values and `z.output<typeof Schema>` (or `z.infer`) for the parsed result. |
-| `zod-require-multipleof-currency` | ⚠️ | Currency-bearing number schemas that accept arbitrary floats let through sub-cent precision errors (e.g. `1.2345`), which causes off-by-penny bugs downstream. | Constrain to two decimals with `.multipleOf(0.01)` (or use integer minor units: `.int().nonnegative()` representing cents). |
-| `zod-require-schema-suffix` | ⚠️ | Exported Zod schemas should be named with a `Schema` suffix. | Rename the export so the name ends in `Schema` (e.g. `export const UserSchema = z.object({...})`). The naming convention keeps the schema distinguishable from the inferred TypeScript type (`type User = z.infer<typeof UserSchema>`). |
-| `zod-string-min-1-required` | ⚠️ | Bare `z.string()` without length constraints accepts empty strings. | Add `.min(1)` or `.trim().min(1)` to reject empty strings. |
-| `zod-transform-requires-pipe` | ⚠️ | `.transform()` returns an untyped value — follow with `.pipe(z.*)` to re-validate. | Chain `.pipe(z.string())` (or the appropriate schema) after `.transform()` so the transformed value is validated. |
-| `zod-trim-before-min` | ⚠️ | `z.string().min(1)` without `.trim()` allows strings of only whitespace. | Add `.trim()` before `.min(1)`: `z.string().trim().min(1)`. |
-| `zod-validate-env-at-startup` | ⚠️ | `process.env.X` is read without an accompanying Zod validation of `process.env` in this file. | Define a Zod schema for the required env vars and call `envSchema.parse(process.env)` (or `.safeParse`) once at startup. Export the parsed, typed object and consume it everywhere else instead of raw `process.env.X`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `zod-brand-ids` | ID-like `z.string()` fields (`id`, `userId`, `post_id`) in API/entity schemas benefit from `.brand<"...">()` so distinct IDs are not assignable to each other. | Chain `.brand<"UserId">()` (or a matching brand tag) onto the schema: `z.string().uuid().brand<"UserId">()`. Then `type UserId = z.infer<typeof userId>` produces a nominal type so a `PostId` cannot be passed where a `UserId` is expected. |
+| `zod-consistent-import-source` | Imports from non-standard zod subpaths (e.g., `zod/src/...`, `zod/dist/...`) circumvent the public API and cause inconsistent schemas across the codebase. Official versioned entry points (`zod/v3`, `zod/v4`, `zod/v4-mini`) are allowed. | Use consistent import source for zod |
+| `zod-no-any` | `z.any()` disables validation and type narrowing. | Replace `z.any()` with `z.unknown()`. The runtime behavior is the same (everything accepted) but the TypeScript type is `unknown`, forcing downstream code to narrow before using the value. |
+| `zod-no-coerce-on-financial` | `z.coerce.number()` silently accepts `"NaN"`, `" 1.2 "`, and empty strings — catastrophic for money/price/amount/currency fields. | Parse the input explicitly: `z.string().regex(/^\d+(\.\d{1,2})?$/).transform(Number)`, and reject anything else with a clear error. |
+| `zod-no-empty-custom-schema` | `z.custom()` without a validator function accepts any value. | Provide a validator function to z.custom() |
+| `zod-no-manual-types` | A hand-written `type` that duplicates the keys of a nearby `z.object({...})` will drift from the schema and defeat runtime validation guarantees. | Derive the type with `type T = z.infer<typeof Schema>` so the type always matches the schema. |
+| `zod-no-number-schema-with-int` | Use `z.int()` instead of `z.number().int()` in Zod v4+. | Use z.int() instead of z.number().int() in Zod v4+ |
+| `zod-no-optional-and-default-together` | Chaining `.optional()` and `.default()` on the same schema is redundant. | Pick one: `.default(x)` already makes the field effectively optional (missing input → default). Remove the `.optional()` call — combining the two makes the schema accept `undefined` without applying the default, which is almost never intended. |
+| `zod-no-optional-nullable-chain` | `.optional().nullable()` should be written as `.nullish()` for clarity. | Replace `.optional().nullable()` or `.nullable().optional()` with `.nullish()`. |
+| `zod-no-safeparse-without-check` | Reading `.data` from `safeParse` without checking `.success` ignores validation errors. | Branch on `result.success` first, or use `.parse()` and let it throw. |
+| `zod-no-schema-in-hot-path` | Building a Zod schema inside a React render, a loop body, or a request handler allocates a new schema on every call — schemas are expensive to construct and should be cached. | Hoist `z.object({...})` / `z.string()` to module scope and reference the same schema instance from your render / handler. |
+| `zod-no-string-schema-with-uuid` | `z.string().uuid()` is deprecated in Zod v4 — use the top-level `z.uuid()` schema. | Use z.uuid() instead of z.string().uuid() in Zod v4+ |
+| `zod-no-throw-in-refine` | `throw` inside `.refine()` / `.superRefine()` bypasses Zod's issue aggregation and surfaces as an unhandled exception instead of a validation error. | Use ctx.addIssue() in superRefine, or return false in refine |
+| `zod-no-transform-in-record-key` | `.transform()` inside a `z.record()` key schema mutates the object key after validation, causing parse/serialize asymmetry. | Don't use transforms in record key schemas |
+| `zod-no-unknown-schema` | `z.unknown()` accepts anything — the schema provides no validation. | Replace `z.unknown()` with a concrete schema that describes the expected shape (e.g. `z.object({...})`, `z.string()`, `z.array(...)`). If the value truly is unknown until runtime, validate it at the boundary where the shape becomes known. |
+| `zod-patch-schema-require-non-empty` | An all-optional Zod schema for a PATCH/Edit/Update body accepts an empty `{}`, validating a request that updates nothing. | Add a `.refine(o => Object.keys(o).length >= 1, { error: "At least one field required" })` guard so the schema rejects an empty body, or make at least one field required. |
+| `zod-prefer-discriminated-union` | `z.union([z.object({...}), ...])` with shared discriminant fields should use `z.discriminatedUnion()`. | Use `z.discriminatedUnion('type', [...])` for faster parsing and better error messages. |
+| `zod-prefer-enum-over-literal-union` | `z.union([z.literal('a'), z.literal('b')])` with only string literals should use `z.enum([...])`. | Use z.enum(['a', 'b']) instead of z.union with literals |
+| `zod-prefer-error-over-message` | Zod v4's error-customization key is bidirectional: `z.*` calls and `.refine` options take `error` (a string `message` there is the deprecated v3 spelling), while `ctx.addIssue({ ... })` takes `message` (an `error` key there is silently dropped). | In a `z.*`/`.refine` call rename `message` to `error` (e.g. `z.string({ error: '...' })`); in `ctx.addIssue({ ... })` rename `error` to `message`. |
+| `zod-prefer-extend-over-merge` | `.merge()` is removed in Zod v4 — `.extend()` is the canonical way to augment an object schema. | Replace `A.merge(B)` with `A.extend(B.shape)` (or inline the fields). |
+| `zod-prefer-loose-object` | `z.object({...}).passthrough()` is replaced by the top-level `z.looseObject(...)` factory in Zod v4. | Replace `z.object({...}).passthrough()` with `z.looseObject({...})`. |
+| `zod-prefer-overwrite-v4` | `.transform()` widens the output type to whatever the callback returns, which breaks `z.input` vs `z.output` parity. When the callback returns a value of the same shape, Zod v4's `.overwrite()` keeps the input type intact. | Replace `.transform(fn)` with `.overwrite(fn)` whenever `fn` returns the same shape as its input (e.g. `s => s.trim()`, `n => Math.round(n)`). |
+| `zod-prefer-strict-object` | `z.object({...}).strict()` is deprecated in Zod v4 — the strictness is a top-level factory, not a chained modifier. | Replace `z.object({...}).strict()` with `z.strictObject({...})`. |
+| `zod-prefer-stringbool` | `z.coerce.boolean()` only checks truthiness — any non-empty string (including `"false"`) becomes `true`, which breaks HTML form inputs and query strings. | Use `z.stringbool()` (Zod v4) to parse `"true"/"false"/"1"/"0"` robustly, or write an explicit `.transform()` with allowed values. |
+| `zod-prefer-top-level-format` | Zod v4 top-level format helpers are shorter and faster. | Replace `z.string().email()` with `z.email()`, `z.string().url()` with `z.url()`, `z.number().int()` with `z.int()`, and similar chains. Top-level helpers are tree-shakeable. |
+| `zod-record-two-args` | `z.record(valueSchema)` is removed in Zod v4 — the single-arg form leaves the key type implicit and makes migrations painful. | Pass both arguments explicitly: `z.record(z.string(), valueSchema)`. Use a branded or enum key schema when you want a narrower key type. |
+| `zod-refine-requires-path` | `z.object().refine()` without `path:` attaches the error to the whole object, not a specific field. | Add `path: ['fieldName']` to the refine options so form errors appear on the correct field. |
+| `zod-require-error-messages` | `.refine()` without an error message produces unhelpful validation errors. | Add `{ error: 'descriptive error' }` as the second argument to `.refine()` (Zod v4 renamed the `message` param to `error`). |
+| `zod-require-input-for-transforms` | `z.infer<typeof Schema>` returns the *output* type of a schema. For schemas that use `.transform()`, the input shape (what the user actually types into a form) differs from the output. | Use `z.input<typeof Schema>` for form values and `z.output<typeof Schema>` (or `z.infer`) for the parsed result. |
+| `zod-require-multipleof-currency` | Currency-bearing number schemas that accept arbitrary floats let through sub-cent precision errors (e.g. `1.2345`), which causes off-by-penny bugs downstream. | Constrain to two decimals with `.multipleOf(0.01)` (or use integer minor units: `.int().nonnegative()` representing cents). |
+| `zod-require-schema-suffix` | Exported Zod schemas should be named with a `Schema` suffix. | Rename the export so the name ends in `Schema` (e.g. `export const UserSchema = z.object({...})`). The naming convention keeps the schema distinguishable from the inferred TypeScript type (`type User = z.infer<typeof UserSchema>`). |
+| `zod-string-min-1-required` | Bare `z.string()` without length constraints accepts empty strings. | Add `.min(1)` or `.trim().min(1)` to reject empty strings. |
+| `zod-transform-requires-pipe` | `.transform()` returns an untyped value — follow with `.pipe(z.*)` to re-validate. | Chain `.pipe(z.string())` (or the appropriate schema) after `.transform()` so the transformed value is validated. |
+| `zod-trim-before-min` | `z.string().min(1)` without `.trim()` allows strings of only whitespace. | Add `.trim()` before `.min(1)`: `z.string().trim().min(1)`. |
+| `zod-validate-env-at-startup` | `process.env.X` is read without an accompanying Zod validation of `process.env` in this file. | Define a Zod schema for the required env vars and call `envSchema.parse(process.env)` (or `.safeParse`) once at startup. Export the parsed, typed object and consume it everywhere else instead of raw `process.env.X`. |
 
 ## zod > api
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `zod-prefer-safe-parse` | ⚠️ | `.parse()` in a route handler throws `ZodError` unhandled — use `.safeParse()` instead. | Use `.safeParse()` and handle `!result.success` to return a structured 400 response. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `zod-prefer-safe-parse` | `.parse()` in a route handler throws `ZodError` unhandled — use `.safeParse()` instead. | Use `.safeParse()` and handle `!result.success` to return a structured 400 response. |
 
 ## zod > performance
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `zod-no-parse-in-render` | ⚠️ | `schema.parse()` in a render path re-validates every render and throws on bad data. | Validate at the data fetch boundary (`queryFn`, server action) or in `useMemo`. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `zod-no-parse-in-render` | `schema.parse()` in a render path re-validates every render and throws on bad data. | Validate at the data fetch boundary (`queryFn`, server action) or in `useMemo`. |
 
 ## zod > security
 
-| Rule | Severity | Description | Remediation |
-|------|----------|-------------|-------------|
-| `zod-no-passthrough-on-api-input` | ⚠️ | `.passthrough()` on API input schemas lets unknown keys through. | Use `.strict()` to reject unknown keys, or remove `.passthrough()` and let zod strip them. |
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `zod-no-passthrough-on-api-input` | `.passthrough()` on API input schemas lets unknown keys through. | Use `.strict()` to reject unknown keys, or remove `.passthrough()` and let zod strip them. |
 

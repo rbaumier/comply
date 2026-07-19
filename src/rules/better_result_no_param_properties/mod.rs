@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-no-param-properties",
     description: "TaggedError constructors must not use parameter properties — call super({ ...args, message }).",
     remediation: "Remove `public`/`private`/`readonly` modifiers on constructor parameters and assign via super().",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-media-has-caption",
     description: "Flag `<video>` and `<audio>` elements without `<track kind=\"captions\">` children.",
     remediation: "Add a `<track kind=\"captions\" src=\"...\" />` element inside `<video>` or `<audio>` to provide captions.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

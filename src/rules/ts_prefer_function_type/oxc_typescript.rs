@@ -64,7 +64,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Interface only has a call signature — use a function type instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

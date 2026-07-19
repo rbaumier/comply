@@ -93,7 +93,7 @@ crate::ast_check! { on ["function_item", "closure_expression"] => |node, _source
             column: pos.column + 1,
             rule_id: "no-inconsistent-returns".into(),
             message: "Function has inconsistent returns \u{2014} some paths return a value, others return nothing.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

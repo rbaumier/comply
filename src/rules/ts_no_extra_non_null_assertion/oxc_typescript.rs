@@ -32,7 +32,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Extra non-null assertion — `x!!` is redundant, use `x!`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

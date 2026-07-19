@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-useless-empty-export",
     description: "`export {}` is unnecessary when the file already has other exports.",
     remediation: "Remove the `export {}` statement.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

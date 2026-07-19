@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-no-unsafe-sysctls",
     description: "Pod securityContext.sysctls must not contain unsafe namespaced sysctls.",
     remediation: "Remove unsafe sysctls (kernel.msg*, kernel.sem*, kernel.shm*, fs.mqueue.*, net.*) or restrict via PodSecurityPolicy / kubelet allowed-unsafe-sysctls.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

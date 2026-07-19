@@ -55,7 +55,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Mutation route without CSRF protection — add `app.use(csrf())`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

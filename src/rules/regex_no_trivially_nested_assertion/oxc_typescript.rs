@@ -92,7 +92,7 @@ impl OxcCheck for Check {
             message:
                 "Trivially nested lookaround assertion \u{2014} merge with parent or simplify."
                     .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

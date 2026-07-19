@@ -101,7 +101,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "no-indexof-equality".into(),
             message: format!("Use `{suggestion}` instead of `indexOf()` comparison."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

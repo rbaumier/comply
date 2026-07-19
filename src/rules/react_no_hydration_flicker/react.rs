@@ -121,7 +121,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         column: node.start_position().column + 1,
         rule_id: super::META.id.into(),
         message: "`useEffect(setState, [])` on mount causes a hydration flash — use `useSyncExternalStore` or `suppressHydrationWarning`.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

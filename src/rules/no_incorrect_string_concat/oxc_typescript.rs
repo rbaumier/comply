@@ -173,7 +173,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Suspicious string concatenation with a numeric variable \u{2014} use explicit conversion or template literals.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

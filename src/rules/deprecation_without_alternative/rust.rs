@@ -42,7 +42,7 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         "`#[deprecated]` without a `note` — add `note = \"Use X instead\"` \
          so callers know the migration path."
             .into(),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

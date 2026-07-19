@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "promise-no-return-wrap",
     description: "Wrapping a value in `Promise.resolve(x)` / `Promise.reject(e)` inside `.then()` is redundant.",
     remediation: "Return the value directly. The `.then` chain wraps it automatically. For errors, `throw e` instead of `return Promise.reject(e)`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/eslint-community/eslint-plugin-promise/blob/main/docs/rules/no-return-wrap.md"),
     categories: &["promise"],
 

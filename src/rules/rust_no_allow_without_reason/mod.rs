@@ -11,7 +11,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`#[allow(...)]` without a justification comment hides problems silently.",
     remediation: "Add a `//` comment on the same line or the line above explaining \
                   why the lint is suppressed.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],
 

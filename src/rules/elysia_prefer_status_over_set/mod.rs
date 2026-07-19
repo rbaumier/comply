@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-prefer-status-over-set",
     description: "`set.status = code` mutates context — use the typed `status(code, body)` helper instead.",
     remediation: "Use `status(code, body)` instead of `set.status = code` for type-safe responses.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "elysia"],
 

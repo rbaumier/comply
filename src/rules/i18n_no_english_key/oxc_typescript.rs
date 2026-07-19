@@ -63,7 +63,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "t() key looks like an English sentence. Use an identifier-style key (e.g. `domain.key`) and store the copy in the locale file.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -66,7 +66,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Inline `style` has {prop_count} properties \u{2014} extract to a CSS class or styled component."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;

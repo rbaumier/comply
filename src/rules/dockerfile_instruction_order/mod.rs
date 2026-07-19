@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-instruction-order",
     description: "The first non-comment instruction must be FROM (or ARG before FROM).",
     remediation: "Move FROM (or a leading ARG) to be the first non-comment instruction.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

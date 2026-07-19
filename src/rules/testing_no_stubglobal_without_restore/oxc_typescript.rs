@@ -103,7 +103,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "vi.stubGlobal() without vi.unstubAllGlobals() in afterEach/afterAll leaks stubs into sibling tests.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 continue;
@@ -118,7 +118,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: super::META.id.into(),
                     message: "vi.stubEnv() without vi.unstubAllEnvs() in afterEach/afterAll leaks env stubs into sibling tests.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

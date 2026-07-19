@@ -222,7 +222,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "enum member `{enum_name}.{member_name}` is never referenced in this file."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

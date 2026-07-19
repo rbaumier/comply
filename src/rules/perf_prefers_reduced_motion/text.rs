@@ -28,7 +28,7 @@ crate::ast_check! { prefilter = ["animation", "@keyframes"] => |node, source, ct
         column: pos.column + 1,
         rule_id: super::META.id.into(),
         message: "CSS declares animations/`@keyframes` but no `@media (prefers-reduced-motion: reduce)` branch — users who opt out still see motion.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((target.byte_range().start, target.byte_range().len())),
     });
 }

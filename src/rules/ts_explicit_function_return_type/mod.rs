@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add an explicit `: ReturnType` annotation after the parameter \
                   list. Explicit return types make function contracts visible \
                   and prevent silent drift when the implementation changes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/explicit-function-return-type/"),
     categories: &["typescript"],
 

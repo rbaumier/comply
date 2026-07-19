@@ -42,7 +42,7 @@ use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
 use crate::rules::meta::RuleMeta;
-use schema::{CargoMessage, RustcLevel};
+use schema::CargoMessage;
 
 /// Cached availability probe for `cargo clippy`. Rust toolchains usually
 /// ship clippy via rustup, but in container builds it can be missing.
@@ -174,20 +174,13 @@ fn is_known_clippy_lint(rule_id: &str) -> bool {
 }
 
 /// Build the `-W clippy::lint` flag list passed to clippy after `--`.
-/// Severity becomes the lint level: `Error` → `-D` (deny, fails the run),
-/// `Warning` → `-W`. We don't use `-A` here because the rule registry
-/// only collects lints we *want* to enable.
+/// Every lint is added as `-W` (warn), never `-D` (deny): the comply driver
+/// owns the final exit code, so clippy must not fail the run itself. The
+/// registry only collects lints we *want* enabled, so there's no `-A`.
 fn build_lint_args(bindings: &[(&'static str, &'static RuleMeta, Severity)]) -> Vec<String> {
     bindings
         .iter()
-        .map(|(lint, _, sev)| {
-            let level = match sev {
-                Severity::Error => "W", // We use -W not -D so the comply driver
-                // controls the final exit code, not clippy.
-                Severity::Warning => "W",
-            };
-            format!("-{level}{lint}")
-        })
+        .map(|(lint, _, _)| format!("-W{lint}"))
         .collect()
 }
 
@@ -333,15 +326,7 @@ fn parse_clippy_jsonl(
             continue;
         }
 
-        // Severity: prefer rustc's level (it knows whether the user
-        // promoted the lint to deny), fall back to the comply meta's
-        // severity for the bound case, and default to Warning for the
-        // pass-through case (clippy emits warnings by default).
-        let severity = match diag.level {
-            RustcLevel::Error => Severity::Error,
-            RustcLevel::Warning => Severity::Warning,
-            _ => mapped_meta.map_or(Severity::Warning, |m| m.severity),
-        };
+        let severity = Severity::Error;
 
         let rule_id = match mapped_meta {
             Some(meta) => std::borrow::Cow::Borrowed(meta.id),
@@ -448,7 +433,7 @@ mod tests {
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].rule_id, "clippy::needless_borrow");
         assert_eq!(diagnostics[0].message, "needless borrow");
-        assert_eq!(diagnostics[0].severity, Severity::Warning);
+        assert_eq!(diagnostics[0].severity, Severity::Error);
     }
 
     #[test]

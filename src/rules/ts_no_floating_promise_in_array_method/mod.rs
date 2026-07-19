@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`.forEach(async ...)` / `.map(async ...)` floats promises — the iteration completes before the async work does.",
     remediation: "Use `for (const x of arr) { await fn(x); }` for sequential work, \
                   or `await Promise.all(arr.map(async (x) => fn(x)))` for parallel work.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript", "async"],
 

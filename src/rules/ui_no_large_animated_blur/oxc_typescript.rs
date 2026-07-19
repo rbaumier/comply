@@ -108,7 +108,7 @@ impl OxcCheck for Check {
                         "`blur({radius}px)` exceeds {max_blur}px — cost escalates with radius and \
                          layer size, can exhaust GPU memory on mobile."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

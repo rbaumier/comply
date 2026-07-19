@@ -311,7 +311,7 @@ impl OxcCheck for Check {
                      arithmetic reintroduces rounding errors — keep the string and use a decimal \
                      library (`new Decimal({receiver}.{prop})`) or compute in SQL."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

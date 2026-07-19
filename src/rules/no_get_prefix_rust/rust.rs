@@ -132,7 +132,7 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
         &name_node,
         super::META.id,
         format!("Accessor `{name}` uses `get_` prefix — rename to `{}`. Reserve `get` for fallible operations.", &name[4..]),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

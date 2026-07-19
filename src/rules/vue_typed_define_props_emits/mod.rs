@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-typed-define-props-emits",
     description: "In `lang=\"ts\"` SFCs, `defineProps({ ... })` / `defineEmits([...])` lose type inference.",
     remediation: "Use the type form: `defineProps<{ ... }>()` / `defineEmits<{ (e: 'x'): void }>()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

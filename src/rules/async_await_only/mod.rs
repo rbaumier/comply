@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "async-await-only",
     description: "Promise chain (`.then()`/`.catch()`) instead of `async`/`await`.",
     remediation: "Use `async`/`await` instead of `.then()`/`.catch()` chains.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],
 

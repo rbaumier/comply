@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "hono-csrf-missing",
     description: "Mutation routes without CSRF protection.",
     remediation: "Add `import { csrf } from 'hono/csrf'` and `app.use(csrf())` to protect mutation endpoints against cross-site request forgery.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security", "hono"],
 

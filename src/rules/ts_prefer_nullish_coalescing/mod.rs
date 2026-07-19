@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-nullish-coalescing",
     description: "`a || b` treats every falsy value (`0`, `\"\"`, `false`) as missing. `a ?? b` only triggers on `null` / `undefined`.",
     remediation: "Use `??` when you mean \"fall back when null or undefined\". Keep `||` when you genuinely want any falsy value to short-circuit (rare).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/prefer-nullish-coalescing/"),
     categories: &["typescript"],
 

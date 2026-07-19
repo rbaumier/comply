@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "drizzle-prefer-infer-select",
     description: "Prefer `typeof table.$inferSelect` over `InferSelectModel<typeof table>`.",
     remediation: "Replace `InferSelectModel<typeof table>` with `typeof table.$inferSelect` (and `InferInsertModel` with `$inferInsert`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["drizzle"],
 

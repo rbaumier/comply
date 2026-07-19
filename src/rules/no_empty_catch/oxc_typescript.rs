@@ -42,7 +42,7 @@ impl OxcCheck for Check {
             message: "Empty catch block silently swallows the error — log it, rethrow, \
                       or add a comment explaining why."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

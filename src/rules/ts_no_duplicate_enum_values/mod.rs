@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-duplicate-enum-values",
     description: "Duplicate enum member values cause silent shadowing at runtime.",
     remediation: "Assign unique values to each enum member.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

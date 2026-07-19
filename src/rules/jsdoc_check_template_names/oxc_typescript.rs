@@ -49,7 +49,7 @@ impl OxcCheck for Check {
                                 message: format!(
                                     "@template parameter `{name}` is declared but never referenced in the block."
                                 ),
-                                severity: Severity::Warning,
+                                severity: Severity::Error,
                                 span: None,
                             });
                         }

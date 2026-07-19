@@ -40,7 +40,7 @@ impl OxcCheck for Check {
                 "`{name}` uses a Jasmine-style f/x prefix to focus or skip a test. \
                  Use .only or .skip modifiers instead."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

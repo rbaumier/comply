@@ -119,7 +119,7 @@ impl OxcCheck for Check {
                         "Animating layout property `{layout_prop}` triggers layout recalculation every frame — \
                          prefer `transform`, `opacity`, `color`, `background`, or `filter`."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

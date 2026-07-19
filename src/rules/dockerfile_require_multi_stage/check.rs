@@ -31,7 +31,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
         column: 1,
         rule_id: super::META.id.into(),
         message: "Single-stage Dockerfile — use `FROM ... AS build` plus a runtime stage to keep the final image minimal.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

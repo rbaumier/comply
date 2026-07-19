@@ -131,7 +131,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Trivially nested quantifiers can be merged into a single quantifier.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -34,7 +34,7 @@ impl AstCheck for Check {
                 format!(
                     "Constraint `{name}` must end with _pk|_fk|_key|_chk|_exl|_idx|_pkey|_fkey (format: {{table}}_{{col}}_{{suffix}})."
                 ),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

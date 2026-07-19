@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rn-no-inline-renderitem",
     description: "Inline arrow functions in `renderItem` break list virtualisation.",
     remediation: "Extract `renderItem` to a stable component or `useCallback`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react-native"],
 

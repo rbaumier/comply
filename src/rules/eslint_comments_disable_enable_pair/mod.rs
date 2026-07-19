@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add `/* eslint-enable */` (or `/* eslint-enable <rule> */`) at the point the \
                   exception should end. For single-line exceptions, use `eslint-disable-next-line` \
                   or `eslint-disable-line` instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://mysticatea.github.io/eslint-plugin-eslint-comments/rules/disable-enable-pair.html"),
     categories: &["eslint-comments"],
 

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "nuxt-no-vue-router-import",
     description: "Nuxt provides its own router via `useRouter`/`useRoute` auto-imports.",
     remediation: "Remove the `vue-router` import; rely on the auto-imported `useRouter()` / `useRoute()`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["nuxt"],
 

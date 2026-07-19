@@ -34,7 +34,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
             format!(
                 "HPA scaleTargetRef points to {target_kind}/{target_name} in namespace {namespace}, but no such resource exists in the project."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

@@ -62,7 +62,7 @@ impl OxcCheck for Check {
                       `.default(x)` alone unless you specifically want `undefined` to \
                       bypass the default."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

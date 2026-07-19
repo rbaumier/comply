@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   layer size, can exhaust GPU memory on mobile.",
     remediation: "Reduce the blur radius below 20px, or composite the blur statically into a \
                   background image.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

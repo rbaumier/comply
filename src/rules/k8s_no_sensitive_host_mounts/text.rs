@@ -33,7 +33,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &volume_map,
                 super::META.id,
                 "Volume mounts a sensitive host path; this can compromise the node.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

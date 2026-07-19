@@ -52,7 +52,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Empty alternative in regex \u{2014} remove leading, trailing, or consecutive `|`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

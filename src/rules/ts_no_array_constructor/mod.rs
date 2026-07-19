@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-array-constructor",
     description: "Generic `Array` constructor is ambiguous — use array literal notation `[]`.",
     remediation: "Use `[]` or `Array.from()` instead. `Array<T>()` with type arguments is acceptable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-array-constructor"),
     categories: &["typescript"],
 

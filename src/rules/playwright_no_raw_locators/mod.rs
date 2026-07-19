@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
                   `page.getByRole('button')` or `page.getByText('Submit')`. \
                   Semantic locators are resilient to markup changes and \
                   align with how users find elements on the page.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

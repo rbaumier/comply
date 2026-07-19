@@ -65,7 +65,7 @@ impl OxcCheck for Check {
                      the uppercase variant is the wrapper object type, \
                      not the primitive."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

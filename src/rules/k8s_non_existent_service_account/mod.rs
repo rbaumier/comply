@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-non-existent-service-account",
     description: "Workload spec.serviceAccountName must reference a ServiceAccount that exists in the project.",
     remediation: "Create the referenced ServiceAccount in the matching namespace, or fix the serviceAccountName value.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

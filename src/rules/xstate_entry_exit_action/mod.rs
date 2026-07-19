@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "xstate-entry-exit-action",
     description: "`entry` and `exit` must be a string, a function, or an array of those.",
     remediation: "Use `entry: 'actionName'`, `entry: () => {}`, or `entry: ['a', 'b']`. Do not pass a plain object.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://stately.ai/docs/actions#entry-and-exit-actions"),
     categories: &["xstate"],
 

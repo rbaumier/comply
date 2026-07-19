@@ -121,7 +121,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "import-namespace".into(),
                     message: format!("`{prop_name}` is not exported by the source module."),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -117,7 +117,7 @@ impl OxcCheck for Check {
                 message: "Missing `key` prop for JSX element in iterator — \
                           React needs stable keys to reconcile lists."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

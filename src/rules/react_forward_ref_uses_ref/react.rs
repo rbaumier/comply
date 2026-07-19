@@ -34,7 +34,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             rule_id: "react-forward-ref-uses-ref".into(),
             message: "`forwardRef` component is missing the `ref` parameter."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
         return;
@@ -60,7 +60,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
             rule_id: "react-forward-ref-uses-ref".into(),
             message: "`forwardRef` component is missing the `ref` parameter."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

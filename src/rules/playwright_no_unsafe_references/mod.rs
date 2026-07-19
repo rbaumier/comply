@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
                   the Node.js scope are not serialized into the browser \
                   context automatically — they will be `undefined` at \
                   runtime.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

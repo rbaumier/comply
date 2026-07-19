@@ -41,7 +41,7 @@ impl OxcCheck for Check {
                                   instead of `boolean('is_deleted')` — a nullable \
                                   timestamp encodes both the boolean and the event time."
                             .into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

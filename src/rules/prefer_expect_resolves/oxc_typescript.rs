@@ -138,7 +138,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Use `await expect(promise).resolves` instead of `expect(await promise)`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((call.span.start as usize, (call.span.end - call.span.start) as usize)),
         });
     }

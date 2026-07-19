@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "regex-no-potentially-useless-backreference",
     description: "Backreference may be useless because some paths to it do not go through the referenced group.",
     remediation: "Restructure the regex so all paths to the backreference pass through the referenced capturing group.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://ota-meshi.github.io/eslint-plugin-regexp/rules/no-potentially-useless-backreference.html",
     ),

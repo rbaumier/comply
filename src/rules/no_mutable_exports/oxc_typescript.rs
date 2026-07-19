@@ -115,7 +115,7 @@ impl OxcCheck for Check {
                     "Exporting mutable `{}` binding \u{2014} use `export const` instead.",
                     export.kind
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

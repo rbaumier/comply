@@ -30,7 +30,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
                         message: format!(
                             "`{arg_text}` is spread multiple times on this element."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }

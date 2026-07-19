@@ -32,7 +32,7 @@ impl AstCheck for Check {
                 &node,
                 super::META.id,
                 format!("Table `{name}` appears plural — use singular (one row = one entity)."),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

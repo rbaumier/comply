@@ -54,7 +54,7 @@ impl OxcCheck for Check {
                 column: 1,
                 rule_id: super::META.id.into(),
                 message: format!("Duplicate export `{name}` in this module."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `{renderHeader()}` with a `<Header />` component. \
                   Inline render functions bypass React's reconciliation, causing \
                   unnecessary DOM destruction and state loss on every render.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react"],
 

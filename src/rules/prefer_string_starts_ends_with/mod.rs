@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `/^pattern/.test(str)` with `str.startsWith('pattern')` and \
                   `/pattern$/.test(str)` with `str.endsWith('pattern')`. \
                   String methods are faster and more readable than regex for simple prefix/suffix checks.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

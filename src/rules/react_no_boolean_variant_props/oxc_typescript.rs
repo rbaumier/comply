@@ -134,7 +134,7 @@ impl OxcCheck for Check {
                 "{count} boolean variant props on this component — collapse into a single \
                  `variant: '...' | '...'` union to eliminate mutually-exclusive invalid states."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

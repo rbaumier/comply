@@ -63,7 +63,7 @@ impl OxcCheck for Check {
             message: format!(
                 "`router.push` inside `{fn_name}` keeps the auth screen on the back stack — use `router.replace`."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -70,7 +70,7 @@ impl AstCheck for Check {
                  `assert!(!cond)` instead. The eq-form produces a worse \
                  failure message."
             ),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

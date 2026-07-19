@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Replace `new Response(JSON.stringify(data), ...)` with \
                   `Response.json(data, ...)`. The static method sets the \
                   `Content-Type` header automatically and is more readable.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

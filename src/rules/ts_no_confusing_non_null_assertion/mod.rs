@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-confusing-non-null-assertion",
     description: "`a! == b` looks confusingly like `a !== b`.",
     remediation: "Remove the `!` or wrap the left side in parentheses: `(a!) == b`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["typescript"],
 

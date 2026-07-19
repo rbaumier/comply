@@ -115,7 +115,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "This assignment is unnecessary — the parameter property already assigns it."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -127,7 +127,7 @@ impl OxcCheck for Check {
             message: "`new Date(\"YYYY-MM-DD\")` parses the date-only string as UTC midnight, \
                       shifting the calendar day in non-UTC zones."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "prefer-array-to-spliced",
     description: "Prefer `toSpliced()` over `slice().splice()` for immutable splice.",
     remediation: "Use `arr.toSpliced(start, deleteCount, ...items)` instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/toSpliced",
     ),

@@ -46,7 +46,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`response: t.Unknown()` / `t.Any()` disables response validation \u{2014} describe the shape with a concrete TypeBox schema.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

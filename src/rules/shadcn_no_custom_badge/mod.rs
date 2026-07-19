@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "shadcn-no-custom-badge",
     description: "Badge-shaped `<span>` drifts from the shadcn design system — use `<Badge>`.",
     remediation: "Replace `<span className=\"rounded-full bg-…\">` with `<Badge variant=\"…\">`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["shadcn"],
 

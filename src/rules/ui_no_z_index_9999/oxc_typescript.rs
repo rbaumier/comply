@@ -80,7 +80,7 @@ impl OxcCheck for Check {
                     message: format!(
                         "`zIndex: {val}` — values above {max_z} indicate a z-index arms race."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

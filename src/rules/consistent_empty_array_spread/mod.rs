@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "consistent-empty-array-spread",
     description: "Parenthesize ternaries spread into array literals.",
     remediation: "Wrap the ternary in parentheses: `[...(condition ? ['a'] : [])]` instead of `[...condition ? ['a'] : []]`. Without parens the precedence is ambiguous and confusing.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

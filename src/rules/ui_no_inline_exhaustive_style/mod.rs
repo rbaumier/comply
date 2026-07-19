@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Inline `style` object with too many properties — extract to a CSS class.",
     remediation: "Move the styles to a CSS module, Tailwind classes, or a styled component. \
                   Inline styles with many properties hurt readability and prevent reuse.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["ui"],
 

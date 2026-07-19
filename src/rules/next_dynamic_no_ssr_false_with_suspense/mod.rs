@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "next-dynamic-no-ssr-false-with-suspense",
     description: "`dynamic(..., { ssr: false })` opts the whole subtree out of SSR.",
     remediation: "Wrap the lazy boundary in `<Suspense>` and drop `ssr: false`, or move the import into a client component.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/app/building-your-application/optimizing/lazy-loading"),
     categories: &["nextjs", "performance"],
 

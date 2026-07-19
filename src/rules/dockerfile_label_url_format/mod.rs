@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-label-url-format",
     description: "LABEL with a URL-type key must contain a valid URL.",
     remediation: "Ensure the label value starts with `http://` or `https://`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

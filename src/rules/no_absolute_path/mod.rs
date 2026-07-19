@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "no-absolute-path",
     description: "Import uses an absolute path — use relative or aliased paths.",
     remediation: "Replace the absolute path import with a relative path (`./…`) or a configured path alias (`@/…`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["imports"],
 

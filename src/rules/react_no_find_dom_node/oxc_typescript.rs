@@ -63,7 +63,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`findDOMNode` is deprecated in React 19 — use refs instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -82,7 +82,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "Raw string child in `<{tag}>` \u{2014} wrap in `<Text>` to avoid a runtime error."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                 }
@@ -104,7 +104,7 @@ impl OxcCheck for Check {
                             message: format!(
                                 "String/number expression child in `<{tag}>` \u{2014} wrap in `<Text>`."
                             ),
-                            severity: Severity::Warning,
+                            severity: Severity::Error,
                             span: None,
                         });
                     }

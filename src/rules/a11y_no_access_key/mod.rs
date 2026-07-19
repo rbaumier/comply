@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "a11y-no-access-key",
     description: "Avoid using `accessKey` — it conflicts with screen reader keyboard shortcuts.",
     remediation: "Remove the `accessKey` attribute. Provide alternative navigation methods instead.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["accessibility"],
 

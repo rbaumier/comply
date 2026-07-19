@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "audit-log-required-fields",
     description: "Audit-log entries must carry enough context to reconstruct the event.",
     remediation: "Include `userId`, `timestamp`, and `action` (or equivalents) in every audit log call.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["security"],
 

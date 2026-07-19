@@ -98,7 +98,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Useless constructor — remove it.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -168,7 +168,7 @@ impl OxcCheck for Check {
                 rule_id: super::META.id.into(),
                 message: "Useless constructor — it only calls `super()` with the same arguments."
                     .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

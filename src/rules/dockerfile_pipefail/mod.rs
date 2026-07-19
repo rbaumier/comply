@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dockerfile-pipefail",
     description: "Piped RUN commands swallow upstream failures unless `pipefail` is set.",
     remediation: "Add `SHELL [\"/bin/bash\", \"-o\", \"pipefail\", \"-c\"]` before the piped RUN.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["docker"],
 

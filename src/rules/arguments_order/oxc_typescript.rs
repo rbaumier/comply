@@ -202,7 +202,7 @@ fn check_call_args(
                 "Argument order may be wrong in `{}()`: '{}' and '{}' appear swapped.",
                 func_name, swap.0, swap.1
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

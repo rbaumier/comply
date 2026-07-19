@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "jsx-no-new-function-as-prop",
     description: "Arrow/function expressions as JSX prop values create a new reference every render.",
     remediation: "Hoist the handler with `useCallback` or to a stable identifier defined outside the render.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://github.com/NickvanDyke/eslint-plugin-react-perf#rules"),
     categories: &["react"],
 

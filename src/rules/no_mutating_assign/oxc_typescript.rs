@@ -119,7 +119,7 @@ impl OxcCheck for Check {
             message: "`Object.assign()` with a non-empty target mutates the target in place \
                       — use `{...target, ...source}` or `Object.assign({}, target, source)` instead."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

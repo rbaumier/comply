@@ -48,7 +48,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Pass an explicit locale to `.{method}()` — without one, formatting depends on the environment locale."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

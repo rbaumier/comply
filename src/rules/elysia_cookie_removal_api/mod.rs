@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-cookie-removal-api",
     description: "Setting `cookie.x.value = ''` doesn't clear the cookie — it sends an empty value with the same expiry.",
     remediation: "Use `cookie.x.remove()` (or `delete cookie.x`) so Elysia emits a Set-Cookie with an expired Max-Age.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

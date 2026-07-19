@@ -72,7 +72,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "`onDone` only fires on compound states (with nested `states`) or invoking states (with `invoke`). This handler will never trigger.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

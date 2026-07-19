@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-pdb-eviction-policy",
     description: "PodDisruptionBudget must declare `spec.unhealthyPodEvictionPolicy` to allow eviction of unhealthy pods.",
     remediation: "Add `spec.unhealthyPodEvictionPolicy: AlwaysAllow` (or `IfHealthyBudget`) to the PDB.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

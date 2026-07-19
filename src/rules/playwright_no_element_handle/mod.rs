@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   `page.locator('selector').all()`. Locators auto-wait and \
                   retry, while ElementHandles are stale references that \
                   break on re-renders.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 

@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Use uppercase characters for the value of escape sequences.",
     remediation: "Replace lowercase hex digits in escape sequences with uppercase: \
                   `\\xff` -> `\\xFF`, `\\u00ff` -> `\\u00FF`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

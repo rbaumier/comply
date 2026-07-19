@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "In an async function, `return value` already wraps in \
                   `Promise.resolve()` and `throw error` already wraps in \
                   `Promise.reject()`. Remove the unnecessary wrapper.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

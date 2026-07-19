@@ -196,7 +196,7 @@ impl OxcCheck for Check {
                         message: format!(
                             "Generic parameter `{name}` is not referenced in parameters or return type."
                         ),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: Some((
                             tp.span.start as usize,
                             (tp.span.end - tp.span.start) as usize,

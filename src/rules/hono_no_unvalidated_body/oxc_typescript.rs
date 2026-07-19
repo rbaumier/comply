@@ -57,7 +57,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("`c.req.{method}()` reads the request body without schema validation — add a validator middleware and use `c.req.valid(...)`."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

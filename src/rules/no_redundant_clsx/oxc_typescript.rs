@@ -55,7 +55,7 @@ impl OxcCheck for Check {
                 "`{}()` with a single static string is redundant — use the string directly.",
                 name
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

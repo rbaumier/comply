@@ -43,7 +43,7 @@ impl OxcCheck for Check {
                         "Prefer `Blob#{}()` over `FileReader#{}(blob)`.",
                         replacement, method
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;

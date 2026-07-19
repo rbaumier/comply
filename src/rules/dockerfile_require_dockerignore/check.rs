@@ -27,7 +27,7 @@ crate::ast_check! { on ["copy_instruction"] => |node, source, ctx, diagnostics|
         column: 1,
         rule_id: super::META.id.into(),
         message: "Broad `COPY .` without `.dockerignore` acknowledgement — make sure `node_modules`, `.git`, `.env` are excluded.".into(),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: None,
     });
 }

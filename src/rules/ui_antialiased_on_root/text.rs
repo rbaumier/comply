@@ -43,7 +43,7 @@ crate::ast_check! { on ["rule_set"] => |node, source, ctx, diagnostics|
         message: format!(
             "Root selector `{sel}` is missing `-webkit-font-smoothing: antialiased` — text will render heavier on macOS/iOS."
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
         span: Some((node.byte_range().start, node.byte_range().len())),
     });
 }

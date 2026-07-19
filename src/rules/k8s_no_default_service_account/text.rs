@@ -36,7 +36,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &kind_pair,
                 super::META.id,
                 "Pod spec must set serviceAccountName (do not rely on `default`).".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
         Some(pair) => {
@@ -46,7 +46,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &pair,
                     super::META.id,
                     "serviceAccountName must not be `default`; use a dedicated ServiceAccount.".into(),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

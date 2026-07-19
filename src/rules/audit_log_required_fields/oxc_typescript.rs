@@ -100,7 +100,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: "Audit log call is missing required fields (`userId`, `timestamp`, `action`).".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
             return;
@@ -119,7 +119,7 @@ impl OxcCheck for Check {
                 message: format!(
                     "Audit log entry is missing required field `{missing}` (or equivalent)."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

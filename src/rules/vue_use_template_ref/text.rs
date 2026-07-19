@@ -45,7 +45,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                 message: format!(
                     "`{name}` is a template ref — replace with `const {name} = useTemplateRef('{name}')` (Vue 3.5+)."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

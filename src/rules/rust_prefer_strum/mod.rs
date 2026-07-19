@@ -26,7 +26,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "rust-prefer-strum",
     description: "Enum has manual `Display` + `FromStr` impls — use `#[derive(strum::Display, strum::EnumString)]` instead.",
     remediation: "Add `#[derive(strum::Display, strum::EnumString)]` and remove the manual impls. Add `#[strum(serialize = \"...\")]` on variants if the string form differs from the variant name.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://docs.rs/strum/latest/strum/derive.Display.html"),
     categories: &["rust"],
 

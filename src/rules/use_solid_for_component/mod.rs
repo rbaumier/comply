@@ -26,7 +26,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "use-solid-for-component",
     description: "Prefer Solid's `<For>` component over `array.map()` to render lists in JSX.",
     remediation: "Replace `{items.map(item => <li />)}` with `<For each={items}>{item => <li />}</For>`.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://biomejs.dev/linter/rules/use-solid-for-component/"),
     categories: &["performance", "solid"],
 

@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             message: "`localStorage` access outside a `try`/`catch` — throws in private-browsing mode, \
                      SSR, or on quota errors. Wrap in `try { ... } catch { ... }`."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

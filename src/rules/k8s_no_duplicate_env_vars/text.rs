@@ -26,7 +26,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                     &name_pair,
                     super::META.id,
                     format!("Duplicate env var `{name}` — later entries silently override earlier ones."),
-                    Severity::Warning,
+                    Severity::Error,
                 ));
             }
         }

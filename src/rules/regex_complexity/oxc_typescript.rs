@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             message: format!(
                 "Regex complexity score is {score} (threshold: {threshold}) \u{2014} consider breaking it into smaller patterns."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

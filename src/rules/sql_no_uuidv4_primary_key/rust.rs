@@ -35,7 +35,7 @@ impl AstCheck for Check {
             super::META.id,
             "UUIDv4 primary keys fragment B-tree indexes — use UUIDv7 or BIGINT IDENTITY instead."
                 .into(),
-            Severity::Warning,
+            Severity::Error,
         ));
     }
 }

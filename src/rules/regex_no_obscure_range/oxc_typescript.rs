@@ -35,7 +35,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Character class range crosses ASCII groups (e.g. `[A-z]`) \u{2014} use `[A-Za-z]` instead.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

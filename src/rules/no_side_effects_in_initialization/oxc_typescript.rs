@@ -2521,7 +2521,7 @@ impl OxcCheck for Check {
                     "Top-level {label} executes on import and blocks tree-shaking. \
                      Move it into a function, or mark it `/*#__PURE__*/` if truly side-effect-free."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

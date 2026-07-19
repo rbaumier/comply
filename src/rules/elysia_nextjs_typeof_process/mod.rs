@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "elysia-nextjs-typeof-process",
     description: "Eden treaty isomorphic clients must branch on `typeof process` — `typeof window` is unreliable in RSC / edge runtimes.",
     remediation: "Use `typeof process !== 'undefined'` to detect the server side when configuring the treaty client.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["correctness", "elysia"],
 

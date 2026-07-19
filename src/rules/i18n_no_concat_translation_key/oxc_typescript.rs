@@ -58,7 +58,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Dynamic `t()` key can't be statically extracted by i18next — use a full static key string.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

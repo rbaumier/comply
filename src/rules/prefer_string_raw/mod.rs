@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "`String.raw` should be used to avoid escaping `\\`.",
     remediation: "Use `String.raw`\\`...\\`` for strings with multiple backslash escapes. \
                   This is clearer and avoids double-escaping mistakes.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

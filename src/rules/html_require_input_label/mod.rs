@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "html-require-input-label",
     description: "Form inputs must have accessible labels.",
     remediation: "Add a <label> element with htmlFor, wrap in label, or use aria-label/aria-labelledby.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["a11y"],
 

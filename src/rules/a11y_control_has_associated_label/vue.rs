@@ -92,7 +92,7 @@ impl TextCheck for Check {
                 column: 1,
                 rule_id: "a11y-control-has-associated-label".into(),
                 message: "Interactive element is missing an accessible label (`aria-label` or `aria-labelledby`).".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

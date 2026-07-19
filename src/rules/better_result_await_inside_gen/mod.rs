@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "better-result-await-inside-gen",
     description: "In Result.gen, Promise-returning Results must use `yield* Result.await(...)`.",
     remediation: "Replace `await` with `yield* Result.await(...)` inside Result.gen generators.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],
 

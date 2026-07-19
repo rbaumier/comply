@@ -52,7 +52,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Unexpected use of page.waitForNavigation().".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

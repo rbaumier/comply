@@ -20,7 +20,7 @@ impl TextCheck for Check {
             column: 1,
             rule_id: super::META.id.into(),
             message: "`ALTER TABLE ... RENAME COLUMN` breaks running deploys — use expand-contract (add new column, dual-write, backfill, drop old).".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         }]
     }

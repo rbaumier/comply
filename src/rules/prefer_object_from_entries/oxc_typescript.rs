@@ -73,7 +73,7 @@ impl OxcCheck for Check {
             rule_id: super::META.id.into(),
             message: "Prefer `Object.fromEntries()` over `Array#reduce()` to build an object."
                 .into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

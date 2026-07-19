@@ -71,7 +71,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "Return `{ data: [...] }` instead of a root-level array — arrays can't be extended without breaking clients.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

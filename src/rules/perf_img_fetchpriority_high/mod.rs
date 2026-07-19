@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "perf-img-fetchpriority-high",
     description: "Hero/LCP images should declare `fetchpriority=\"high\"` and must not be lazy-loaded.",
     remediation: "Add `fetchpriority=\"high\"` to the LCP image, and remove `loading=\"lazy\"` on it.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["web-performance"],
 

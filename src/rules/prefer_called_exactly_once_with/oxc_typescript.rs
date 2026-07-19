@@ -142,7 +142,7 @@ impl OxcCheck for Check {
                         "Replace `toHaveBeenCalledTimes(1)` + `toHaveBeenCalledWith(...)` on `{}` with `toHaveBeenCalledExactlyOnceWith(...)`.",
                         a.expect_arg
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

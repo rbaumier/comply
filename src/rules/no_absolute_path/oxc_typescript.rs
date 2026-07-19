@@ -39,7 +39,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: format!("Do not import modules using an absolute path (`{spec}`)."),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -46,7 +46,7 @@ impl AstCheck for Check {
                  `push_str` into it, or collect into `Vec<String>` then \
                  `.join(\"\")`."
                     .into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

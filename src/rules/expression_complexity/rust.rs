@@ -55,7 +55,7 @@ impl AstCheck for Check {
                         "Expression has {threshold}+ logical operators \u{2014} \
                          extract to named variables."
                     ),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

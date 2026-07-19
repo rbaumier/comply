@@ -123,7 +123,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "valid-describe-callback".into(),
                     message: message.into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((arrow.span.start as usize, (arrow.span.end - arrow.span.start) as usize)),
                 });
             }
@@ -152,7 +152,7 @@ impl OxcCheck for Check {
                     column,
                     rule_id: "valid-describe-callback".into(),
                     message: message.into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: Some((func.span.start as usize, (func.span.end - func.span.start) as usize)),
                 });
             }

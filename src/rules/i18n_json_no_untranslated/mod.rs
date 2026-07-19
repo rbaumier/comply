@@ -9,7 +9,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "i18n-json-no-untranslated",
     description: "Translation value is identical to the base locale — likely untranslated.",
     remediation: "Translate the value or confirm it should remain the same (brand names, etc.).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["i18n"],
 

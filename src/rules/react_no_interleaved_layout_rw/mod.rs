@@ -17,7 +17,7 @@ pub const META: RuleMeta = RuleMeta {
                   layout on every write.",
     remediation: "Batch reads first, writes second — or schedule writes inside \
                   `requestAnimationFrame` after all reads complete.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["react", "web-performance"],
 

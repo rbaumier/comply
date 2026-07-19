@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "vue-v-memo-requires-v-for",
     description: "`v-memo=\"[]\"` without `v-for` never re-renders — that's exactly what `v-once` states directly.",
     remediation: "Replace standalone `v-memo=\"[]\"` with `v-once`, or give `v-memo` a real dependency array.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["vue"],
 

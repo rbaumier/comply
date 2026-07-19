@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "dead-export",
     description: "Symbol is exported but never imported elsewhere in the project.",
     remediation: "Remove the export (and the symbol if unused internally), or verify the export is still needed for an external consumer. Unused exports bloat the module's public surface.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality", "imports"],
 

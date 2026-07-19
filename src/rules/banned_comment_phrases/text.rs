@@ -29,7 +29,7 @@ impl TextCheck for Check {
                     "Comment uses `{phrase}` — narrator filler typical of AI-generated \
                      prose. State the point directly or delete the comment."
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

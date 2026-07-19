@@ -15,7 +15,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Unnecessary `<Fragment>` that wraps a single child or nothing.",
     remediation: "Remove the fragment wrapper when it contains only one child or \
                   is empty. Fragments are only needed to group multiple siblings.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some(
         "https://github.com/jsx-eslint/eslint-plugin-react/blob/master/docs/rules/jsx-no-useless-fragment.md",
     ),

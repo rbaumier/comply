@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "ts-no-shadow",
     description: "Variable shadowing makes code harder to reason about and can lead to bugs.",
     remediation: "Rename the inner variable to avoid shadowing the outer one.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: Some("https://typescript-eslint.io/rules/no-shadow"),
     categories: &["typescript"],
 

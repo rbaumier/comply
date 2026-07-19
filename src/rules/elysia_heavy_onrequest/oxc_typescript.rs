@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.onRequest()` runs before routing on every request \u{2014} move heavy work (await/fetch/db/JSON.parse) to `.beforeHandle()`.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

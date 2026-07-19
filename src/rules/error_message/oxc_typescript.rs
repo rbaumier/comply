@@ -68,7 +68,7 @@ fn check_args(
                 column,
                 rule_id: super::META.id.into(),
                 message: format!("Pass a message to the `{ctor_name}` constructor."),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }
@@ -88,7 +88,7 @@ fn check_args(
                     column,
                     rule_id: super::META.id.into(),
                     message: "Error message should be a string.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
                 return;
@@ -105,7 +105,7 @@ fn check_args(
                         column,
                         rule_id: super::META.id.into(),
                         message: "Error message should not be an empty string.".into(),
-                        severity: Severity::Warning,
+                        severity: Severity::Error,
                         span: None,
                     });
                     return;
@@ -124,7 +124,7 @@ fn check_args(
                                 column,
                                 rule_id: super::META.id.into(),
                                 message: "Error message should not be an empty string.".into(),
-                                severity: Severity::Warning,
+                                severity: Severity::Error,
                                 span: None,
                             });
                             return;
@@ -142,7 +142,7 @@ fn check_args(
                     column,
                     rule_id: super::META.id.into(),
                     message: "Error message should be a string.".into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -101,7 +101,7 @@ impl OxcCheck for Check {
                  (e.g. `{name}(s => s.field)`) so the component re-renders \
                  only when that slice changes."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

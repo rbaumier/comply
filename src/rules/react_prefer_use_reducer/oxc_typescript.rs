@@ -148,7 +148,7 @@ impl Check {
             message: format!(
                 "Component `{name}` has {count} `useState` calls — consider `useReducer` for related state."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

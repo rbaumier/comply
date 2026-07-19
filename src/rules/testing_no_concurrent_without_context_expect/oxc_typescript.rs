@@ -154,7 +154,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "test.concurrent must destructure { expect } from the test context — the module-level expect is not scoped per concurrent test.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

@@ -10,7 +10,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "css-no-vendor-prefix-property",
     description: "Vendor-prefixed CSS properties are unnecessary with modern autoprefixer tooling.",
     remediation: "Remove the vendor prefix (e.g. `-webkit-transform` → `transform`) and rely on autoprefixer.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["css"],
 

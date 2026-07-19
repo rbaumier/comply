@@ -54,7 +54,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         format!(
             "Effect only calls `{func_name}` to pass data to parent — lift state to avoid the extra render cycle."
         ),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

@@ -129,7 +129,7 @@ impl OxcCheck for Check {
                     message:
                         "Bounce/elastic easing — use `ease-out` or a smooth deceleration curve."
                             .into(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     span: None,
                 });
             }

@@ -35,7 +35,7 @@ impl OxcCheck for Check {
                     "Comment sentence exceeds {} words. Split it — one idea per sentence.",
                     super::MAX_WORDS_PER_SENTENCE
                 ),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

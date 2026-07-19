@@ -120,7 +120,7 @@ impl OxcCheck for Check {
                 column: 1,
                 rule_id: super::META.id.into(),
                 message: "JSDoc description merely repeats the symbol name without adding useful information.".into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: None,
             });
         }

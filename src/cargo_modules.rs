@@ -103,7 +103,7 @@ fn parse_orphans(text: &str, workspace: &Path) -> Vec<Diagnostic> {
                  loads this file. Either declare it from the parent module or delete \
                  the file. Orphan files are dead code that grep still finds."
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

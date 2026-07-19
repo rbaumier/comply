@@ -41,7 +41,7 @@ impl OxcCheck for Check {
             column,
             rule_id: super::META.id.into(),
             message: "`.prepare()` with `.where(...)` must use `sql.placeholder('name')` instead of inline variables so the prepared statement can be reused across executions.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: None,
         });
     }

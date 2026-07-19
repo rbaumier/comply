@@ -2006,7 +2006,7 @@ impl OxcCheck for Check {
                 message:
                     "Top-level side effect in a test file — move it into a `beforeEach` or `beforeAll` hook."
                         .into(),
-                severity: Severity::Warning,
+                severity: Severity::Error,
                 span: Some((span.start as usize, (span.end - span.start) as usize)),
             });
         }

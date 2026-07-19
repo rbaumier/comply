@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use index access instead: `const third = arr[2]`. \
                   Consecutive commas like `[,, x,,,, y]` are hard to read \
                   and easy to miscount.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["unicorn"],
 

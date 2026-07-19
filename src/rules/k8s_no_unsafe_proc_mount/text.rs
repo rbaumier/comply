@@ -16,7 +16,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
                 &pair,
                 super::META.id,
                 "Container uses `procMount: Unmasked`; revert to the default masked /proc.".into(),
-                Severity::Warning,
+                Severity::Error,
             ));
         }
     }

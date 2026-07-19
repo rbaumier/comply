@@ -237,7 +237,7 @@ crate::ast_check! { on ["class_name"] => |node, source, ctx, diagnostics|
         &node,
         super::META.id,
         format!("Unexpected unknown pseudo-class `{name}`."),
-        Severity::Warning,
+        Severity::Error,
     ));
 }
 

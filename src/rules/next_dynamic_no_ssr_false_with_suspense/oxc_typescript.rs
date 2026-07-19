@@ -62,7 +62,7 @@ impl OxcCheck for Check {
             column,
             rule_id: "next-dynamic-no-ssr-false-with-suspense".into(),
             message: "Replace `dynamic(..., { ssr: false })` with a `<Suspense>` boundary, or move the lazy import into a client component.".into(),
-            severity: Severity::Warning,
+            severity: Severity::Error,
             span: Some((call.span.start as usize, (call.span.end - call.span.start) as usize)),
         });
     }

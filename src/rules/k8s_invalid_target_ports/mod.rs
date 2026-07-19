@@ -12,7 +12,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "k8s-invalid-target-ports",
     description: "Port names must conform to IANA naming: lowercase, alphanumeric, hyphens, 1-15 chars, start/end with alphanumeric.",
     remediation: "Rename the port to match IANA conventions (e.g. `http`, `grpc`, `metrics`).",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["kubernetes"],
 

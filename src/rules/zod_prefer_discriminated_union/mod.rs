@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     id: "zod-prefer-discriminated-union",
     description: "`z.union([z.object({...}), ...])` with shared discriminant fields should use `z.discriminatedUnion()`.",
     remediation: "Use `z.discriminatedUnion('type', [...])` for faster parsing and better error messages.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["zod"],
 

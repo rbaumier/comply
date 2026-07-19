@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
                   specific response with `page.waitForResponse()`. The \
                   `networkidle` strategy is timing-based and fails on \
                   pages with polling, analytics, or websockets.",
-    severity: Severity::Warning,
+    severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
 
