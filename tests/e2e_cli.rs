@@ -124,7 +124,7 @@ fn no_tsconfig_does_not_fail_type_aware() {
         .arg(&path)
         .assert()
         .stderr(
-            predicate::str::contains("found no tsconfig.json")
+            predicate::str::contains("no tsconfig.json found")
                 .or(predicate::str::contains("needs Node.js on PATH")),
         );
 }

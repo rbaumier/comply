@@ -79,14 +79,14 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
 
     if !node_available() {
         anyhow::bail!(
-            "--type-aware needs Node.js on PATH to run the type-aware sidecar, but `node` was not \
-             found. Install Node.js, or pass --no-type-aware to skip type-aware rules."
+            "type-aware analysis needs Node.js on PATH to run the type-aware sidecar, but `node` \
+             was not found. Install Node.js."
         );
     }
 
     let Some(tsconfig) = find_tsconfig(files) else {
         eprintln!(
-            "comply: --type-aware found no tsconfig.json — skipping type-aware rules."
+            "comply: no tsconfig.json found — skipping type-aware rules."
         );
         return Ok(vec![]);
     };
@@ -227,15 +227,14 @@ fn run_sidecar(project_dir: &Path, request: &str) -> Result<Option<SidecarRespon
 fn sidecar_error(err: &str) -> anyhow::Error {
     if err == "package-not-found" {
         anyhow::anyhow!(
-            "--type-aware needs the typescript-go API, but @typescript/native-preview could not be \
-             resolved from the project. Install it with: npm install --save-dev \
-             @typescript/native-preview (or pass --no-type-aware to skip type-aware rules)."
+            "type-aware analysis needs the typescript-go API, but @typescript/native-preview could \
+             not be resolved from the project. Install it with: npm install --save-dev \
+             @typescript/native-preview."
         )
     } else {
         anyhow::anyhow!(
             "the type-aware sidecar failed to initialize the TypeScript program ({err}). This is a \
-             type-aware analysis-environment error; fix the toolchain, or pass --no-type-aware to \
-             skip type-aware rules."
+             type-aware analysis-environment error; fix the toolchain."
         )
     }
 }
@@ -363,7 +362,6 @@ mod tests {
         let msg = format!("{:#}", sidecar_error("package-not-found"));
         assert!(msg.contains("@typescript/native-preview"), "{msg}");
         assert!(msg.contains("npm install"), "{msg}");
-        assert!(msg.contains("--no-type-aware"), "{msg}");
     }
 
     // An api-init / snapshot cause is a hard error that preserves the underlying
@@ -372,7 +370,7 @@ mod tests {
     fn sidecar_error_api_init_preserves_cause() {
         let msg = format!("{:#}", sidecar_error("api-init-failed: boom"));
         assert!(msg.contains("api-init-failed: boom"), "{msg}");
-        assert!(msg.contains("--no-type-aware"), "{msg}");
+        assert!(msg.contains("toolchain"), "{msg}");
     }
 
     /// The custom type-aware rules are registered with `Backend::TypeAware` so

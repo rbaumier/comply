@@ -558,7 +558,11 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         &config,
         &mut timings,
         cli.comply_only,
-        cli.type_aware,
+        // Type-aware analysis is mandatory: the full run always drives the
+        // sidecar and the tsgolint rule set. The `type_aware` gate below stays
+        // for the isolated per-rule path (`comply rules <id>`), which skips the
+        // sidecar when the requested rule doesn't need it.
+        true,
         cli.is_partial_scan(),
     )?;
 
