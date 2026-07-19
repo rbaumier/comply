@@ -14,47 +14,43 @@ step (`--diff-only`), a pre-commit hook, or in CI.
 
 ## See it in action
 
-An AI agent hands you this. It compiles. It "works". comply flags **17 problems in 19 lines**:
+An AI agent hands you this. It compiles. It "works". `comply --comply-only` flags **25 violations** in 19 lines (a selection annotated below):
 
 ```ts
 // TODO: handle partial refunds                                       // ✗ todo-needs-issue-link
-async function processOrder(id, items, discount, isGift = false, retry = false) { // ✗ max-params · id-length (`id`) · no-boolean-flag-param · ts-no-unused-vars (items, retry)
-  let done = false;                                                   // ✗ no-let (prefer const) · boolean-naming → isDone
-  const cart = JSON.parse(localStorage.getItem("cart")) as Cart;      // ✗ no-type-assertion · no-unchecked-json-parse
+export async function processOrder(id, items, discount, isGift = false, retry = false) { // ✗ max-params · no-async-without-await · no-generic-names (process, items)
+  let done = false;                                                   // ✗ no-let · boolean-naming → isDone
+  const cart = JSON.parse(localStorage.getItem("cart")) as Cart;      // ✗ no-type-assertion · no-unchecked-json-parse · no-json-parse-cast
   if (cart.lines.indexOf(id) === -1) return 0;                        // ✗ no-indexof-equality
-  let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;                  // ✗ no-nested-ternary · no-magic-numbers
-  if (!isGift) {                                                       // ✗ no-negated-condition
+  let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;                  // ✗ no-nested-ternary · no-magic-numbers · no-let
+  if (!isGift) {                                                       // ✗ no-negated-condition · prefer-ternary
     fee = fee - discount;
   } else {
     fee = 0;
   }
-  try {
-    sendReceipt(id);                                                  // ✗ no-floating-promise (result discarded)
+  try {                                                               // ✗ no-try-statements
+    sendReceipt(id);
     done = true;
-  } catch (e) {                                                        // ✗ catch-error-name (e → error)
+  } catch (e) {                                                        // ✗ catch-error-name · ts-no-implicit-any-catch
     throw new Error(e.message);                                       // ✗ error-without-cause
   }
-  return done == true ? fee : 0;                                      // ✗ no-redundant-boolean (`== true`)
+  return done == true ? fee : 0;
 }
 ```
 
-Here's what comply wants instead — validated input, named constants, early
-guards, propagated errors, extracted branches:
+Here's the version comply signs off on (`comply: all clear`) — validated input,
+named constants, an early guard, and the error left to propagate with its stack
+intact instead of being re-wrapped and swallowed:
 
 ```ts
+const FREE_SHIPPING_THRESHOLD = 100;
 const EXPRESS_FEE = 5;
 const STANDARD_FEE = 2;
 
-async function processOrder(order: Order): Promise<number> {
-  const cart = cartSchema.parse(JSON.parse(order.cartJson));
+export async function fulfillOrder(order: Order): Promise<number> {
+  const cart = cartSchema.parse(order.cart);
   if (!cart.lines.includes(order.id)) return 0;
-
-  try {
-    await sendReceipt(order.id);
-  } catch (error) {
-    throw new Error("failed to send receipt", { cause: error });
-  }
-
+  await sendReceipt(order.id);
   return order.isGift ? 0 : feeFor(cart) - order.discount;
 }
 
