@@ -48,6 +48,13 @@ fn severity_str(s: Severity) -> &'static str {
     }
 }
 
+fn severity_emoji(s: Severity) -> &'static str {
+    match s {
+        Severity::Error => "❌",
+        Severity::Warning => "⚠️",
+    }
+}
+
 fn backend_label(rule: &rules::RuleDef) -> String {
     use crate::rules::backend::Backend;
     let labels: Vec<&str> = rule
@@ -111,15 +118,14 @@ fn markdown_string(rules: &[rules::RuleDef]) -> String {
     for (cat, group) in &by_category {
         writeln!(out, "## {cat}").unwrap();
         writeln!(out).unwrap();
-        writeln!(out, "| Rule | Severity | Backend | Description | Remediation |").unwrap();
-        writeln!(out, "|------|----------|---------|-------------|-------------|").unwrap();
+        writeln!(out, "| Rule | Severity | Description | Remediation |").unwrap();
+        writeln!(out, "|------|----------|-------------|-------------|").unwrap();
         for rule in group {
             let id = rule.meta.id;
-            let sev = severity_str(rule.meta.severity);
-            let backend = backend_label(rule);
+            let sev = severity_emoji(rule.meta.severity);
             let desc = escape_cell(rule.meta.description);
             let remediation = escape_cell(rule.meta.remediation);
-            writeln!(out, "| `{id}` | {sev} | {backend} | {desc} | {remediation} |").unwrap();
+            writeln!(out, "| `{id}` | {sev} | {desc} | {remediation} |").unwrap();
         }
         writeln!(out).unwrap();
     }
