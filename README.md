@@ -14,7 +14,7 @@ step (`--diff-only`), a pre-commit hook, or in CI.
 
 ## See it in action
 
-An AI agent hands you this. It compiles. It "works". `comply --comply-only` flags **all 25 problems below** — one caret per finding, pointing at the exact column:
+An AI agent hands you this. It compiles. It "works". `comply --comply-only` flags **all 24 problems below** — one caret per finding, pointing at the exact column:
 
 ```ts
 // TODO: handle partial refunds
@@ -27,13 +27,12 @@ export async function processOrder(id, items, discount, isGift = false, retry = 
   let done = false;
 //^ no-let
 //    ^ boolean-naming -> isDone
-  const cart = JSON.parse(localStorage.getItem("cart")) as Cart;
+  const cart = JSON.parse(items) as Cart;
 //             ^ no-type-assertion
 //             ^ no-json-parse-cast
 //             ^ no-unchecked-json-parse
 //             ^ try-catch-json-parse
 //             ^ ts-no-as-narrowing
-//                        ^ react-no-unwrapped-localstorage
   if (cart.lines.indexOf(id) === -1) return 0;
 //    ^ no-indexof-equality
   let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;
