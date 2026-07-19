@@ -2,12 +2,13 @@
 
 > Your code will comply.
 
-**One fast binary that keeps your whole repo clean — no matter who, or what, wrote it.**
+**Your codebase is written by AI now — and AI ships slop.**
 
-AI agents ship code that compiles, passes tests, and quietly rots your codebase.
-comply is the deterministic guardrail that catches the mess: **~1900 opinionated
-rules** across your whole tree, run in one command — as an agent's self-review
-step (`--diff-only`), a pre-commit hook, or in CI.
+You can steer it with prompts and skills, but you can't rely on them to catch
+everything. Deterministic linters can. So comply pulls together every linter
+rule I could get my hands on and judged worth keeping — **~1900 of them** — into
+one fast binary. Run it as an agent's self-review step (`--diff-only`), a
+pre-commit hook, or in CI.
 
 > [!WARNING]
 > **comply is in early alpha and very much a work in progress.** Many rules are aggressively opinionated, and **you should expect a fair number of false positives.** Treat its output as suggestions to review, not gospel — and please [open an issue](https://github.com/rbaumier/comply/issues) when a rule fires where it shouldn't. Rule IDs, defaults, and behavior are all still subject to change.
