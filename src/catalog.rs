@@ -35,6 +35,12 @@ fn category_label(cats: &[&str]) -> String {
     cats.join(" > ")
 }
 
+/// Escape a value for a single markdown table cell: a raw `|` would start a new
+/// column and a newline would break the row.
+fn escape_cell(s: &str) -> String {
+    s.replace('|', "\\|").replace('\n', " ")
+}
+
 fn severity_str(s: Severity) -> &'static str {
     match s {
         Severity::Error => "error",
@@ -105,14 +111,15 @@ fn markdown_string(rules: &[rules::RuleDef]) -> String {
     for (cat, group) in &by_category {
         writeln!(out, "## {cat}").unwrap();
         writeln!(out).unwrap();
-        writeln!(out, "| Rule | Severity | Backend | Description |").unwrap();
-        writeln!(out, "|------|----------|---------|-------------|").unwrap();
+        writeln!(out, "| Rule | Severity | Backend | Description | Remediation |").unwrap();
+        writeln!(out, "|------|----------|---------|-------------|-------------|").unwrap();
         for rule in group {
             let id = rule.meta.id;
             let sev = severity_str(rule.meta.severity);
             let backend = backend_label(rule);
-            let desc = rule.meta.description;
-            writeln!(out, "| `{id}` | {sev} | {backend} | {desc} |").unwrap();
+            let desc = escape_cell(rule.meta.description);
+            let remediation = escape_cell(rule.meta.remediation);
+            writeln!(out, "| `{id}` | {sev} | {backend} | {desc} | {remediation} |").unwrap();
         }
         writeln!(out).unwrap();
     }
