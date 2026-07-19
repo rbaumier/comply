@@ -90,6 +90,13 @@ const FREE_SHIPPING_THRESHOLD = 100;
 const EXPRESS_FEE = 5;
 const STANDARD_FEE = 2;
 
+/**
+ * Validates a raw order, charges shipping, and emits a receipt.
+ *
+ * @example
+ *   const result = await fulfillOrder(req.body);
+ *   // => ok({ receipt, shippingFee: 5 })
+ */
 export async function fulfillOrder(rawOrder: unknown): Promise<Result<Fulfillment, FulfillmentError>> {
   const order = orderSchema.parse(rawOrder);
   if (!order.cart.lines.includes(order.id)) {
