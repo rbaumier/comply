@@ -19,6 +19,9 @@ keeping, **~2000 of them**, into one fast binary.
 // TODO: handle partial refunds
 // ▲
 // └── todo-needs-issue-link
+/** Charges the order and emails the receipt. */
+// ▲
+// └── jsdoc-missing-example
 export async function processOrder(id, items, discount, isGift = false, retry = false) {
 //     ▲              ▲                ▲
 //     │              │                └── no-generic-names -> 'items'
@@ -90,6 +93,13 @@ const FREE_SHIPPING_THRESHOLD = 100;
 const EXPRESS_FEE = 5;
 const STANDARD_FEE = 2;
 
+/**
+ * Validates a raw order, charges shipping, and emits a receipt.
+ *
+ * @example
+ *   const result = await fulfillOrder(req.body);
+ *   // => ok({ receipt, shippingFee: 5 })
+ */
 export async function fulfillOrder(rawOrder: unknown): Promise<Result<Fulfillment, FulfillmentError>> {
   const order = orderSchema.parse(rawOrder);
   if (!order.cart.lines.includes(order.id)) {
