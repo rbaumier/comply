@@ -2,22 +2,142 @@
 
 > Your code will comply.
 
-A fast, opinionated, multi-language linter that enforces architecture and coding-standards rules across your whole repository — TypeScript, Rust, Vue, SQL, CSS, Dockerfiles, Kubernetes manifests, and more — from a single binary.
+A fast, opinionated, multi-language linter that enforces architecture and
+coding-standards rules across your whole repository — from a single binary.
+It exists to keep code **clean, consistent, and correct** no matter who (or
+**what**) wrote it.
 
 > [!WARNING]
 > **comply is in early alpha and very much a work in progress.** It ships ~1900 rules, many of them aggressively opinionated, and **you should expect a fair number of false positives.** Treat its output as suggestions to review, not gospel — and please [open an issue](https://github.com/rbaumier/comply/issues) when a rule fires where it shouldn't. Rule IDs, defaults, and behavior are all still subject to change.
 
+## Why comply? — a quality guardrail for AI-generated code
+
+AI coding agents — Claude Code, Cursor, Copilot, and friends — ship code
+*fast*. But they optimize for **"it runs"**, not **"it's clean"**. Across a
+real codebase that drift adds up: inconsistent naming, silent `any`, unwrapped
+panics, floating promises, dead files, duplicated blocks, one-off abstractions.
+The code compiles and the tests pass — and the repo slowly rots.
+
+comply is the **deterministic guardrail** you run *after* the agent (or the
+human): a reviewer that holds every file to the same architecture and
+coding-standards bar, every time, with no opinions of the day. The result is a
+codebase that reads like it was written by **one careful senior engineer**, not
+stitched together from a dozen prompts.
+
+It slots in wherever quality gets decided:
+
+- **As an agent's self-review step** — point your agent at `comply --diff-only`
+  so it only has to fix what it just touched, not the whole repo's backlog.
+- **In a pre-commit hook** — nothing lands until it complies.
+- **In CI** — `--diff-only` keeps the signal on the lines of the PR, so nobody
+  drowns in pre-existing tech debt.
+
+Fast, single-binary, no per-language config to wire up. Clean code, on autopilot.
+
 ## What it is
 
-comply walks your project, runs **1893 rules across 169 categories**, and reports violations in a familiar ESLint-style format. Rather than wiring up a different linter per language and framework, it bundles everything into one tool:
+comply walks your project, runs **1893 rules across 169 categories**, and
+reports violations in a familiar ESLint-style format. Rather than wiring up a
+different linter per language and framework, it bundles everything into one tool:
 
 - **In-process AST rules** powered by [tree-sitter](https://tree-sitter.github.io/) — no Node runtime required for most checks.
 - **Delegation to best-in-class tools** when they're installed: [oxlint](https://oxc.rs/) for TypeScript/JS, [clippy](https://doc.rust-lang.org/clippy/) for Rust. If they're not on your `PATH`, comply degrades gracefully and runs its own rules only.
-- **Framework awareness** — comply detects what you're using (Next.js, Remix, Elysia, Angular, Drizzle, TanStack, Zod…) and unlocks framework-specific rules automatically.
+- **Framework awareness** — comply detects what you're using (Next.js, Nuxt, Elysia, Drizzle, TanStack, Zod…) and unlocks framework-specific rules automatically.
+
+## Supported languages & frameworks
+
+### Languages
+
+comply's engine runs its rule set on these languages:
+
+| Language | Extensions | What runs |
+| --- | --- | --- |
+| **TypeScript / JavaScript** | `.ts` `.tsx` `.js` `.jsx` `.mts` `.mjs` | Full in-process rule set + oxlint delegation + type-aware checks |
+| **Rust** | `.rs` | In-process tree-sitter rules + clippy delegation |
+| **Vue** | `.vue` | Single-File-Component template/script rules |
+| **JSON** | `.json` | Config & i18n-translation rules |
+
+Markdown (`.md`/`.mdx`) and HTML (`.html`) are **read for context** — comply
+indexes their `import` / `<script src>` references so a component used only from
+a docs page or an HTML entry point still counts as "used" — but no lint rules
+target them.
+
+### Frameworks
+
+comply auto-detects these from your `package.json` and project files, then turns
+on the matching framework-specific rules:
+
+- **Web / meta-frameworks** — Next.js, Nuxt
+- **Backend & APIs** — Elysia, Hono, Express
+- **Data & validation** — Drizzle ORM, Zod
+- **State & routing** — TanStack Query, TanStack Router, Vue Router, XState
+- **UI** — shadcn/ui, React Email, React Native
+- **Auth & errors** — Better Auth, better-result
+- **Testing** — Jest, Playwright
+- **Tooling & i18n** — Vite, Webpack, i18n
+
+## Before / after
+
+A few of the ~1900 rules, showing the kind of cleanup comply nudges you (or your
+agent) toward. Run `comply explain <rule-id>` for the full rationale of any rule.
+
+**`boolean-naming`** — a boolean's name should state its predicate.
+
+```ts
+// before
+const active = user.subscription !== null;
+if (active) grantAccess();
+
+// after
+const isActive = user.subscription !== null;
+if (isActive) grantAccess();
+```
+
+**`no-floating-promise`** — a discarded promise swallows errors and loses ordering.
+
+```ts
+// before — the promise is dropped: a failure vanishes silently
+function onSignup(user: User) {
+  sendWelcomeEmail(user);
+  track("signup");
+}
+
+// after
+async function onSignup(user: User) {
+  await sendWelcomeEmail(user);
+  track("signup");
+}
+```
+
+**`rust-no-unwrap`** — no `.unwrap()` / `.expect()` in production paths.
+
+```rust
+// before — panics at runtime if the file is missing
+let config = fs::read_to_string("config.toml").unwrap();
+
+// after — propagate the error to the caller with `?`
+let config = fs::read_to_string("config.toml")?;
+```
+
+**`no-nested-ternary`** — nested ternaries are hard to scan; give each branch a name.
+
+```ts
+// before
+const label =
+  status === "ok" ? "Done" : status === "err" ? "Failed" : "Pending";
+
+// after
+function labelFor(status: Status) {
+  if (status === "ok") return "Done";
+  if (status === "err") return "Failed";
+  return "Pending";
+}
+```
 
 ## Features
 
-- **One binary, many languages** — TypeScript / JSX / TSX / JavaScript, Rust, Vue SFCs, TOML, JSON, CSS, YAML (Kubernetes, docker-compose, GitHub Actions), Dockerfiles, SQL, and GraphQL.
+- **One binary, many languages** — TypeScript / JSX / TSX / JavaScript, Rust, Vue SFCs, and JSON, with a single install.
+- **Framework-aware** — detects your stack and unlocks the matching rules automatically.
 - **Git-aware scanning** — lint the whole tree, the working tree, staged files, a specific commit, or a commit range.
 - **CI-friendly diff mode** — `--diff-only` reports only findings on lines you actually changed, so you don't drown in pre-existing tech debt.
 - **Auto-fix** — `--fix` applies fixes for any rule whose backend supports them.
