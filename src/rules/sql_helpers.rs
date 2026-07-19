@@ -118,7 +118,17 @@ fn dml_shape_matches(lower: &str, verb: &str, clause: &str) -> bool {
     let Some((clause_start, _)) = find_word(lower, clause, verb_end) else {
         return false;
     };
-    span_is_projection_shaped(&lower[verb_end..clause_start])
+    let mut projection = &lower[verb_end..clause_start];
+    // A `SELECT <cols> INTO <target> FROM …` — PL/pgSQL variable assignment or
+    // `SELECT INTO` table creation — carries an INTO clause between the columns
+    // and FROM. Only the column list before INTO is a projection; the target
+    // after it is a table/variable name and must not be shape-checked as prose.
+    if verb == "select"
+        && let Some((into_start, _)) = find_word(projection, "into", 0)
+    {
+        projection = &projection[..into_start];
+    }
+    span_is_projection_shaped(projection)
 }
 
 /// Byte range `(start, end)` of the first whole-word occurrence of `needle`
@@ -505,6 +515,19 @@ mod tests {
         // injection here would be the dangerous direction of error.
         assert!(is_sql_string("SELECT a + b FROM t"));
         assert!(is_sql_string("SELECT price - discount FROM orders"));
+    }
+
+    #[test]
+    fn accepts_select_into_projection() {
+        // `SELECT <cols> INTO <target> FROM …` is valid SQL — PL/pgSQL variable
+        // assignment (`SELECT id INTO r FROM t`) and `SELECT INTO` table
+        // creation (`SELECT * INTO TABLE archived FROM t`). The INTO clause sits
+        // between the columns and FROM; only the columns before INTO form the
+        // projection, so the target name must not be read as prose.
+        assert!(is_sql_string(
+            "SELECT * INTO TABLE archived_users FROM users WHERE active = false"
+        ));
+        assert!(is_sql_string("SELECT conname INTO r FROM pg_constraint"));
     }
 
     #[test]
