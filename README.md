@@ -14,25 +14,32 @@ step (`--diff-only`), a pre-commit hook, or in CI.
 
 ## See it in action
 
-An AI agent hands you this. It compiles. It "works". comply flags **12 problems in 12 lines**:
+An AI agent hands you this. It compiles. It "works". comply flags **16 problems in 19 lines**:
 
 ```ts
-async function processOrder(id, items, discount, isGift = false, retry = false) { // ✗ max-params · id-length (`id`) · no-boolean-flag-param
-  let done = false;                                              // ✗ boolean-naming → isDone
-  const cart = JSON.parse(localStorage.getItem("cart")) as Cart; // ✗ no-type-assertion · no-unchecked-json-parse
-  const fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;           // ✗ no-nested-ternary · no-magic-numbers
-  try {
-    sendReceipt(id);                                             // ✗ no-floating-promise (result discarded)
-    done = true;
-  } catch (e) {                                                  // ✗ catch-error-name (e → error)
-    throw new Error(e.message);                                  // ✗ error-without-cause
+// TODO: handle partial refunds                                       // ✗ todo-needs-issue-link
+async function processOrder(id, items, discount, isGift = false, retry = false) { // ✗ max-params · id-length (`id`) · no-boolean-flag-param · ts-no-unused-vars (items, retry)
+  let done = false;                                                   // ✗ boolean-naming → isDone
+  const cart = JSON.parse(localStorage.getItem("cart")) as Cart;      // ✗ no-type-assertion · no-unchecked-json-parse
+  if (cart.lines.indexOf(id) === -1) return 0;                        // ✗ no-indexof-equality
+  let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;                  // ✗ no-nested-ternary · no-magic-numbers
+  if (!isGift) {                                                       // ✗ no-negated-condition
+    fee = fee - discount;
+  } else {
+    fee = 0;
   }
-  return done == true ? fee : 0;                                 // ✗ no-redundant-boolean (`== true`)
+  try {
+    sendReceipt(id);                                                  // ✗ no-floating-promise (result discarded)
+    done = true;
+  } catch (e) {                                                        // ✗ catch-error-name (e → error)
+    throw new Error(e.message);                                       // ✗ error-without-cause
+  }
+  return done == true ? fee : 0;                                      // ✗ no-redundant-boolean (`== true`)
 }
 ```
 
-Here's what comply wants instead — validated input, named constants, propagated
-errors, extracted branches:
+Here's what comply wants instead — validated input, named constants, early
+guards, propagated errors, extracted branches:
 
 ```ts
 const EXPRESS_FEE = 5;
@@ -40,12 +47,15 @@ const STANDARD_FEE = 2;
 
 async function processOrder(order: Order): Promise<number> {
   const cart = cartSchema.parse(JSON.parse(order.cartJson));
+  if (!cart.lines.includes(order.id)) return 0;
+
   try {
     await sendReceipt(order.id);
   } catch (error) {
     throw new Error("failed to send receipt", { cause: error });
   }
-  return feeFor(cart);
+
+  return order.isGift ? 0 : feeFor(cart) - order.discount;
 }
 
 function feeFor(cart: Cart): number {
