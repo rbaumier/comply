@@ -14,12 +14,12 @@ step (`--diff-only`), a pre-commit hook, or in CI.
 
 ## See it in action
 
-An AI agent hands you this. It compiles. It "works". comply flags **16 problems in 19 lines**:
+An AI agent hands you this. It compiles. It "works". comply flags **17 problems in 19 lines**:
 
 ```ts
 // TODO: handle partial refunds                                       // ✗ todo-needs-issue-link
 async function processOrder(id, items, discount, isGift = false, retry = false) { // ✗ max-params · id-length (`id`) · no-boolean-flag-param · ts-no-unused-vars (items, retry)
-  let done = false;                                                   // ✗ boolean-naming → isDone
+  let done = false;                                                   // ✗ no-let (prefer const) · boolean-naming → isDone
   const cart = JSON.parse(localStorage.getItem("cart")) as Cart;      // ✗ no-type-assertion · no-unchecked-json-parse
   if (cart.lines.indexOf(id) === -1) return 0;                        // ✗ no-indexof-equality
   let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;                  // ✗ no-nested-ternary · no-magic-numbers
