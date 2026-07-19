@@ -18,45 +18,55 @@ An AI agent hands you this. It compiles. It "works". `comply --comply-only` flag
 
 ```ts
 // TODO: handle partial refunds
-// ^ todo-needs-issue-link
+// ▲
+// └── todo-needs-issue-link
 export async function processOrder(id, items, discount, isGift = false, retry = false) {
-//     ^ max-params (5 params, max 4)
-//     ^ no-async-without-await
-//                    ^ no-generic-names -> 'process...'
-//                                     ^ no-generic-names -> 'items'
+//     ▲              ▲                ▲
+//     │              │                └── no-generic-names -> 'items'
+//     │              └── no-generic-names -> 'process...'
+//     ├── max-params (5 params, max 4)
+//     └── no-async-without-await
   let done = false;
-//^ no-let
-//    ^ boolean-naming -> isDone
+//▲   ▲
+//│   └── boolean-naming -> isDone
+//└── no-let
   const cart = JSON.parse(items) as Cart;
-//             ^ no-type-assertion
-//             ^ no-json-parse-cast
-//             ^ no-unchecked-json-parse
-//             ^ try-catch-json-parse
-//             ^ ts-no-as-narrowing
+//             ▲
+//             ├── no-type-assertion
+//             ├── no-json-parse-cast
+//             ├── no-unchecked-json-parse
+//             ├── try-catch-json-parse
+//             └── ts-no-as-narrowing
   if (cart.lines.indexOf(id) === -1) return 0;
-//    ^ no-indexof-equality
+//    ▲
+//    └── no-indexof-equality
   let fee = cart.total > 100 ? 5 : cart.vip ? 0 : 2;
-//^ no-let
-//                       ^ no-magic-numbers -> 100
-//                             ^ no-magic-numbers -> 5
-//                                 ^ no-nested-ternary
+//▲                      ▲     ▲   ▲
+//│                      │     │   └── no-nested-ternary
+//│                      │     └── no-magic-numbers -> 5
+//│                      └── no-magic-numbers -> 100
+//└── no-let
   if (!isGift) {
-//^ prefer-ternary
-//    ^ no-negated-condition
+//▲   ▲
+//│   └── no-negated-condition
+//└── prefer-ternary
     fee = fee - discount;
   } else {
     fee = 0;
   }
   try {
-//^ no-try-statements
+//▲
+//└── no-try-statements
     sendReceipt(id);
     done = true;
   } catch (e) {
-//         ^ catch-error-name -> error
-//         ^ ts-no-implicit-any-catch
+//         ▲
+//         ├── catch-error-name -> error
+//         └── ts-no-implicit-any-catch
     throw new Error(e.message);
-//        ^ error-without-cause
-//        ^ exception-use-error-cause
+//        ▲
+//        ├── error-without-cause
+//        └── exception-use-error-cause
   }
   return done == true ? fee : 0;
 }
