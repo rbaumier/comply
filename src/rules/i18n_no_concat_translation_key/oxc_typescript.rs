@@ -44,10 +44,11 @@ impl OxcCheck for Check {
         let Some(expr) = first_arg.as_expression() else {
             return;
         };
-        let is_dynamic = matches!(
-            expr,
-            Expression::TemplateLiteral(_) | Expression::BinaryExpression(_)
-        );
+        let is_dynamic = match expr {
+            Expression::TemplateLiteral(tl) => !tl.expressions.is_empty(),
+            Expression::BinaryExpression(_) => true,
+            _ => false,
+        };
         if !is_dynamic {
             return;
         }
@@ -61,5 +62,50 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn allows_no_substitution_template_literal_key() {
+        // #7842: a backtick key with zero `${}` substitutions is a static
+        // string, not a dynamic key.
+        assert!(run_on("t(`pages.dashboardDetail.procurement.goods.massageMachine`)").is_empty());
+    }
+
+    #[test]
+    fn flags_interpolated_template_literal_key() {
+        let d = run_on("t(`section.${name}`)");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "i18n-no-concat-translation-key");
+    }
+
+    #[test]
+    fn flags_string_concatenation_key() {
+        let d = run_on("t('section.' + name)");
+        assert_eq!(d.len(), 1);
     }
 }
