@@ -685,8 +685,15 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        // Collect node IDs of functions/arrows that contain an await or for-await.
+        // Collect node IDs of functions/arrows that, in their own body
+        // (excluding nested functions), contain an await/for-await, a `throw`,
+        // or a value-returning `return`. Membership is keyed to the innermost
+        // enclosing function via `nearest_function_id`.
         let mut has_await: FxHashSet<oxc_semantic::NodeId> =
+            FxHashSet::default();
+        let mut has_own_throw: FxHashSet<oxc_semantic::NodeId> =
+            FxHashSet::default();
+        let mut has_value_return: FxHashSet<oxc_semantic::NodeId> =
             FxHashSet::default();
 
         for node in semantic.nodes().iter() {
@@ -699,6 +706,16 @@ impl OxcCheck for Check {
                 AstKind::ForOfStatement(for_of) if for_of.r#await => {
                     if let Some(func_id) = nearest_function_id(node, semantic) {
                         has_await.insert(func_id);
+                    }
+                }
+                AstKind::ThrowStatement(_) => {
+                    if let Some(func_id) = nearest_function_id(node, semantic) {
+                        has_own_throw.insert(func_id);
+                    }
+                }
+                AstKind::ReturnStatement(ret) if ret.argument.is_some() => {
+                    if let Some(func_id) = nearest_function_id(node, semantic) {
+                        has_value_return.insert(func_id);
                     }
                 }
                 _ => {}
@@ -899,6 +916,20 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Block-body async function/arrow whose own body (excluding nested
+            // functions) contains a `throw` and no value-returning
+            // `return`. Its effective contract is `Promise<void>` that either
+            // resolves or rejects, and `async` is the sole mechanism turning
+            // the `throw` into a rejection: dropping it would let the exception
+            // propagate synchronously at the call site instead, changing
+            // runtime semantics rather than only the static type. A body that
+            // returns a value (`Promise<T>`) or never throws stays flagged.
+            if has_own_throw.contains(&node.id())
+                && !has_value_return.contains(&node.id())
+            {
+                continue;
+            }
+
             // Block body that is either empty (`async () => {}`) or exactly
             // `return <call>();`. An empty body is a `Promise<void>` no-op whose
             // `async` is its only source of the return type — dropping it yields
@@ -1032,6 +1063,64 @@ mod tests {
             reply.code(200).send({});
         });"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_only_async_validator() {
+        // Regression for rbaumier/comply#7920 — a bare `const validator = async
+        // (...) => { if (...) throw ... }` (HeyForm PayloadForm.tsx:42). No
+        // Promise annotation and not a call argument, so no annotation-based
+        // carve-out fires; the body's completion is a conditional `throw` with
+        // no value-returning `return`. `async` is the rejection mechanism —
+        // dropping it makes the `throw` propagate synchronously at the call
+        // site — so the missing await is not a smell.
+        let src = r#"const validator = async (rule: any, value: any) => {
+            if (!validatePayload(value)) {
+                throw new Error(rule.message as string)
+            }
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_throw_only_async_validator_object_property() {
+        // Same class from #7920 (ChangePasswordModal.tsx:97 / ResetPassword.tsx
+        // :110) — an object-property async validator whose body only throws.
+        let src = r#"const rules = {
+            validator: async (rule, value) => {
+                if (helper.isValid(values.password) && value !== values.password) {
+                    throw new Error(rule.message as string)
+                }
+            }
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_no_throw_no_await() {
+        // Negative space for #7920: a plain async body that neither throws nor
+        // awaits has no rejection-mechanism justification — it stays flagged.
+        // Guards the throw-only carve-out against over-broadening.
+        assert_eq!(run_on("async function f() { doSync(); }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_throw_with_value_return() {
+        // Negative space for #7920: a body that both throws and returns a value
+        // has a `Promise<T>` contract, not the `Promise<void>` resolve-or-reject
+        // shape the carve-out targets — it stays flagged.
+        let src = r#"async function f(x) { if (!x) throw new Error("x"); return 1; }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_when_throw_is_in_nested_closure() {
+        // Negative space for #7920: a `throw` inside a nested closure is that
+        // closure's, not the outer async function's, so the outer function
+        // (which never throws or awaits in its own body) stays flagged. Locks
+        // in the `nearest_function_id` "excluding nested functions" attribution.
+        let src = r#"async function f() { const g = () => { throw new Error("x"); }; doSync(); }"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
