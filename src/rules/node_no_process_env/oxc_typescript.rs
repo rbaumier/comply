@@ -19,7 +19,19 @@ fn is_config_file(ctx: &CheckCtx) -> bool {
         return true;
     }
     // playwright.config.ts, vite.config.ts, drizzle.config.ts, vitest.config.ts, etc.
-    stem.to_ascii_lowercase().ends_with(".config")
+    if stem.to_ascii_lowercase().ends_with(".config") {
+        return true;
+    }
+    // A file directly under a `config/` (or `env/`, `environment/`) directory is
+    // the central configuration location the rule points users toward, e.g.
+    // `config/app.js`, `config/database.ts`.
+    let parent_dir = ctx
+        .path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    CONFIG_STEMS.iter().any(|s| parent_dir.eq_ignore_ascii_case(s))
 }
 
 /// True for test files: those in a test directory or named with a
@@ -189,6 +201,29 @@ mod tests {
     fn allows_vitest_config() {
         let src = "export default defineConfig({ test: { env: { BASE: process.env.BASE } } });";
         assert!(run_on_path(src, "vitest.config.ts").is_empty());
+    }
+
+    // Regression for #7923: a file directly under a `config/` directory is the
+    // central config module the rule points users toward, whatever its stem.
+    #[test]
+    fn allows_file_under_config_dir_issue_7923() {
+        let src = r#"
+const host = process.env.HOST || 'localhost';
+const protocol = process.env.PROTOCOL || 'http';
+const port = process.env.PORT || '3000';
+"#;
+        assert!(run_on_path(src, "packages/backend/src/config/app.js").is_empty());
+    }
+
+    #[test]
+    fn allows_file_under_env_dir_issue_7923() {
+        assert!(run_on_path("export const url = process.env.DATABASE_URL;", "src/env/database.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_outside_config_dir_issue_7923() {
+        let d = run_on_path("const x = process.env.FOO;", "src/services/app.js");
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
