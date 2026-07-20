@@ -12,12 +12,14 @@ const BUSINESS_DIRS: &[&str] = &["service", "domain", "core", "model", "entity"]
 const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 const LOG_NAMESPACES: &[&str] = &["log", "tracing"];
 
-/// True if any directory segment of `path` names a DDD business-logic layer.
+/// True if any directory segment of `path` names a DDD business-logic layer
+/// sitting directly under `src`.
 ///
-/// `core` is special-cased: it counts as a domain layer only when `src` is its
-/// immediate parent (`src/core/`, `crates/app/src/core/`). A crate literally
-/// named `core` (`crates/core/…`) or a `core` sub-module of a named crate
-/// (`src/<crate>/core/…`) is infrastructure, not a domain layer, so it is not
+/// The `src`-parent requirement distinguishes an in-application layer
+/// (`src/model/`, `crates/app/src/model/`) — which is flagged — from a crate
+/// literally named after a layer (`crates/model/…`, parent `crates`) or a
+/// layer-named sub-module of a named crate (`src/<crate>/core/…`), which are
+/// module boundaries or infrastructure, not domain layers, so they are not
 /// flagged.
 fn is_business_logic_path(path: &std::path::Path) -> bool {
     let segments: Vec<&str> = path
@@ -26,13 +28,10 @@ fn is_business_logic_path(path: &std::path::Path) -> bool {
         .collect();
     // The file name is not a directory layer, so skip the last segment.
     let dir_count = segments.len().saturating_sub(1);
-    segments[..dir_count].iter().enumerate().any(|(i, &seg)| {
-        if seg == "core" {
-            i > 0 && segments[i - 1] == "src"
-        } else {
-            BUSINESS_DIRS.contains(&seg)
-        }
-    })
+    segments[..dir_count]
+        .iter()
+        .enumerate()
+        .any(|(i, &seg)| BUSINESS_DIRS.contains(&seg) && i > 0 && segments[i - 1] == "src")
 }
 
 /// True if `name` matches one of our targeted logging macro paths and
@@ -184,6 +183,26 @@ mod tests {
     #[test]
     fn allows_logging_in_core_submodule_of_crate() {
         let diags = run_path("src/cargo/core/registry.rs", r#"tracing::warn!("query");"#);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_log_warn_in_model_layer_under_src() {
+        let diags = run_path("src/model/order.rs", r#"log::warn!("clamped to 0");"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_logging_in_workspace_crate_named_model() {
+        // nautilus_trader `crates/model/` is a workspace member crate (parent
+        // segment `crates`, not `src`), not an in-`src` DDD layer.
+        let src = r#"pub fn saturating_sub(self, rhs: Self) -> Self {
+    if raw == 0 && self.raw < rhs.raw {
+        log::warn!("Saturating Quantity subtraction: clamped to 0");
+    }
+    Self { raw, precision }
+}"#;
+        let diags = run_path("crates/model/src/types/quantity.rs", src);
         assert!(diags.is_empty());
     }
 }
