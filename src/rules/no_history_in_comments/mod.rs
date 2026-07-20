@@ -145,22 +145,71 @@ pub(crate) fn mentions_history(raw: &str) -> bool {
         if HISTORY_WORDS_ALWAYS.contains(word) {
             let prev = i.checked_sub(1).map(|j| words[j]);
             let prev2 = i.checked_sub(2).map(|j| words[j]);
-            // Skip hypothetical readings, which describe a possible design path
-            // rather than a past code change: the modal passive ("should be
-            // refactored") and a conditional clause headed by a conjunction +
-            // pronoun ("if we refactored X", "unless they refactored it").
-            // "when" is excluded — "when we refactored the API" usually narrates
-            // a past event, the code history this rule exists to flag.
-            let modal_passive = prev == Some("be");
-            let conditional_clause = matches!(prev, Some("we" | "you" | "they" | "one" | "it"))
-                && matches!(prev2, Some("if" | "unless"));
-            if modal_passive || conditional_clause {
+            let next = words.get(i + 1).copied();
+            if history_word_is_domain_usage(prev, prev2, next) {
                 continue;
             }
             return true;
         }
     }
     false
+}
+
+/// True when a bare `rewritten`/`refactored` reads as something other than code
+/// history, judged from its immediate neighbours. Three non-history readings:
+///
+/// - modal passive ("should be refactored") — a possible design path, not a past
+///   change.
+/// - conditional clause ("if we refactored X", "unless they refactored it") — a
+///   hypothetical. "when" is excluded: "when we refactored the API" narrates a
+///   past event, the code history this rule exists to flag.
+/// - attributive adjective ("rewritten rows", "a refactored query") — the word
+///   modifies the following noun (a domain modifier), not a verb narrating a
+///   change: a data row physically rewritten during compaction, say.
+fn history_word_is_domain_usage(
+    prev: Option<&str>,
+    prev2: Option<&str>,
+    next: Option<&str>,
+) -> bool {
+    let modal_passive = prev == Some("be");
+    let conditional_clause = matches!(prev, Some("we" | "you" | "they" | "one" | "it"))
+        && matches!(prev2, Some("if" | "unless"));
+    modal_passive || conditional_clause || is_attributive_adjective(prev, next)
+}
+
+/// True when a `rewritten`/`refactored` occurrence modifies the noun that
+/// follows it (attributive adjective) rather than acting as a history-narrating
+/// verb.
+///
+/// The word is a verb — and thus history — when preceded by an auxiliary
+/// (passive: "were rewritten") or a subject pronoun (active: "we refactored X"),
+/// when followed by a verb complement ("refactored into", "rewritten to X"), or
+/// when clause-final ("recently rewritten"). Otherwise it heads a noun phrase
+/// ("rewritten rows", "a refactored query") and is a domain adjective.
+///
+/// Keyed on grammatical position via closed function-word classes, never on the
+/// modified noun, so it generalizes across domains (`rewritten packet`,
+/// `refactored query`, `rewritten URL`).
+fn is_attributive_adjective(prev: Option<&str>, next: Option<&str>) -> bool {
+    // A verb slot before the word: an auxiliary (passive) or a subject pronoun
+    // (active). Either makes the word a history-narrating verb. ("one" is
+    // excluded — as a quantifier it heads a noun phrase: "one rewritten row".)
+    const PRECEDING_VERB_CUES: &[&str] = &[
+        "was", "were", "been", "being", "is", "are", "am", "has", "have", "had", "we", "you",
+        "they", "i", "he", "she", "it",
+    ];
+    // Function words that cannot head the noun phrase an attributive adjective
+    // modifies: a following one marks a verb taking an object or complement
+    // ("refactored the module", "rewritten into fragments", "refactored it").
+    const NON_NOUN_FOLLOWERS: &[&str] = &[
+        "the", "a", "an", "this", "that", "these", "those", "to", "into", "in", "from", "by", "as",
+        "for", "with", "of", "on", "at", "and", "or", "it", "them", "us", "me", "him", "her", "you",
+    ];
+    let Some(next) = next else { return false };
+    if NON_NOUN_FOLLOWERS.contains(&next) {
+        return false;
+    }
+    !prev.is_some_and(|p| PRECEDING_VERB_CUES.contains(&p))
 }
 
 /// True when the text preceding a "previously called" match has a call
