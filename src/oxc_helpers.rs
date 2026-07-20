@@ -1409,6 +1409,53 @@ pub fn is_array_initializer(expr: &oxc_ast::ast::Expression) -> bool {
     }
 }
 
+/// `true` when `expr` proves its value is a fresh array: an array literal
+/// (`[...]`, `[]`), a `new Array(...)` construction, an array-returning call
+/// (`x.map(...)`, `x.filter(...)`, `x.slice(...)`, `x.concat(...)`,
+/// `str.split(...)`, `Array.from(...)`, `Array.of(...)`), or an
+/// `Object.keys`/`Object.values`/`Object.entries(...)` static producer.
+///
+/// `slice`/`concat`/`split` also exist on `String`, so this accepts the same
+/// receiver-type imprecision the callers already carry for `slice`/`concat`:
+/// `String.prototype.split` always returns a fresh `string[]`.
+///
+/// Unlike [`expression_is_array`], this does not resolve an identifier receiver
+/// through the scope — it only reads the expression shape — so callers gate
+/// identifier receivers on [`expression_is_array`] and call/literal receivers on
+/// this. A member-chain or a call whose method is not a recognised array
+/// producer (`db.x.where(...)`, `obj.getList()`) carries no array evidence.
+#[must_use]
+pub fn is_array_evident_initializer(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    if is_array_initializer(expr) {
+        return true;
+    }
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    match &call.callee {
+        Expression::StaticMemberExpression(member) => {
+            let method = member.property.name.as_str();
+            if let Expression::Identifier(id) = &member.object {
+                match id.name.as_str() {
+                    // `Array.from(...)` / `Array.of(...)` build a fresh array.
+                    "Array" => return matches!(method, "from" | "of"),
+                    // `Object.keys`/`values`/`entries(...)` each return a fresh
+                    // array (`string[]` / `unknown[]` / `[string, unknown][]`).
+                    "Object" => return matches!(method, "keys" | "values" | "entries"),
+                    _ => {}
+                }
+            }
+            matches!(
+                method,
+                "map" | "filter" | "slice" | "concat" | "split" | "flat" | "flatMap" | "toSorted"
+                    | "toReversed" | "toSpliced" | "fill"
+            )
+        }
+        _ => false,
+    }
+}
+
 /// Resolve `ident` to the initializer of its declaring `const`/`let` when that
 /// binding lives in an inner (non-module) scope — a locally-owned binding whose
 /// mutation is not observable outside the declaring function.

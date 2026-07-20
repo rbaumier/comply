@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, expression_is_array, is_array_initializer,
+    byte_offset_to_line_col, expression_is_array, is_array_evident_initializer,
     is_node_module_system_target, is_reduce_accumulator_param, is_vue_ref_value_target,
     locally_owned_binding_init, resolves_to_import_from,
 };
@@ -231,45 +231,6 @@ fn is_non_array_fill(
         return !receiver_initializer(receiver, semantic).is_some_and(is_array_evident_initializer);
     }
     false
-}
-
-/// `true` when `expr` proves its value is a fresh array: an array literal
-/// (`[...]`, `[]`), a `new Array(...)` construction, an array-returning call
-/// (`x.map(...)`, `x.filter(...)`, `x.slice(...)`, `x.concat(...)`,
-/// `str.split(...)`, `Array.from(...)`, `Array.of(...)`), or an
-/// `Object.keys`/`Object.values`/`Object.entries(...)` static producer.
-///
-/// `slice`/`concat`/`split` also exist on `String`, so this accepts the same
-/// receiver-type imprecision the rule already carries for `slice`/`concat`:
-/// `String.prototype.split` always returns a fresh `string[]`.
-fn is_array_evident_initializer(expr: &Expression) -> bool {
-    if is_array_initializer(expr) {
-        return true;
-    }
-    let Expression::CallExpression(call) = expr else {
-        return false;
-    };
-    match &call.callee {
-        Expression::StaticMemberExpression(member) => {
-            let method = member.property.name.as_str();
-            if let Expression::Identifier(id) = &member.object {
-                match id.name.as_str() {
-                    // `Array.from(...)` / `Array.of(...)` build a fresh array.
-                    "Array" => return matches!(method, "from" | "of"),
-                    // `Object.keys`/`values`/`entries(...)` each return a fresh
-                    // array (`string[]` / `unknown[]` / `[string, unknown][]`).
-                    "Object" => return matches!(method, "keys" | "values" | "entries"),
-                    _ => {}
-                }
-            }
-            matches!(
-                method,
-                "map" | "filter" | "slice" | "concat" | "split" | "flat" | "flatMap" | "toSorted"
-                    | "toReversed" | "toSpliced" | "fill"
-            )
-        }
-        _ => false,
-    }
 }
 
 /// True when a `.push(...)` call is a router/history navigation, not an
