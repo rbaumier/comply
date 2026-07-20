@@ -31,6 +31,13 @@
 //! `Err(Variant(..))`, the fatal/non-fatal split). A bare `Err(_)`/`Err(e)` arm
 //! beside an unguarded capturing sibling still swallows every other error class
 //! and stays flagged; a lone empty `Err` arm likewise stays flagged.
+//!
+//! An empty arm whose pattern is an *or-pattern* is error-swallowing only when
+//! *every* alternative is itself an `Err(...)` pattern. When one alternative is a
+//! non-error case (`Err(NotFound) | Ok(_) => {}`, the idempotent-delete idiom, or
+//! a bare wildcard), the empty body is the correct no-op for a success/benign
+//! case and is not flagged. A pure error or-pattern (`Err(A) | Err(B) => {}`)
+//! still fires.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
@@ -310,8 +317,23 @@ fn is_empty_block(node: &tree_sitter::Node, _source: &[u8]) -> bool {
 /// pattern node directly, depending on grammar version. We descend through
 /// `match_pattern` wrappers and inspect the textual form of the pattern,
 /// which reliably matches `Err(...)` and qualified forms like `Result::Err(...)`.
+///
+/// An `or_pattern` (`Err(NotFound) | Ok(_)`) is error-swallowing only when
+/// *every* alternative is itself an `Err(...)` pattern. If any alternative is a
+/// non-error case (an `Ok(...)`, a bare wildcard, or another constructor), the
+/// empty body is shared with a success/non-error case — the idempotent-operation
+/// idiom — so it is not a swallow.
 fn pattern_is_err(node: &tree_sitter::Node, source: &[u8]) -> bool {
     let inner = unwrap_match_pattern(*node);
+    if inner.kind() == "or_pattern" {
+        let mut cursor = inner.walk();
+        let mut alternatives = inner
+            .named_children(&mut cursor)
+            .filter(|alt| !alt.kind().ends_with("comment"))
+            .peekable();
+        return alternatives.peek().is_some()
+            && alternatives.all(|alt| pattern_is_err(&alt, source));
+    }
     let text = inner.utf8_text(source).unwrap_or("").trim();
     // Match `Err(...)` or `<path>::Err(...)`.
     if let Some(paren) = text.find('(') {
@@ -730,6 +752,64 @@ mod tests {
         // Narrowness guard: an `else if` chain is not a diverging else — the
         // outer empty then-block still swallows the success case and fires.
         let src = "fn t() { if let Err(_) = expr { } else if cond { } else { panic!(); } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_or_pattern_arm_with_ok_alternative_issue_7909() {
+        // Issue #7909: the idempotent-delete idiom — an empty arm whose
+        // or-pattern also matches `Ok(_)` (`Err(NotFound) | Ok(_) => {}`) is the
+        // correct no-op for "already gone or successfully deleted". The `| Ok(_)`
+        // alternative means the empty body is shared with the success case, so it
+        // is not error-swallowing; every other error routes to the sibling arms.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Err(CatalogError::NotFound(_)) | Ok(_) => {} \
+                   Err(CatalogError::CannotDeleteInternalDatabase) => { reject(); } \
+                   Err(err) => { log(err); } \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_or_pattern_arm_with_ok_first_issue_7909() {
+        // Order-independence: `Ok(_) | Err(NotFound) => {}` is the same idiom.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(_) | Err(NotFound(_)) => {} \
+                   Err(err) => { log(err); } \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_pure_err_or_pattern_arm_issue_7909() {
+        // Narrowness guard: an or-pattern whose alternatives are *all* `Err(...)`
+        // (`Err(A) | Err(B) => {}`) still swallows every matched error and fires.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(A) | Err(B) => {} \
+                   } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_nested_or_pattern_arm_with_ok_alternative_issue_7909() {
+        // 3+ alternatives parse as a nested `or_pattern` — a benign `Ok(_)` in
+        // any position must still exempt via the per-alternative recursion.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Err(A) | Err(B) | Ok(_) => {} \
+                   Err(err) => { log(err); } \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_nested_pure_err_or_pattern_arm_issue_7909() {
+        // A nested all-`Err` or-pattern (`Err(A) | Err(B) | Err(C) => {}`) still
+        // swallows every matched error through the recursion and fires.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(A) | Err(B) | Err(C) => {} \
+                   } }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 }
