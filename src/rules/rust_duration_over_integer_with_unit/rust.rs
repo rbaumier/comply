@@ -19,12 +19,14 @@
 //! `julian_days`, `unix_seconds`, `created_at_seconds`, `*_timestamp`,
 //! `*_epoch`, `*_epoch_*`) are exempted — `Duration` models an elapsed span,
 //! not an absolute timeline point, so the suggestion would be wrong.
-//! A struct *field* is exempted when its enclosing `struct_item` derives serde
-//! `Serialize` or `Deserialize`: the integer is the wire/JSON contract. A
-//! `Duration` serializes as a `{secs, nanos}` object, so swapping the type
-//! changes the serialized representation and breaks the API schema. This applies
-//! to fields only — a function parameter is not a serialization target and
-//! still flags.
+//! A struct *field* is exempted when its enclosing `struct_item` derives a
+//! serialization target — serde `Serialize`/`Deserialize` or the parquet row
+//! derives `ParquetRecordWriter`/`ParquetRecordReader`: the integer is the
+//! wire/column contract. A serde `Duration` serializes as a `{secs, nanos}`
+//! object and parquet has no physical type for `Duration`, so swapping the type
+//! changes the serialized representation (or fails to compile) and breaks the
+//! schema. This applies to fields only — a function parameter is not a
+//! serialization target and still flags.
 //! A plain-integer field is exempted when the file declares an atomic-integer
 //! field (`AtomicU64`, `std::sync::atomic::AtomicI64`, ...) with the exact same
 //! name. Rust has no `AtomicDuration`, so a field built from an atomic counter
@@ -90,6 +92,21 @@ const INTEGER_TYPES: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize",
 ];
 
+/// Derive macros whose final path segment marks the enclosing struct as a
+/// serialization target: serde's `Serialize`/`Deserialize` and parquet's row
+/// derives `ParquetRecordWriter`/`ParquetRecordReader`. For such a struct the
+/// integer field is the on-wire/on-disk representation — a `Duration` would
+/// serialize as a nested `{secs, nanos}` object (serde) or has no parquet
+/// physical type at all, so the type is fixed by the format contract. Matched
+/// by final path segment, so `serde::Serialize` counts but a custom
+/// `MySerialize` does not.
+const SERIALIZATION_DERIVES: &[&str] = &[
+    "Serialize",
+    "Deserialize",
+    "ParquetRecordWriter",
+    "ParquetRecordReader",
+];
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -118,7 +135,7 @@ impl AstCheck for Check {
             && has_time_unit_suffix(name)
             && is_integer_type(type_text)
             && !mirrors_atomic_counter(node, name, source_bytes)
-            && !in_serde_derived_struct(node, source_bytes)
+            && !in_serialization_derived_struct(node, source_bytes)
             && !has_seconds_nanoseconds_pair(node, name, type_text, source_bytes)
         {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
@@ -215,14 +232,14 @@ fn file_has_atomic_field_named(node: tree_sitter::Node, name: &str, source: &[u8
 }
 
 /// True when the `field_declaration`'s enclosing `struct_item` carries a
-/// `#[derive(...)]` whose list includes serde's `Serialize` or `Deserialize`.
-/// Such a struct is a (de)serialization target: the integer field is the
-/// wire/JSON representation, and `Duration` would serialize as a nested
-/// `{secs, nanos}` object — changing the contract. The derive list is matched
+/// `#[derive(...)]` naming a serialization target (see `SERIALIZATION_DERIVES`).
+/// The integer field is then the on-wire/on-disk representation, and a
+/// `Duration` would change the contract (serde: nested `{secs, nanos}`) or fail
+/// to compile (parquet has no physical type for it). The derive list is matched
 /// by final path segment, so `serde::Serialize` counts but a custom
 /// `MySerialize` does not.
-fn in_serde_derived_struct(field: tree_sitter::Node, source: &[u8]) -> bool {
-    enclosing_struct(field).is_some_and(|s| struct_derives_serde(s, source))
+fn in_serialization_derived_struct(field: tree_sitter::Node, source: &[u8]) -> bool {
+    enclosing_struct(field).is_some_and(|s| struct_derives_serialization_target(s, source))
 }
 
 /// The nearest `struct_item` ancestor of `node`, if any.
@@ -302,18 +319,16 @@ fn struct_has_counterpart_field(
         .any(|child| struct_has_counterpart_field(child, stem, counterpart, type_text, source))
 }
 
-/// True when `struct_item`'s preceding `#[derive(...)]` attributes include a
-/// serde `Serialize` or `Deserialize` entry (matched by final path segment).
-fn struct_derives_serde(struct_item: tree_sitter::Node, source: &[u8]) -> bool {
+/// True when `struct_item`'s preceding `#[derive(...)]` attributes name a
+/// serialization target (see `SERIALIZATION_DERIVES`), matched by final path
+/// segment.
+fn struct_derives_serialization_target(struct_item: tree_sitter::Node, source: &[u8]) -> bool {
     let mut sibling = struct_item.prev_named_sibling();
     while let Some(s) = sibling {
         match s.kind() {
             "attribute_item" => {
                 if let Ok(text) = s.utf8_text(source)
-                    && derive_paths(text).any(|p| {
-                        let seg = final_segment(p);
-                        seg == "Serialize" || seg == "Deserialize"
-                    })
+                    && derive_paths(text).any(|p| SERIALIZATION_DERIVES.contains(&final_segment(p)))
                 {
                     return true;
                 }
@@ -612,6 +627,29 @@ struct Resp { latency_ms: u64 }
 fn build(timeout_ms: u64) -> u64 { timeout_ms }";
         // The struct field is exempt; the fn parameter still flags → exactly one.
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_parquet_record_writer_field() {
+        // neondatabase/neon `RequestData`: the `ParquetRecordWriter` derive maps
+        // each field to a parquet physical column type. `Duration` has no parquet
+        // physical type, so `duration_us: u64` is the on-disk column contract and
+        // must keep the integer type. Regression for #7928.
+        let source = "\
+#[derive(parquet_derive::ParquetRecordWriter)]
+pub(crate) struct RequestData {
+    region: String,
+    duration_us: u64,
+    disconnect_timestamp: Option<chrono::NaiveDateTime>,
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_parquet_record_reader_field() {
+        // The read counterpart derive is the same column contract as the writer.
+        let source = "#[derive(ParquetRecordReader)]\nstruct Row { latency_us: u64 }";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
