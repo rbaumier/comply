@@ -1,8 +1,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, expression_is_array, is_array_evident_initializer,
-    is_node_module_system_target, is_reduce_accumulator_param, is_vue_ref_value_target,
-    locally_owned_binding_init, resolves_to_import_from,
+    is_node_module_system_target, is_pinia_store_binding, is_reduce_accumulator_param,
+    is_vue_ref_value_target, locally_owned_binding_init, resolves_to_import_from,
+    root_identifier_of_expr,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
@@ -85,6 +86,25 @@ impl OxcCheck for Check {
         // the `<ref>.value` case above (`reactive()` under the hood), with no
         // immutable alternative that preserves the proxy's identity.
         if is_pinia_store_action_this_mutation(member, node, semantic) {
+            return;
+        }
+
+        // Pinia option-store consumer: `store.list.push(x)` /
+        // `store.list.splice(...)` (and the computed-key form `store[key].splice(...)`)
+        // where `store` is a `const store = useXxxStore()` binding whose factory
+        // resolves to a `defineStore(...)` imported from `pinia`. The store
+        // instance is a Vue reactive proxy Pinia builds from the store's `state`,
+        // so mutating a state array in place from a component/composable/util is
+        // the documented Pinia state-mutation path — it preserves the array's
+        // reactive identity, and the non-mutating alternative
+        // (`store.list = [...store.list, x]`) reallocates it. Consumer-side parity
+        // to the definition-side `this.<state>` exemption above: the receiver
+        // chain's root identifier (covering both `store.list` and `store[key]`)
+        // resolves via `is_pinia_store_binding`, reusing the shared lever the
+        // `no-mutation` / `no-property-mutation` store-write exemptions use.
+        if let Some(root) = root_identifier_of_expr(&member.object)
+            && is_pinia_store_binding(root, semantic, ctx.project, ctx.path)
+        {
             return;
         }
 
@@ -491,6 +511,35 @@ mod tests {
 
     fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule_gated(&Check, src, path)
+    }
+
+    /// Build a temp project from `(rel_path, source)` pairs, index it so the
+    /// cross-file `ImportIndex` is populated, and run the rule on `target_rel`.
+    fn run_on_project(files: &[(&str, &str)], target_rel: &str) -> Vec<Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        let target_path = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let canon = fs::canonicalize(&target_path).unwrap();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_oxc_check(&Check, &source, &canon, &project, file)
     }
 
     #[test]
@@ -1314,6 +1363,68 @@ mod tests {
                     this.items.push(x);
                 }
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_state_array_mutation_via_imported_pinia_store_consumer_issue_7931() {
+        // Regression for rbaumier/comply#7931 — imsyy/SPlayer: a
+        // `const dataStore = useDataStore()` binding holds a reactive proxy Pinia
+        // builds from the store's `state`; mutating a state array in place from a
+        // consumer (`dataStore.list.splice(...)` / `dataStore.list.push(x)`) is the
+        // documented Pinia state-mutation path, referentially stable, with no
+        // immutable alternative that preserves the array's reactive identity.
+        let files = &[
+            (
+                "src/stores/data.ts",
+                "import { defineStore } from 'pinia'\n\
+                 export const useDataStore = defineStore('data', {\n\
+                   state: () => ({ list: [] as number[] }),\n\
+                   actions: {},\n\
+                 })",
+            ),
+            (
+                "src/composables/useSongMenu.ts",
+                "import { useDataStore } from '../stores/data'\n\
+                 export function remove(i: number) {\n\
+                   const dataStore = useDataStore()\n\
+                   dataStore.list.splice(i, 1)\n\
+                   dataStore.list.push(1)\n\
+                 }",
+            ),
+        ];
+        assert!(run_on_project(files, "src/composables/useSongMenu.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_computed_key_state_array_mutation_on_pinia_store_issue_7931() {
+        // #7931 — imsyy/SPlayer helper.ts: `settingStore[settingsKey].splice(...)`
+        // reaches a state array through a computed member key; the receiver chain's
+        // root identifier still resolves to the `useSettingStore()` binding, so the
+        // reactive mutation is exempt as with the dotted form.
+        let src = r#"
+            import { defineStore } from 'pinia'
+            const useSettingStore = defineStore('setting', {
+                state: () => ({ dirs: [] as string[] }),
+                actions: {},
+            })
+            function removeDir(settingsKey: string, delIndex: number) {
+                const settingStore = useSettingStore()
+                settingStore[settingsKey].splice(delIndex, 1)
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_mutation_on_non_pinia_call_binding_issue_7931() {
+        // Negative space for #7931 — `useThing()` does not resolve to a
+        // `defineStore(...)` factory, so `thing.list.push(x)` is an ordinary array
+        // mutation and stays flagged.
+        let src = r#"
+            const thing = useThing();
+            thing.list.push(1);
         "#;
         assert_eq!(run(src).len(), 1);
     }

@@ -4857,8 +4857,14 @@ fn export_is_pinia_store_factory(
 /// A store instance is a reactive proxy whose state properties are the intended,
 /// documented mutation point (`store.count = x`, `store.count++`) with no
 /// immutable alternative — the same reactive-write class as `reactive(...)` (see
-/// [`is_vue_reactive_object_target`]). Callers gate a direct-identifier-based
-/// property write on the store, so a deeper chain rooted elsewhere stays flagged.
+/// [`is_vue_reactive_object_target`]). `ident` is the receiver's binding: the
+/// property-write callers (`no-mutation` / `no-property-mutation`) pass the
+/// direct-identifier base of a `store.<state>` write, while the array-method
+/// caller (`no-mutating-methods`) passes the receiver chain's resolved root
+/// (`root_identifier_of_expr`), covering `store.list` and `store[key]` — a Pinia
+/// store proxy is deeply reactive, so a deeper state mutation is exempt the same
+/// way `reactive()`'s deep reactivity is. A chain broken by a call or rooted at
+/// `this` resolves to no binding, so it stays flagged.
 ///
 /// Two structural hops, both symbol-resolution based (no name/path/value
 /// allowlist):
