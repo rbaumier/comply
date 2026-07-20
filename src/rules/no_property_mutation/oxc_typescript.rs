@@ -11,10 +11,10 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding, is_node_module_system_target,
-    is_react_display_name_assignment, is_reassigned_fresh_copy_at, is_reduce_accumulator_param,
-    is_rtk_reducer_draft_param, is_typed_array_binding, is_unist_visitor_node_param,
-    is_valtio_proxy_binding, is_vue_reactive_object_target, is_vue_ref_value_target,
-    root_identifier_of_expr,
+    is_pinia_store_binding, is_react_display_name_assignment, is_reassigned_fresh_copy_at,
+    is_reduce_accumulator_param, is_rtk_reducer_draft_param, is_typed_array_binding,
+    is_unist_visitor_node_param, is_valtio_proxy_binding, is_vue_reactive_object_target,
+    is_vue_ref_value_target, root_identifier_of_expr,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -517,6 +517,13 @@ impl OxcCheck for Check {
                         { return; }
                         // Vue 3 reactive() object: `state.n = x` is the idiomatic update.
                         if is_vue_reactive_object_target(m, semantic, ctx.project, ctx.path) { return; }
+                        // Pinia store instance: `store.count = x` writes reactive
+                        // store state through the `useXStore()` proxy — the documented
+                        // state-write API with no immutable form; parity with the
+                        // `reactive()` object exemption above.
+                        if let Expression::Identifier(base) = &m.object
+                            && is_pinia_store_binding(base, semantic, ctx.project, ctx.path)
+                        { return; }
                         if obj_text == "module" || obj_text == "exports" { return; }
                         // Node Module-system object: `mod.loaded = true`,
                         // `Module._cache[id] = …` — mutation is the loader contract.
@@ -657,6 +664,10 @@ impl OxcCheck for Check {
                         { return; }
                         // Vue 3 reactive() object: `state.incrementedTimes++` is the idiomatic update.
                         if is_vue_reactive_object_target(m, semantic, ctx.project, ctx.path) { return; }
+                        // Pinia store instance: `store.count++` — see the AssignmentExpression arm.
+                        if let Expression::Identifier(base) = &m.object
+                            && is_pinia_store_binding(base, semantic, ctx.project, ctx.path)
+                        { return; }
                         // Own instance state: `this.count++` — see the AssignmentExpression arm.
                         if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
@@ -2442,6 +2453,68 @@ mod tests {
             const state = reactive({ a: { b: 1 } });
             function getState() { return state; }
             getState().a.b = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Pinia store instance direct state write — issue #7857
+
+    #[test]
+    fn allows_direct_state_write_on_imported_pinia_store_issue_7857() {
+        // Regression for rbaumier/comply#7857 — v3-admin-vite useLayoutMode:
+        // `settingsStore.layoutMode = mode` writes reactive state through the
+        // store instance the `useSettingsStore()` factory returned.
+        // `useSettingsStore` is a `defineStore(...)` exported from a Pinia store
+        // module — the documented, only Pinia state-write API.
+        let files = &[
+            (
+                "pinia/stores/settings.ts",
+                "import { defineStore } from 'pinia'\n\
+                 export const useSettingsStore = defineStore('settings', () => ({}))",
+            ),
+            (
+                "composables/useLayoutMode.ts",
+                "import { useSettingsStore } from '../pinia/stores/settings'\n\
+                 const settingsStore = useSettingsStore()\n\
+                 function setLayoutMode(mode) { settingsStore.layoutMode = mode }",
+            ),
+        ];
+        assert!(run_on_project(files, "composables/useLayoutMode.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_state_update_on_local_pinia_store_issue_7857() {
+        // The store factory and its consumer can live in one module; the
+        // update-expression arm takes the same exemption.
+        let src = r#"
+            import { defineStore } from 'pinia'
+            const useCounterStore = defineStore('counter', () => ({}))
+            const counter = useCounterStore()
+            function inc() { counter.count++ }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_state_write_on_non_pinia_call_binding_issue_7857() {
+        // Negative space: `useThing()` does not resolve to a `defineStore(...)`
+        // factory, so the property write is an ordinary mutation and stays flagged.
+        let src = r#"
+            const thing = useThing();
+            thing.count = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_state_write_when_define_store_not_from_pinia_issue_7857() {
+        // Negative space: `defineStore` imported from a non-pinia module is not
+        // Pinia's factory, so the store-instance write stays flagged.
+        let src = r#"
+            import { defineStore } from './not-pinia'
+            const useX = defineStore('x', () => ({}))
+            const x = useX();
+            x.count = 1;
         "#;
         assert_eq!(run(src).len(), 1);
     }

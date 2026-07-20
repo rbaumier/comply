@@ -4403,6 +4403,206 @@ pub fn is_vue_reactive_object_target(
     )
 }
 
+/// Pinia's store-factory function. A `defineStore(id, setup | options)` call
+/// returns a *factory*; calling that factory (`useXStore()`) yields the reactive
+/// store instance whose state properties are the intended mutation point. Shared
+/// with the cross-file `ImportIndex` extractor (`import_index.rs`) so a store
+/// write through an imported factory is recognized against the same name — the
+/// single source of truth, mirroring [`VUE_REF_FACTORIES`].
+pub(crate) const PINIA_STORE_FACTORY: &str = "defineStore";
+
+/// The store-factory callee of a Pinia store binding — `useXStore` for
+/// `const store = useXStore()`. Resolves `ident` to its declarator, peels
+/// transparent wrappers (`useXStore()!`, `useXStore() as Store`; see
+/// [`peel_value_wrappers`]), and returns the initializer call's callee when it is
+/// a plain identifier. `None` when the binding is not a call, the callee is not a
+/// bare identifier, or `ident` is a parameter/local declared inside a function
+/// nested in the initializer (bounded by the function guard, mirroring
+/// [`is_call_ref_value_target`]).
+fn store_binding_factory_callee<'a>(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::IdentifierReference<'a>> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::VariableDeclarator(decl) => {
+                let init = decl.init.as_ref()?;
+                let Expression::CallExpression(call) = peel_value_wrappers(init) else {
+                    return None;
+                };
+                let Expression::Identifier(callee) = &call.callee else {
+                    return None;
+                };
+                return Some(callee);
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// True when `callee` names Pinia's `defineStore` AND that name is Pinia's —
+/// either a named import from `pinia` (`import { defineStore } from 'pinia'`), or,
+/// in a project using `unplugin-auto-import`, a free/global identifier that
+/// resolves to no local declaration (auto-import injects `defineStore` with no
+/// import statement). The no-local-declaration check keeps a same-named
+/// user-defined factory from being mistaken for Pinia's. Mirrors
+/// [`callee_is_vue_factory`].
+fn callee_is_pinia_define_store(
+    callee: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    callee.name.as_str() == PINIA_STORE_FACTORY
+        && (resolves_to_import_from(callee, semantic, &["pinia"])
+            || (project.uses_unplugin_auto_import(path)
+                && reference_resolves_to_no_local_binding(callee, semantic)))
+}
+
+/// True when `callee` resolves to a same-module `const useX = defineStore(...)`
+/// binding whose `defineStore` is Pinia's (see [`callee_is_pinia_define_store`]).
+/// Resolves the callee via `reference_id` → symbol → declaration node, then
+/// confirms the declarator initializer (peeling `!`/`as T`) is a `defineStore(...)`
+/// call. An imported factory resolves to an `ImportDeclaration`, not a
+/// `VariableDeclarator`, so it is handled by
+/// [`callee_is_imported_pinia_store_factory`] instead.
+fn callee_binding_is_local_define_store(
+    callee: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let Some(ref_id) = callee.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            AstKind::VariableDeclarator(decl) => {
+                let Some(init) = &decl.init else {
+                    return false;
+                };
+                let Expression::CallExpression(call) = peel_value_wrappers(init) else {
+                    return false;
+                };
+                let Expression::Identifier(define_callee) = &call.callee else {
+                    return false;
+                };
+                return callee_is_pinia_define_store(define_callee, semantic, project, path);
+            }
+            // A binding declared inside a function is that function's own — a
+            // parameter or local, never the module/const-scope `defineStore(...)`
+            // factory. Bounds the walk, mirroring [`store_binding_factory_callee`].
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `callee` is imported from another project module whose matching
+/// export binds a Pinia store factory (`export const useX = defineStore(...)`).
+/// Mirrors [`binding_is_imported_vue_ref`]: confirms `callee` resolves to an
+/// import binding (so a same-named local that shadows the import is not treated as
+/// the import), then resolves its source module and original export name via the
+/// [`ImportIndex`](crate::project::ImportIndex) and checks that module's export
+/// table — following one `export { name } from './origin'` re-export hop — for a
+/// store-factory binding. Resolution is purely structural (binding provenance +
+/// import records + the exporting module's declaration shape).
+fn callee_is_imported_pinia_store_factory(
+    callee: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    if !binding_resolves_to_import(callee, semantic) {
+        return false;
+    }
+    let name = callee.name.as_str();
+    let index = project.import_index();
+    if index.is_empty() {
+        return false;
+    }
+    let canon = index.canonical(path);
+    index.get_imports(&canon).iter().any(|imp| {
+        imp.local_name == name
+            && imp
+                .source_path
+                .as_deref()
+                .is_some_and(|src| export_is_pinia_store_factory(index, src, &imp.imported_name))
+    })
+}
+
+/// True when `file` exports `name` as a Pinia store-factory binding, directly or
+/// through a single `export { name } from './origin'` re-export hop (the barrel
+/// pattern common in Pinia store modules). Mirrors [`export_is_vue_ref_factory`].
+fn export_is_pinia_store_factory(
+    index: &crate::project::ImportIndex,
+    file: &Path,
+    name: &str,
+) -> bool {
+    let exports_store_factory = |f: &Path| {
+        index.get_exports(f).iter().any(|e| e.name == name && e.is_pinia_store_factory)
+    };
+    exports_store_factory(file)
+        || index.reexport_target(file, name).is_some_and(exports_store_factory)
+}
+
+/// True when `ident` resolves to a binding holding a Pinia store instance —
+/// `const store = useXStore()` where `useXStore` is a `defineStore(...)` factory.
+/// A store instance is a reactive proxy whose state properties are the intended,
+/// documented mutation point (`store.count = x`, `store.count++`) with no
+/// immutable alternative — the same reactive-write class as `reactive(...)` (see
+/// [`is_vue_reactive_object_target`]). Callers gate a direct-identifier-based
+/// property write on the store, so a deeper chain rooted elsewhere stays flagged.
+///
+/// Two structural hops, both symbol-resolution based (no name/path/value
+/// allowlist):
+/// 1. resolve `ident`'s declarator initializer to a `CallExpression` whose callee
+///    is a plain identifier — the store factory `useXStore` (see
+///    [`store_binding_factory_callee`]);
+/// 2. confirm that factory identifier's declaration is a
+///    `const useX = defineStore(...)` binding whose `defineStore` is Pinia's —
+///    locally in this module ([`callee_binding_is_local_define_store`]), or, for
+///    the `import { useXStore } from './stores/x'` case, via the cross-file
+///    [`ImportIndex`](crate::project::ImportIndex) export table's
+///    `is_pinia_store_factory` flag ([`callee_is_imported_pinia_store_factory`]).
+#[must_use]
+pub fn is_pinia_store_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    let Some(factory) = store_binding_factory_callee(ident, semantic) else {
+        return false;
+    };
+    callee_binding_is_local_define_store(factory, semantic, project, path)
+        || callee_is_imported_pinia_store_factory(factory, semantic, project, path)
+}
+
 /// True when `ident` resolves to a `const`/`let` binding initialised by a call to
 /// `proxy(...)` imported from `valtio`. valtio's `proxy()` returns a reactive
 /// Proxy whose *direct mutation* is the entire public API: `state.n = x`,

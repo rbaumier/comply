@@ -419,6 +419,7 @@ mod tests {
             local_name: None,
             is_primitive_literal: false,
             is_vue_ref_factory: false,
+            is_pinia_store_factory: false,
             binds_at_most_one_param: false,
             is_string_literal_const: false,
         };
@@ -432,6 +433,7 @@ mod tests {
             local_name: None,
             is_primitive_literal: false,
             is_vue_ref_factory: false,
+            is_pinia_store_factory: false,
             binds_at_most_one_param: false,
             is_string_literal_const: false,
         };
