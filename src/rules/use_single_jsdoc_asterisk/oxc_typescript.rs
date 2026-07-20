@@ -144,18 +144,26 @@ impl Check {
     }
 }
 
+/// A JSDoc block opens with exactly `/**` followed by a non-`*` byte (or the end
+/// of the comment). A comment whose 3rd byte is another `*` (`/***`, `/****`, …)
+/// is a decorative banner, ignored by the JSDoc spec, and carries no doc
+/// semantics — the single-asterisk rule must not apply to it.
+fn is_jsdoc_opener(raw: &str) -> bool {
+    raw.starts_with("/**") && raw.as_bytes().get(3) != Some(&b'*')
+}
+
 /// Resolve a comment span to the byte offset of its `/**` opener and the raw
 /// `/** … */` text. Returns `None` for non-JSDoc comments. Tolerates oxc spans
 /// that either include or exclude the `/*` delimiter.
 fn jsdoc_slice(source: &str, start: usize, end: usize) -> Option<(usize, &str)> {
     if let Some(raw) = source.get(start..end)
-        && raw.starts_with("/**")
+        && is_jsdoc_opener(raw)
     {
         return Some((start, raw));
     }
     let doc_start = start.checked_sub(2)?;
     let raw = source.get(doc_start..end)?;
-    raw.starts_with("/**").then_some((doc_start, raw))
+    is_jsdoc_opener(raw).then_some((doc_start, raw))
 }
 
 impl OxcCheck for Check {
@@ -248,6 +256,15 @@ mod tests {
     fn ignores_line_comment() {
         let src = "// ** not jsdoc\nfunction f() {}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_decorative_banner_opener() {
+        // A comment opening with `/***…` (three or more asterisks) is a
+        // decorative copyright banner, not JSDoc; the closing row of asterisks
+        // is intentional formatting, not a malformed continuation line.
+        let src = "/**********************************\n * @Author: Ronnie Zhang\n * @LastEditor: Ronnie Zhang\n * @LastEditTime: 2023/12/05 21:25:52\n * @Email: zclzone@outlook.com\n * Copyright © 2023 Ronnie Zhang | https://isme.top\n **********************************/\nexport const tab = {};";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     // ── Biome `invalid.js` fixtures — must fire exactly once each ───────
