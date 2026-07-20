@@ -195,6 +195,48 @@ mod tests {
     }
 
     #[test]
+    fn allows_chained_branchless_bool_expressions() {
+        // polars `fmt.rs`/`json/mod.rs`/`replace_time_zone.rs`: a chained
+        // `A & B & C` parses as `(A & B) & C`; the inner `(A & B)` is itself a
+        // `binary_expression` with `&`, and it is provably bool because both its
+        // operands are — so the whole chain is the branchless logical idiom, not
+        // a `&&`/`||` typo (#6883).
+        assert!(
+            run_on(
+                "fn env_is_true(_k: &str) -> bool { true } \
+                 fn f() { if env_is_true(\"A\") | env_is_true(\"B\") | env_is_true(\"C\") {} }"
+            )
+            .is_empty()
+        );
+        assert!(
+            run_on(
+                "fn f(a: &A) { if a.is_empty() & a.schema.is_none() & a.schema_overwrite.is_none() {} }"
+            )
+            .is_empty()
+        );
+        assert!(
+            run_on(
+                "fn f(from: &str, to: &str, amb: &[&str]) { if (from == to) & ((from == \"UTC\") | ((amb.len() == 1) & (amb.get(0) == Some(\"raise\")))) {} }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_chained_bitwise_with_unprovable_operand() {
+        // A chained `&` where one leaf is an unprovable struct field stays
+        // ambiguous between a `&&` typo and the branchless idiom, so it fires.
+        assert_eq!(
+            run_on("fn f(a: bool, b: bool, s: &S) { if a & b & s.c {} }").len(),
+            1
+        );
+        assert_eq!(
+            run_on("fn f(a: bool, b: bool, s: &S) { if a | b | s.c {} }").len(),
+            1
+        );
+    }
+
+    #[test]
     fn still_flags_non_matches_macro_operand() {
         // An arbitrary macro's expansion type is opaque, so its bool-ness is
         // unprovable — the `&`/`|` stays ambiguous and keeps firing.

@@ -2975,8 +2975,18 @@ pub fn operand_is_bool(node: Node, source: &[u8]) -> bool {
         "binary_expression" => node
             .child_by_field_name("operator")
             .and_then(|op| op.utf8_text(source).ok())
-            .is_some_and(|op| {
-                matches!(op, "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||")
+            .is_some_and(|op| match op {
+                "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||" => true,
+                // A branchless `&`/`|` is itself bool-valued when both its own
+                // operands are provably bool, so a chained `A & B & C` (parsed
+                // as `(A & B) & C`) recognises its inner `(A & B)` as bool.
+                "&" | "|" => node
+                    .child_by_field_name("left")
+                    .zip(node.child_by_field_name("right"))
+                    .is_some_and(|(left, right)| {
+                        operand_is_bool(left, source) && operand_is_bool(right, source)
+                    }),
+                _ => false,
             }),
         "unary_expression" => {
             // `!` is logical NOT only when its operand is bool; on an integer it
