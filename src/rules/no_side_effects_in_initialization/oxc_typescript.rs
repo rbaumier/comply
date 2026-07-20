@@ -231,10 +231,13 @@
 //!   side effect;
 //! - builder/fluent configuration: a top-level `obj.method(...)` call whose
 //!   receiver `obj` is a bare identifier bound by a same-scope
-//!   `const obj = new ...()` declaration. The mutation targets a freshly-built
-//!   module-local object that has not escaped, so it is no external side effect
-//!   and no tree-shaking hazard. A method call on anything else (an imported
-//!   singleton, a `const x = getThing()` whose init is a plain call) is still
+//!   `const obj = new ...()` declaration, or by a known fresh-object factory
+//!   with import provenance (`const app = express()`,
+//!   `const router = express.Router()` where `express` is imported from the
+//!   `express` package). The mutation targets a freshly-built module-local
+//!   object that has not escaped, so it is no external side effect and no
+//!   tree-shaking hazard. A method call on anything else (an imported singleton,
+//!   a `const x = getThing()` whose factory has no known provenance) is still
 //!   flagged;
 //! - exports augmentation: a top-level `Object.assign(target, ...)` call whose
 //!   `target` is the module's own export object — a bare identifier this module
@@ -1550,17 +1553,21 @@ fn module_const_new_bindings(program: &Program) -> FxHashSet<String> {
     out
 }
 
-/// True when `call` configures a freshly-constructed module-local object:
+/// True when `call` configures a freshly-built module-local object:
 /// `obj.method(...)` where `obj` is a bare identifier bound by a top-level
-/// `const obj = new ...()`. This is the builder/fluent configuration pattern —
-/// all mutation targets an object created in the same file that has not escaped,
-/// so there is no external side effect and no tree-shaking hazard. The receiver
+/// `const obj = new ...()` ([`module_const_new_bindings`]) or by a known
+/// fresh-object factory ([`express_factory_const_bindings`]). This is the
+/// builder/fluent configuration pattern —
+/// all mutation targets a fresh object built in the same file, configured in
+/// place during module initialization before any consumer observes it, so there
+/// is no external side effect and no tree-shaking hazard (if nothing imports the
+/// binding, it and its config calls are dead together). The receiver
 /// must be a bare identifier (not a longer chain or a call result), so an
 /// imported singleton (`registry.register(...)`) or a `const x = getThing()`
-/// whose init is a plain call is still flagged.
+/// whose factory has no known provenance is still flagged.
 fn is_local_const_config_call(
     call: &oxc_ast::ast::CallExpression,
-    new_locals: &FxHashSet<String>,
+    builder_bases: &FxHashSet<String>,
 ) -> bool {
     let Expression::StaticMemberExpression(m) = &call.callee else {
         return false;
@@ -1568,7 +1575,85 @@ fn is_local_const_config_call(
     let Expression::Identifier(obj) = &m.object else {
         return false;
     };
-    new_locals.contains(obj.name.as_str())
+    builder_bases.contains(obj.name.as_str())
+}
+
+/// Local name bound to the default (or namespace) import of the Express package:
+/// `import express from "express"` or `import * as express from "express"` →
+/// `Some("express")`. Anchors the [`express_factory_const_bindings`] provenance
+/// gate to the real `express` package, so a same-named local `express` (or one
+/// imported from another module) is not treated as an app/router factory.
+fn express_default_import_local(program: &Program) -> Option<String> {
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else { continue };
+        if import.source.value.as_str() != "express" {
+            continue;
+        }
+        let Some(specifiers) = &import.specifiers else { continue };
+        for spec in specifiers {
+            match spec {
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
+                    return Some(def.local.name.to_string());
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
+                    return Some(ns.local.name.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// True when `init` builds a fresh Express app or router from the `express`
+/// import bound to `express_local`: `express()` (an application) or
+/// `express.Router()` (a router). Both return a brand-new, module-local object,
+/// so configuring it in place (`app.use(...)`, `router.get(...)`) is builder
+/// setup — the factory-created counterpart of `new Koa()`.
+fn is_express_factory_call(init: &Expression, express_local: &str) -> bool {
+    let Expression::CallExpression(call) = init else { return false };
+    match &call.callee {
+        // `express()` — creates an application.
+        Expression::Identifier(id) => id.name.as_str() == express_local,
+        // `express.Router()` — creates a router.
+        Expression::StaticMemberExpression(m) => {
+            m.property.name.as_str() == "Router"
+                && matches!(&m.object, Expression::Identifier(o) if o.name.as_str() == express_local)
+        }
+        _ => false,
+    }
+}
+
+/// Collect names of top-level `const` bindings initialized by an Express
+/// app/router factory (`const app = express()`,
+/// `const router = express.Router()`) where `express` resolves to the `express`
+/// package import (see [`express_default_import_local`]). These are
+/// freshly-created, module-local objects, so configuring them in place is the
+/// builder pattern — the same exemption as `const app = new Koa()`, extended to
+/// Express's factory form. Without the `express` import, or for a bare
+/// `const x = getThing()` whose factory has no known provenance, nothing is
+/// collected and the call stays flagged.
+fn express_factory_const_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
+    let Some(express_local) = express_default_import_local(program) else {
+        return out;
+    };
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else { continue };
+        if decl.kind != oxc_ast::ast::VariableDeclarationKind::Const {
+            continue;
+        }
+        for declarator in &decl.declarations {
+            let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                continue;
+            };
+            let Some(init) = &declarator.init else { continue };
+            if is_express_factory_call(init, &express_local) {
+                out.insert(id.name.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Collect the local binding names this module re-exports: the identifier of a
@@ -2473,7 +2558,8 @@ impl OxcCheck for Check {
         let start_transition_names = react_start_transition_bindings(program);
         let vue_reactivity_names = vue_reactivity_bindings(program);
         let module_locals = module_const_bindings(program);
-        let new_locals = module_const_new_bindings(program);
+        let mut builder_base_locals = module_const_new_bindings(program);
+        builder_base_locals.extend(express_factory_const_bindings(program));
         let exported_locals = module_exported_local_bindings(program);
         let exported_bindings = module_exported_bindings(program);
         let top_level_locals = module_top_level_value_bindings(program);
@@ -2496,7 +2582,7 @@ impl OxcCheck for Check {
                     || is_data_init_foreach(call, &module_locals)
                     || is_property_registration_foreach(call)
                     || is_define_property_wrapper_call(call, program)
-                    || is_local_const_config_call(call, &new_locals)
+                    || is_local_const_config_call(call, &builder_base_locals)
                     || is_export_object_assign(call, &exported_locals)
                     || is_define_property_on_local_prototype(call, &top_level_locals)
                     || is_direct_define_property_on_exported_binding(call, &exported_bindings)
@@ -4654,6 +4740,64 @@ precacheAndRoute(entries)
             diags.len(),
             1,
             "config call on a const whose init is a plain call must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_express_router_route_registration() {
+        // Issue #7912: the standard Express router-module pattern builds a router
+        // with the `express.Router()` factory and registers routes on it. The
+        // router is a fresh, module-local object (the factory-created counterpart
+        // of `new Koa()`), so `router.get/post/put(...)` is builder setup, not an
+        // external side effect.
+        let src = "\
+            import express from 'express';\n\
+            const router = express.Router();\n\
+            router.get('/organization/definitions', organizationsController.getDefinitions);\n\
+            router.post('/organization', organizationsController.signup);\n\
+            router.put('/organization', organizationsController.putOrganization);\n\
+            export { router };\n";
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "src/routers/organizations/organizations.router.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "route registration on an express.Router() must be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_express_app_middleware_registration() {
+        // The application factory `express()` also returns a fresh module-local
+        // object; `app.use(...)` middleware setup is exempt for the same reason.
+        let src = "\
+            import express from 'express';\n\
+            const app = express();\n\
+            app.use(cors());\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/middleware/setup.ts");
+        assert!(
+            diags.is_empty(),
+            "middleware registration on an express() app must be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_router_factory_without_express_provenance() {
+        // The provenance gate anchors the exemption to the real `express` package.
+        // A same-named local `express` whose value comes from an unknown factory
+        // could be a shared/imported singleton, so its `.Router()` mutation stays
+        // flagged.
+        let src = "\
+            const express = getFramework();\n\
+            const router = express.Router();\n\
+            router.get('/x', handler);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a router built from a factory without express provenance must still be flagged, got {diags:?}"
         );
     }
 
