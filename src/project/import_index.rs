@@ -353,8 +353,11 @@ pub struct ImportIndex {
 }
 
 impl ImportIndex {
-    /// Parse every TS/JS/TSX/Rust file in `files` and build the index. Vue
-    /// files are ignored (Vue `<script>` blocks are not yet extracted).
+    /// Parse every indexable file in `files` and build the index. TS/JS/TSX and
+    /// Rust files are parsed directly. A Vue SFC's `<script>` / `<script setup>`
+    /// block is extracted and re-parsed so the SFC participates as both an
+    /// importer and an exporter in the graph. Markdown and HTML contribute only
+    /// the cross-file references they declare.
     #[must_use]
     pub fn build(files: &[&SourceFile]) -> Self {
         // Per-file parse + extract runs in parallel; each worker gets its own
@@ -7153,6 +7156,31 @@ mod tests {
                 .iter()
                 .any(|i| i.source_path.as_deref() == Some(canon_vue.as_path())),
             "TS file should resolve import of .vue file, got: {imports:?}"
+        );
+    }
+
+    // Regression for #7893: an export consumed only by a `.vue` SFC
+    // `<script setup>` block must register a usage so dead-export does not flag
+    // it. The SFC script's `import { useChunkUpload } from '@/composables/...'`
+    // is extracted and resolved through the Vite `@` alias exactly like a TS/JS
+    // importer, so the consumed export is cross-file live.
+    #[test]
+    fn vue_sfc_script_import_registers_usage_issue_7893() {
+        let (_dir, index, paths) = build_index(&[
+            ("vite.config.js", "export default {};\n"),
+            (
+                "src/composables/useChunkUpload.js",
+                "export function useChunkUpload(opts = {}) { return opts; }\n",
+            ),
+            (
+                "src/view/media/chunkUpload.vue",
+                "<script setup>\nimport { useChunkUpload } from '@/composables/useChunkUpload'\nconst { tasks } = useChunkUpload()\n</script>\n<template><div/></template>",
+            ),
+        ]);
+        let composable_canon = &paths[1];
+        assert!(
+            !index.get_usages(composable_canon, "useChunkUpload").is_empty(),
+            "useChunkUpload is imported by a .vue SFC and must not be dead",
         );
     }
 
