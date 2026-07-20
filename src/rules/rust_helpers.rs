@@ -2991,6 +2991,14 @@ pub fn operand_is_bool(node: Node, source: &[u8]) -> bool {
                     .is_some_and(|operand| operand_is_bool(operand, source))
         }
         "call_expression" => call_returns_bool(node, source),
+        // `matches!(expr, pat)` expands to a `bool` pattern-match by the language
+        // spec — unlike an arbitrary macro whose expansion type is opaque, its
+        // result is always `bool`. Match on the macro's identity (its `macro`
+        // segment being `matches`), never a broader name list.
+        "macro_invocation" => node
+            .child_by_field_name("macro")
+            .and_then(|m| final_segment(m, source))
+            .is_some_and(|name| name == "matches"),
         "identifier" => node.utf8_text(source).ok().is_some_and(|name| {
             // A binding explicitly annotated `bool`, or — for an inferred
             // binding — one whose initializer is itself provably bool
