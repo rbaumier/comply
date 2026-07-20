@@ -1,6 +1,10 @@
 //! tailwind-no-deprecated-classes — flag deprecated Tailwind utility
 //! classes that were removed or renamed in v3/v4.
 //!
+//! Runs only in projects that use Tailwind CSS; UnoCSS/Windi presets keep
+//! classes like `flex-shrink-0` as first-class utilities, so the v3/v4
+//! deprecation rename applies only to real Tailwind projects.
+//!
 //! Walks JSX `jsx_attribute` nodes (TS/TSX/JS) and Vue `attribute` nodes
 //! (Vue SFC `<template>`). For each `class`/`className` attribute, splits
 //! the value on whitespace, strips Tailwind variant prefixes (`hover:`,
@@ -65,6 +69,9 @@ fn vue_class_value<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a 
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    if !ctx.project.uses_tailwind() {
+        return;
+    }
     let class_str = jsx_class_value(node, source)
         .or_else(|| vue_class_value(node, source));
     let Some(class_str) = class_str else { return; };
@@ -104,7 +111,21 @@ mod tests {
     use super::*;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", &project, file)
+    }
+
+    #[test]
+    fn silent_on_unocss_presetwind3_vue_without_tailwind() {
+        // Regression for rbaumier/comply#7900 — UnoCSS `presetWind3` targets
+        // Tailwind v3 semantics where `flex-shrink-0` is a first-class utility.
+        // The v3/v4 deprecation rename applies only to real Tailwind projects,
+        // so the rule must stay silent on a UnoCSS/Windi project.
+        let source = r#"<template>
+  <div class="flex-1 flex-shrink-0" />
+</template>"#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, "t.vue").is_empty());
     }
 
     #[test]
