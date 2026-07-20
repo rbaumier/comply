@@ -1898,12 +1898,14 @@ fn resolves_to_node_module_ctor(
 /// through it without leaking a pre-sort alias: the **object of a member access**
 /// (`arr.map(...)`, `arr.length`, `arr[i]`) or the iterated expression of a
 /// `for…of` loop (`for (const x of arr)`), which only consumes the iterator. A
-/// `return <binding>` is additionally allowed, but only when the initializer is a
-/// provably-fresh built-in Array copy (`x.slice(…)`, `.filter`/`.map`/`Array.from`/
-/// `[...x]`, …): the value handed out is the already-sorted private copy, so no
-/// pre-existing alias can observe the reorder. Any other bare-value use — a call
-/// argument (`use(arr)`), an assignment source (`x = arr`), a spread (`[...arr]`),
-/// an object-property value (`{ k: arr }`), or a `return` of an opaque-call binding
+/// `return` is additionally allowed — either bare (`return arr`) or nested inside the
+/// returned object/array literal (`return { arr }`, `return [arr]`) — but only when
+/// the initializer is a provably-fresh array: an array literal (`[]`, `[a, b]`,
+/// `[...x]`) or a built-in Array copy (`x.slice(…)`, `.filter`/`.map`/`Array.from`).
+/// The aggregate is built at the return, after the sort, so no pre-existing alias can
+/// observe the reorder. Any other bare-value use — a call argument (`use(arr)`), an
+/// assignment source (`x = arr`), a property/element of a *stored* literal
+/// (`const o = { arr }`), or a `return` of an opaque-call binding
 /// (`const xs = getItems(); return xs`, whose result may be shared) — could hand
 /// the array to code that observes the reorder, so the binding is rejected and the
 /// `.sort()` stays flagged.
@@ -1930,7 +1932,7 @@ pub fn is_local_fresh_array_binding(
     let nodes = semantic.nodes();
 
     let mut is_fresh_local = false;
-    let mut init_is_fresh_copy = false;
+    let mut init_is_provably_fresh = false;
     for kind in
         std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
@@ -1946,8 +1948,8 @@ pub fn is_local_fresh_array_binding(
                 init,
                 Some(Expression::CallExpression(_) | Expression::ArrayExpression(_))
             );
-            init_is_fresh_copy =
-                is_fresh_local && init.is_some_and(initializer_is_fresh_array_copy);
+            init_is_provably_fresh =
+                is_fresh_local && init.is_some_and(initializer_is_provably_fresh_array);
             break;
         }
     }
@@ -1957,9 +1959,9 @@ pub fn is_local_fresh_array_binding(
 
     // The array must not leak a pre-sort alias. Every reference reads through the
     // binding (member object, `for…of` iterable), and — only for a provably-fresh
-    // built-in copy — a `return <binding>` may hand out the already-sorted copy.
+    // array — a `return` may hand out the already-sorted array.
     scoping.get_resolved_references(sym_id).all(|reference| {
-        reference_is_member_object(reference.node_id(), semantic, init_is_fresh_copy)
+        reference_is_member_object(reference.node_id(), semantic, init_is_provably_fresh)
     })
 }
 
@@ -1967,11 +1969,12 @@ pub fn is_local_fresh_array_binding(
 /// binding: it is the *object* of a member access (`arr.foo`, `arr[i]`), the
 /// iterated expression of a `for…of` loop (`for (const x of arr)`), which consumes
 /// the iterator without retaining the array, or — when `allow_return_escape` is set
-/// (the initializer is a provably-fresh built-in copy) — the argument of a `return`,
-/// which hands out the already-sorted private copy. Any other parent (call
-/// argument, assignment source, spread, property value, the `for…of` binding
-/// target, or a `return` of a possibly-shared binding) lets a pre-sort alias escape
-/// and returns `false`.
+/// (the initializer is a provably-fresh array) — a value handed to a `return`, either
+/// directly (`return arr`) or nested inside the returned object/array literal
+/// (`return { arr }`, `return [arr]`), which exposes only the already-sorted private
+/// array. Any other parent (call argument, assignment source, a spread or property
+/// value in a *stored* literal, the `for…of` binding target, or a `return` of a
+/// possibly-shared binding) lets a pre-sort alias escape and returns `false`.
 fn reference_is_member_object(
     ref_node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
@@ -1986,10 +1989,44 @@ fn reference_is_member_object(
         AstKind::StaticMemberExpression(member) => member.object.span() == ref_span,
         AstKind::ComputedMemberExpression(member) => member.object.span() == ref_span,
         AstKind::ForOfStatement(for_of) => for_of.right.span() == ref_span,
-        AstKind::ReturnStatement(ret) => {
-            allow_return_escape && ret.argument.as_ref().is_some_and(|arg| arg.span() == ref_span)
+        _ => allow_return_escape && reference_escapes_only_via_return(ref_node_id, semantic),
+    }
+}
+
+/// True when the reference at `ref_node_id` flows into a `return` and nowhere else:
+/// as the bare argument (`return arr`) or nested solely inside object/array literals
+/// that are materialized *at* the return (`return { arr }`, `return { k: arr }`,
+/// `return [arr]`, `return { a: [arr] }`). Because the aggregate is built at the
+/// return — after the in-place sort — the caller only ever observes the sorted
+/// array; no pre-existing alias can see the reorder.
+///
+/// The walk climbs only through `ObjectProperty`/`ObjectExpression`/`ArrayExpression`
+/// /`SpreadElement` nodes up to a `ReturnStatement` argument. Any other enclosing
+/// node (a `CallExpression` argument, a `VariableDeclarator` storing the literal, a
+/// `ConditionalExpression`, …) stops the walk and returns `false`, so a literal that
+/// is retained before the sort keeps the `.sort()` flagged.
+fn reference_escapes_only_via_return(
+    ref_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let mut child = ref_node_id;
+    loop {
+        let parent = nodes.parent_id(child);
+        match nodes.kind(parent) {
+            AstKind::ObjectProperty(_)
+            | AstKind::ObjectExpression(_)
+            | AstKind::ArrayExpression(_)
+            | AstKind::SpreadElement(_) => child = parent,
+            AstKind::ReturnStatement(ret) => {
+                let child_span = nodes.get_node(child).kind().span();
+                return ret.argument.as_ref().is_some_and(|arg| arg.span() == child_span);
+            }
+            _ => return false,
         }
-        _ => false,
     }
 }
 
@@ -2002,12 +2039,14 @@ const FRESH_ARRAY_COPY_METHODS: &[&str] = &[
 ];
 
 /// True when `init` provably evaluates to a freshly allocated array no other code
-/// can alias: a call to a built-in copy method (`x.slice(…)`, `.filter`, `.map`, …),
-/// `Array.from(…)`, or an array literal with a spread (`[...x]`). A `return` of a
-/// binding with such an initializer only exposes the sorted copy, unlike an opaque
-/// call (`getItems()`) whose result may be a shared array.
-fn initializer_is_fresh_array_copy(init: &oxc_ast::ast::Expression) -> bool {
-    use oxc_ast::ast::{ArrayExpressionElement, Expression};
+/// can alias: any array literal (`[]`, `[a, b]`, `[...x]`), a call to a built-in
+/// copy method (`x.slice(…)`, `.filter`, `.map`, …), or `Array.from(…)`. An array
+/// literal allocates a brand-new array nothing can alias at creation — more
+/// provably-private than a copy method call. A `return` of a binding with such an
+/// initializer only exposes the sorted array, unlike an opaque call (`getItems()`)
+/// whose result may be a shared array.
+fn initializer_is_provably_fresh_array(init: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
 
     match init {
         Expression::CallExpression(call) => {
@@ -2019,10 +2058,7 @@ fn initializer_is_fresh_array_copy(init: &oxc_ast::ast::Expression) -> bool {
                 || (method == "from"
                     && matches!(&callee.object, Expression::Identifier(obj) if obj.name.as_str() == "Array"))
         }
-        Expression::ArrayExpression(array) => array
-            .elements
-            .iter()
-            .any(|el| matches!(el, ArrayExpressionElement::SpreadElement(_))),
+        Expression::ArrayExpression(_) => true,
         _ => false,
     }
 }
