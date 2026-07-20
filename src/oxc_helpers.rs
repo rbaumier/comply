@@ -4130,7 +4130,7 @@ pub fn binding_declared_ts_type<'a>(
     semantic: &oxc_semantic::Semantic<'a>,
 ) -> Option<&'a oxc_ast::ast::TSType<'a>> {
     use oxc_ast::AstKind;
-    use oxc_ast::ast::{BindingPattern, TSType};
+    use oxc_ast::ast::BindingPattern;
     let ref_id = ident.reference_id.get()?;
     let scoping = semantic.scoping();
     let sym_id = scoping.get_reference(ref_id).symbol_id()?;
@@ -4157,12 +4157,32 @@ pub fn binding_declared_ts_type<'a>(
         BindingPattern::ObjectPattern(obj) => {
             let annotation = &annotation?.type_annotation;
             let key = object_pattern_key_for_symbol(obj, sym_id)?;
-            match annotation {
-                TSType::TSTypeLiteral(lit) => signature_member_type(&lit.members, key),
-                _ => named_type_member_type(type_reference_name(annotation)?, key, semantic, 0),
-            }
+            ts_type_member_type(annotation, key, semantic)
         }
         _ => None,
+    }
+}
+
+/// The declared type of member `member` on `container` — the type an access
+/// `obj.member` yields when `obj` has type `container`. Reads an inline object
+/// type literal (`{ member: T }`) directly, or resolves a named
+/// `interface`/`type` reference to its same-file declaration and looks the
+/// member up there (following `extends` heritage and `type X = Y` aliases via
+/// [`named_type_member_type`]). A generic reference's own type arguments are
+/// ignored: the member's declared type is read structurally, independent of the
+/// instantiation. Same-file only — returns `None` for an inline non-literal
+/// type, an unknown/cross-file named type, or an absent member. This is the
+/// member-access counterpart of the object-pattern branch of
+/// [`binding_declared_ts_type`].
+pub fn ts_type_member_type<'a>(
+    container: &'a oxc_ast::ast::TSType<'a>,
+    member: &str,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+    use oxc_ast::ast::TSType;
+    match container {
+        TSType::TSTypeLiteral(lit) => signature_member_type(&lit.members, member),
+        _ => named_type_member_type(type_reference_name(container)?, member, semantic, 0),
     }
 }
 
