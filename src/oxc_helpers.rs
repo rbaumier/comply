@@ -1395,6 +1395,54 @@ pub fn is_prisma_delegate_call(member: &oxc_ast::ast::StaticMemberExpression) ->
     )
 }
 
+/// Receiver names that denote an HTTP client instance rather than a framework
+/// router/app. `axios.get(url, config)` and `client.get(url)` request a URL;
+/// they do not register a server route.
+const HTTP_CLIENT_RECEIVERS: &[&str] = &[
+    "axios", "http", "https", "client", "fetch", "request", "req", "instance",
+];
+
+/// True when `member` is a verb call (`<recv>.get`, `<recv>.post`, …) whose
+/// receiver denotes an HTTP client instance rather than a framework router/app —
+/// so the call is an outbound request, not a server route registration.
+///
+/// The receiver may be a bare identifier (`axios.get`, `client.post`) or a
+/// member access whose terminal property is the client (`$.http.post`,
+/// `this.http.get`, `api.client.post`, `service['axios'].get`): a connector
+/// framework injects the client as a property, so the object of the verb call is
+/// itself a `<owner>.<client>` accessor.
+#[must_use]
+pub fn is_http_client_receiver(member: &oxc_ast::ast::StaticMemberExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    let receiver = match &member.object {
+        Expression::Identifier(obj) => obj.name.as_str(),
+        Expression::StaticMemberExpression(inner) => inner.property.name.as_str(),
+        Expression::ComputedMemberExpression(inner) => match &inner.expression {
+            Expression::StringLiteral(lit) => lit.value.as_str(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    HTTP_CLIENT_RECEIVERS.contains(&receiver)
+}
+
+/// True when `arg` is a request handler: a function, or a reference to one
+/// (`handler`, `controller.list`). A server route registration passes a handler
+/// after the path (`app.get("/users", handler)`); a client HTTP call
+/// (`client.get("/users")`) passes only the path.
+#[must_use]
+pub fn is_handler_arg(arg: &oxc_ast::ast::Argument) -> bool {
+    use oxc_ast::ast::Argument;
+    matches!(
+        arg,
+        Argument::ArrowFunctionExpression(_)
+            | Argument::FunctionExpression(_)
+            | Argument::Identifier(_)
+            | Argument::StaticMemberExpression(_)
+            | Argument::ComputedMemberExpression(_)
+    )
+}
+
 /// `true` when `expr` is an array literal (`[...]`, `[]`) or a `new Array(...)`
 /// construction.
 #[must_use]

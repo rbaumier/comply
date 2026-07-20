@@ -2,7 +2,7 @@
 //! referencing any schema validator.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_handler_arg, is_http_client_receiver};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, Expression};
 use std::sync::Arc;
@@ -24,36 +24,6 @@ fn first_arg_is_route_path(arg: &Argument) -> bool {
             .is_some_and(|q| q.value.raw.starts_with('/')),
         _ => false,
     }
-}
-
-/// Receiver names that denote an HTTP client instance rather than a framework
-/// router/app. `axios.get(url, config)` and `client.get(url)` request a URL;
-/// they do not register a server route.
-const HTTP_CLIENT_RECEIVERS: &[&str] = &[
-    "axios", "http", "https", "client", "fetch", "request", "req", "instance",
-];
-
-/// True when `arg` is a request handler: a function, or a reference to one
-/// (`handler`, `controller.list`). A server route registration passes a handler
-/// after the path (`app.get("/users", handler)`); a client HTTP call
-/// (`client.get("/users")`) passes only the path.
-fn is_handler_arg(arg: &Argument) -> bool {
-    matches!(
-        arg,
-        Argument::ArrowFunctionExpression(_)
-            | Argument::FunctionExpression(_)
-            | Argument::Identifier(_)
-            | Argument::StaticMemberExpression(_)
-            | Argument::ComputedMemberExpression(_)
-    )
-}
-
-/// True when the call's receiver is a known HTTP-client name.
-fn receiver_is_http_client(member: &oxc_ast::ast::StaticMemberExpression) -> bool {
-    let Expression::Identifier(obj) = &member.object else {
-        return false;
-    };
-    HTTP_CLIENT_RECEIVERS.contains(&obj.name.as_str())
 }
 
 impl OxcCheck for Check {
@@ -86,7 +56,7 @@ impl OxcCheck for Check {
             if !ROUTE_METHODS.contains(&method) {
                 continue;
             }
-            if receiver_is_http_client(member) {
+            if is_http_client_receiver(member) {
                 continue;
             }
             let Some(first_arg) = call.arguments.first() else {
@@ -250,6 +220,35 @@ export function getRandomJoke() {
         // not a handler, so it is a client call, not a route registration.
         let src = r#"export function load() { return axios.get('/users', { params }); }"#;
         assert!(run_on(src, "src/api/users.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_member_expression_http_client_call() {
+        // Issue #7922 — `$.http.post('/v1/webhooks', payload)` is an outbound
+        // request through the connector framework's injected `$.http` client, not
+        // a server route handler. A member-expression receiver whose terminal
+        // property is an HTTP-client name must not be flagged as a route.
+        let src = r#"const response = await $.http.post('/v1/webhooks', payload);"#;
+        assert!(
+            run_on(src, "packages/backend/src/apps/invoice-ninja/triggers/new-clients/index.js")
+                .is_empty()
+        );
+        assert!(
+            run_on("this.http.get('/', body);", "src/apps/monday/verify.js").is_empty()
+        );
+        // Computed member receiver (`service['axios']`) resolves the same way.
+        assert!(
+            run_on("service['axios'].get('/', body);", "src/apps/monday/list.js").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_member_expression_router_receiver() {
+        // Negative space: a nested router (`server.router.post`) whose terminal
+        // receiver property is not an HTTP-client name is still a route
+        // registration and must be flagged when it lacks a schema.
+        let src = r#"server.router.post("/things", (req, res) => res.json([]));"#;
+        assert_eq!(run_on(src, "src/api/things.js").len(), 1);
     }
 
     #[test]
