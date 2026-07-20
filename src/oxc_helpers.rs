@@ -2870,39 +2870,47 @@ fn reference_is_array_growth_receiver(
     matches!(member.property.name.as_str(), "push" | "unshift" | "splice")
 }
 
+/// The module specifier `id` is imported from, if its binding resolves to an
+/// `import ... from '<source>'` declaration. Returns `None` for an unresolved
+/// reference or a binding that is not an import (e.g. a local function/param or a
+/// hook-initialized `const`), so a same-named non-import binding is never
+/// mistaken for the imported one.
+///
+/// Resolves the reference via `reference_id` → symbol → declaration node, then
+/// walks the declaration node and its ancestors for the enclosing
+/// `ImportDeclaration`. Callers apply their own predicate (exact match or a scope
+/// prefix like `@react-navigation/`) to the returned source.
+#[must_use]
+pub fn import_source_of<'a>(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    use oxc_ast::AstKind;
+
+    let ref_id = id.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::ImportDeclaration(import) => Some(import.source.value.as_str()),
+            _ => None,
+        })
+}
+
 /// True when `id` resolves (via its binding) to an import whose source module
 /// is one of `modules`. Returns `false` for an unresolved reference or a binding
 /// that is not an import (e.g. a local function/param shadowing the name), so a
 /// same-named non-import call is never mistaken for the imported one.
-///
-/// Resolves the reference via `reference_id` → symbol → declaration node, then
-/// walks the declaration node and its ancestors for the enclosing
-/// `ImportDeclaration` and matches its `source.value` against `modules`.
 #[must_use]
 pub fn resolves_to_import_from(
     id: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
     modules: &[&str],
 ) -> bool {
-    use oxc_ast::AstKind;
-
-    let Some(ref_id) = id.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let decl_node_id = scoping.symbol_declaration(sym_id);
-    let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
-    {
-        if let AstKind::ImportDeclaration(import) = kind {
-            return modules.contains(&import.source.value.as_str());
-        }
-    }
-    false
+    import_source_of(id, semantic).is_some_and(|source| modules.contains(&source))
 }
 
 /// True when `expr` is a primitive literal — `string`, `number`, or `boolean` —
