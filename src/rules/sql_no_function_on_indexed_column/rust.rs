@@ -75,4 +75,76 @@ mod tests {
         let src = r#"fn f() { let q = "SELECT id FROM user WHERE email = 'a'"; }"#;
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn allows_coalesce_over_subquery_on_value_side() {
+        // FP #7890 (zksync-era factory_deps_dal.rs): the indexed column
+        // `miniblock_number` is bare on the sargable side; COALESCE wraps a
+        // subquery and a literal on the *value* side, so the index seek stands.
+        let src = r##"fn f() {
+    sqlx::query!(
+        r#"
+        SELECT bytecode
+        FROM factory_deps
+        WHERE
+            bytecode_hash = $1
+            AND miniblock_number <= COALESCE(
+                (SELECT MAX(number) FROM miniblocks WHERE l1_batch_number <= $2),
+                0
+            )
+        "#,
+    );
+}"##;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_coalesce_wrapping_column() {
+        // COALESCE wrapping a real column still defeats the seek.
+        let src = r#"fn f() { let q = "SELECT id FROM t WHERE COALESCE(deleted_at, 'inf') > now()"; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_cast_of_bind_param() {
+        // CAST wraps a bind parameter; the type name after `AS` is not a column.
+        let src = r#"fn f() { let q = "SELECT id FROM t WHERE addr = CAST($1 AS bytea)"; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_cast_of_column() {
+        let src = r#"fn f() { let q = "SELECT id FROM t WHERE CAST(created_at AS date) = $1"; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_extract_of_bind_param() {
+        // EXTRACT's field keyword precedes FROM; the source after FROM is a param.
+        let src = r#"fn f() { let q = "SELECT id FROM t WHERE y = EXTRACT(YEAR FROM $1)"; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_extract_of_column() {
+        let src = r#"fn f() { let q = "SELECT id FROM t WHERE EXTRACT(YEAR FROM created_at) = 2024"; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_column_wrapped_in_grouping_paren() {
+        // A column wrapped in a grouping / arithmetic sub-expression inside the
+        // function is still wrapped: `EXTRACT(EPOCH FROM (now() - created_at))`
+        // defeats the seek on `created_at`.
+        let src = r#"fn f() { let q = "SELECT id FROM t WHERE EXTRACT(EPOCH FROM (now() - created_at)) > 3600"; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_grouping_paren_without_column() {
+        // No column anywhere in the argument list — only a function call and a
+        // bind parameter inside a grouping paren, plus a literal fallback.
+        let src = r#"fn f() { let q = "SELECT id FROM t WHERE ts <= COALESCE((now() - $1), now())"; }"#;
+        assert!(run(src).is_empty());
+    }
 }
