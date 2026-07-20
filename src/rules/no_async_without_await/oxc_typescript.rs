@@ -387,26 +387,51 @@ fn type_reference_is_object_literal_contract(
     }
 }
 
+/// True when `ts_type` is a named type reference — a bare identifier or a
+/// qualified/namespaced name — the shape a `satisfies`/`as` conformance
+/// assertion pins an object literal to. `as const` is excluded: it parses
+/// `const` as a bare type reference, but it is a literal-narrowing assertion,
+/// not a conformance assertion to a named contract, so it imposes no
+/// `Promise`-returning member.
+fn is_named_type_reference(ts_type: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+
+    let TSType::TSTypeReference(tref) = ts_type else {
+        return false;
+    };
+    match &tref.type_name {
+        TSTypeName::QualifiedName(_) => true,
+        TSTypeName::IdentifierReference(id) => id.name.as_str() != "const",
+        TSTypeName::ThisExpression(_) => false,
+    }
+}
+
 /// Check if the async function is a shorthand method / arrow value of an object
-/// literal whose binding contract carries an explicit named type annotation, in
-/// either of two positions:
+/// literal that carries an explicit named type contract, in one of three
+/// positions:
 ///
-/// - the object literal is the direct initializer of a type-annotated
+/// - Axis A — the object literal is the direct initializer of a type-annotated
 ///   `VariableDeclarator` (`const proto: Core.CoreAPI.Controller.Base = { async
-///   m() {...} }`); or
-/// - the object literal is returned by — or is the concise arrow body of — a
-///   factory whose explicit return type is a named type reference (`function
-///   make(): Api { return { async m() {...} } }`, `const make = ():
-///   Modules.EntityService.EntityService => ({ async m() {...} })`).
+///   m() {...} }`);
+/// - Axis B — the object literal is returned by — or is the concise arrow body
+///   of — a factory whose explicit return type is a named type reference
+///   (`function make(): Api { return { async m() {...} } }`, `const make = ():
+///   Modules.EntityService.EntityService => ({ async m() {...} })`);
+/// - Axis C — the object literal is the operand of a `satisfies`/`as`
+///   conformance assertion to a named type (`{ async m() {...} } satisfies
+///   SessionStrategy<S, any>`).
 ///
-/// In both positions the named type is the contract, exactly as `implements I`
-/// is for a class (`is_method_of_class_with_supertype`): `async` is what makes
-/// the method conform to the declared `Promise<T>` member even when the body
-/// never awaits — dropping it would break every `await` call site.
+/// The named type is the contract, exactly as `implements I` is for a class
+/// (`is_method_of_class_with_supertype`): `async` is what makes the method
+/// conform to the declared `Promise<T>` member even when the body never awaits —
+/// dropping it would break every `await` call site. For Axes A/B,
 /// `type_reference_is_object_literal_contract` decides when a type reference
-/// counts as such a contract. An object literal with no binding/return type
-/// annotation, one whose annotation is not a named type reference, or a nested
-/// inner object under a typed outer binding all keep the diagnostic firing.
+/// counts (a bare identifier must resolve to a same-file `Promise`-returning
+/// member). Axis C is stronger: a `satisfies`/`as` is an explicit author-written
+/// conformance assertion, so a named type reference counts on presence alone —
+/// including an imported bare identifier — exactly as a class supertype does. An
+/// object literal with no such contract, or a nested inner object under a typed
+/// outer binding, keeps the diagnostic firing.
 fn is_async_method_of_contract_typed_object_literal(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -444,16 +469,31 @@ fn is_async_method_of_contract_typed_object_literal(
         });
     }
 
-    // Axis B: the object literal is in the return position of an enclosing
-    // factory — the argument of a `return` statement or the concise body of an
-    // arrow (`=> ({...})`). Unwrap the parentheses oxc preserves directly above
-    // the object literal, then read the factory's explicit return type.
+    // Unwrap the parentheses oxc preserves directly above the object literal,
+    // then inspect what encloses it (shared by Axis C and Axis B below).
     let mut wrapped = object;
     let mut above = nodes.parent_node(wrapped.id());
     while matches!(above.kind(), AstKind::ParenthesizedExpression(_)) {
         wrapped = above;
         above = nodes.parent_node(wrapped.id());
     }
+
+    // Axis C: the object literal is the operand of a `satisfies`/`as` expression
+    // (`{ async m() {...} } satisfies SessionStrategy<S, any>`). The author's
+    // explicit conformance assertion is the object-literal equivalent of a class
+    // `implements` clause, so a named type reference — including an imported bare
+    // identifier a single-file linter cannot resolve — counts on presence alone,
+    // mirroring `is_method_of_class_with_supertype`.
+    if let AstKind::TSSatisfiesExpression(e) = above.kind() {
+        return is_named_type_reference(&e.type_annotation);
+    }
+    if let AstKind::TSAsExpression(e) = above.kind() {
+        return is_named_type_reference(&e.type_annotation);
+    }
+
+    // Axis B: the object literal is in the return position of an enclosing
+    // factory — the argument of a `return` statement or the concise body of an
+    // arrow (`=> ({...})`). Read the factory's explicit return type.
     let return_type = match above.kind() {
         // `return { ... }` — the factory is the nearest enclosing function.
         AstKind::ReturnStatement(_) => {
@@ -844,16 +884,17 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Async method/arrow value of an object literal whose binding
-            // contract is an explicit named type annotation — either the object
-            // is the initializer of a type-annotated variable (`const proto:
-            // Core.CoreAPI.Controller.Base = { async m() {...} }`) or it is
-            // returned by / is the concise body of a factory with an explicit
-            // return type (`(): Modules.EntityService.EntityService => ({ async
-            // m() {...} })`). The named type owns the contract exactly as it does
-            // for a class that `implements` it, so `async` is mandatory even when
-            // the body never awaits. An object literal with no such annotation
-            // stays flagged.
+            // Async method/arrow value of an object literal that carries a named
+            // type contract — the object is the initializer of a type-annotated
+            // variable (`const proto: Core.CoreAPI.Controller.Base = { async
+            // m() {...} }`), is returned by / is the concise body of a factory
+            // with an explicit return type (`(): Modules.EntityService.
+            // EntityService => ({ async m() {...} })`), or is the operand of a
+            // `satisfies`/`as` conformance assertion to a named type (`{ async
+            // m() {...} } satisfies SessionStrategy<S, any>`). The named type owns
+            // the contract exactly as it does for a class that `implements` it, so
+            // `async` is mandatory even when the body never awaits. An object
+            // literal with no such contract stays flagged.
             if is_async_method_of_contract_typed_object_literal(node, semantic, ctx.source) {
                 continue;
             }
@@ -1801,6 +1842,79 @@ mod tests {
         // return type has no interface contract — its object literal's async
         // method (no await, not a single forwarding call) stays flagged.
         let src = "const make = () => ({ async m() { const x = 1; return x; } });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_async_method_of_object_satisfies_imported_contract() {
+        // Regression for rbaumier/comply#7930 — keystonejs/keystone
+        // `packages/core/src/session.ts`. The object literal is pinned to the
+        // imported `SessionStrategy` contract via `satisfies`; that type declares
+        // `end` as `Promise`-returning, so `async end` is mandatory even though
+        // the body never awaits — dropping `async` breaks the `satisfies`
+        // constraint. The assertion is the object-literal analog of a class
+        // `implements`, so the named reference counts on presence alone even
+        // though it is imported and unresolvable in a single file.
+        let src = r#"import type { SessionStrategy } from './types'
+        export function statelessSessions<Session>() {
+            return {
+                async get({ context }) { return await context.unseal(); },
+                async end({ context }) {
+                    if (!context?.res) return;
+                    context.res.setHeader('Set-Cookie', serialize('', {}));
+                },
+                async start({ context, data }) { return await context.seal(data); },
+            } satisfies SessionStrategy<Session, any>;
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_method_of_object_as_imported_contract() {
+        // The `as` operator carries the same conformance assertion as
+        // `satisfies`, and a bare imported identifier counts on presence alone
+        // (the single-file linter cannot resolve `Adapter`, exactly as it cannot
+        // a class's imported base under `implements`).
+        let src = r#"import type { Adapter } from './types'
+        const a = {
+            async close() { this.socket.destroy(); },
+        } as Adapter;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_method_of_object_asserted_as_const() {
+        // Negative space for #7930: `as const` parses `const` as a bare type
+        // reference, but it is a literal-narrowing assertion, not a conformance
+        // assertion to a named contract — it imposes no Promise-returning member,
+        // so the async method with no await stays flagged.
+        let src = r#"const o = {
+            async m() { doSync(); },
+        } as const;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_method_of_object_satisfies_inline_type() {
+        // Negative space for #7930: Axis C treats only a *named* type reference
+        // as a conformance contract (mirroring a class supertype). An inline
+        // object type literal is not a named reference, so the async method with
+        // no await stays flagged.
+        let src = r#"const o = {
+            async m() { doSync(); },
+        } satisfies { m(): void };"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_method_of_inner_object_under_satisfies() {
+        // Negative space for #7930: only the object literal DIRECTLY under the
+        // `satisfies`/`as` assertion is a contract. An async method of a nested
+        // inner object stays flagged even though the outer object is pinned to a
+        // named type.
+        let src = r#"const o = {
+            inner: { async m() { doThing(); } },
+        } satisfies Ns.Wrapper;"#;
         assert_eq!(run_on(src).len(), 1);
     }
 
