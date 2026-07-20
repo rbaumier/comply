@@ -4,7 +4,9 @@
 //! sole argument is a string literal, or whose receiver is statically a string
 //! (a string literal/template, a string-returning call like `s.toLowerCase()`,
 //! an identifier bound to a `const` initialized to one of those
-//! (`const lc = s.toLowerCase(); lc.includes(x)`), or an identifier narrowed to
+//! (`const lc = s.toLowerCase(); lc.includes(x)`), an identifier whose binding
+//! carries an explicit `: string` type annotation (a `string`-typed parameter or
+//! annotated variable), or an identifier narrowed to
 //! `string` by a `typeof x === "string"` guard in an enclosing `&&` chain), is a
 //! `String.prototype` substring search, not array membership — there is no
 //! collection to index, so it is not flagged;
@@ -28,8 +30,8 @@ use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     Argument, BinaryExpression, BinaryOperator, CallExpression, ChainElement, Expression,
-    LogicalOperator, NewExpression, Statement, TSSignature, TSType, TSTypeAnnotation, TSTypeName,
-    TSTypeReference, UnaryOperator, VariableDeclarationKind,
+    LogicalOperator, NewExpression, Statement, TSLiteral, TSSignature, TSType, TSTypeAnnotation,
+    TSTypeName, TSTypeReference, UnaryOperator, VariableDeclarationKind,
 };
 use oxc_semantic::ReferenceFlags;
 use oxc_span::GetSpan;
@@ -97,18 +99,10 @@ impl OxcCheck for Check {
         }
 
         // `String.prototype.includes`/`indexOf` is a substring search, not array
-        // membership — `"abc".includes(x)` or `s.toLowerCase().includes(query)`
-        // has no collection to hash into a Map/Set, so the O(1)-lookup advice is a
-        // category error. Skip when the receiver is statically a string: a string
-        // literal/template, a call to a string-returning method, an identifier
-        // bound to a `const` initialized to one of those
-        // (`const lc = s.toLowerCase(); lc.includes(x)`), or an identifier narrowed
-        // to `string` by a `typeof x === "string"` guard in an enclosing `&&` chain
-        // (`typeof preset === "string" && preset.includes(word)`).
+        // membership, so the O(1)-lookup advice is a category error — skip when the
+        // receiver is statically a string (see `receiver_is_string_typed`).
         if matches!(method, "includes" | "indexOf")
-            && (receiver_is_string(&member.object)
-                || receiver_is_const_bound_string(&member.object, semantic)
-                || receiver_is_typeof_narrowed_string(&member.object, node, semantic))
+            && receiver_is_string_typed(&member.object, node, semantic)
         {
             return;
         }
@@ -632,6 +626,78 @@ fn receiver_is_const_bound_string<'a>(
         return false;
     }
     matches!(&decl.init, Some(init) if receiver_is_string(init))
+}
+
+/// True when `expr` is an identifier whose binding carries an explicit `string`
+/// type annotation — a `string`-typed function parameter (`providerName: string`)
+/// or an annotated variable (`const s: string = getIt()`). Such a receiver is a
+/// `string` regardless of its initializer, so `.includes()`/`.indexOf()` on it is
+/// a `String.prototype` substring search, not array membership — there is no
+/// collection to hash into a Map/Set. Resolves the identifier to its symbol
+/// declaration and inspects the binding's `TSTypeAnnotation`; a reassignment
+/// cannot violate the annotation (TS enforces the declared type on every write),
+/// so no reassignment check is needed.
+fn receiver_is_declared_string<'a>(
+    expr: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(id) = expr else {
+        return false;
+    };
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let declaration = semantic.nodes().kind(scoping.symbol_declaration(sym_id));
+    let annotation = if let AstKind::FormalParameter(param) = declaration {
+        &param.type_annotation
+    } else if let AstKind::VariableDeclarator(decl) = declaration {
+        &decl.type_annotation
+    } else {
+        return false;
+    };
+    annotation
+        .as_ref()
+        .is_some_and(|ann| type_is_string(&ann.type_annotation))
+}
+
+/// True when a TS type is a `string`: the `string` keyword, a string-literal type
+/// (`"foo"`), a union all of whose members are strings (`"a" | "b"`), or any of
+/// those parenthesized. These are the types on which `.includes()`/`.indexOf()`
+/// is `String.prototype`, not `Array.prototype`. A union with any non-string
+/// member is not matched (`.all` requires every constituent to be a string).
+fn type_is_string(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSStringKeyword(_) => true,
+        TSType::TSLiteralType(lit) => matches!(&lit.literal, TSLiteral::StringLiteral(_)),
+        TSType::TSUnionType(union) => union.types.iter().all(type_is_string),
+        TSType::TSParenthesizedType(paren) => type_is_string(&paren.type_annotation),
+        _ => false,
+    }
+}
+
+/// True when the `.includes()`/`.indexOf()` receiver is statically a `string`, so
+/// the call is a `String.prototype` substring search rather than array membership
+/// — there is no collection to hash into a Map/Set, making the O(1)-lookup advice
+/// a category error. A receiver counts as a string when it is a string
+/// literal/template or a string-returning call ([`receiver_is_string`]), an
+/// identifier bound to a `const` initialized to one of those
+/// ([`receiver_is_const_bound_string`]), an identifier whose binding carries an
+/// explicit `: string` type annotation ([`receiver_is_declared_string`]), or an
+/// identifier narrowed to `string` by a `typeof x === "string"` guard in an
+/// enclosing `&&` chain ([`receiver_is_typeof_narrowed_string`]).
+fn receiver_is_string_typed<'a>(
+    object: &Expression<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    receiver_is_string(object)
+        || receiver_is_const_bound_string(object, semantic)
+        || receiver_is_declared_string(object, semantic)
+        || receiver_is_typeof_narrowed_string(object, node, semantic)
 }
 
 /// True when the `.includes()`/`.indexOf()` receiver is an identifier proven to
@@ -1686,6 +1752,67 @@ function scan(customKeywords) {
     for (const k of ks) {
         if (customKeywords.includes(k)) {}
     }
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_string_typed_param_includes_in_find_callback() {
+        // Regression for #7899: `providerName: string` — `.includes()` on a
+        // `string`-typed parameter is a `String.prototype` substring search, not
+        // array membership, so there is no collection to hash into a Map/Set.
+        assert!(
+            run(r#"
+export const findFriendlyProviderName = (providerName: string) => {
+  const provider = Object.keys(wellKnownProviders).find((provider) => providerName.includes(provider));
+  return provider ? wellKnownProviders[provider] : null;
+};
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_string_annotated_variable_includes_in_loop() {
+        // A variable with an explicit `: string` annotation is a string regardless
+        // of its initializer, so `.includes()` on it is a substring search.
+        assert!(
+            run(r#"
+const s: string = getIt();
+for (const x of xs) {
+    if (s.includes(x)) {}
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_string_literal_union_typed_param_includes_in_loop() {
+        // A union of string-literal types (`"a" | "b"`) is a `string` subtype —
+        // `.includes()` on it is still `String.prototype`.
+        assert!(
+            run(r#"
+function pick(kind: "a" | "b") {
+    for (const x of xs) {
+        if (kind.includes(x)) {}
+    }
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_array_annotated_variable_includes_in_loop() {
+        // Negative space: a `string[]` annotation is an array, so `.includes()` is
+        // the genuine O(n*m) membership scan — the `: string` exemption must not
+        // extend to array-typed bindings.
+        let diags = run(r#"
+const arr: string[] = getIt();
+for (const x of xs) {
+    if (arr.includes(x)) {}
 }
 "#);
         assert_eq!(diags.len(), 1);
