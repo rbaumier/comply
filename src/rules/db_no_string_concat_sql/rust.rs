@@ -9,6 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 use crate::rules::sql_helpers::is_sql_string;
 
 use super::position::placeholder_is_identifier_position;
@@ -62,6 +63,13 @@ impl AstCheck for Check {
         // compile-time const placeholders (`{COLUMN_KIND}`) are all
         // safe and must not be flagged.
         if !has_risky_placeholder(format_string) {
+            return;
+        }
+        // A risky-looking interpolation inside a `#[cfg(test)]` module or
+        // `#[test]` fn is a query fixture fed to the code under test against an
+        // in-process session, never a production query over untrusted input, so
+        // the injection rationale does not apply.
+        if is_in_test_context(node, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -358,6 +366,43 @@ mod tests {
     #[test]
     fn flags_value_in_set_clause() {
         let src = r#"fn f(val: i32) { let q = format!("UPDATE t SET x = {} WHERE id = 1", val); }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #7918 (delta-rs crates/core exec.rs): a value-position interpolation
+    // inside a `#[cfg(test)] mod tests` block is a query fixture fed to an
+    // in-process DataFusion session under test, never a production query over
+    // untrusted input, so the injection rationale does not apply.
+    #[test]
+    fn repro_7918_value_interpolation_in_cfg_test_module_not_flagged() {
+        let src = r#"#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn run_query() {
+        let df = session
+            .sql(&format!(
+                "SELECT id FROM delta_table WHERE file_id = '{file_id}'"
+            ))
+            .await
+            .unwrap();
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_7918_value_interpolation_in_test_fn_not_flagged() {
+        let src = r#"#[test]
+fn t() { let q = format!("SELECT id FROM t WHERE file_id = '{file_id}'"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative space: the same value interpolation in a production fn outside any
+    // test context keeps firing, so the guard is scope-bound, not a blanket
+    // silence.
+    #[test]
+    fn repro_7918_value_interpolation_in_production_fn_still_flagged() {
+        let src = r#"fn q(file_id: &str) -> String { format!("SELECT id FROM t WHERE file_id = '{file_id}'") }"#;
         assert_eq!(run_on(src).len(), 1);
     }
 }
