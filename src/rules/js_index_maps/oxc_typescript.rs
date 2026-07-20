@@ -195,6 +195,12 @@ fn unwrap_expr<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
 /// optional-chained one (`foo?.bar`). The wrappers do not change what the
 /// receiver structurally is, so `(curr?.extension as Extension[])?.find(...)` has
 /// the same property-access receiver as the bare `curr.extension.find(...)`.
+///
+/// A `??`/`||` default onto an empty array literal is seen through the same way:
+/// `(foo.bar ?? []).find(...)` / `(foo.bar || []).find(...)` scan the relation
+/// field `foo.bar` when it is present and an empty array otherwise, so the
+/// receiver is still that same bounded field — the defensive `?? []` / `|| []`
+/// adds nothing to index — and it keeps the exemption its bare form would get.
 fn receiver_is_property_access(expr: &Expression<'_>) -> bool {
     match unwrap_expr(expr) {
         Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => true,
@@ -202,6 +208,15 @@ fn receiver_is_property_access(expr: &Expression<'_>) -> bool {
             &chain.expression,
             ChainElement::StaticMemberExpression(_) | ChainElement::ComputedMemberExpression(_)
         ),
+        Expression::LogicalExpression(logical)
+            if matches!(logical.operator, LogicalOperator::Coalesce | LogicalOperator::Or)
+                && matches!(
+                    unwrap_expr(&logical.right),
+                    Expression::ArrayExpression(arr) if arr.elements.is_empty()
+                ) =>
+        {
+            receiver_is_property_access(&logical.left)
+        }
         _ => false,
     }
 }
@@ -2018,6 +2033,50 @@ for (const x of xs) {
 const arr = getItems();
 for (const item of items) {
     const match = arr.find((x) => x.id === item.id);
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_property_access_coalesce_array_default_includes_in_loop() {
+        // Regression for #7910: `(c.extends ?? []).includes(x)` — the `?? []` default
+        // does not change that `c.extends` is a bounded relation field, so it keeps
+        // the property-access exemption the bare `c.extends.includes(x)` would get.
+        assert!(
+            run(r#"
+const composerRootKeys = allConfigs.filter(
+  (c) =>
+    c.key !== config.key &&
+    (c.extends ?? []).includes(config.key) &&
+    context.permissions.canReadSingleProjectResource(c.project),
+);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_property_access_or_array_default_find_in_loop() {
+        // #7910: the `|| []` default variant gets the same property-access exemption.
+        assert!(
+            run(r#"
+for (const c of configs) {
+    const m = (base.scopedOverrides || []).find((o) => o.config === c.key);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_plain_variable_receiver_array_default_includes_in_loop() {
+        // #7910 negative space: `(bigList ?? []).includes(x)` where `bigList` is a
+        // plain (unbounded) variable is NOT a relation field — the `?? []` default
+        // must not exempt it, so the genuine O(n*m) membership scan stays flagged.
+        let diags = run(r#"
+for (const x of xs) {
+    if ((bigList ?? []).includes(x)) {}
 }
 "#);
         assert_eq!(diags.len(), 1);
