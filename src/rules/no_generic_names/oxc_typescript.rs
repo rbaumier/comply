@@ -1286,6 +1286,71 @@ fn is_array_method_callback_param<'a>(
     )
 }
 
+/// True when the identifier is an element of an array pattern that is the first
+/// formal parameter of an arrow/function passed as the first argument of a
+/// `new X(…)` whose constructor name ends in `Observer`
+/// (`new IntersectionObserver(([entry]) => …)`,
+/// `new MutationObserver(([record]) => …)`). The browser hands such a callback an
+/// array of spec-typed records, canonically consumed one element at a time; that
+/// element is the API-prescribed `IntersectionObserverEntry` / `MutationRecord` /
+/// `ResizeObserverEntry` binding, so the author has no rename freedom — the same
+/// "the API prescribes the parameter name" rationale as `is_message_handler_param`.
+/// The structural signal is the `NewExpression` callee name ending in `Observer`,
+/// not a fixed constructor allowlist.
+fn is_observer_callback_element<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // Climb to the enclosing arrow/function, requiring the identifier be nested
+    // in an array pattern (the `[entry]` destructuring) on the way up.
+    let mut seen_array_pattern = false;
+    let mut func_node_id = None;
+    for (kind, nid) in nodes.ancestor_kinds(node.id()).zip(nodes.ancestor_ids(node.id())) {
+        match kind {
+            AstKind::ArrayPattern(_) => seen_array_pattern = true,
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                func_node_id = Some(nid);
+                break;
+            }
+            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => continue,
+            _ => break,
+        }
+    }
+    if !seen_array_pattern {
+        return false;
+    }
+    let Some(fid) = func_node_id else { return false };
+
+    // The array-pattern element must sit inside the function's FIRST parameter.
+    let (params, fn_span) = match nodes.kind(fid) {
+        AstKind::ArrowFunctionExpression(arrow) => (&arrow.params, arrow.span),
+        AstKind::Function(func) => (&func.params, func.span),
+        _ => return false,
+    };
+    let Some(first) = params.items.first() else {
+        return false;
+    };
+    let node_span = node.kind().span();
+    if node_span.start < first.span.start || node_span.end > first.span.end {
+        return false;
+    }
+
+    // The function must be the first argument of a `new X(…)` whose constructor
+    // name ends in `Observer`.
+    let AstKind::NewExpression(new_expr) = nodes.parent_node(fid).kind() else {
+        return false;
+    };
+    let callee_ends_in_observer = match &new_expr.callee {
+        Expression::Identifier(id) => id.name.as_str().ends_with("Observer"),
+        Expression::StaticMemberExpression(m) => m.property.name.as_str().ends_with("Observer"),
+        _ => false,
+    };
+    callee_ends_in_observer
+        && new_expr.arguments.first().is_some_and(|arg| arg.span() == fn_span)
+}
+
 /// Property names that, when assigned a function value, mark that function as a
 /// message-event handler (`self.onmessage = …`, `worker.onmessageerror = …`).
 const MESSAGE_HANDLER_PROPERTIES: &[&str] = &["onmessage", "onmessageerror"];
@@ -1628,6 +1693,15 @@ impl OxcCheck for Check {
                     // prescribes the position and the author has no rename
                     // freedom — same rationale as `is_in_callback_property`.
                     if is_array_method_callback_param(node, semantic) {
+                        return;
+                    }
+                    // The element array-destructured from the first parameter of a
+                    // DOM Observer callback (`new IntersectionObserver(([entry]) =>
+                    // …)`, `new MutationObserver(([record]) => …)`) is the
+                    // API-prescribed spec-entry binding
+                    // (`IntersectionObserverEntry`, `MutationRecord`), so its name
+                    // is dictated by the platform contract, not chosen lazily.
+                    if is_observer_callback_element(node, semantic) {
                         return;
                     }
                     let (line, column) =
@@ -2767,6 +2841,52 @@ mod tests {
         let src = r#"
             function process(data) { return data; }
             element.addEventListener('click', (data) => { use(data); });
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_entry_destructured_from_observer_callback_issue_6882() {
+        // Regression for #6882 — the element array-destructured from the first
+        // parameter of a DOM Observer callback is the API-prescribed spec-entry
+        // binding (`IntersectionObserverEntry`, `MutationRecord`,
+        // `ResizeObserverEntry`), so its name is fixed by the platform contract,
+        // not chosen lazily.
+        let src = r#"
+            ctx.observer = new IntersectionObserver(([entry]) => {
+                const res = ctx.handler(entry, ctx.observer);
+                if (res === false || (ctx.once && entry.isIntersecting)) { destroy(el); }
+            }, cfg);
+            new MutationObserver(([record]) => { use(record); });
+            new ResizeObserver(([entry]) => { use(entry); });
+        "#;
+        assert!(run(src).is_empty(), "observer-callback destructured entry must not flag");
+    }
+
+    #[test]
+    fn still_flags_entry_outside_observer_callback_issue_6882() {
+        // Negative space: only a `new X(...)Observer`-shaped callback is exempt.
+        // A plain `const entry`, an array-destructured `entry` from a
+        // non-Observer `new X(...)`, and one from a bare (non-`new`) call are all
+        // generic and must still flag.
+        let src = r#"
+            const entry = lookup();
+            new EventSource(([entry]) => { use(entry); });
+            subscribe(([entry]) => { use(entry); });
+        "#;
+        assert_eq!(run(src).len(), 3);
+    }
+
+    #[test]
+    fn still_flags_entry_at_wrong_position_in_observer_callback_issue_6882() {
+        // Negative space pinning the two positional guards: the exemption needs
+        // the callback to be the FIRST argument of the `new X(...)Observer` and
+        // the array pattern to be the FIRST parameter. A callback in a later
+        // argument slot, or an array pattern in a later parameter, is not the
+        // spec-entry binding and must still flag.
+        let src = r#"
+            new FooObserver(cfg, ([entry]) => { use(entry); });
+            new FooObserver((first, [entry]) => { use(entry); });
         "#;
         assert_eq!(run(src).len(), 2);
     }
