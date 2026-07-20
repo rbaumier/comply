@@ -3,6 +3,11 @@
 //! Flag `.await` on DB-like calls inside loops. In Rust this looks like
 //! `conn.query(...).await` inside `for`/`while`/`loop` blocks.
 //!
+//! A `while`/`loop` whose awaited query carries a SQL `LIMIT` clause is
+//! keyset/chunk pagination — it reads one bounded page per iteration, the
+//! opposite of an N+1 — and is exempt. A `for` binds each element of a
+//! collection (one dependent query per element), so it stays flagged.
+//!
 //! Detection is AST-based. The awaited expression must be a `call_expression`
 //! whose callee is a `field_expression` `<receiver>.<method>`. Unambiguous
 //! sqlx driver methods (`fetch_one`/`fetch_all`/`fetch_optional`) flag on the
@@ -19,6 +24,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::sql_helpers::contains_word;
 
 /// Method names that are unambiguously sqlx/ORM driver calls — DB-specific by
 /// name alone, so a match flags without any receiver anchoring.
@@ -148,23 +154,55 @@ fn is_db_name(name: &str) -> bool {
         .any(|db| db.eq_ignore_ascii_case(name))
 }
 
-fn is_inside_loop(node: tree_sitter::Node) -> bool {
+/// The nearest loop enclosing an awaited expression.
+enum EnclosingLoop {
+    /// `for x in collection { … }` — per-item iteration over a collection, the
+    /// structural shape of an N+1 (one dependent query per element).
+    For,
+    /// `while cond { … }` / `loop { … }` — no per-item collection binding; may
+    /// be a keyset/chunk-pagination fetch of one bounded page per iteration.
+    WhileOrLoop,
+}
+
+/// Classify the nearest loop enclosing `node`, stopping at the nearest
+/// function/closure boundary. `None` when the await is not inside a loop.
+fn enclosing_loop(node: tree_sitter::Node) -> Option<EnclosingLoop> {
     let mut parent = node.parent();
     while let Some(p) = parent {
         match p.kind() {
-            "for_expression" | "while_expression" | "loop_expression" => return true,
-            "function_item" | "closure_expression" => return false,
+            "for_expression" => return Some(EnclosingLoop::For),
+            "while_expression" | "loop_expression" => return Some(EnclosingLoop::WhileOrLoop),
+            "function_item" | "closure_expression" => return None,
             _ => {}
         }
         parent = p.parent();
+    }
+    None
+}
+
+/// True if any string literal in the awaited call's subtree carries a SQL
+/// `LIMIT` clause (word-boundary match, so a `rate_limits` table name does not
+/// count). A `LIMIT`-bounded fetch reads one bounded page per iteration —
+/// keyset/chunk pagination — not the single dependent row of an N+1.
+fn awaited_query_has_limit(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if matches!(current.kind(), "string_literal" | "raw_string_literal")
+            && let Ok(text) = current.utf8_text(source)
+            && contains_word(&text.to_ascii_lowercase(), "limit")
+        {
+            return true;
+        }
+        stack.extend(current.children(&mut cursor));
     }
     false
 }
 
 crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
-    if !is_inside_loop(node) {
+    let Some(loop_kind) = enclosing_loop(node) else {
         return;
-    }
+    };
 
     if is_in_test_context(node, source) {
         return;
@@ -172,6 +210,14 @@ crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
 
     let Some(inner) = node.named_child(0) else { return };
     if !is_db_call(inner, source) {
+        return;
+    }
+
+    // Keyset/chunk pagination: a `while`/`loop` whose awaited query is bounded
+    // by a SQL `LIMIT` fetches one page per iteration — a deliberate batching
+    // strategy, the opposite of an N+1 — so it is not flagged. A `for` binds
+    // each element of a collection and stays flagged.
+    if matches!(loop_kind, EnclosingLoop::WhileOrLoop) && awaited_query_has_limit(inner, source) {
         return;
     }
 
@@ -311,6 +357,66 @@ mod tests {
     fn flags_unambiguous_fetch_all_in_loop() {
         let src =
             "async fn f(ids: Vec<i32>) { for id in ids { build_query(id).fetch_all(ex).await; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #7892: keyset/chunk pagination — a bare `loop {}` fetching one
+    // `LIMIT`-bounded page per iteration and breaking on a short chunk is a
+    // batching strategy, the opposite of an N+1. The `LIMIT` clause lives in the
+    // `sqlx::query!` macro string within the awaited call's subtree.
+    #[test]
+    fn allows_keyset_pagination_loop_with_limit() {
+        let src = r##"async fn f(&self) {
+            loop {
+                let rows = sqlx::query!(
+                    r#"
+                    SELECT storage_logs.hashed_key, storage_logs.value
+                    FROM storage_logs
+                    WHERE storage_logs.hashed_key >= $2::bytea
+                    ORDER BY storage_logs.hashed_key
+                    LIMIT $4
+                    "#,
+                    QUERY_LIMIT as i32
+                )
+                .fetch_all(self.storage)
+                .await
+                .unwrap();
+                if rows.len() < QUERY_LIMIT {
+                    break;
+                }
+            }
+        }"##;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #7892: a `loop` fetching a `LIMIT`-bounded chunk passed as a string
+    // argument is likewise chunk pagination, not an N+1.
+    #[test]
+    fn allows_loop_fetch_all_with_limit_arg() {
+        let src = r#"async fn f() {
+            loop {
+                let page = db.fetch_all("SELECT * FROM t ORDER BY id LIMIT 100").await;
+                if page.len() < 100 { break; }
+            }
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #7892: the exemption is `LIMIT`-gated, not a blanket `loop`/`while`
+    // pass. A `while let` popping items and running one dependent query each,
+    // with no `LIMIT`, is a genuine N+1 and still fires.
+    #[test]
+    fn flags_while_let_pop_query_without_limit() {
+        let src =
+            "async fn f(mut ids: Vec<i32>) { while let Some(id) = ids.pop() { db.query(id).await; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #7892: a `loop` whose awaited query has no `LIMIT` is not chunk
+    // pagination and still fires — proving suppression requires the clause.
+    #[test]
+    fn flags_loop_query_without_limit() {
+        let src = "async fn f(sql: &str) { loop { db.fetch_all(sql).await; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
