@@ -72,6 +72,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `arr[0]!` / `arr[arr.length - 1]!` — the access is the operand of a
+        // TypeScript non-null assertion. The `!` is the developer's explicit
+        // statement that this element is present, dismissing exactly the boundary
+        // condition this rule warns about, so the read is not an accidental
+        // unchecked access. Teams that object to `!` are served by the dedicated
+        // `ts-no-non-null-assertion` rule; flagging here would double-penalize.
+        if is_non_null_asserted(node, semantic) {
+            return;
+        }
+
         // jest/vitest mock-introspection arrays — `<spy>.mock.calls[0]`,
         // `.mock.results[0]`, `.mock.instances[0]` (and a further index into a
         // call entry, `.mock.calls[0][1]`). These arrays are framework-managed
@@ -625,6 +635,44 @@ fn is_typeof_operand(
             AstKind::UnaryExpression(unary) => {
                 return unary.operator == UnaryOperator::Typeof
                     && unary.argument.span() == current_span;
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Returns true when the index-access `node` is the operand of a TypeScript
+/// non-null assertion (`arr[0]!`, `(arr[0])!`, `arr[arr.length - 1]!`). The `!`
+/// is the developer's explicit assertion that the element is present, so the read
+/// is not an accidental unchecked access — the same dismissal signal as `.at(0)`
+/// or a `?? fallback`.
+///
+/// Climbs only through `ParenthesizedExpression` wrappers (so a parenthesized
+/// operand still counts), then requires the immediate enclosing node to be a
+/// `TSNonNullExpression` whose asserted expression is exactly this access. The
+/// asserted-expression span is matched against the climbed node's span, so the
+/// access must BE the `!` operand — `arr[0].foo!` (where the `!` applies to the
+/// outer `.foo` member, a value read of `arr[0]`) stays flagged.
+fn is_non_null_asserted(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node.id();
+    let mut current_span = node.kind().span();
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        match parent.kind() {
+            AstKind::ParenthesizedExpression(paren) => {
+                current_span = paren.span;
+                current_id = parent_id;
+            }
+            AstKind::TSNonNullExpression(non_null) => {
+                return non_null.expression.span() == current_span;
             }
             _ => return false,
         }
@@ -6308,6 +6356,50 @@ mod tests {
         // returns an array that is truthy even when empty, so it does not prove
         // `arr` non-empty and `arr[0]` stays flagged.
         let src = "function f(arr) { if (arr.filter(x => x > 0)) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_non_null_asserted_first_issue_7888() {
+        // The `!` on `word[0]` is an explicit non-null assertion — the developer
+        // has asserted the element is present (drizzle-orm casing.ts:20).
+        let src = "const c = `${word[0]!.toUpperCase()}${word.slice(1)}`;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_non_null_asserted_member_issue_7888() {
+        // drizzle-orm sqlite-core/foreign-keys.ts:45 — `foreignColumns[0]!.table`.
+        let src = "const fk = { foreignTable: foreignColumns[0]!.table };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_non_null_asserted_minimal_repro_issue_7888() {
+        // The issue body's minimal reproduction.
+        let src = "export function g(cols) { return { t: cols[0]!.table }; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_non_null_asserted_last_issue_7888() {
+        // The same assertion applies to a last-element read.
+        let src = "const last = arr[arr.length - 1]!;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_non_null_asserted_parenthesized_issue_7888() {
+        // The assertion is peeled through a parenthesized operand: `(arr[0])!`.
+        let src = "const x = (arr[0])!;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_when_outer_member_asserted_issue_7888() {
+        // Negative control: the `!` applies to the outer `.foo` member, so `arr[0]`
+        // itself is a value read that is NOT non-null-asserted and stays flagged.
+        let src = "const y = arr[0].foo!;";
         assert_eq!(run_on(src).len(), 1);
     }
 }
