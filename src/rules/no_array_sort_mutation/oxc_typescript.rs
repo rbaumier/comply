@@ -267,6 +267,45 @@ mod oxc_tests {
     }
 
     #[test]
+    fn skips_sort_on_fresh_array_literal_returned_in_object_issue_7868() {
+        // `rootSpans` is a fresh `[]` populated via `.push`, sorted in place, then
+        // handed back inside a returned object literal. The object is materialized
+        // at the return, after the sort, so no pre-existing alias observes the
+        // reorder — `.sort()` is correct and `.toSorted()` would only add a copy.
+        let src = "function buildSpanTree(spans) { \
+                   const rootSpans = []; \
+                   for (const span of spans) { if (isRoot(span)) rootSpans.push(span); } \
+                   rootSpans.sort((a, b) => a.t - b.t); \
+                   return { spanMap, childrenMap, rootSpans }; }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_fresh_array_literal_returned_in_array() {
+        // A fresh literal handed back nested inside a returned array literal exposes
+        // only the post-sort array, exactly as safe as a bare `return xs`.
+        let src = "function f() { const xs = [3, 1, 2]; xs.sort(); return [xs]; }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_fresh_array_literal_returned_via_spread() {
+        // Spreading the sorted binding into a fresh returned array (`return [...xs]`)
+        // copies it — the caller receives a new array, never an alias of `xs`.
+        let src = "function f() { const xs = [3, 1, 2]; xs.sort(); return [...xs]; }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_sort_on_fresh_array_literal_stored_in_object_before_sort() {
+        // The object literal captures `xs` before the sort, so `holder.xs` aliases
+        // it and observes the reorder. The fresh-literal return allowance must not
+        // extend to a literal that is stored rather than returned.
+        let src = "const xs = []; const holder = { xs }; xs.sort();";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    #[test]
     fn flags_sort_on_awaited_as_cast_binding_escaping_via_call_arg() {
         // The wrapper peel recognizes the fresh initializer but must not suppress
         // a genuine escape: the array is handed to `sink` before sorting, so a
