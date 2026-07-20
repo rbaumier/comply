@@ -27,10 +27,13 @@
 //! whose debug surface is Python's `__repr__`/`__str__`) or a non-standard
 //! `#[derive(...)]` (prost `::prost::Message`, whose codegen omits `Debug`) —
 //! since such a macro may inject or omit a `Debug` impl invisibly, types with
-//! raw-pointer fields, and types that store a closure/function in a field
+//! raw-pointer fields, types that store a closure/function in a field
 //! whose generic type parameter carries an `Fn`/`FnMut`/`FnOnce` bound (the
 //! combinator pattern in poem/tower/axum — closures don't implement `Debug`,
-//! so neither a derive nor a `Debug`-bounded field is viable).
+//! so neither a derive nor a `Debug`-bounded field is viable), and types that
+//! borrow a `std::fmt::Formatter` (an owned `fmt::Formatter` or a
+//! `&mut fmt::Formatter<'_>` field — `Formatter` has no `Debug` impl, so the
+//! struct genuinely cannot derive it).
 //!
 //! We accept manual impls because libraries with closure or PhantomData
 //! fields legitimately can't derive — they hand-roll the impl. The manual
@@ -190,6 +193,12 @@ impl AstCheck for Check {
             return;
         }
         if has_raw_pointer_field(node) {
+            return;
+        }
+        // A field borrowing a `std::fmt::Formatter` can't derive `Debug`:
+        // `Formatter` has no `Debug` impl. Same "can't derive" class as a
+        // raw-pointer field.
+        if holds_formatter_typed_field(node, source_bytes) {
             return;
         }
         let Some(name_node) = node.child_by_field_name("name") else {
@@ -668,6 +677,53 @@ fn has_raw_pointer_field(item: tree_sitter::Node) -> bool {
     }
 }
 
+/// True when the type stores a field that borrows or owns a `std::fmt::Formatter`
+/// — an owned `fmt::Formatter` or a reference to one (`&mut fmt::Formatter<'_>`).
+/// `std::fmt::Formatter` has no `Debug` impl, so a type carrying one genuinely
+/// cannot derive `Debug`; it is the same "can't derive" class as a raw-pointer or
+/// closure field. Such types are transient `Display`/`Debug` visitor structs
+/// built inside a `fmt` call and handed a `&mut Formatter` — they never escape
+/// it, so the "consumers can't log it" rationale is structurally inapplicable.
+///
+/// Walks the type's own field subtree (like `has_raw_pointer_field`; the
+/// `struct_item`/`enum_item` node holds no `impl` blocks, so only field types are
+/// visited) and matches a `scoped_type_identifier` whose final two `::` segments
+/// are `fmt::Formatter`, covering the `fmt::`, `std::fmt::`, and `core::fmt::`
+/// spellings, nested inside any reference or generic wrapper. This is a fixed
+/// std-type fact — the same category as the stdlib `ErrorKind` exemption in
+/// `rust-explicit-enum-match-arms` — not a per-name/domain allowlist.
+fn holds_formatter_typed_field(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = item.walk();
+    loop {
+        let node = cursor.node();
+        if node.kind() == "scoped_type_identifier"
+            && node.utf8_text(source).is_ok_and(is_fmt_formatter_path)
+        {
+            return true;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() || cursor.node().id() == item.id() {
+                return false;
+            }
+        }
+    }
+}
+
+/// True if `path` names `std::fmt::Formatter`: its final two `::` segments are
+/// exactly `fmt` then `Formatter`, matching `fmt::Formatter`, `std::fmt::Formatter`,
+/// and `core::fmt::Formatter` while rejecting an unrelated `Formatter` in some
+/// other module (e.g. `my::Formatter`).
+fn is_fmt_formatter_path(path: &str) -> bool {
+    let mut segments = path.rsplit("::");
+    segments.next() == Some("Formatter") && segments.next() == Some("fmt")
+}
+
 /// True when `struct_node` stores a field whose type is one of the struct's own
 /// generic type parameters, and that parameter carries an `Fn`/`FnMut`/`FnOnce`
 /// bound somewhere reachable. Such a field holds a closure/function, which never
@@ -1034,6 +1090,50 @@ mod tests {
     #[test]
     fn suppresses_raw_pointer_field() {
         assert!(run_on("pub struct W { p: *const u8 }").is_empty());
+    }
+
+    /// Closes #7877 (issue repro): datafusion's display visitors
+    /// (`IndentVisitor`/`GraphvizVisitor`/`PgJsonVisitor` in
+    /// `logical_plan/display.rs`) borrow a `&mut fmt::Formatter`.
+    /// `std::fmt::Formatter` has no `Debug` impl, so the struct can't derive
+    /// `Debug` — the rule's remediation is impossible and this is a false positive.
+    #[test]
+    fn suppresses_struct_holding_formatter_reference() {
+        let source = "pub struct IndentVisitor<'a, 'b> {\n\
+                      \x20   f: &'a mut fmt::Formatter<'b>,\n\
+                      \x20   with_schema: bool,\n\
+                      \x20   indent: usize,\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "a struct borrowing &mut fmt::Formatter can't derive Debug and must not be flagged"
+        );
+    }
+
+    /// The `std::fmt::` and `core::fmt::` spellings, and an owned (non-reference)
+    /// `Formatter` field, are the same std-type fact and must also be exempted.
+    #[test]
+    fn suppresses_struct_holding_std_and_core_fmt_formatter() {
+        assert!(
+            run_on("pub struct A<'a> { f: &'a mut std::fmt::Formatter<'a> }").is_empty(),
+            "std::fmt::Formatter must be recognized"
+        );
+        assert!(
+            run_on("pub struct B<'a> { f: core::fmt::Formatter<'a> }").is_empty(),
+            "an owned core::fmt::Formatter must be recognized"
+        );
+    }
+
+    /// Load-bearing negative: the exemption keys on the `fmt::Formatter` path, not
+    /// on any type merely named `Formatter`. A `Formatter` from an unrelated module
+    /// has no bearing on `Debug`-derivability and must still flag.
+    #[test]
+    fn still_flags_struct_with_non_fmt_formatter_type() {
+        assert_eq!(
+            run_on("pub struct S { f: my::Formatter }").len(),
+            1,
+            "a non-`fmt` `Formatter` type must not be exempted"
+        );
     }
 
     /// Closes #3834: the standard README-doctest harness — a unit struct
