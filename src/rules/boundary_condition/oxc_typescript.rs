@@ -743,8 +743,11 @@ fn has_nullish_or_logical_fallback(
 
 /// Returns true when an ancestor `if` or ternary condition proves this access is
 /// in-bounds. Recognized guards:
-///   1. any `.length` check in an enclosing `if` condition (covers first and last
-///      reads);
+///   1. in an enclosing `if` condition, any `.length` check, or a `<obj_text>`
+///      non-emptiness test recognized by [`test_proves_nonempty`] — notably a
+///      truthy `<obj_text>.some(...)` / `<obj_text>?.some(...)` on the same array
+///      (`Array.prototype.some` is `false` for `[]`). Both cover first and last
+///      reads;
 ///   2. for a first-element read (`is_first`), a truthy `arr[0]` / `arr?.[0]`
 ///      check on the same array (`obj_text`) — the truthiness equivalent of
 ///      `if (arr.length)`. This also exempts the guard condition's own `[0]`
@@ -808,6 +811,13 @@ fn has_length_guard_ancestor(
                 let cond_text = &source
                     [if_stmt.test.span().start as usize..if_stmt.test.span().end as usize];
                 if normalize_optional_chaining(cond_text).contains(".length") {
+                    return true;
+                }
+                // A dominating `if (arr.some(...))` proves `arr` is non-empty in the
+                // branch (`Array.prototype.some` is `false` for `[]`), so both `arr[0]`
+                // and `arr[arr.length - 1]` are in-bounds — the same non-emptiness
+                // oracle the enclosing `while`/`for` arms consult.
+                if test_proves_nonempty(&if_stmt.test, obj_text, source) {
                     return true;
                 }
                 if is_first && condition_guards_index0(&if_stmt.test, obj_text, source, false) {
@@ -929,15 +939,19 @@ fn has_length_guard_ancestor(
     }
 }
 
-/// Returns true when `test` — the condition of an enclosing `while`/`for` whose
-/// body dominates the access — proves `<obj_text>.length >= 1` (the array is
-/// non-empty on every iteration). Recognized on the SAME receiver array:
+/// Returns true when `test` — the condition of an enclosing `while`/`for` loop or
+/// a dominating `if` whose branch dominates the access — proves `<obj_text>.length
+/// >= 1` (the array is non-empty in the guarded region). Recognized on the SAME
+/// receiver array:
 ///   - a bare truthy `<obj_text>.length` (zero is falsy, so a truthy length is `>= 1`);
 ///   - `<obj_text>.length > 0` / `>= 1` / `!== 0` / `=== N` (`N >= 1`) and the
 ///     mirrored `0 < <obj_text>.length` — delegated to
 ///     [`length_comparison_proves_nonempty`];
+///   - a truthy `<obj_text>.some(pred)` / `<obj_text>?.some(pred)` call —
+///     `Array.prototype.some` returns `false` for an empty array, so a truthy
+///     result proves at least one element exists (see [`array_some_call_matches`]);
 ///   - any conjunct of an `&&` chain that proves one of the above — every conjunct
-///     holds inside the loop body, so it suffices for one to bound the length.
+///     holds inside the guarded region, so it suffices for one to bound the length.
 /// `||` is NOT traversed: a disjunct need not hold when the whole test is true.
 fn test_proves_nonempty(test: &Expression, obj_text: &str, source: &str) -> bool {
     match test {
@@ -951,8 +965,29 @@ fn test_proves_nonempty(test: &Expression, obj_text: &str, source: &str) -> bool
                 || test_proves_nonempty(&logical.right, obj_text, source)
         }
         Expression::StaticMemberExpression(_) => is_length_of(test, obj_text, source),
+        Expression::CallExpression(call) => array_some_call_matches(call, obj_text, source),
+        Expression::ChainExpression(chain) => matches!(
+            &chain.expression,
+            ChainElement::CallExpression(call)
+                if array_some_call_matches(call, obj_text, source)
+        ),
         _ => length_comparison_proves_nonempty(test, obj_text, source),
     }
+}
+
+/// Returns true when `call` is `<obj_text>.some(...)` / `<obj_text>?.some(...)` on
+/// the SAME receiver — its callee is a `.some` member access whose receiver text
+/// (optional chaining normalized) equals `<obj_text>`. `Array.prototype.some`
+/// returns `true` only for a non-empty array (`[].some(_)` is `false`), so a truthy
+/// `arr.some(...)` test proves `arr.length >= 1`, the same non-emptiness signal as a
+/// truthy `arr.length`. A `.some(...)` on a different array does not match.
+fn array_some_call_matches(call: &CallExpression, obj_text: &str, source: &str) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    member.property.name.as_str() == "some"
+        && normalize_optional_chaining(expr_text(&member.object, source))
+            == normalize_optional_chaining(obj_text)
 }
 
 /// Returns true when `expr` (an `if`/ternary condition, in its positive form when
@@ -6127,5 +6162,60 @@ mod tests {
         // the body read (the branch runs exactly when the element is absent).
         let src = "function f(arr) { if (arr[0] === undefined) { use(arr[0]); } }";
         assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_index0_dominated_by_some_guard_issue_7479() {
+        // fantastic-admin `getDeepestPath`: `menu.children[0]` in the `else` branch is
+        // dominated by `if (menu.children?.some(...))`, which proves `menu.children`
+        // non-empty (`some` is `false` for `[]`), so the first element exists.
+        let src = "function getDeepestPath(menu, rootPath = '') { let retnPath = ''; if (menu.children?.some(item => item.meta?.menu !== false)) { const item = menu.children.find(item => item.meta?.menu !== false); if (item) { retnPath = getDeepestPath(item, resolveRoutePath(rootPath, menu.path)); } else { retnPath = getDeepestPath(menu.children[0], resolveRoutePath(rootPath, menu.path)); } } return retnPath; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_plain_some_guard_issue_7479() {
+        // `if (arr.some(...))` (no optional chaining) proves `arr` non-empty.
+        let src = "function f(arr) { if (arr.some(x => x > 0)) { use(arr[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_optional_some_guard_issue_7479() {
+        // `if (arr?.some(...))` — the `?.` guards `undefined`; a truthy result still
+        // proves non-emptiness.
+        let src = "function f(arr) { if (arr?.some(x => x > 0)) { use(arr[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_last_index_dominated_by_some_guard_issue_7479() {
+        // Non-emptiness proves the last element exists too: `arr[arr.length - 1]`.
+        let src = "function f(arr) { if (arr.some(x => x > 0)) { use(arr[arr.length - 1]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_while_some_guard_issue_7479() {
+        // The same non-emptiness oracle applies to a `while (arr.some(...))` drain.
+        let src = "function f(arr) { while (arr.some(x => x > 0)) { use(arr[0]); arr.shift(); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_some_guard_on_different_array_issue_7479() {
+        // Negative control: `some` is called on `other`, not the indexed `arr` — it
+        // proves `other` non-empty, not `arr`, so `arr[0]` stays flagged.
+        let src = "function f(arr, other) { if (other.some(x => x > 0)) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_filter_guard_issue_7479() {
+        // Negative control: only `.some` proves non-emptiness. `arr.filter(...)`
+        // returns an array that is truthy even when empty, so it does not prove
+        // `arr` non-empty and `arr[0]` stays flagged.
+        let src = "function f(arr) { if (arr.filter(x => x > 0)) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
