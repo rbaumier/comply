@@ -43,6 +43,15 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // A member access `SomeEnum.Member` whose object resolves to a
+        // `TSEnumDeclaration` is a public, compile-time-known discriminant — for
+        // timing purposes identical to the literal it resolves to. A comparison
+        // against it (`authType !== AuthType.OAuth`) is a control-flow branch on
+        // which strategy is configured, not a secret comparison, so it leaks
+        // nothing even when the member name normalizes to a secret word.
+        if either_operand_is_enum_member(bin, semantic) {
+            return;
+        }
         // A `Symbol` is compared by reference identity (an O(1) pointer/id
         // check), not byte-by-byte, so a comparison where either operand is a
         // `Symbol()` / `Symbol.for(...)` value cannot leak timing. This covers
@@ -274,6 +283,41 @@ fn operand_is_function_reference(expr: &Expression, semantic: &oxc_semantic::Sem
         }
     }
     false
+}
+
+/// True when either operand of `bin` is a member access `X.Y` whose object `X`
+/// resolves through the symbol table to a `TSEnumDeclaration`. An enum member is
+/// a public, compile-time-known constant, so a comparison against it cannot leak
+/// a runtime secret through timing — the enum-member analogue of the literal
+/// exemption.
+///
+/// Each operand's member object is resolved via `reference_id` → symbol →
+/// declaration node. An operand whose object does not resolve to an enum (a real
+/// object holding a secret-named property) does not match and stays flagged.
+fn either_operand_is_enum_member(bin: &BinaryExpression, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+
+    let resolves_to_enum = |expr: &Expression| -> bool {
+        let Expression::StaticMemberExpression(member) = expr else {
+            return false;
+        };
+        let Expression::Identifier(ident) = &member.object else {
+            return false;
+        };
+        let Some(ref_id) = ident.reference_id.get() else {
+            return false;
+        };
+        let scoping = semantic.scoping();
+        let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+            return false;
+        };
+        let decl_node_id = scoping.symbol_declaration(sym_id);
+        matches!(
+            semantic.nodes().kind(decl_node_id),
+            AstKind::TSEnumDeclaration(_)
+        )
+    };
+    resolves_to_enum(&bin.left) || resolves_to_enum(&bin.right)
 }
 
 /// True when `bin` compares a value against the same-named property on a private
@@ -631,6 +675,40 @@ mod tests {
     fn flags_password_hash_comparison() {
         assert_eq!(run_on("if (passwordHash === storedHash) {}").len(), 1);
         assert_eq!(run_on("if (user.password_hash === expectedHash) {}").len(), 1);
+    }
+
+    /// immich server/src/services/auth.service.ts:447 — `AuthType.OAuth` is an
+    /// enum member (a public compile-time discriminant), not a credential, even
+    /// though its normalized name `oauth` ends with the secret word `auth`.
+    /// Branching on which auth strategy is configured leaks no secret bytes.
+    #[test]
+    fn allows_enum_member_comparison() {
+        assert!(
+            run_on(
+                "enum AuthType { Password, OAuth } function f(authType: AuthType) { if (authType !== AuthType.OAuth) { return; } }"
+            )
+            .is_empty()
+        );
+        // Enum member on the left operand is exempt too.
+        assert!(
+            run_on(
+                "enum AuthType { Password, OAuth } function f(authType: AuthType) { if (AuthType.OAuth === authType) { return; } }"
+            )
+            .is_empty()
+        );
+    }
+
+    /// Over-exemption guard: a member access whose object resolves to a real
+    /// object (not an enum) holding a secret-named property must still flag — the
+    /// exemption keys on the object resolving to a `TSEnumDeclaration`, not on the
+    /// member syntax.
+    #[test]
+    fn flags_non_enum_member_secret() {
+        assert_eq!(
+            run_on("const config = load(); function f(input) { if (config.apiKey === input) {} }")
+                .len(),
+            1
+        );
     }
 
     /// Build a temp project from `(rel_path, source)` pairs, index it so the
