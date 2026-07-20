@@ -105,9 +105,9 @@
 //! turning the flag on. The guard is recognised when the `if` condition
 //! is either:
 //!
-//! - a *simple* flag reference — a bare identifier, a field access, or a
-//!   no-argument method call — whose final segment names a known flag
-//!   (`verbose`, `debug`, `quiet`, `trace`, …), or
+//! - a *simple* flag reference — a bare or path-qualified identifier, a
+//!   field access, or a no-argument call — whose final segment names a
+//!   known flag (`verbose`, `debug`, `quiet`, `trace`, …), or
 //! - an environment-variable-presence check — `env::var(KEY).is_ok()` or
 //!   `env::var_os(KEY).is_some()` (with or without a `std::` prefix), or
 //! - an environment-variable value-equality check —
@@ -648,8 +648,8 @@ fn macro_invocation_name<'a>(mi: tree_sitter::Node, source: &'a [u8]) -> Option<
 }
 
 /// True when `cond` is a recognised runtime opt-in guard: either a
-/// *simple* flag reference (a bare identifier, a field access, or a
-/// no-argument method call) whose final path segment is a known
+/// *simple* flag reference (a bare or path-qualified identifier, a field
+/// access, or a no-argument call) whose final path segment is a known
 /// verbose/debug flag name, or an environment-variable opt-in check
 /// (`env::var(KEY).is_ok()` / `env::var_os(KEY).is_some()`, or
 /// `env::var(KEY).as_deref() ==/!= Ok("…")`). A negated flag
@@ -811,8 +811,9 @@ fn trailing_path_segment<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Optio
 /// `cond` is not one of the accepted simple shapes.
 fn flag_segment<'a>(cond: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     match cond.kind() {
-        // `verbose`
-        "identifier" => cond.utf8_text(source).ok(),
+        // `verbose`, `config::verbose`, `polars_core::config::verbose` — a bare
+        // or path-qualified reference reduces to its final path segment.
+        "identifier" | "scoped_identifier" => trailing_path_segment(cond, source),
         // `self.verbose`, `opts.debug`
         "field_expression" => cond
             .child_by_field_name("field")
@@ -1252,6 +1253,28 @@ required-features = ["std"]
         assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
     }
 
+    /// Regression for #6886 (pola-rs/polars `polars-io/src/configs.rs:110` and
+    /// `polars-stream/src/execute.rs:331`): a path-qualified verbose call
+    /// (`config::verbose()`, `polars_core::config::verbose()`) is a `scoped_identifier`
+    /// callee whose final segment is a known flag name — the same opt-in guard as
+    /// `self.verbose()`, so the gated `eprintln!` is exempt.
+    #[test]
+    fn allows_eprintln_under_path_qualified_verbose_call_guard() {
+        let short = "pub fn f() { if config::verbose() { eprintln!(\"coalesce_run_length: {v}\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", short).is_empty());
+        let long = "pub fn f() { if polars_core::config::verbose() { eprintln!(\"updating graph state\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", long).is_empty());
+    }
+
+    /// A path-qualified call whose final segment is *not* a known flag name is
+    /// not a verbose gate — the scoped-callee arm only clears segments already
+    /// in `VERBOSE_FLAG_NAMES`, so this `eprintln!` stays flagged.
+    #[test]
+    fn flags_eprintln_under_path_qualified_non_flag_call_guard() {
+        let source = "pub fn f() { if config::ready() { eprintln!(\"x\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
     /// Regression for #3941 (uv `uv-resolver/src/error.rs:789`): an
     /// `eprintln!` gated behind `std::env::var_os(KEY).is_some()` only runs
     /// when the consumer sets the variable — opt-in diagnostics, not noise.
@@ -1302,9 +1325,8 @@ required-features = ["std"]
     }
 
     /// The gate exempts an `eprintln!` nested deeper inside the gated block —
-    /// here inside a further `if config::verbose()` (a scoped call the flag-name
-    /// heuristic does not recognise, so only the outer env-var gate clears it),
-    /// mirroring polars `time_zone.rs:68`.
+    /// here inside a further `if config::verbose()`, mirroring polars
+    /// `time_zone.rs:68`. Either gate on its own clears it.
     #[test]
     fn allows_eprintln_nested_under_env_var_as_deref_eq_ok_guard() {
         let source = "pub fn g() { if std::env::var(\"POLARS_IGNORE_TZ\").as_deref() == Ok(\"1\") { if config::verbose() { eprintln!(\"WARN: {}\", err) } } }";
