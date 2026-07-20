@@ -4,10 +4,11 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BinaryExpression, BinaryOperator, BindingPattern, Expression, FormalParameters, IfStatement,
-    LogicalOperator, Statement, TSType, TSTypeAnnotation, TSTypeName, UnaryOperator,
+    BinaryExpression, BinaryOperator, BindingPattern, CallExpression, Expression, FormalParameters,
+    IfStatement, LogicalOperator, Statement, TSType, TSTypeAnnotation, TSTypeName, UnaryOperator,
 };
 use oxc_span::{GetSpan, Span};
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -183,17 +184,24 @@ fn is_returntype_of_type_parameter(ty: &TSType, semantic: &oxc_semantic::Semanti
 }
 
 /// Classify a return-value expression as promise-returning or sync.
+///
+/// `thenable_calls` holds the source-text signatures of the call expressions that
+/// appear as the receiver of a returned `.then`/`.catch`/`.finally` chain in the
+/// same function (see [`thenable_receiver_sigs`]), so a bare return of one of
+/// those calls is recognised as promise-returning too.
 fn classify_value(
     expr: &Expression,
     source: &str,
     semantic: &oxc_semantic::Semantic,
+    thenable_calls: &FxHashSet<&str>,
 ) -> ReturnKind {
     // `a ?? Promise.resolve()` / `a || Promise.resolve()`: a single
     // Promise-typed operand makes the whole expression resolve to a Promise.
     if let Expression::LogicalExpression(logical) = expr
         && matches!(logical.operator, LogicalOperator::Coalesce | LogicalOperator::Or)
-        && (classify_value(&logical.left, source, semantic) == ReturnKind::Promise
-            || classify_value(&logical.right, source, semantic) == ReturnKind::Promise)
+        && (classify_value(&logical.left, source, semantic, thenable_calls) == ReturnKind::Promise
+            || classify_value(&logical.right, source, semantic, thenable_calls)
+                == ReturnKind::Promise)
     {
         return ReturnKind::Promise;
     }
@@ -221,6 +229,18 @@ fn classify_value(
     let Expression::CallExpression(call) = expr else {
         return ReturnKind::Sync;
     };
+
+    // A call `C` that is also returned `.then()`/`.catch()`/`.finally()`-chained
+    // (`C.then(...)`) in a sibling branch is provably a thenable — those methods
+    // are only valid on a thenable — so classify the bare `C` return as Promise.
+    // Without this, a function whose branches all return the same
+    // promise-returning call (one raw, one chained) is mistaken for a
+    // sync/promise mix.
+    let call_src = &source[call.span.start as usize..call.span.end as usize];
+    if thenable_calls.contains(call_src) {
+        return ReturnKind::Promise;
+    }
+
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return ReturnKind::Sync;
     };
@@ -255,29 +275,40 @@ fn collect_return_kinds(
     source: &str,
     semantic: &oxc_semantic::Semantic,
 ) -> Vec<ReturnKind> {
+    let exprs = collect_return_exprs(stmts, None);
+    let thenable_calls = thenable_receiver_sigs(&exprs, source);
+    exprs
+        .iter()
+        .map(|expr| classify_value(expr, source, semantic, &thenable_calls))
+        .collect()
+}
+
+/// Collect the argument expression of every `return` reachable from `stmts`,
+/// skipping nested function bodies. When `exclude` is set, returns whose span
+/// falls inside it are ignored — used to look for a Promise return *outside* a
+/// dual-mode callback branch.
+fn collect_return_exprs<'b, 'a>(
+    stmts: &'b [Statement<'a>],
+    exclude: Option<Span>,
+) -> Vec<&'b Expression<'a>> {
     let mut out = Vec::new();
     for stmt in stmts {
-        collect_from_stmt(stmt, source, semantic, None, &mut out);
+        collect_return_exprs_from_stmt(stmt, exclude, &mut out);
     }
     out
 }
 
-/// Walk a statement collecting return kinds, skipping nested function bodies.
-/// When `exclude` is set, returns whose span falls inside it are ignored — used
-/// to look for a Promise return *outside* a dual-mode callback branch.
-fn collect_from_stmt(
-    stmt: &Statement,
-    source: &str,
-    semantic: &oxc_semantic::Semantic,
+fn collect_return_exprs_from_stmt<'b, 'a>(
+    stmt: &'b Statement<'a>,
     exclude: Option<Span>,
-    out: &mut Vec<ReturnKind>,
+    out: &mut Vec<&'b Expression<'a>>,
 ) {
     match stmt {
         Statement::ReturnStatement(ret) => {
             if let Some(arg) = &ret.argument {
                 let skipped = exclude.is_some_and(|ex| span_contains(ex, ret.span));
                 if !skipped {
-                    out.push(classify_value(arg, source, semantic));
+                    out.push(arg);
                 }
             }
         }
@@ -285,65 +316,95 @@ fn collect_from_stmt(
         Statement::FunctionDeclaration(_) => {}
         Statement::BlockStatement(block) => {
             for s in &block.body {
-                collect_from_stmt(s, source, semantic, exclude, out);
+                collect_return_exprs_from_stmt(s, exclude, out);
             }
         }
         Statement::IfStatement(if_stmt) => {
-            collect_from_stmt(&if_stmt.consequent, source, semantic, exclude, out);
+            collect_return_exprs_from_stmt(&if_stmt.consequent, exclude, out);
             if let Some(alt) = &if_stmt.alternate {
-                collect_from_stmt(alt, source, semantic, exclude, out);
+                collect_return_exprs_from_stmt(alt, exclude, out);
             }
         }
         Statement::SwitchStatement(switch) => {
             for case in &switch.cases {
                 for s in &case.consequent {
-                    collect_from_stmt(s, source, semantic, exclude, out);
+                    collect_return_exprs_from_stmt(s, exclude, out);
                 }
             }
         }
         Statement::TryStatement(try_stmt) => {
             for s in &try_stmt.block.body {
-                collect_from_stmt(s, source, semantic, exclude, out);
+                collect_return_exprs_from_stmt(s, exclude, out);
             }
             if let Some(handler) = &try_stmt.handler {
                 for s in &handler.body.body {
-                    collect_from_stmt(s, source, semantic, exclude, out);
+                    collect_return_exprs_from_stmt(s, exclude, out);
                 }
             }
             if let Some(finalizer) = &try_stmt.finalizer {
                 for s in &finalizer.body {
-                    collect_from_stmt(s, source, semantic, exclude, out);
+                    collect_return_exprs_from_stmt(s, exclude, out);
                 }
             }
         }
         Statement::ForStatement(for_stmt) => {
-            collect_from_stmt(&for_stmt.body, source, semantic, exclude, out);
+            collect_return_exprs_from_stmt(&for_stmt.body, exclude, out);
         }
         Statement::ForInStatement(for_in) => {
-            collect_from_stmt(&for_in.body, source, semantic, exclude, out);
+            collect_return_exprs_from_stmt(&for_in.body, exclude, out);
         }
         Statement::ForOfStatement(for_of) => {
-            collect_from_stmt(&for_of.body, source, semantic, exclude, out);
+            collect_return_exprs_from_stmt(&for_of.body, exclude, out);
         }
         Statement::WhileStatement(while_stmt) => {
-            collect_from_stmt(&while_stmt.body, source, semantic, exclude, out);
+            collect_return_exprs_from_stmt(&while_stmt.body, exclude, out);
         }
         Statement::DoWhileStatement(do_while) => {
-            collect_from_stmt(&do_while.body, source, semantic, exclude, out);
+            collect_return_exprs_from_stmt(&do_while.body, exclude, out);
         }
         Statement::LabeledStatement(labeled) => {
-            collect_from_stmt(&labeled.body, source, semantic, exclude, out);
+            collect_return_exprs_from_stmt(&labeled.body, exclude, out);
         }
-        // ExpressionStatement containing arrow/function — skip (nested fn)
-        Statement::ExpressionStatement(es) => {
-            if matches!(
-                es.expression,
-                Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
-            ) {
-                // nested function — don't descend
-            }
-        }
+        // ExpressionStatement is a nested function or a plain expression: it holds
+        // no `return` for this function, so there is nothing to descend into.
+        Statement::ExpressionStatement(_) => {}
         _ => {}
+    }
+}
+
+/// Source-text signatures of the call expressions that appear as the receiver of
+/// a returned `.then`/`.catch`/`.finally` chain (`C.then(...)` → `C`). A bare
+/// return of the identical call is thereby known to be promise-returning.
+fn thenable_receiver_sigs<'s>(exprs: &[&Expression], source: &'s str) -> FxHashSet<&'s str> {
+    let mut sigs = FxHashSet::default();
+    for &expr in exprs {
+        if let Some(base) = thenable_chain_base_call(expr) {
+            sigs.insert(&source[base.span.start as usize..base.span.end as usize]);
+        }
+    }
+    sigs
+}
+
+/// If `expr` is a `.then`/`.catch`/`.finally` chain (`X.then(...)`), return the
+/// base call expression `X` at the bottom of the chain, unwrapping nested
+/// promise-method links (`a().then().catch()` → `a()`). `None` when the receiver
+/// is not itself a call.
+fn thenable_chain_base_call<'b, 'a>(expr: &'b Expression<'a>) -> Option<&'b CallExpression<'a>> {
+    let Expression::CallExpression(call) = expr else {
+        return None;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return None;
+    };
+    if !matches!(member.property.name.as_str(), "then" | "catch" | "finally") {
+        return None;
+    }
+    if let Some(base) = thenable_chain_base_call(&member.object) {
+        return Some(base);
+    }
+    match &member.object {
+        Expression::CallExpression(base) => Some(base),
+        _ => None,
     }
 }
 
@@ -650,11 +711,11 @@ fn returns_promise_outside(
     semantic: &oxc_semantic::Semantic,
     exclude: Span,
 ) -> bool {
-    let mut kinds = Vec::new();
-    for stmt in stmts {
-        collect_from_stmt(stmt, source, semantic, Some(exclude), &mut kinds);
-    }
-    kinds.contains(&ReturnKind::Promise)
+    let exprs = collect_return_exprs(stmts, Some(exclude));
+    let thenable_calls = thenable_receiver_sigs(&exprs, source);
+    exprs
+        .iter()
+        .any(|expr| classify_value(expr, source, semantic, &thenable_calls) == ReturnKind::Promise)
 }
 
 fn span_contains(outer: Span, inner: Span) -> bool {
@@ -1195,5 +1256,57 @@ mod tests {
         // not fire (precision over recall for opaque returns).
         let src = "function k(p: any, c: boolean) { if (c) return Promise.resolve(1); return p; }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_same_call_bare_and_then_chained_branches() {
+        // Regression for #7476 — fantastic-admin/basic router/extensions.ts. Both
+        // return branches return the same call `originalReplace(to)`: one bare,
+        // one `.then()`-chained. `.then` is only valid on a thenable, so the bare
+        // sibling return of the identical call is provably promise-returning, not
+        // sync, and the function is uniformly async rather than a sync/promise mix.
+        let src = "function extendReplace(router: Router) {
+            const originalReplace = router.replace
+            router.replace = function (to: RouteLocationRaw) {
+                const appSettingsStore = useAppSettingsStore(pinia)
+                if (appSettingsStore.settings.topbar.tabbar) {
+                    const tabId = getId(router)
+                    const appTabbarStore = useAppTabbarStore(pinia)
+                    return originalReplace(to).then(() => {
+                        appTabbarStore.remove(tabId)
+                    })
+                }
+                else {
+                    return originalReplace(to)
+                }
+            }
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_call_mixed_with_then_chain_on_different_call() {
+        // Negative control for #7476: the upgrade keys on the *identical* call
+        // being both bare and `.then()`-chained. A bare `foo()` (sync) mixed with
+        // a `.then()` chain on a *different* call `bar()` is a genuine mix and
+        // still fires.
+        let src = "function f(c: boolean) {
+            if (c) { return bar().then(() => {}); }
+            return foo();
+        }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_upgraded_call_alongside_independent_sync_branch() {
+        // Negative control for #7476: upgrading the bare `foo()` to Promise (it is
+        // returned `.then()`-chained in a sibling) does not launder an unrelated
+        // literal `1` sync branch. The genuine sync/promise mix still fires.
+        let src = "function f(a: number) {
+            if (a === 0) { return foo().then(() => {}); }
+            if (a === 1) { return foo(); }
+            return 1;
+        }";
+        assert_eq!(run(src).len(), 1);
     }
 }
