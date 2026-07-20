@@ -161,6 +161,36 @@ mod tests {
     }
 
     #[test]
+    fn allows_matches_macro_operand() {
+        // polars `builder.rs`: `matches!(...)` always yields `bool` by the
+        // language spec, so `matches!(...) | some_bool` is the branchless logical
+        // OR idiom, not a `||` typo (#6880).
+        assert!(
+            run_on(
+                "fn f(enc: E, ignore_errors: bool) { if matches!(enc, E::LossyUtf8) | ignore_errors {} }"
+            )
+            .is_empty()
+        );
+        assert!(
+            run_on("fn f(x: i32, b: bool) { if matches!(x, 1 | 2) & b {} }").is_empty()
+        );
+        // A `::`-qualified `core::matches!` resolves to the same built-in.
+        assert!(
+            run_on("fn f(x: i32, b: bool) { if core::matches!(x, 1) | b {} }").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_non_matches_macro_operand() {
+        // An arbitrary macro's expansion type is opaque, so its bool-ness is
+        // unprovable — the `&`/`|` stays ambiguous and keeps firing.
+        assert_eq!(
+            run_on("fn f(b: bool) { if my_macro!() | b {} }").len(),
+            1
+        );
+    }
+
+    #[test]
     fn still_flags_integer_operand() {
         // One operand is a plain integer-typed expression: intent is ambiguous,
         // keep flagging.
