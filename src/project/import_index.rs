@@ -4802,6 +4802,27 @@ pub(crate) fn ts_counterpart_exts(ext: &str) -> &'static [&'static str] {
     }
 }
 
+/// Non-script asset extensions (stylesheet, image, font, media). A specifier
+/// carrying one of these names a real file-type suffix, not a strippable stem,
+/// and is never in the indexed script set. `json`/`wasm`/`node` are
+/// intentionally excluded — they can be legitimately resolved modules.
+const ASSET_EXTS: &[&str] = &[
+    "css", "less", "scss", "sass", "styl", "pcss", "png", "jpg", "jpeg", "gif", "svg", "webp",
+    "avif", "woff", "woff2", "ttf", "eot", "otf", "mp4", "webm", "mp3", "wav",
+];
+
+/// True when `spec` names a non-script asset (stylesheet, image, font, media) by
+/// extension — a side-effect asset load, not a module resolved to compiled code.
+/// A Vite-style `?query`/`#hash` suffix (`./logo.svg?url`, `theme.css?inline`) is
+/// stripped before reading the extension.
+pub(crate) fn is_asset_specifier(spec: &str) -> bool {
+    let path = spec.split(['?', '#']).next().unwrap_or(spec);
+    let last_segment = path.rsplit('/').next().unwrap_or(path);
+    last_segment
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| ASSET_EXTS.contains(&ext))
+}
+
 /// True when `dir` is the root of a Nuxt project, signalled by a
 /// `nuxt.config.{ts,js,mjs}` file in `dir`. Gating the synthetic `~/*` and
 /// `@/*` aliases on this keeps a `~/...` or `@/...` import in a non-Nuxt
@@ -4873,20 +4894,12 @@ fn probe_path(raw: &Path, known: &FxHashSet<PathBuf>) -> Option<PathBuf> {
         return std::fs::canonicalize(raw).ok();
     }
 
-    // A specifier carrying an explicit non-script asset extension (stylesheet,
-    // image, font, media) names a real file-type suffix, not a strippable stem.
-    // Such assets are never in the indexed script set, so they resolve to no
+    // A specifier carrying an explicit non-script asset extension resolves to no
     // module: return `None` rather than `with_extension`-substituting a TS/JS
     // extension below, which would fabricate a phantom edge to a script sibling
-    // (`import "./index.less"` resolving to the sibling `./index.ts`). This is
-    // distinct from a synthetic pseudo-extension that is part of the filename
-    // (`./cabinets_.$cabinetId`): those are not real file-type suffixes and are
-    // not listed here. `json`/`wasm`/`node` are intentionally excluded — they
-    // can be legitimately resolved modules.
-    const ASSET_EXTS: &[&str] = &[
-        "css", "less", "scss", "sass", "styl", "pcss", "png", "jpg", "jpeg", "gif", "svg", "webp",
-        "avif", "woff", "woff2", "ttf", "eot", "otf", "mp4", "webm", "mp3", "wav",
-    ];
+    // (`import "./index.less"` resolving to the sibling `./index.ts`). A synthetic
+    // pseudo-extension that is part of the filename (`./cabinets_.$cabinetId`) is
+    // not a real file-type suffix and is intentionally absent from `ASSET_EXTS`.
     if raw
         .extension()
         .and_then(|e| e.to_str())
