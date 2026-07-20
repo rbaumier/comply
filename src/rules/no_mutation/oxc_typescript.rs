@@ -98,6 +98,19 @@ impl OxcCheck for Check {
                 {
                     return;
                 }
+                // Vue 3 reactive ref array: `list.value[i] = x` writes an element of
+                // the deeply-reactive array a `ref([])` holds — the intended reactive
+                // update with no immutable alternative (reassigning a fresh array
+                // reallocates and drops the array's reactive identity). Parity with
+                // the exempt `list.value.push(…)` deep-write in the CallExpression arm
+                // and the `list.value = x` reassignment above; the computed member's
+                // `object` is the `<ref>.value` node passed to `is_vue_ref_value_target`.
+                if let AssignmentTarget::ComputedMemberExpression(member) = &assign.left
+                    && let Expression::StaticMemberExpression(inner) = &member.object
+                    && is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
+                {
+                    return;
+                }
                 // TypedArray element write `buf[i] = v`: indexed assignment is the
                 // only way to populate a TypedArray (a fixed-length binary buffer
                 // with no immutable element-setter and no spread-then-build form).
@@ -1192,6 +1205,42 @@ mod tests {
             import { ref } from 'vue'
             const r = ref(0);
             r.config = 5;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Vue 3 reactive ref `.value` array indexed write — issue #7856
+
+    #[test]
+    fn allows_indexed_write_into_vue_ref_value_array_issue_7856() {
+        // Regression for rbaumier/comply#7856 — v3-admin-vite tags-view store:
+        // `visitedViews.value[index] = { ...view }` writes an element of the
+        // deeply-reactive array a `ref([])` holds. The indexed write drives
+        // reactivity exactly like the sibling `visitedViews.value.push(…)`
+        // (already exempt); reassigning a fresh array drops reactive identity.
+        let src = r#"
+            import { ref } from 'vue'
+            const visitedViews = ref([])
+            const addVisitedView = (view) => {
+                const index = visitedViews.value.findIndex(v => v.path === view.path)
+                if (index !== -1) {
+                    visitedViews.value[index] = { ...view }
+                } else {
+                    visitedViews.value.push({ ...view })
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_indexed_write_into_non_ref_value_array_issue_7856() {
+        // Negative space: the exemption is ref-scoped. `list.value[i] = x` where
+        // `list` is not a `ref()` binding is an ordinary indexed write and stays
+        // flagged.
+        let src = r#"
+            const list = getList();
+            list.value[0] = 1;
         "#;
         assert_eq!(run(src).len(), 1);
     }
