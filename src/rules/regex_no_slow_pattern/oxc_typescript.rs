@@ -7,6 +7,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::regex_helpers::is_inside_char_class;
+use crate::rules::regex_redos::inner_quantifier_on_leading_atom;
 use std::sync::Arc;
 
 /// Detects nested quantifiers like `(X+)+`, `(X*)*`, `(X+)*`, etc.
@@ -42,14 +43,17 @@ fn has_nested_quantifier(pattern: &str) -> bool {
             }
             if depth == 0 && inner_has_quantifier && j + 1 < len {
                 let next = bytes[j + 1];
-                if (next == b'+' || next == b'*')
-                    // A top-level alternation `(?:A|B|C)*` is the disjoint-
-                    // alternation tokenizer idiom: the scanner cannot prove the
-                    // branches share an overlapping prefix, so it stays
-                    // conservative and does not warn. A genuine `(X+)+` / `(a*)*`
-                    // ReDoS has no top-level `|`.
-                    && !body_has_top_level_alternation(&bytes[i + 1..j])
-                {
+                let body = &bytes[i + 1..j];
+                let has_outer_quantifier = next == b'+' || next == b'*';
+                // Flag only an ambiguous nested quantifier. A top-level
+                // alternation `(?:A|B|C)*` is the disjoint-alternation tokenizer
+                // idiom, and the "unrolled loop" `(?:(?!</tag>)<[^<]*)*` anchors
+                // its inner `*` behind a mandatory disjoint literal — both are
+                // linear-time. A real `(X+)+` / `(a*)*` repeats the group's
+                // leading atom with no top-level `|`.
+                let is_ambiguous = !body_has_top_level_alternation(body)
+                    && inner_quantifier_on_leading_atom(body);
+                if has_outer_quantifier && is_ambiguous {
                     return true;
                 }
             }
@@ -192,6 +196,19 @@ mod tests {
     fn allows_two_branch_alternation() {
         // Top-level `|` under the outer `*` → conservative, no warning.
         assert!(run_on(r#"const re = /(?:a*|b*)*/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_unrolled_loop_tag_stripper() {
+        // Kuingsmile/word-GPT-Plus generalTools.ts:35-36 — Friedl's "unrolling
+        // the loop" tag stripper. The literal `<` (disjoint from the repeated
+        // `[^<]` class) anchors every iteration → linear-time, not catastrophic.
+        assert!(
+            run_on(r#"const re = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi;"#).is_empty()
+        );
+        assert!(
+            run_on(r#"const re = /<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi;"#).is_empty()
+        );
     }
 
     // --- Existing baseline: single quantifier / no quantified group. ---

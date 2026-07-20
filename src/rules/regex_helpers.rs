@@ -119,7 +119,7 @@ pub fn group_is_nullable(body: &[u8]) -> bool {
 /// Strips a leading group prefix so only the matchable body remains:
 /// `?:`, `?=`, `?!`, `?<=`, `?<!`, `?<name>`. A bare `(...)` capture group has
 /// no prefix and is returned unchanged.
-fn strip_group_prefix(body: &[u8]) -> &[u8] {
+pub(crate) fn strip_group_prefix(body: &[u8]) -> &[u8] {
     if body.first() != Some(&b'?') {
         return body;
     }
@@ -182,17 +182,8 @@ fn branch_is_nullable(branch: &[u8]) -> bool {
 /// Scans the atom starting at `branch[i]` and returns `(byte length including
 /// any trailing quantifier, is the atom nullable)`. Caller guarantees
 /// `i < branch.len()`.
-fn scan_atom(branch: &[u8], i: usize) -> (usize, bool) {
-    let body_len = match branch[i] {
-        // Escaped single char: `\d`, `\n`, `\r`, … (always consumes ≥1 char).
-        b'\\' => 2.min(branch.len() - i),
-        // Char class `[...]` — find its unescaped close; always consumes ≥1.
-        b'[' => char_class_len(branch, i),
-        // Nested group — find its matching `)`; nullability is recursive.
-        b'(' => group_len(branch, i),
-        // Any other single byte (literal, `.`, `^`, `$`, …).
-        _ => 1,
-    };
+pub(crate) fn scan_atom(branch: &[u8], i: usize) -> (usize, bool) {
+    let body_len = atom_body_len(branch, i);
     let (quant_len, min_zero) = scan_quantifier(branch, i + body_len);
     let total = body_len + quant_len;
     if min_zero {
@@ -200,14 +191,15 @@ fn scan_atom(branch: &[u8], i: usize) -> (usize, bool) {
         return (total, true);
     }
     // No min-0 quantifier: nullable only if the atom body itself is nullable,
-    // which is only possible for a nested group.
-    let nullable = branch[i] == b'(' && group_is_nullable(&branch[i + 1..i + body_len - 1]);
+    // which is only possible for a nested (closed, hence `body_len >= 2`) group.
+    let is_closed_group = branch[i] == b'(' && body_len >= 2;
+    let nullable = is_closed_group && group_is_nullable(&branch[i + 1..i + body_len - 1]);
     (total, nullable)
 }
 
 /// Returns the byte length of the `[...]` char class starting at `start`,
 /// including the closing `]`. If unterminated, spans to the end.
-fn char_class_len(bytes: &[u8], start: usize) -> usize {
+pub(crate) fn char_class_len(bytes: &[u8], start: usize) -> usize {
     let mut i = start + 1;
     // The first `]` immediately after `[` or `[^` is a literal member.
     if bytes.get(i) == Some(&b'^') {
@@ -228,7 +220,7 @@ fn char_class_len(bytes: &[u8], start: usize) -> usize {
 
 /// Returns the byte length of the group starting at `start` (`(`), including
 /// the matching `)`. If unterminated, spans to the end.
-fn group_len(bytes: &[u8], start: usize) -> usize {
+pub(crate) fn group_len(bytes: &[u8], start: usize) -> usize {
     let mut depth = 0u32;
     let mut i = start;
     while i < bytes.len() {
@@ -283,6 +275,16 @@ fn scan_quantifier(bytes: &[u8], pos: usize) -> (usize, bool) {
 /// Returns 1 if a lazy `?` immediately follows a quantifier at `pos`, else 0.
 fn lazy_suffix(bytes: &[u8], pos: usize) -> usize {
     usize::from(bytes.get(pos) == Some(&b'?'))
+}
+
+/// Byte length of the bare atom at `bytes[i]`, excluding any trailing quantifier.
+pub(crate) fn atom_body_len(bytes: &[u8], i: usize) -> usize {
+    match bytes[i] {
+        b'\\' => 2.min(bytes.len() - i),
+        b'[' => char_class_len(bytes, i),
+        b'(' => group_len(bytes, i),
+        _ => 1,
+    }
 }
 
 #[cfg(test)]

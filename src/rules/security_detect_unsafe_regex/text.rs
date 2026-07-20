@@ -2,6 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::regex_redos::inner_quantifier_on_leading_atom;
 
 #[derive(Debug)]
 pub struct Check;
@@ -46,7 +47,14 @@ fn has_nested_quantifier_group(pattern: &str) -> bool {
             // Now `j` is the matching ')'. Check the next char.
             if j < bytes.len() && depth == 0 && inner_has_quantifier {
                 let next = bytes.get(j + 1).copied();
-                if matches!(next, Some(b'+') | Some(b'*')) {
+                // Flag only when the inner quantifier repeats the group's
+                // leading atom (`(a+)+`, `(.*)*`). The "unrolled loop" idiom
+                // `(?:(?!</tag>)<[^<]*)*` anchors the inner `*` behind a
+                // mandatory literal disjoint from the repeated class, so it is
+                // linear-time, not catastrophic.
+                if matches!(next, Some(b'+') | Some(b'*'))
+                    && inner_quantifier_on_leading_atom(&bytes[i + 1..j])
+                {
                     return true;
                 }
             }
@@ -163,5 +171,16 @@ mod tests {
     fn allows_simple_grouping() {
         let src = r"const r = /^(foo|bar)$/;";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unrolled_loop_tag_stripper() {
+        // Kuingsmile/word-GPT-Plus generalTools.ts:35-36 — Friedl's "unrolling
+        // the loop" tag stripper. The literal `<` (disjoint from the repeated
+        // `[^<]` class) anchors every iteration → linear-time, not catastrophic.
+        let src = r#"const r = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi;"#;
+        assert!(run(src).is_empty());
+        let src2 = r#"const r = /<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi;"#;
+        assert!(run(src2).is_empty());
     }
 }
