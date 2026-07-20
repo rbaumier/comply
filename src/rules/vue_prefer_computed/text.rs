@@ -23,6 +23,16 @@
 //! when a value it directly reads changes. The shallow read of a `computed`
 //! can't replicate deep watching, so such a watch can't be replaced.
 //!
+//! Two further contract exemptions, because `computed()` can't express them:
+//! - A watcher whose body reads the callback's **second parameter** — the
+//!   source's *previous* value — can't be a `computed()`: `computed()` has no
+//!   access to a dependency's prior value (a scroll-direction comparison
+//!   `val > (oldVal ?? 0)` is impossible to express as one).
+//! - An explicit non-default `flush` option (`flush: 'post'` / `flush: 'sync'`)
+//!   is a scheduling contract. A `computed()` always evaluates pre-flush during
+//!   render, so it can't observe a value that only exists after the DOM updates.
+//!   The default `'pre'` is not exempt — it schedules like a `computed()` does.
+//!
 //! Four further usage-context exemptions, because `computed()` is read-only:
 //! - A constant RHS (`''`, `0`, `true`, ...) is a reset on a trigger, not a
 //!   derivation; `computed()` would freeze the ref to that constant.
@@ -70,56 +80,29 @@ impl TextCheck for Check {
                 continue;
             }
 
-            // Collect the watch statement body by following brace depth until
-            // the outer `watch(...)` parenthesis closes. `has_deep` reports a
-            // `{ deep: true }` option in the trailing argument list.
-            let Some((body, has_deep)) = extract_watch_callback_body(&lines, i) else {
+            // Split the watch statement into its header (up to the callback
+            // body, carrying the callback's parameter list), body, and trailing
+            // options text, by following brace depth until the outer
+            // `watch(...)` parenthesis closes.
+            let Some(call) = extract_watch_call(&lines, i) else {
                 continue;
             };
 
-            // A deep watch reacts to nested mutations that a `computed`'s
-            // shallow read can't observe — it can't be replaced.
-            if has_deep {
+            // A deep watch reacts to nested mutations a `computed`'s shallow
+            // read can't observe; an explicit non-default `flush` is a
+            // scheduling contract a `computed()` can't express. Neither can be
+            // replaced.
+            if trailing_has_deep_option(&call.trailing)
+                || trailing_has_explicit_flush(&call.trailing)
+            {
                 continue;
             }
 
-            if let Some((ident, rhs)) = parse_single_value_assignment(&body) {
-                // A constant RHS can't be lazily derived — the watch is a reset
-                // on a trigger, not a derived value, so `computed()` would
-                // freeze it.
-                if rhs_is_constant_literal(&rhs) {
-                    continue;
-                }
-                // A ref assigned at another site in the file is mutable
-                // interactive state, not a derived value; `computed()` is
-                // read-only and would break it.
-                if value_assignment_count(src, &ident) >= 2 {
-                    continue;
-                }
-                // A ref whose contents are mutated in place at any site
-                // (`<ident>.value.push(…)`, an element write, or a property
-                // write) is also mutable interactive state. One such site
-                // suffices: it can never be the watch body being analysed, which
-                // is a bare `<ident>.value = …` reassignment, so this signal is
-                // always "another write site". A read-only `computed()` can't be
-                // pushed into or edited in place, so it can't replace the ref.
-                if has_in_place_mutation(src, &ident) {
-                    continue;
-                }
-                // A ref bound by `v-model` in the template is two-way
-                // interactive state: the user's input writes its `.value` too.
-                // That write appears as `v-model="<ident>"`, never as
-                // `<ident>.value =`, so `value_assignment_count` can't see it.
-                // Converting to a read-only `computed()` breaks the binding.
-                if has_v_model_binding(src, &ident) {
-                    continue;
-                }
-                // A ref initialized by a composable (`const t = use<Uppercase>(…)`)
-                // may persist its `.value` setter to an external store
-                // (localStorage, cookies, IndexedDB, ...) and read it back on
-                // init. That side effect can't be expressed by a read-only
-                // `computed()`, so the assignment is not a plain derivation.
-                if target_initialized_by_composable(src, &ident) {
+            if let Some((ident, rhs)) = parse_single_value_assignment(&call.body) {
+                // Skip when a reactive/scheduling/interactive-state signal means
+                // a read-only `computed()` can't stand in — see the module
+                // docblock and `is_exempt_derivation`.
+                if is_exempt_derivation(&call.header, src, &ident, &rhs) {
                     continue;
                 }
                 diags.push(Diagnostic {
@@ -140,15 +123,40 @@ impl TextCheck for Check {
     }
 }
 
-/// Extract the body of the first `{ ... }` block inside the watch/watchEffect
-/// call that starts on `lines[start]`. Returns the body text and whether the
-/// trailing options object carries `{ deep: true }`.
+/// Returns true when the `<ident>.value = <rhs>` assignment is not a
+/// replaceable derivation: some reactive/scheduling/interactive-state signal
+/// means a read-only, pre-flush `computed()` can't stand in for the watcher.
+/// The signals — the callback reading the source's previous value, a constant
+/// reset, a ref written or mutated in place at another site, a `v-model`-bound
+/// ref, or a composable-owned ref — are each detailed in the module docblock.
+fn is_exempt_derivation(header: &str, src: &str, ident: &str, rhs: &str) -> bool {
+    callback_reads_previous_value(header, rhs)
+        || rhs_is_constant_literal(rhs)
+        || value_assignment_count(src, ident) >= 2
+        || has_in_place_mutation(src, ident)
+        || has_v_model_binding(src, ident)
+        || target_initialized_by_composable(src, ident)
+}
+
+/// The three text pieces of a `watch(...)` call, split by the callback body's
+/// braces: the `header` (from `watch(` up to the body-opening `{`, carrying the
+/// callback's parameter list), the callback `body`, and the `trailing` options
+/// text after the body.
+struct WatchCall {
+    header: String,
+    body: String,
+    trailing: String,
+}
+
+/// Splits the watch/watchEffect call that starts on `lines[start]` into its
+/// [`WatchCall`] pieces, following brace depth until the outer `watch(...)`
+/// parenthesis closes.
 ///
 /// Returns `None` when the `watch(...)` call closes (outer paren back to 0)
 /// before an inline callback body is entered — that means the callback is an
 /// external function reference (`watch(src, handler)`), so there is nothing to
 /// analyse and the scan must not run on into the next statement.
-fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, bool)> {
+fn extract_watch_call(lines: &[&str], start: usize) -> Option<WatchCall> {
     // Find the first `{` after the watch identifier — this is the start of the
     // callback body. We skip braces that appear inside the arg list but we
     // need to handle `watch(() => src, () => { ... })` too, so the *last*
@@ -158,6 +166,7 @@ fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, 
     let mut paren: i32 = 0;
     let mut in_body = false;
     let mut after_body = false;
+    let mut header = String::new();
     let mut body = String::new();
     let mut trailing = String::new();
     let mut body_start_paren: i32 = 0;
@@ -173,6 +182,8 @@ fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, 
                 trailing.push(c);
             } else if in_body {
                 body.push(c);
+            } else {
+                header.push(c);
             }
             match c {
                 '(' => paren += 1,
@@ -182,7 +193,7 @@ fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, 
                         // The `watch(...)` argument list ended; the body and
                         // any options object have been seen.
                         if paren == 0 {
-                            return Some((body, trailing_has_deep_option(&trailing)));
+                            return Some(WatchCall { header, body, trailing });
                         }
                     } else if in_body {
                         if paren < body_start_paren {
@@ -224,12 +235,14 @@ fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, 
             trailing.push('\n');
         } else if in_body {
             body.push('\n');
+        } else {
+            header.push('\n');
         }
     }
     // The body closed but the outer `watch(...)` paren never did (malformed or
-    // truncated source): still report the body, with whatever options we saw.
+    // truncated source): still report the pieces we saw.
     if after_body {
-        Some((body, trailing_has_deep_option(&trailing)))
+        Some(WatchCall { header, body, trailing })
     } else {
         None
     }
@@ -263,6 +276,134 @@ fn trailing_has_deep_option(trailing: &str) -> bool {
             .next()
             .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
         if !continues {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true when `trailing` (the watch argument text after the callback
+/// body) carries an explicit non-default `flush` option (`flush: 'post'` or
+/// `flush: 'sync'`), tolerant of whitespace around the colon and of single- or
+/// double-quotes. `flush` is matched on a word boundary. The default `'pre'` is
+/// deliberately not matched: it schedules the callback like a `computed()`
+/// re-evaluation, so it isn't a contract `computed()` fails to express.
+fn trailing_has_explicit_flush(trailing: &str) -> bool {
+    let bytes = trailing.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = trailing[from..].find("flush") {
+        let pos = from + rel;
+        from = pos + "flush".len();
+        // Word boundary before `flush`, then `: '<value>'` with an explicit
+        // non-default timing.
+        let before_ok = pos == 0
+            || !matches!(bytes[pos - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$');
+        if before_ok
+            && let Some(after_colon) = trailing[from..].trim_start().strip_prefix(':')
+            && flush_value_is_explicit(after_colon.trim_start())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true when `value` (the text after `flush:`) begins with a quoted
+/// `'post'` or `'sync'` — the explicit non-default flush timings — tolerant of
+/// single- or double-quotes.
+fn flush_value_is_explicit(value: &str) -> bool {
+    for quote in ['\'', '"'] {
+        if let Some(inner) = value.strip_prefix(quote)
+            && let Some(end) = inner.find(quote)
+            && matches!(&inner[..end], "post" | "sync")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true when the watch callback declares a second parameter — its
+/// source's *previous* value — and the assignment RHS references it. A
+/// `computed()` has no access to a dependency's prior value, so such a
+/// derivation can't be expressed as one. `header` is the `watch(...)` text up
+/// to the callback body; the callback's parameter list is the `(...)` group
+/// immediately before the arrow that opens the body.
+fn callback_reads_previous_value(header: &str, rhs: &str) -> bool {
+    let Some(param) = callback_second_param(header) else {
+        return false;
+    };
+    rhs_references_identifier(rhs, &param)
+}
+
+/// Returns the name of the watch callback's second parameter (the source's
+/// previous value), or `None` when the callback has fewer than two parameters
+/// or the second is not a plain identifier (e.g. a destructuring pattern).
+///
+/// The callback arrow is the last `=>` in `header` (any source-getter arrow
+/// `() => …` comes earlier); the parameter list is the `(...)` group ending
+/// immediately before it. A `: type` annotation or a `= default` is dropped.
+fn callback_second_param(header: &str) -> Option<String> {
+    let arrow = header.rfind("=>")?;
+    let params = paren_group_before(header[..arrow].trim_end())?;
+    let parts = split_top_level_commas(params);
+    if parts.len() < 2 {
+        return None;
+    }
+    let name: String = parts[1]
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
+        .collect();
+    if name.is_empty() {
+        return None;
+    }
+    Some(name)
+}
+
+/// Given text ending with `)`, returns the inner text of the parenthesized
+/// group that closing paren matches (depth-tracked, walking backwards). `None`
+/// when `text` does not end with `)` — e.g. a single unparenthesized arrow
+/// parameter (`v => …`).
+fn paren_group_before(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    if bytes.last() != Some(&b')') {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    for i in (0..bytes.len()).rev() {
+        match bytes[i] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[i + 1..bytes.len() - 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Returns true when `rhs` references the identifier `name` as a whole token
+/// (word boundaries on both sides), so `oldVal` matches in `val > (oldVal ?? 0)`
+/// but not inside a longer identifier like `oldValue2`. A preceding `.` also
+/// breaks the boundary, so a same-named property access (`store.oldVal`) is not
+/// mistaken for the parameter.
+fn rhs_references_identifier(rhs: &str, name: &str) -> bool {
+    let bytes = rhs.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = rhs[from..].find(name) {
+        let pos = from + rel;
+        from = pos + name.len();
+        let before_ok = pos == 0
+            || !matches!(bytes[pos - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$' | b'.');
+        let after_ok = !rhs[pos + name.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        if before_ok && after_ok {
             return true;
         }
     }
@@ -1149,6 +1290,65 @@ mod tests {
                    <template>\n\
                    <input type=\"checkbox\" v-model=\"checkAll.foo\" />\n\
                    </template>";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_watch_reading_previous_value_param() {
+        // #7477: the RHS reads `oldVal`, the callback's second parameter — the
+        // source's PREVIOUS value. `computed()` can't access a dependency's
+        // prior value, so this scroll-direction derivation can't become one.
+        let src = "const scrollOnHide = ref(false)\n\
+                   watch(y, (val, oldVal) => {\n\
+                   scrollOnHide.value = appSettingsStore.settings.topbar.mode === 'sticky' && val > (oldVal ?? 0) && val > topbarHeight.value\n\
+                   })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_watch_declaring_but_not_reading_previous_value_param() {
+        // The callback declares `oldVal` but the body reads only the current
+        // value — still a pure derivation, so the second param must not exempt.
+        let src = "const doubled = ref(0)\n\
+                   watch(count, (val, oldVal) => {\n  doubled.value = val * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_watch_reading_a_property_named_like_the_previous_value_param() {
+        // The body reads `store.oldVal`, a same-named property — NOT the
+        // callback's `oldVal` parameter. The `.` boundary must keep it flagged.
+        let src = "const doubled = ref(0)\n\
+                   watch(count, (val, oldVal) => {\n  doubled.value = store.oldVal * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_watch_with_explicit_post_flush() {
+        // #7477: `flush: 'post'` must run AFTER the DOM updates to read the
+        // mounted child's `.ref`; a `computed()` runs pre-flush during render
+        // and can't observe it.
+        let src = "watch(currencyInputRef, (value) => {\n\
+                   currencyNativeInputRef.value = value?.ref ?? null\n\
+                   }, {\n\
+                   flush: 'post',\n\
+                   })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_watch_with_explicit_sync_flush() {
+        let src = "const doubled = ref(0)\n\
+                   watch(count, (v) => {\n  doubled.value = v * 2\n}, { flush: 'sync' })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_watch_with_default_pre_flush() {
+        // `flush: 'pre'` is the default scheduling — the same moment a
+        // `computed()` re-evaluates — so it must not exempt a pure derivation.
+        let src = "const doubled = ref(0)\n\
+                   watch(count, (v) => {\n  doubled.value = v * 2\n}, { flush: 'pre' })";
         assert_eq!(run(src).len(), 1);
     }
 }
