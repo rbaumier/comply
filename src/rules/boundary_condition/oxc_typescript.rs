@@ -9,7 +9,9 @@
 //! acknowledges that `arr[0]` may be `undefined`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{binding_declared_ts_type, byte_offset_to_line_col, resolves_to_import_from};
+use crate::oxc_helpers::{
+    binding_declared_ts_type, byte_offset_to_line_col, resolves_to_import_from, ts_type_member_type,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
@@ -225,6 +227,17 @@ impl OxcCheck for Check {
             && let Expression::Identifier(obj_ident) = &member.object
             && resolves_to_nonempty_tuple_type(obj_ident, semantic)
         {
+            return;
+        }
+
+        // `obj.field[0]` where `field` is declared as a non-empty tuple member on
+        // `obj`'s type — e.g. `prop.embedded[0]` with `interface Prop { embedded?:
+        // [string, string] }`. The indexed receiver is a `StaticMemberExpression`,
+        // not an identifier, so [`resolves_to_nonempty_tuple_type`] (which requires
+        // an identifier receiver) never runs. Resolve `obj`'s declared type, look up
+        // `field`, and skip when that member is a fixed-length tuple — the
+        // member-access counterpart of the identifier-receiver exemption above.
+        if is_first && member_access_receiver_is_nonempty_tuple_member(&member.object, semantic) {
             return;
         }
 
@@ -1903,6 +1916,34 @@ fn resolves_to_nonempty_tuple_type<'a>(
             .is_some_and(|ann| ts_type_resolves_to_nonempty_tuple(&ann.type_annotation, semantic));
     }
     false
+}
+
+/// Returns true when the indexed receiver is a member access `obj.field` whose
+/// `field` is declared as a non-empty tuple on `obj`'s type — making
+/// `obj.field[0]` provably in-bounds. `obj` must be a simple identifier whose
+/// declared type resolves (same file) to an `interface`/`type`/inline type
+/// literal carrying a `field: [A, B]` member. The member-access counterpart of
+/// [`resolves_to_nonempty_tuple_type`], which only covers an identifier receiver;
+/// the member's tuple type is read via [`ts_type_member_type`] and validated with
+/// [`ts_type_resolves_to_nonempty_tuple`] so index-vs-arity behavior matches the
+/// identifier case. A plain-array member (`field?: string[]`), an empty tuple
+/// (`field: []`), an absent member, or a cross-file/unresolved container type all
+/// stay flagged.
+fn member_access_receiver_is_nonempty_tuple_member<'a>(
+    object: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::StaticMemberExpression(access) = object else {
+        return false;
+    };
+    let Expression::Identifier(obj_ident) = &access.object else {
+        return false;
+    };
+    let Some(container) = binding_declared_ts_type(obj_ident, semantic) else {
+        return false;
+    };
+    ts_type_member_type(container, access.property.name.as_str(), semantic)
+        .is_some_and(|ty| ts_type_resolves_to_nonempty_tuple(ty, semantic))
 }
 
 /// Returns true when `ident` is an UNANNOTATED `const` binding whose initializer
@@ -5046,6 +5087,57 @@ mod tests {
         // Negative space: the destructured binding has no matching member on the
         // annotated type, so its type is unresolved and the read stays flagged.
         let src = "function f({ nouns }: { other?: [string, string] }) { return nouns[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_member_access_interface_tuple_member_issue_7878() {
+        // The issue's minimal reproducer: `prop.embedded[0]` where `embedded` is a
+        // fixed 2-tuple member of an interface. The indexed receiver is a member
+        // access, not an identifier, so the identifier-only tuple resolvers never
+        // ran; resolving `prop`'s type and looking up `embedded` proves the read
+        // in-bounds.
+        let src = "interface Prop { embedded?: [string, string]; } export function first(prop: Prop): string { if (!prop.embedded) { return ''; } return prop.embedded[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_member_access_inline_type_literal_tuple_member_issue_7878() {
+        // The container type is an inline object literal; the tuple member is read
+        // straight off its signatures.
+        let src = "function f(p: { embedded: [string, string] }) { return p.embedded[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_member_access_type_alias_tuple_member_issue_7878() {
+        // The container is a `type` alias with an object-literal body; the member's
+        // tuple type is resolved by name.
+        let src = "type Prop = { embedded: [string, string] }; function f(p: Prop) { return p.embedded[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_member_access_plain_array_member_issue_7878() {
+        // Negative space: a plain array member (`embedded?: string[]`) is
+        // variable-length, so `p.embedded[0]` may be `undefined` and stays flagged.
+        let src = "interface Prop { embedded?: string[]; } function f(p: Prop) { return p.embedded[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_member_access_empty_tuple_member_issue_7878() {
+        // Negative space: an empty tuple member (`embedded: []`) has no element at
+        // index 0, so the read is genuinely out of bounds and stays flagged.
+        let src = "interface Prop { embedded: []; } function f(p: Prop) { return p.embedded[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_member_access_missing_member_issue_7878() {
+        // Negative space: the accessed member has no declaration on the container
+        // type, so its type is unresolved and the read stays flagged.
+        let src = "interface Prop { other?: [string, string]; } function f(p: Prop) { return p.embedded[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
