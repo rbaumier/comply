@@ -23,6 +23,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if !ctx.project.uses_tailwind() {
+            return;
+        }
         let AstKind::JSXAttribute(attr) = node.kind() else {
             return;
         };
@@ -76,7 +79,24 @@ mod tests {
     use super::*;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.tsx", &project, file)
+    }
+
+    #[test]
+    fn silent_when_project_has_no_tailwind() {
+        // Regression for rbaumier/comply#7900 — without a Tailwind dependency
+        // or config, `flex-shrink-0` is a valid utility in UnoCSS/Windi presets
+        // and the v3/v4 deprecation rename does not apply, so the rule stays silent.
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                r#"const x = <div className="flex-shrink-0" />;"#,
+                "t.tsx"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
