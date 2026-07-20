@@ -31,6 +31,14 @@
 //! in-memory layout for FFI or byte-level casts (e.g. `bytemuck`), so factoring
 //! shared fields into a nested type would change the layout and break the
 //! contract.
+//!
+//! Same-name `struct_item`s that each carry a `#[cfg(...)]` conditional-
+//! compilation gate are collapsed to a single representative before the
+//! pairwise scan. Two definitions of one struct name under mutually-exclusive
+//! gates (a `#[cfg(feature = "v1")]` / `#[cfg(feature = "v2")]` versioned
+//! redefinition) are never present in the same build, so their shared field
+//! subset does not "appear together" in two coexisting structs and there is
+//! nothing to extract; counting both would double-count one logical type.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -42,6 +50,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
 
     let mut struct_fields: Vec<StructFields> = Vec::new();
     collect_structs(node, source, &mut struct_fields);
+    dedup_cfg_twins(&mut struct_fields);
 
     let ptrs_by_line: FxHashMap<usize, &FxHashMap<String, (Strength, String)>> = struct_fields
         .iter()
@@ -135,6 +144,15 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
 /// Per-struct field data gathered for clump detection.
 struct StructFields {
     line: usize,
+    /// The struct's declared type name. Same-name structs under divergent
+    /// `#[cfg]` gates are one logical type re-declared per build variant.
+    name: String,
+    /// True if the struct carries a `#[cfg(...)]` conditional-compilation gate —
+    /// a build variant. `#[cfg_attr(...)]` does not count: it conditionally
+    /// applies an attribute but always compiles the item, so it cannot make two
+    /// same-name definitions mutually exclusive. Same-name gated structs are
+    /// versioned redefinitions collapsed to one before clump detection.
+    cfg_gated: bool,
     names: Vec<String>,
     /// Field names whose type is determined solely by the struct's own declared
     /// generic type parameters.
@@ -204,8 +222,15 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
             && !is_borrowed_view_struct(node)
             && !has_layout_repr_attr(node, source)
         {
+            let name = node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .unwrap_or("")
+                .to_string();
             out.push(StructFields {
                 line: node.start_position().row + 1,
+                name,
+                cfg_gated: has_cfg_gate(node, source),
                 names,
                 generic_param_only,
                 optional_fields,
@@ -223,6 +248,50 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
             }
         }
     }
+}
+
+/// Collapse conditional-compilation twins: `struct_item`s that share a name and
+/// each carry a `#[cfg(...)]` gate are one logical type re-declared under
+/// mutually-exclusive build variants (a `#[cfg(feature = "v1")]` /
+/// `#[cfg(feature = "v2")]` versioned redefinition), never present together in
+/// one compilation. Keep the first such definition per name and drop the rest,
+/// so their shared field subset is not double-counted as a two-struct clump.
+/// Ungated same-name structs (distinct types in separate modules) are left
+/// untouched, and gated structs still clump against differently-named structs.
+fn dedup_cfg_twins(structs: &mut Vec<StructFields>) {
+    let mut kept_gated_names: FxHashSet<String> = FxHashSet::default();
+    structs.retain(|sf| !sf.cfg_gated || kept_gated_names.insert(sf.name.clone()));
+}
+
+/// True if `struct_node` carries a `#[cfg(...)]` conditional-compilation gate as
+/// a preceding `attribute_item` sibling. Only `cfg` counts, not `cfg_attr`:
+/// `#[cfg_attr(...)]` conditionally applies an attribute but always compiles the
+/// item, so it does not make two same-name definitions mutually exclusive.
+/// Interleaved comment siblings are skipped and unrelated attributes
+/// (`#[derive(...)]`) are traversed past. Keying on the `attribute`'s path child
+/// — not a raw text scan — means an attribute merely ending in `cfg`, or the
+/// token `cfg` in a comment, does not match.
+fn has_cfg_gate(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = struct_node.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                let mut cursor = s.walk();
+                let path = s
+                    .children(&mut cursor)
+                    .find(|c| c.kind() == "attribute")
+                    .and_then(|attr| attr.named_child(0))
+                    .and_then(|p| p.utf8_text(source).ok());
+                if path == Some("cfg") {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
 }
 
 /// True when `ty` is determined solely by the host struct's own declared
@@ -931,5 +1000,114 @@ struct Right {
 }
 "#;
         assert_eq!(run_on(src).len(), 2);
+    }
+
+    /// Two definitions of one struct name under mutually-exclusive
+    /// `#[cfg(feature = "v1")]` / `#[cfg(feature = "v2")]` gates are a single
+    /// logical type re-declared per build variant — never present together.
+    /// They share `[currency, payment_id, status]` only because the cfg-twin is
+    /// double-counted; collapsing the twin drops the count below threshold.
+    #[test]
+    fn no_fp_on_cfg_gated_same_name_twins_issue_7870() {
+        let src = r#"
+#[cfg(feature = "v1")]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RefundResponse {
+    pub refund_id: String,
+    pub payment_id: String,
+    pub currency: common_enums::Currency,
+    pub status: RefundStatus,
+}
+
+#[cfg(feature = "v2")]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RefundResponse {
+    pub id: common_utils::id_type::GlobalRefundId,
+    pub payment_id: common_utils::id_type::GlobalPaymentId,
+    pub currency: common_enums::Currency,
+    pub status: RefundStatus,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// The dedup collapses same-name cfg twins, not every cfg-gated struct: a
+    /// `#[cfg]`-gated struct still forms a clump with a differently-named struct
+    /// that repeats its field group, so genuine clumps are not suppressed.
+    #[test]
+    fn still_flags_cfg_gated_struct_clumping_with_distinct_struct() {
+        let src = r#"
+#[cfg(feature = "v1")]
+struct RefundResponse {
+    payment_id: String,
+    currency: String,
+    status: String,
+}
+
+struct PaymentResponse {
+    payment_id: String,
+    currency: String,
+    status: String,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    /// `#[cfg_attr(...)]` conditionally applies an attribute but always compiles
+    /// the item, so it is not a build-variant gate: two always-compiled same-name
+    /// structs (here in separate modules) that share a field group are a genuine
+    /// clump and must still be flagged.
+    #[test]
+    fn still_flags_cfg_attr_same_name_structs() {
+        let src = r#"
+mod a {
+    #[cfg_attr(feature = "serde", derive(Serialize))]
+    pub struct Config {
+        pub host: String,
+        pub port: String,
+        pub tls: String,
+    }
+}
+
+mod b {
+    #[cfg_attr(feature = "serde", derive(Serialize))]
+    pub struct Config {
+        pub host: String,
+        pub port: String,
+        pub tls: String,
+    }
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    /// Three same-name definitions under mutually-exclusive gates collapse to a
+    /// single representative, so the shared field group never reaches the
+    /// two-struct threshold.
+    #[test]
+    fn no_fp_on_three_way_cfg_gated_twins() {
+        let src = r#"
+#[cfg(feature = "v1")]
+struct Handle {
+    id: String,
+    kind: String,
+    owner: String,
+}
+
+#[cfg(feature = "v2")]
+struct Handle {
+    id: String,
+    kind: String,
+    owner: String,
+}
+
+#[cfg(feature = "v3")]
+struct Handle {
+    id: String,
+    kind: String,
+    owner: String,
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 }
