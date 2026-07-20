@@ -3536,6 +3536,137 @@ fn fn_is_unist_visitor(
     })
 }
 
+/// The Vue custom-directive lifecycle hook names. A directive hook receives the
+/// bound `HTMLElement` as its first parameter (`mounted(el, binding)`); a
+/// directive is the imperative-DOM escape hatch, so mutating a DOM element
+/// property on that parameter (`el.hidden = true`, `el['hidden'] = true`) is the
+/// only API — a live DOM node has no immutable/spread form.
+const VUE_DIRECTIVE_HOOKS: &[&str] = &[
+    "created",
+    "beforeMount",
+    "mounted",
+    "beforeUpdate",
+    "updated",
+    "beforeUnmount",
+    "unmounted",
+];
+
+/// True when `ident` resolves to the **element parameter** (first formal
+/// parameter) of a Vue custom-directive lifecycle hook. The bound element is a
+/// live `HTMLElement` whose sole mutation API is imperative property assignment,
+/// with no immutable alternative.
+///
+/// Structural anchors, resolved through the binding's declaration — never a name
+/// match on `el`:
+/// - the binding is the **first formal parameter** of a function/arrow `F`, and
+/// - `F` is the value of an object property keyed by a lifecycle-hook name
+///   ([`VUE_DIRECTIVE_HOOKS`]), where that object literal is a directive
+///   definition (see [`object_is_vue_directive_definition`]).
+///
+/// An ordinary local named `el`, and a non-first parameter of a directive hook,
+/// both stay flagged.
+#[must_use]
+pub fn is_vue_directive_hook_element_param(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    if !decl_is_first_formal_parameter(decl_node_id, semantic) {
+        return false;
+    }
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(decl_node_id) {
+        if matches!(
+            ancestor.kind(),
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_)
+        ) {
+            return function_is_vue_directive_hook(ancestor.id(), semantic);
+        }
+    }
+    false
+}
+
+/// True when the function node `fn_id` is a Vue custom-directive lifecycle hook —
+/// the value (arrow, function expression, or method shorthand) of an object
+/// property keyed by one of [`VUE_DIRECTIVE_HOOKS`], whose object literal is a
+/// directive definition.
+fn function_is_vue_directive_hook(
+    fn_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let nodes = semantic.nodes();
+    let hook_prop = nodes.parent_node(fn_id);
+    let AstKind::ObjectProperty(prop) = hook_prop.kind() else {
+        return false;
+    };
+    if !property_key_name(&prop.key).is_some_and(|name| VUE_DIRECTIVE_HOOKS.contains(&name)) {
+        return false;
+    }
+    let hook_object = nodes.parent_node(hook_prop.id());
+    if !matches!(hook_object.kind(), AstKind::ObjectExpression(_)) {
+        return false;
+    }
+    object_is_vue_directive_definition(hook_object.id(), semantic)
+}
+
+/// True when the object-literal node `object_id` is a Vue directive definition:
+/// the second argument of an `<app>.directive(name, { … })` registration call, or
+/// the value of a `<name>: { … }` entry directly inside a `directives: { … }`
+/// component option.
+fn object_is_vue_directive_definition(
+    object_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let object_span = nodes.kind(object_id).span();
+    let parent = nodes.parent_node(object_id);
+    match parent.kind() {
+        // `app.directive('permiss', { … })` — the definition is the call's second
+        // argument (argument expressions carry no wrapper node, so the object's
+        // parent is the call itself).
+        AstKind::CallExpression(call) => {
+            matches!(
+                &call.callee,
+                Expression::StaticMemberExpression(member)
+                    if member.property.name.as_str() == "directive"
+            ) && call
+                .arguments
+                .get(1)
+                .and_then(|arg| arg.as_expression())
+                .is_some_and(|arg| arg.span() == object_span)
+        }
+        // `directives: { permiss: { … } }` — the object is the value of a named
+        // entry whose enclosing object literal is a `directives:` option.
+        AstKind::ObjectProperty(_) => {
+            let directives_map = nodes.parent_node(parent.id());
+            if !matches!(directives_map.kind(), AstKind::ObjectExpression(_)) {
+                return false;
+            }
+            matches!(
+                nodes.parent_node(directives_map.id()).kind(),
+                AstKind::ObjectProperty(directives_prop)
+                    if property_key_name(&directives_prop.key) == Some("directives")
+            )
+        }
+        _ => false,
+    }
+}
+
 /// True when `ident` resolves to a binding initialised from a `.getContext(...)`
 /// call — e.g. `const ctx = canvas.getContext('2d')`. A rendering context
 /// (`CanvasRenderingContext2D`, `WebGLRenderingContext`, …) is an imperative,
