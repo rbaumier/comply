@@ -3229,12 +3229,17 @@ fn call_returns_bool(call: Node, source: &[u8]) -> bool {
 /// The bare name of a call's callee: the `field` of a method call's
 /// `field_expression` (`self.get_random_bit` → `get_random_bit`), the last
 /// segment of a `scoped_identifier` path (`module::f` → `f`), or a plain
-/// `identifier` (`f` → `f`). Other callee shapes yield `None`.
+/// `identifier` (`f` → `f`). A turbofish call (`x.is_instance_of::<T>()`) is a
+/// `generic_function` wrapping the inner callee, so its `function` child is
+/// resolved recursively. Other callee shapes yield `None`.
 fn callee_name<'a>(function: Node, source: &'a [u8]) -> Option<&'a str> {
     let name_node = match function.kind() {
         "field_expression" => function.child_by_field_name("field")?,
         "scoped_identifier" => function.child_by_field_name("name")?,
         "identifier" => function,
+        "generic_function" => {
+            return callee_name(function.child_by_field_name("function")?, source);
+        }
         _ => return None,
     };
     name_node.utf8_text(source).ok()

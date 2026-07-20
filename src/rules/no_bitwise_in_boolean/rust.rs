@@ -181,6 +181,20 @@ mod tests {
     }
 
     #[test]
+    fn allows_turbofish_bool_method_operands() {
+        // polars `any_value.rs`: `is_instance_of::<T>()` is a turbofish method
+        // call (a `generic_function` callee), and the `is_` prefix marks it
+        // bool-returning, so `is_instance_of::<PyList>() | is_instance_of::<PyTuple>()`
+        // is the branchless logical OR idiom, not a `||` typo (#6881).
+        assert!(
+            run_on(
+                "fn f(ob: &O) { if ob.is_instance_of::<PyList>() | ob.is_instance_of::<PyTuple>() {} }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn still_flags_non_matches_macro_operand() {
         // An arbitrary macro's expansion type is opaque, so its bool-ness is
         // unprovable — the `&`/`|` stays ambiguous and keeps firing.
