@@ -17,12 +17,18 @@ fn has_version_suffix(key: &str) -> bool {
     !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
 }
 
-/// `localStorage.<method>(...)` — returns the call's first string-literal
-/// argument when the callee matches, otherwise `None`.
-fn localstorage_string_key<'a>(
-    call: &'a CallExpression<'a>,
+/// The top-level `localStorage.<method>(...)` call of an expression statement,
+/// when the callee is exactly `localStorage.<method>`.
+fn statement_localstorage_call<'a>(
+    stmt: &'a Statement<'a>,
     method: &str,
-) -> Option<&'a StringLiteral<'a>> {
+) -> Option<&'a CallExpression<'a>> {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return None;
+    };
+    let Expression::CallExpression(call) = &expr_stmt.expression else {
+        return None;
+    };
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return None;
     };
@@ -32,24 +38,38 @@ fn localstorage_string_key<'a>(
     if obj.name != "localStorage" || member.property.name.as_str() != method {
         return None;
     }
+    Some(call)
+}
+
+/// The call's first argument when it is a string literal (the storage key).
+fn call_string_key<'a>(call: &'a CallExpression<'a>) -> Option<&'a StringLiteral<'a>> {
     let Expression::StringLiteral(lit) = call.arguments.first()?.as_expression()? else {
         return None;
     };
     Some(lit)
 }
 
-/// The top-level `localStorage.<method>(...)` call of an expression statement.
-fn statement_localstorage_call<'a>(
-    stmt: &'a Statement<'a>,
-    method: &str,
-) -> Option<&'a StringLiteral<'a>> {
-    let Statement::ExpressionStatement(expr_stmt) = stmt else {
-        return None;
+/// A `JSON.stringify` static-member callee.
+fn is_json_stringify(callee: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = callee else {
+        return false;
     };
-    let Expression::CallExpression(call) = &expr_stmt.expression else {
-        return None;
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
     };
-    localstorage_string_key(call, method)
+    obj.name == "JSON" && member.property.name.as_str() == "stringify"
+}
+
+/// The stored value carries a *serialized shape* that can change across
+/// versions — `JSON.stringify(...)`, an object literal, or an array literal.
+/// A scalar (`string`/`number`/`boolean`) or any other expression has no shape
+/// to migrate, so a `:vN` suffix buys nothing.
+fn value_has_migratable_shape(value: &Expression) -> bool {
+    match value.without_parentheses() {
+        Expression::ObjectExpression(_) | Expression::ArrayExpression(_) => true,
+        Expression::CallExpression(call) => is_json_stringify(&call.callee),
+        _ => false,
+    }
 }
 
 /// A `setItem(key, ...)` paired with a sibling `localStorage.removeItem(key)` in
@@ -58,9 +78,31 @@ fn statement_localstorage_call<'a>(
 /// Scoping to the same block avoids exempting persisted keys that are merely
 /// removed elsewhere (e.g. a logout cleanup path).
 fn block_removes_key(stmts: &[Statement], key: &str) -> bool {
-    stmts
-        .iter()
-        .any(|stmt| statement_localstorage_call(stmt, "removeItem").is_some_and(|lit| lit.value == key))
+    stmts.iter().any(|stmt| {
+        statement_localstorage_call(stmt, "removeItem")
+            .and_then(call_string_key)
+            .is_some_and(|lit| lit.value == key)
+    })
+}
+
+/// The unversioned storage key of a `localStorage.setItem(key, value)` statement
+/// that warrants a `:vN` suffix: a literal key with none, that is not a
+/// feature-detection probe, whose value carries a migratable serialized shape.
+fn flaggable_setitem_key<'a>(
+    stmt: &'a Statement<'a>,
+    block: &'a [Statement<'a>],
+) -> Option<&'a StringLiteral<'a>> {
+    let call = statement_localstorage_call(stmt, "setItem")?;
+    let key_lit = call_string_key(call)?;
+    let key = key_lit.value.as_str();
+    if has_version_suffix(key) || block_removes_key(block, key) {
+        return None;
+    }
+    let value = call.arguments.get(1)?.as_expression()?;
+    if !value_has_migratable_shape(value) {
+        return None;
+    }
+    Some(key_lit)
 }
 
 impl OxcCheck for Check {
@@ -87,13 +129,10 @@ impl OxcCheck for Check {
         };
 
         for stmt in stmts {
-            let Some(lit) = statement_localstorage_call(stmt, "setItem") else {
+            let Some(lit) = flaggable_setitem_key(stmt, stmts) else {
                 continue;
             };
             let key = lit.value.as_str();
-            if has_version_suffix(key) || block_removes_key(stmts, key) {
-                continue;
-            }
 
             let (line, column) = byte_offset_to_line_col(ctx.source, lit.span().start as usize);
             diagnostics.push(Diagnostic {
@@ -206,6 +245,61 @@ mod tests {
               return true;
             }
         "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_scalar_string_value() {
+        // lin-xin/vue-manage-system src/store/sidebar.ts — a Pinia action persists
+        // a plain string (a hex color); a scalar value has no serialized shape to
+        // version, so the `:vN` suffix would buy nothing.
+        let src = r#"
+            const store = {
+                actions: {
+                    setBgColor(color: string) {
+                        this.bgColor = color;
+                        localStorage.setItem('sidebar-bg-color', color);
+                    },
+                    setTextColor(color: string) {
+                        this.textColor = color;
+                        localStorage.setItem('sidebar-text-color', color);
+                    }
+                }
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_scalar_literal_value() {
+        let src = r#"localStorage.setItem("theme", "dark");"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_object_literal_value() {
+        let src = r#"localStorage.setItem("settings", { theme: "dark" });"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_array_literal_value() {
+        let src = r#"localStorage.setItem("history", ["a", "b"]);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_parenthesized_stringify_value() {
+        let src = r#"localStorage.setItem("settings", (JSON.stringify(x)));"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_non_stringify_call_value() {
+        // Only `JSON.stringify(...)` is a serialized shape; an arbitrary call has
+        // an unknown shape, so it is left unflagged (an accepted false negative,
+        // consistent with the rule ignoring dynamic keys).
+        let src = r#"localStorage.setItem("token", getToken());"#;
         assert!(run(src).is_empty());
     }
 }
