@@ -30,10 +30,16 @@
 //! raw-pointer fields, types that store a closure/function in a field
 //! whose generic type parameter carries an `Fn`/`FnMut`/`FnOnce` bound (the
 //! combinator pattern in poem/tower/axum — closures don't implement `Debug`,
-//! so neither a derive nor a `Debug`-bounded field is viable), and types that
+//! so neither a derive nor a `Debug`-bounded field is viable), types that
 //! borrow a `std::fmt::Formatter` (an owned `fmt::Formatter` or a
 //! `&mut fmt::Formatter<'_>` field — `Formatter` has no `Debug` impl, so the
-//! struct genuinely cannot derive it).
+//! struct genuinely cannot derive it), and types that hold a trait-object field
+//! (`dyn Trait`, `&dyn Trait`, `Box<dyn Trait>`, `Arc<dyn Trait>`, …) over a
+//! trait declared in the same crate whose declaration carries no `Debug`
+//! supertrait (a `dyn Trait` is `Debug` only when `Trait: Debug`, so the struct
+//! genuinely cannot derive it — datafusion's `Unparser` over its `Dialect` /
+//! `UserDefinedLogicalNodeUnparser` traits; an external, non-indexed trait stays
+//! conservatively flagged).
 //!
 //! We accept manual impls because libraries with closure or PhantomData
 //! fields legitimately can't derive — they hand-roll the impl. The manual
@@ -213,6 +219,14 @@ impl AstCheck for Check {
         // struct itself — so this scans both. Same "can't derive" class as a
         // raw-pointer field.
         if holds_closure_typed_field(node, name, source_bytes) {
+            return;
+        }
+        // A field whose type is a trait object (`dyn Trait`, in any wrapper:
+        // `&dyn Trait`, `Box<dyn Trait>`, `Arc<dyn Trait>`, …) over a trait
+        // declared in this crate without a `Debug` supertrait can't be `Debug`:
+        // a `dyn Trait` is `Debug` only when `Trait: Debug`. Same "can't derive"
+        // class as a raw-pointer, `Formatter`, or closure field.
+        if holds_non_debug_trait_object_field(node, source_bytes, ctx) {
             return;
         }
         if has_debug_derive(node, source_bytes) {
@@ -722,6 +736,74 @@ fn holds_formatter_typed_field(item: tree_sitter::Node, source: &[u8]) -> bool {
 fn is_fmt_formatter_path(path: &str) -> bool {
     let mut segments = path.rsplit("::");
     segments.next() == Some("Formatter") && segments.next() == Some("fmt")
+}
+
+/// True when the type stores a field whose type is a trait object (`dyn Trait`,
+/// in any wrapper: `&dyn Trait`, `Box<dyn Trait>`, `Arc<dyn Trait>`, `Vec<Arc<dyn
+/// Trait>>`, …) over a trait declared in the same crate whose declaration carries
+/// no `Debug` supertrait. A `dyn Trait` implements `Debug` only when `Trait:
+/// Debug`, so such a field can't be `Debug` and the struct genuinely cannot
+/// derive it — the same "can't derive" class as a raw-pointer, `Formatter`, or
+/// closure field.
+///
+/// The trait is resolved across the crate (via
+/// [`ProjectCtx::crate_trait_lacks_debug_supertrait`], the same cross-file crate
+/// scan used for sibling-file manual `Debug` impls): datafusion declares `pub
+/// struct Unparser` in `unparser/mod.rs` and its `Dialect` /
+/// `UserDefinedLogicalNodeUnparser` traits in sibling files. When the trait
+/// resolves to an external crate (not indexed), the field is left flagged —
+/// conservative, no false negatives.
+///
+/// Walks the type's own field subtree (like `has_raw_pointer_field`; the
+/// `struct_item`/`enum_item` node holds no `impl` blocks, so only field types are
+/// visited) and, for each `dynamic_type` node, resolves its primary trait.
+fn holds_non_debug_trait_object_field(
+    item: tree_sitter::Node,
+    source: &[u8],
+    ctx: &CheckCtx,
+) -> bool {
+    let mut cursor = item.walk();
+    loop {
+        let node = cursor.node();
+        if node.kind() == "dynamic_type"
+            && let Some(trait_name) = dyn_primary_trait_name(node, source)
+            && ctx
+                .project
+                .crate_trait_lacks_debug_supertrait(ctx.path, trait_name)
+        {
+            return true;
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() || cursor.node().id() == item.id() {
+                return false;
+            }
+        }
+    }
+}
+
+/// The primary trait name of a `dynamic_type`, for the crate lookup — the final
+/// `::` segment of the path after `dyn`, cut at the first `<`, `+`, `>`, or
+/// whitespace. A trait object has at most one non-auto trait and `Debug` can only
+/// reach it as a supertrait, so only the primary trait matters. tree-sitter-rust
+/// models `dyn Trait + Send + Sync` as one `dynamic_type` whose internal layout is
+/// grammar-version dependent, so the trait is read from the node text (which
+/// starts with `dyn`). For the crate-local traits this exemption targets the path
+/// is a plain identifier; sugared or quantified shapes (`dyn Fn(...)`, `dyn
+/// for<'a> …`) yield a token that never matches an in-crate trait name, so they
+/// resolve to no match — conservative, still flagged. Returns `None` when the
+/// path is empty.
+fn dyn_primary_trait_name<'a>(dynamic_type: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let rest = dynamic_type.utf8_text(source).ok()?.strip_prefix("dyn")?.trim_start();
+    let path_end = rest
+        .find(|c: char| c == '<' || c == '+' || c == '>' || c.is_whitespace())
+        .unwrap_or(rest.len());
+    rest[..path_end].rsplit("::").next().filter(|s| !s.is_empty())
 }
 
 /// True when `struct_node` stores a field whose type is one of the struct's own
@@ -1643,6 +1725,76 @@ name = "anyhow_like"
             diags.len(),
             1,
             "an impl Debug for Error in crate B must not exempt crate A's Error"
+        );
+    }
+
+    /// Closes #7882: datafusion's `pub struct Unparser` holds `&dyn Dialect` and
+    /// `Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>` fields whose traits are
+    /// declared in sibling files of the same crate and carry no `Debug`
+    /// supertrait (`Dialect: Send + Sync`, `UserDefinedLogicalNodeUnparser` with
+    /// none). A `dyn Trait` is `Debug` only when `Trait: Debug`, so the struct
+    /// genuinely cannot derive `Debug` and must not be flagged.
+    #[test]
+    fn allows_struct_holding_trait_object_field_over_non_debug_crate_trait() {
+        let lib = "use std::sync::Arc;\n\
+                   pub struct Unparser<'a> {\n\
+                   \x20   dialect: &'a dyn Dialect,\n\
+                   \x20   pretty: bool,\n\
+                   \x20   extension_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,\n\
+                   }";
+        let dialect = "pub trait Dialect: Send + Sync { fn name(&self) -> &str; }";
+        let ext = "pub trait UserDefinedLogicalNodeUnparser { fn unparse(&self); }";
+        let diags = run_cross_file(
+            &[
+                ("Cargo.toml", SIBLING_LIB_CARGO_TOML),
+                ("src/lib.rs", lib),
+                ("src/dialect.rs", dialect),
+                ("src/extension_unparser.rs", ext),
+            ],
+            "src/lib.rs",
+        );
+        assert!(
+            diags.is_empty(),
+            "a struct holding a trait-object field over a non-Debug crate trait must not be flagged"
+        );
+    }
+
+    /// Load-bearing conservative direction: when the trait object's trait is not
+    /// declared in the crate (external), the struct stays flagged — the rule
+    /// can't prove the `dyn` isn't `Debug`, so it keeps recommending `Debug`.
+    #[test]
+    fn still_flags_trait_object_field_over_external_trait() {
+        let lib = "pub struct Holder { inner: Box<dyn ExternalTrait> }";
+        let diags = run_cross_file(
+            &[("Cargo.toml", SIBLING_LIB_CARGO_TOML), ("src/lib.rs", lib)],
+            "src/lib.rs",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a trait object over a trait not declared in the crate must stay flagged"
+        );
+    }
+
+    /// Load-bearing positive: when the trait object's trait carries a `Debug`
+    /// supertrait, `dyn Trait` IS `Debug`, so the struct can derive `Debug` and
+    /// must still be flagged when it doesn't.
+    #[test]
+    fn still_flags_trait_object_field_when_trait_has_debug_supertrait() {
+        let lib = "pub struct Holder { inner: Box<dyn Loggable> }";
+        let loggable = "use std::fmt;\npub trait Loggable: fmt::Debug { fn log(&self); }";
+        let diags = run_cross_file(
+            &[
+                ("Cargo.toml", SIBLING_LIB_CARGO_TOML),
+                ("src/lib.rs", lib),
+                ("src/loggable.rs", loggable),
+            ],
+            "src/lib.rs",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a trait object over a trait with a Debug supertrait can derive Debug and must stay flagged"
         );
     }
 
