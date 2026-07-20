@@ -2996,6 +2996,16 @@ pub struct ProjectCtx {
     // sibling file (anyhow's `Error` in `lib.rs` + impl in `error.rs`) counts.
     rust_debug_impl_targets: OnceLock<FxHashMap<PathBuf, FxHashSet<String>>>,
 
+    // Cross-file map: crate root (Cargo manifest dir) → set of trait names
+    // declared in that crate whose declaration carries no `Debug` supertrait, so
+    // a `dyn Trait` object over them is not `Debug`. Built once on first access
+    // from the indexed `.rs` files (no extra fs walk).
+    // `rust-impl-debug-on-public-types` consults it so a public struct holding a
+    // trait-object field over such a trait (datafusion's `Unparser` over
+    // `Dialect`/`UserDefinedLogicalNodeUnparser`) — which cannot derive `Debug`
+    // — is not flagged.
+    rust_non_debug_traits: OnceLock<FxHashMap<PathBuf, FxHashSet<String>>>,
+
     // "Does this package register a global rate-limit middleware?" — i.e. an
     // `app.use(<rateLimiter>)` / `router.use(<rateLimiter>)` whose argument is a
     // recognized rate-limit middleware, in an indexed TS/JS source belonging to
@@ -3255,6 +3265,70 @@ impl ProjectCtx {
                 continue;
             };
             let names = collect_debug_impl_target_names(tree.root_node(), source.as_bytes());
+            if names.is_empty() {
+                continue;
+            }
+            map.entry(manifest.manifest_dir().to_path_buf())
+                .or_default()
+                .extend(names);
+        }
+        map
+    }
+
+    /// True when trait `trait_name`, declared somewhere in the same crate as
+    /// `path` (the crate identified by the nearest `Cargo.toml`), carries no
+    /// `Debug` supertrait — so a `dyn trait_name` trait object is not `Debug`.
+    /// Lets `rust-impl-debug-on-public-types` exempt a public struct that holds
+    /// such a trait object as a field: it genuinely cannot derive `Debug`.
+    /// Returns `false` when `path` has no Cargo manifest or the trait is not
+    /// declared in the crate — an external trait stays conservatively flagged.
+    ///
+    /// The cross-file index is built once on first call and memoized, so it is
+    /// paid only when a `pub` type actually holds a trait-object field (the
+    /// minority case that motivates the lookup).
+    pub fn crate_trait_lacks_debug_supertrait(&self, path: &Path, trait_name: &str) -> bool {
+        // Canonicalize first so the crate-root lookup key matches the index
+        // builder (which walks canonicalized `indexed_paths()`).
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let Some(manifest) = self.nearest_cargo_manifest(&canon) else {
+            return false;
+        };
+        let index = self
+            .rust_non_debug_traits
+            .get_or_init(|| self.build_rust_non_debug_traits());
+        index
+            .get(manifest.manifest_dir())
+            .is_some_and(|names| names.contains(trait_name))
+    }
+
+    /// Build the crate-root → non-`Debug`-supertrait trait-name map by
+    /// enumerating the indexed `.rs` files (no new filesystem walk —
+    /// `indexed_paths()` is the per-run file set already retained in memory).
+    /// Each file is pre-filtered on a literal `"trait"` substring before parsing,
+    /// so files with no trait declaration are skipped without paying tree-sitter.
+    fn build_rust_non_debug_traits(&self) -> FxHashMap<PathBuf, FxHashSet<String>> {
+        let mut map: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
+        let mut parser = tree_sitter::Parser::new();
+        if parser.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+            return map;
+        }
+        for path in self.import_index().indexed_paths() {
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if !source.contains("trait") {
+                continue; // fast prune: no trait declaration possible
+            }
+            let Some(manifest) = self.nearest_cargo_manifest(path) else {
+                continue;
+            };
+            let Some(tree) = parser.parse(&source, None) else {
+                continue;
+            };
+            let names = collect_non_debug_trait_names(tree.root_node(), source.as_bytes());
             if names.is_empty() {
                 continue;
             }
@@ -5994,6 +6068,44 @@ fn collect_debug_impl_target_names(root: tree_sitter::Node, source: &[u8]) -> Fx
         }
     }
     names
+}
+
+/// Names of traits declared under `root` whose declaration carries no `Debug`
+/// supertrait — a `dyn Trait` over such a trait is not `Debug`. Walks every
+/// `trait_item` and reads its `bounds` (the supertrait list after `:`); a trait
+/// whose bounds include a `Debug` path (`Debug`, `fmt::Debug`, `std::fmt::Debug`,
+/// `core::fmt::Debug`) is a `Debug` trait object and excluded.
+fn collect_non_debug_trait_names(root: tree_sitter::Node, source: &[u8]) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "trait_item"
+            && let Some(name_node) = node.child_by_field_name("name")
+            && let Ok(name) = name_node.utf8_text(source)
+            && !trait_declares_debug_supertrait(node, source)
+        {
+            names.insert(name.to_owned());
+        }
+        stack.extend(node.children(&mut cursor));
+    }
+    names
+}
+
+/// True when `trait_item`'s supertrait `bounds` list names `Debug` — the bound's
+/// final `::` segment is `Debug`, matching `Debug`, `fmt::Debug`, `std::fmt::Debug`,
+/// and `core::fmt::Debug`. A trait with no `bounds` field has no supertraits.
+fn trait_declares_debug_supertrait(trait_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(bounds) = trait_item.child_by_field_name("bounds") else {
+        return false;
+    };
+    let mut cursor = bounds.walk();
+    bounds.children(&mut cursor).any(|bound| {
+        matches!(bound.kind(), "type_identifier" | "scoped_type_identifier")
+            && bound
+                .utf8_text(source)
+                .is_ok_and(|t| t.rsplit("::").next() == Some("Debug"))
+    })
 }
 
 /// The base type identifier of an `impl` target, ignoring generic arguments,
