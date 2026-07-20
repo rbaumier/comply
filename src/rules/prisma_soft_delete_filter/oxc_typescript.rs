@@ -332,6 +332,18 @@ impl OxcCheck for Check {
         if !crate::oxc_helpers::is_prisma_delegate_call(member) {
             return;
         }
+        // A dynamically-computed delegate accessor — `prisma[<expr>].findX(...)`
+        // where the model name is a runtime value (`context.prisma[list.listKey]`,
+        // the generic-repository / ORM-wrapper dispatch pattern) — names no model
+        // that resolves to a schema, so whether it declares a soft-delete column is
+        // structurally unknowable. Bail before the schema-less `deletedAt` default
+        // can fire on no evidence. A string-literal property (`prisma["user"]`) is
+        // still statically named and follows the existing schema-less path below.
+        if let Expression::ComputedMemberExpression(computed) = &member.object
+            && !matches!(computed.expression, Expression::StringLiteral(_))
+        {
+            return;
+        }
         // The soft-delete column to enforce. Defaults to `deletedAt` for the
         // schema-less fallback; when a schema governs this query it becomes the
         // exact field the model declares, so a project whose column is
@@ -726,6 +738,39 @@ mod tests {
             const record = await svc.findUnique({ where: { id: "1" } });
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #7929: the delegate model is accessed through a
+    // dynamically-computed member (`context.prisma[list.listKey].findX(...)`),
+    // the generic-repository dispatch used by framework ORM wrappers. The model
+    // name is a runtime string resolvable to no schema, so the rule cannot know
+    // whether it is soft-deletable and must not fire the schema-less default.
+    #[test]
+    fn ignores_dynamic_computed_member_model_receiver() {
+        let find_first = r#"
+            async function f(context, list, filter) {
+                const result = await context.prisma[list.listKey].findFirst({ where: filter });
+                return result;
+            }
+        "#;
+        assert!(run(find_first).is_empty());
+        let find_many = r#"
+            async function g(context, list) {
+                const results = await context.prisma[list.listKey].findMany({ where: {} });
+                return results;
+            }
+        "#;
+        assert!(run(find_many).is_empty());
+    }
+
+    // The discriminator is dynamic-vs-static, not "any computed member": a
+    // string-literal property (`prisma["user"]`) names a statically-known model,
+    // so it stays on the schema-less path and still fires when the filter is
+    // missing — proving the #7929 bail is narrow.
+    #[test]
+    fn flags_string_literal_computed_member_model_receiver() {
+        let src = r#"const r = await prisma["user"].findMany({ where: { active: true } });"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // A genuine delegate call through an injected client
