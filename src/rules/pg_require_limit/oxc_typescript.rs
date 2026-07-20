@@ -8,7 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::sql_helpers::{contains_word, is_sql_string};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, TemplateLiteral};
 use std::sync::Arc;
 
 pub struct Check;
@@ -54,6 +54,15 @@ impl OxcCheck for Check {
         }
         let lower = text.to_ascii_lowercase();
         if contains_word(&lower, "limit") {
+            return;
+        }
+        // A dynamically-assembled query builder (projection and table both
+        // interpolations) blanks its own `${limitSql}` clause when flattened, so
+        // "no literal LIMIT" is unsound here. Checked lazily — only templates
+        // that already look like a limit-less SELECT reach this point.
+        if let AstKind::TemplateLiteral(tpl) = node.kind()
+            && is_interpolated_query_builder(tpl)
+        {
             return;
         }
         if is_implicitly_bounded(&lower) {
@@ -135,6 +144,52 @@ fn is_passed_to_data_sink<'a>(
         }
     }
     false
+}
+
+/// True when a template is a dynamically-assembled SQL query builder rather
+/// than a concrete query: the projection (the token after `SELECT`) and the
+/// table target (the token after `FROM`) are BOTH template interpolations, not
+/// literal identifier text.
+///
+/// A serializer template such as Drizzle's dialect builder —
+/// `` sql`${withSql}select${distinctSql} ${selection} from ${tableSql}…${limitSql}…` `` —
+/// assembles every clause, including `LIMIT`, from runtime fragments. Flattening
+/// blanks `${limitSql}` along with the projection and table, so the absence of a
+/// literal `LIMIT` keyword is not evidence the query is unbounded.
+///
+/// A hand-written `` sql`SELECT * FROM users` `` (literal projection `*` and
+/// table `users`) or `` sql`SELECT id FROM ${table}` `` (literal projection
+/// `id`) still names concrete columns and keeps flagging — only a template whose
+/// projection AND table are both interpolations is exempt.
+fn is_interpolated_query_builder(tpl: &TemplateLiteral<'_>) -> bool {
+    keyword_followed_by_interpolation(tpl, "select")
+        && keyword_followed_by_interpolation(tpl, "from")
+}
+
+/// True when *some* whole-word `keyword` (ASCII, lowercase) ends a quasi (modulo
+/// trailing whitespace) that is immediately followed by a template interpolation
+/// — i.e. the token after that `keyword` in the assembled string is a `${…}`
+/// expression, not literal identifier text. The match is existential across all
+/// quasis, not scoped to one SELECT…FROM pair.
+fn keyword_followed_by_interpolation(tpl: &TemplateLiteral<'_>, keyword: &str) -> bool {
+    tpl.quasis.iter().enumerate().any(|(i, quasi)| {
+        // An interpolation follows quasi `i` iff it is not the last quasi.
+        i + 1 < tpl.quasis.len() && quasi_ends_with_word(quasi.value.raw.as_str(), keyword)
+    })
+}
+
+/// True when `quasi`, after trailing whitespace is stripped, ends with the
+/// whole word `keyword` (matched case-insensitively) — so the only text after
+/// `keyword` within this quasi is whitespace, and the next thing in the template
+/// is the following interpolation.
+fn quasi_ends_with_word(quasi: &str, keyword: &str) -> bool {
+    let trimmed = quasi.trim_end().as_bytes();
+    let kw = keyword.as_bytes();
+    let Some(split) = trimmed.len().checked_sub(kw.len()) else {
+        return false;
+    };
+    trimmed[split..].eq_ignore_ascii_case(kw)
+        && (split == 0 || !is_ident_byte(trimmed[split - 1]))
 }
 
 fn starts_with_select(text: &str) -> bool {
@@ -366,6 +421,38 @@ mod tests {
     #[test]
     fn flags_from_cart_not_cosmosdb() {
         let source = r#"const q = "SELECT * FROM cart";"#;
+        assert_eq!(run(source).len(), 1);
+    }
+
+    // Regression for #7889: Drizzle's dialect query-builder template assembles
+    // every clause — including LIMIT via `${limitSql}` — from runtime
+    // interpolations. Its projection (`${selection}`) and table (`${tableSql}`)
+    // are both `${…}` expressions, so "no literal LIMIT" is not evidence of an
+    // unbounded query. Must not flag.
+    #[test]
+    fn allows_fully_interpolated_query_builder_template() {
+        let source = r#"
+            const finalQuery =
+              sql`${withSql}select${distinctSql} ${selection} from ${tableSql}${joinsSql}${whereSql}${groupBySql}${havingSql}${orderBySql}${limitSql}${offsetSql}${lockingClauseSql}`;
+        "#;
+        assert!(run(source).is_empty());
+    }
+
+    // Over-exemption guard for #7889: only templates whose projection AND table
+    // are both interpolations are exempt. A literal projection keeps flagging
+    // even when the table target is an interpolation.
+    #[test]
+    fn flags_interpolated_table_with_literal_projection() {
+        let source = r#"const rows = sql`SELECT id FROM ${table}`;"#;
+        assert_eq!(run(source).len(), 1);
+    }
+
+    // Symmetric over-exemption guard for #7889: a literal table keeps flagging
+    // even when the projection is an interpolation — both sides of the `&&`
+    // must be interpolations for the query-builder exemption to apply.
+    #[test]
+    fn flags_interpolated_projection_with_literal_table() {
+        let source = r#"const rows = sql`SELECT ${cols} FROM users`;"#;
         assert_eq!(run(source).len(), 1);
     }
 
