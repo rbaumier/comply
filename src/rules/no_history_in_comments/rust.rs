@@ -184,6 +184,34 @@ mod tests {
     }
 
     #[test]
+    fn allows_rewritten_attributive_adjective() {
+        // Regression for issue #7489: in a columnar/compaction data system,
+        // `rewritten <noun>` is domain terminology (a data row physically
+        // rewritten into a new fragment), not code-history narration. The word
+        // is an attributive adjective — followed by the noun it modifies, not in
+        // a verb slot — so it must not fire.
+        assert!(run("// maps a rewritten row's group-local index to a new address\nfn f() {}").is_empty());
+        assert!(run("// Rewritten old row addresses must reference only fragments\nfn f() {}").is_empty());
+        assert!(run("// Rewritten old rows are mapped positionally onto the new rows\nfn f() {}").is_empty());
+        assert!(run("// Deleted offsets inside a rewritten fragment.\nfn f() {}").is_empty());
+        // Generalizes across domains — not a row/fragment word list.
+        assert!(run("// forwards the rewritten packet to the next hop\nfn f() {}").is_empty());
+        assert!(run("// caches the refactored query plan\nfn f() {}").is_empty());
+        // A quantifier heads the noun phrase too: "one rewritten <noun>".
+        assert!(run("// at most one rewritten fragment per group\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_rewritten_refactored_verb_forms() {
+        // The verb (history) readings still fire: passive with a non-"was"
+        // auxiliary, a verb-complement follower, and an object pronoun (the verb
+        // takes an object, not a noun it modifies).
+        assert_eq!(run("// these fragments were rewritten during the last pass\nfn f() {}").len(), 1);
+        assert_eq!(run("// later refactored into two passes\nfn f() {}").len(), 1);
+        assert_eq!(run("// refactored it to drop the intermediate buffer\nfn f() {}").len(), 1);
+    }
+
+    #[test]
     fn flags_rename_without_version_anchor() {
         // Negative space for #6145: an internal rename with no version anchor is
         // still code-history narration and must fire.
