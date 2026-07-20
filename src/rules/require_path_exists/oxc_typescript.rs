@@ -10,6 +10,9 @@ use std::sync::Arc;
 // `"ESNext"`) requires writing the emitted `.mjs`/`.cjs` extension in specifiers
 // even when the on-disk source is `.mts`/`.cts`; `with_extension` rewrites the
 // specifier's JS extension to the source extension (`./foo.mjs` → `foo.mts`).
+// `.vue` is probed because webpack-based Vue tooling (Vue CLI) puts `.vue` in
+// `resolve.extensions`, so the canonical `import App from './App'` entry-point
+// idiom resolves to the sibling SFC; probing it is inert where no `.vue` exists.
 const EXTENSIONS: &[&str] = &[
     "",
     ".ts",
@@ -21,6 +24,7 @@ const EXTENSIONS: &[&str] = &[
     ".mts",
     ".cts",
     ".json",
+    ".vue",
     "/index.ts",
     "/index.tsx",
     "/index.js",
@@ -473,6 +477,29 @@ mod tests {
         let source = "import { x } from './foo';";
         let diags = run_in_dir("app.ts", source, &["foo.js"]);
         assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_extensionless_vue_sfc_import_issue_7879() {
+        // chuzhixin/vue-admin-better reproducer: a Vue project's `main.js`
+        // imports the root SFC via the canonical extensionless entry-point idiom
+        // `import App from './App'`. `App.vue` exists on disk and Vue bundlers put
+        // `.vue` in `resolve.extensions`, so the specifier resolves to the sibling
+        // SFC and the import must not be flagged.
+        let source = "import App from './App';";
+        let diags = run_in_dir("src/main.js", source, &["src/App.vue"]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_extensionless_import_without_vue_sibling() {
+        // Negative space: an extensionless `./App` with no `.vue` (or any) sibling
+        // on disk is a genuine broken import and must still fire — probing `.vue`
+        // stays a pure on-disk existence check.
+        let source = "import App from './App';";
+        let diags = run_in_dir("src/main.js", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("./App"));
     }
 
     #[test]
