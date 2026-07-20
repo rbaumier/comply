@@ -558,7 +558,9 @@ fn is_inside_try_body<'a>(
 }
 
 /// True if the enclosing function's body contains a `URL.canParse(<arg>)`
-/// call lexically *before* this `new URL(<arg>)` site.
+/// call lexically *before* this `new URL(<arg>)` site, keyed on the
+/// constructor argument's own source text so an identifier (`s`) and a member
+/// access (`databaseConfig.url`) are matched the same way.
 ///
 /// Captures all three documented guard shapes with one substring check:
 ///
@@ -567,8 +569,8 @@ fn is_inside_try_body<'a>(
 /// * `URL.canParse(s) && new URL(s).x`
 ///
 /// In every case `URL.canParse` appears earlier in source than the
-/// `new URL` it guards. The argument-name match keeps the heuristic
-/// honest when an unrelated `URL.canParse(other)` lives in the same
+/// `new URL` it guards. Matching the argument's exact source text keeps the
+/// heuristic honest when an unrelated `URL.canParse(other)` lives in the same
 /// function.
 fn is_guarded_by_can_parse<'a>(
     new_expr: &oxc_ast::ast::NewExpression<'a>,
@@ -577,17 +579,24 @@ fn is_guarded_by_can_parse<'a>(
     source: &str,
 ) -> bool {
     use oxc_ast::ast::Expression;
-    let arg_name = new_expr
-        .arguments
-        .first()
-        .and_then(|a| a.as_expression())
-        .and_then(|e| match e {
-            Expression::Identifier(id) => Some(id.name.as_str()),
-            _ => None,
-        });
-    let Some(arg) = arg_name else {
+    use oxc_span::GetSpan;
+    // Key the guard on the argument's own source text so it covers any stable
+    // value expression — a plain identifier or a member access. A literal, call,
+    // or other shape names no reusable value a `URL.canParse(<same text>` guard
+    // could refer to, so it is left unmatched.
+    let Some(arg) = new_expr.arguments.first().and_then(|a| a.as_expression()) else {
         return false;
     };
+    if !matches!(
+        arg,
+        Expression::Identifier(_)
+            | Expression::StaticMemberExpression(_)
+            | Expression::ComputedMemberExpression(_)
+    ) {
+        return false;
+    }
+    let arg_span = arg.span();
+    let arg = &source[arg_span.start as usize..arg_span.end as usize];
 
     let mut func_start: Option<usize> = None;
     for ancestor in semantic.nodes().ancestors(node.id()) {
@@ -838,6 +847,35 @@ mod tests {
             }
         "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Regression for #7473: `new URL(databaseConfig.url)` guarded by
+    // `if (URL.canParse(databaseConfig.url))` — a member-expression argument
+    // gets the same guard treatment as an identifier argument.
+    #[test]
+    fn allows_can_parse_guard_on_member_expression() {
+        let src = r#"
+            function clean(databaseConfig: { url: string }): void {
+                if (URL.canParse(databaseConfig.url)) {
+                    const parsedUrl = new URL(databaseConfig.url);
+                    parsedUrl.searchParams.delete('uselibpqcompat');
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // The member-expression guard still keys on the exact argument text: a
+    // `URL.canParse(a.url)` guard does not cover `new URL(b.url)`.
+    #[test]
+    fn still_flags_member_expr_when_can_parse_is_for_different_member() {
+        let src = r#"
+            function f(a: { url: string }, b: { url: string }): string | null {
+                if (!URL.canParse(a.url)) return null;
+                return new URL(b.url).host;
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     // Regression for rbaumier/comply#30 (adjacent FP): `new URL(config.BASE_URL)` —
