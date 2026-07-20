@@ -13,8 +13,8 @@ use crate::oxc_helpers::{
     is_local_dispatch_table_binding, is_local_object_builder_binding, is_node_module_system_target,
     is_pinia_store_binding, is_react_display_name_assignment, is_reassigned_fresh_copy_at,
     is_reduce_accumulator_param, is_rtk_reducer_draft_param, is_typed_array_binding,
-    is_unist_visitor_node_param, is_valtio_proxy_binding, is_vue_reactive_object_target,
-    is_vue_ref_value_target, root_identifier_of_expr,
+    is_unist_visitor_node_param, is_valtio_proxy_binding, is_vue_directive_hook_element_param,
+    is_vue_reactive_object_target, is_vue_ref_value_target, root_identifier_of_expr,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -563,7 +563,8 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && (is_created_dom_element(id, semantic)
+                            && (is_vue_directive_hook_element_param(id, semantic)
+                                || is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reassigned_fresh_copy_at(id, assign.span.start, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
@@ -622,7 +623,8 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && (is_created_dom_element(id, semantic)
+                            && (is_vue_directive_hook_element_param(id, semantic)
+                                || is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reassigned_fresh_copy_at(id, assign.span.start, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
@@ -672,7 +674,8 @@ impl OxcCheck for Check {
                         if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && (is_created_dom_element(id, semantic)
+                            && (is_vue_directive_hook_element_param(id, semantic)
+                                || is_created_dom_element(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
                                 || is_get_context_call_binding(id, semantic)
@@ -696,7 +699,8 @@ impl OxcCheck for Check {
                         if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && (is_created_dom_element(id, semantic)
+                            && (is_vue_directive_hook_element_param(id, semantic)
+                                || is_created_dom_element(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
                                 || is_valtio_proxy_binding(id, semantic)
                                 || is_get_context_call_binding(id, semantic)
@@ -726,7 +730,8 @@ impl OxcCheck for Check {
                         if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && (is_created_dom_element(id, semantic)
+                            && (is_vue_directive_hook_element_param(id, semantic)
+                                || is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reassigned_fresh_copy_at(id, unary.span.start, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
@@ -741,7 +746,8 @@ impl OxcCheck for Check {
                         if is_rooted_at_this(&m.object) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && (is_created_dom_element(id, semantic)
+                            && (is_vue_directive_hook_element_param(id, semantic)
+                                || is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reassigned_fresh_copy_at(id, unary.span.start, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
@@ -1545,6 +1551,113 @@ mod tests {
         let src = r#"
             const o = getConfig();
             o.title = 'x';
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // DOM element property write inside a Vue custom-directive hook — issue #7867
+
+    #[test]
+    fn skips_dom_write_in_vue_directive_hook_issue_7867() {
+        // Regression for rbaumier/comply#7867 — a directive lifecycle hook's first
+        // parameter is the bound `HTMLElement`; a directive is the imperative-DOM
+        // escape hatch, so `el['hidden'] = true` is the only API, no immutable form.
+        let src = r#"
+            app.directive('permiss', {
+                mounted(el, binding) {
+                    if (binding.value && !permiss.key.includes(String(binding.value))) {
+                        el['hidden'] = true;
+                    }
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_static_dom_write_in_vue_directive_hook_issue_7867() {
+        // The static-member form `el.hidden = true` is the same directive-hook
+        // element write.
+        let src = r#"
+            app.directive('focus', {
+                mounted: (el) => {
+                    el.tabIndex = 0;
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_dom_write_in_directives_component_option_issue_7867() {
+        // A directive supplied via the `directives: { name: { … } }` component
+        // option is the same provenance; its hook's element param is exempt too.
+        let src = r#"
+            export default {
+                directives: {
+                    permiss: {
+                        mounted(el, binding) {
+                            el.hidden = true;
+                        },
+                    },
+                },
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_ordinary_local_named_el_issue_7867() {
+        // Negative space: the gate is the directive-hook first-param position, not
+        // the receiver name — an ordinary local named `el` stays flagged.
+        let src = r#"
+            function f() {
+                const el = getElement();
+                el['hidden'] = true;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_first_param_write_in_directive_hook_issue_7867() {
+        // Negative space: the gate is the FIRST parameter (the element). Mutating a
+        // later parameter inside the same hook is external state and stays flagged.
+        let src = r#"
+            app.directive('permiss', {
+                mounted(el, extra) {
+                    extra.foo = 1;
+                },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_element_write_in_non_directive_call_issue_7867() {
+        // Negative space: the provenance gate is a `.directive(name, { … })` call.
+        // The same hook shape passed to an unrelated method stays flagged.
+        let src = r#"
+            registry.register('permiss', {
+                mounted(el, binding) {
+                    el['hidden'] = true;
+                },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_hook_method_in_directive_call_issue_7867() {
+        // Negative space: the gate also requires a real lifecycle-hook name. A
+        // non-hook method (`setup`) inside a genuine `.directive(…)` call is not a
+        // directive element hook, so its first-param write stays flagged.
+        let src = r#"
+            app.directive('x', {
+                setup(el) {
+                    el.foo = 1;
+                },
+            });
         "#;
         assert_eq!(run(src).len(), 1);
     }
