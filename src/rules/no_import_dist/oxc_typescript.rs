@@ -42,6 +42,14 @@ fn is_type_only(import: &ImportDeclaration) -> bool {
 }
 
 fn emit(ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>, spec: &str, offset: usize) {
+    // A stylesheet/asset import (`element-plus/dist/index.css`, `foo.svg`) loads
+    // the package's compiled CSS/asset bundle — its public surface, published
+    // only under `dist/` with no package-entry-point form. The remediation
+    // ("import from the entry point") targets deep-imported compiled *code*; it
+    // does not apply to a side-effect asset load.
+    if crate::project::import_index::is_asset_specifier(spec) {
+        return;
+    }
     // The package's own declared entry file (package.json `main`/`exports` `.`)
     // exists to dispatch to the prebuilt `./dist/` artifact — telling it to
     // import from the entry point is circular. Non-entry files still fire.
@@ -185,6 +193,33 @@ import { isParentDirectory } from '../dist/path.js';"#;
         let src = r#"import { foo } from "./dist/foo";"#;
         let diags = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/foo.ts");
         assert_eq!(diags.len(), 1, "dist import in production source must fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_stylesheet_import_from_dist() {
+        // Issue #7869 — `element-plus/dist/index.css` is the documented way to
+        // load Element Plus's compiled stylesheet; a CSS bundle published under
+        // dist/ has no package-entry-point form, so the rule's premise does not
+        // apply.
+        let src = r#"import 'element-plus/dist/index.css';"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_stylesheet_import_from_dist_with_query_suffix() {
+        // Vite appends `?inline`/`?url` to asset imports; the extension check
+        // must strip the query before classifying.
+        let src = r#"import 'pkg/dist/theme.css?inline';"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_deep_code_import_from_dist_despite_asset_carveout() {
+        // Negative space: a genuine deep import of compiled JS past the entry
+        // point still fires — the carve-out is a file-type discriminator, not a
+        // package-name allowlist.
+        let src = r#"import { foo } from "element-plus/dist/es/foo.mjs";"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
