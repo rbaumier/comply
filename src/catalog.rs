@@ -72,6 +72,7 @@ const TECH_SCOPES: &[&str] = &[
     "solid",
     "elysia",
     "hono",
+    "axum",
     "docker-compose",
     "docker",
     "kubernetes",
