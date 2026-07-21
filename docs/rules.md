@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2024 rules across 146 categories.
+2025 rules across 147 categories.
 
 ## Categories
 
@@ -13,6 +13,7 @@
 - [api-design](#api-design) (7 rules)
 - [architecture](#architecture) (2 rules)
 - [async](#async) (4 rules)
+- [axum > deployment](#axum-deployment) (1 rules)
 - [axum > security](#axum-security) (14 rules)
 - [better-auth](#better-auth) (9 rules)
 - [better-auth > imports](#better-auth-imports) (1 rules)
@@ -258,6 +259,12 @@
 | `no-async-without-await` | `async` function never uses `await`. | Either remove the `async` keyword (the function returns a value, not a Promise of one) or add the `await` that justifies it. An `async` function that never awaits forces callers to unwrap a Promise for no reason. |
 | `no-floating-promise` | Promise-returning call is used as a statement — rejection is ignored. | `await` the promise, chain `.then/.catch`, pass it to `Promise.all`, or explicitly mark `void promise` if you intentionally ignore it. An unhandled rejection becomes an `UnhandledPromiseRejection` warning — and in Node 15+, crashes the process. |
 | `no-redundant-await` | `return await` outside a try block is redundant. | Drop the `await` — an `async` function already wraps its return value in a Promise, so `return await p` is equivalent to `return p` but adds a microtask. Keep `return await` only inside a `try` block, where it affects catch semantics. |
+
+## axum > deployment
+
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `axum-serve-no-graceful-shutdown` | `axum::serve(...)` without `.with_graceful_shutdown(...)` — in-flight requests are dropped on SIGTERM/SIGINT. | Chain `.with_graceful_shutdown(shutdown_signal())` onto `axum::serve(listener, app)` so open connections drain before the process exits. |
 
 ## axum > security
 
