@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2018 rules across 146 categories.
+2019 rules across 146 categories.
 
 ## Categories
 
@@ -13,7 +13,7 @@
 - [api-design](#api-design) (7 rules)
 - [architecture](#architecture) (2 rules)
 - [async](#async) (4 rules)
-- [axum > security](#axum-security) (8 rules)
+- [axum > security](#axum-security) (9 rules)
 - [better-auth](#better-auth) (9 rules)
 - [better-auth > imports](#better-auth-imports) (1 rules)
 - [better-auth > security](#better-auth-security) (7 rules)
@@ -271,6 +271,7 @@
 | `axum-cors-methods-wildcard` | Combining CORS credentials with wildcard methods lets every HTTP verb reach the axum API from credentialed requests. | Pair `.allow_credentials(true)` with an explicit method list: `.allow_methods([Method::GET, Method::POST])`. `.allow_methods(Any)` and `CorsLayer::very_permissive()` cannot be combined with credentials safely. |
 | `axum-cors-regex-unanchored` | A CORS origin regex used in an `AllowOrigin::predicate` closure without a trailing `$` anchor matches more than intended (e.g. `https://good.example.com.attacker.com`). | Anchor the origin regex at the end with `$`: `Regex::new(r"^https://.*\.example\.com$")`. |
 | `axum-cors-wildcard` | Permissive CORS allows any origin to access the axum API. | Restrict the origin: `CorsLayer::new().allow_origin("https://your-domain.com".parse::<HeaderValue>().unwrap())`. `CorsLayer::permissive()`, `CorsLayer::very_permissive()`, and `.allow_origin(Any)` let every origin reach the API. |
+| `axum-jwt-cookie-no-httponly` | Cookie carrying a JWT (`jsonwebtoken::encode`) is built without `http_only` — the token is readable from JavaScript (XSS). | Add `.http_only(true)` to the `Cookie::build(...)` chain that stores a JWT so the token cannot be read by scripts. Setting `.http_only(false)` leaves it exposed. |
 
 ## better-auth
 

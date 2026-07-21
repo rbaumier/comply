@@ -904,6 +904,36 @@ pub fn file_imports_jwt_crate(node: Node, source: &[u8]) -> bool {
     })
 }
 
+/// True if the file containing `node` binds the local name `local` to a known
+/// JWT crate (one of [`JWT_CRATES`]) through a `use` declaration — e.g.
+/// `use jsonwebtoken::encode;` (grouped and `as`-aliased forms included) binds
+/// `encode`. Resolution reuses the [`collect_use_leaves`] scanner, so it keys on
+/// the leaf's crate segment, never on a substring of the file: `use base64::encode;`
+/// binding the same `local` does NOT match (its crate segment is `base64`), and
+/// a locally-defined `fn encode` binds nothing. A glob import of a JWT crate
+/// module counts only when no explicit binding of `local` exists.
+pub fn file_binds_name_to_jwt_crate(node: Node, source: &[u8], local: &str) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut leaves = Vec::new();
+    collect_use_leaves(root, source, &mut leaves);
+
+    let mut explicit: Option<bool> = None;
+    let mut has_jwt_glob = false;
+    for leaf in &leaves {
+        let crate_name = leaf.module.first().unwrap_or(&leaf.local);
+        let is_jwt = JWT_CRATES.contains(&crate_name.as_str());
+        if leaf.local == "*" {
+            has_jwt_glob |= is_jwt;
+        } else if leaf.local == local {
+            explicit = Some(explicit.unwrap_or(false) || is_jwt);
+        }
+    }
+    explicit.unwrap_or(has_jwt_glob)
+}
+
 /// A single leaf symbol of a `use` declaration: the module segments preceding
 /// the bound name, and the local binding name (`*` for a glob import).
 struct UsePathLeaf {
