@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2015 rules across 146 categories.
+2016 rules across 146 categories.
 
 ## Categories
 
@@ -13,7 +13,7 @@
 - [api-design](#api-design) (7 rules)
 - [architecture](#architecture) (2 rules)
 - [async](#async) (4 rules)
-- [axum > security](#axum-security) (5 rules)
+- [axum > security](#axum-security) (6 rules)
 - [better-auth](#better-auth) (9 rules)
 - [better-auth > imports](#better-auth-imports) (1 rules)
 - [better-auth > security](#better-auth-security) (7 rules)
@@ -263,6 +263,7 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
+| `axum-cookie-no-secure` | Cookie built without `secure` — it can be sent over plain HTTP. | Add `.secure(true)` to the `Cookie::build(...)` chain so the cookie is only sent over HTTPS. Setting `.secure(false)` leaves it exposed on plain HTTP. |
 | `axum-cors-allowed-headers-wildcard` | Combining CORS credentials with wildcard allowed headers weakens the preflight contract: browsers reject a credentialed request whose allowed headers answer with `*`. | Pair `.allow_credentials(true)` with an explicit header list: `.allow_headers([AUTHORIZATION, CONTENT_TYPE])`. `.allow_headers(Any)` and `CorsLayer::very_permissive()` cannot be combined with credentials safely. |
 | `axum-cors-credentials-wildcard` | Combining CORS credentials with a wildcard origin is rejected by browsers and exposes the axum API to every site. | Pair `.allow_credentials(true)` with a specific origin: `.allow_origin("https://your-domain.com".parse::<HeaderValue>().unwrap())`. `.allow_origin(Any)` and `CorsLayer::very_permissive()` cannot be combined with credentials safely. |
 | `axum-cors-methods-wildcard` | Combining CORS credentials with wildcard methods lets every HTTP verb reach the axum API from credentialed requests. | Pair `.allow_credentials(true)` with an explicit method list: `.allow_methods([Method::GET, Method::POST])`. `.allow_methods(Any)` and `CorsLayer::very_permissive()` cannot be combined with credentials safely. |
