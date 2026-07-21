@@ -7221,6 +7221,48 @@ pub(crate) fn skip_char_literal(bytes: &[u8], start: usize) -> usize {
     i + 1
 }
 
+/// True if `node` is a `cfg!(...)` invocation — Rust's expression-position
+/// conditional-compilation predicate, which the compiler folds to `true` or
+/// `false` for the target being built.
+///
+/// Keying on the `macro_invocation` node and the final segment of its `macro`
+/// path means a runtime function named `cfg(..)`, or a local named `cfg`, does
+/// not match, while the qualified `core::cfg!(..)` spelling does. A third-party
+/// `mylib::cfg!(..)` matches too — the same trade-off `final_segment` already
+/// carries for `matches!`, and the safe direction for callers that suppress on
+/// a hit.
+pub fn is_cfg_macro_invocation(node: Node, source: &[u8]) -> bool {
+    node.kind() == "macro_invocation"
+        && node
+            .child_by_field_name("macro")
+            .and_then(|path| final_segment(path, source))
+            == Some("cfg")
+}
+
+/// True if `node` or any of its descendants is a `cfg!(...)` invocation —
+/// `cfg!(unix)`, `!cfg!(windows)`, `cfg!(unix) && strict`.
+///
+/// An `if` whose condition reads a `cfg!` is a compile-time gate: the compiler
+/// keeps one arm for the target being built, so the arms are per-configuration
+/// variants rather than runtime control flow, and a rule that judges them
+/// redundant of one another has misread them.
+///
+/// Blind spots, pointing opposite ways. tree-sitter leaves another macro's
+/// arguments as an unparsed `token_tree`, so a `cfg!` nested inside one
+/// (`outer!(cfg!(unix))`) reads as absent and a caller that suppresses on a hit
+/// will still fire. Conversely a `cfg!` reached only through a closure in the
+/// expression (`items.iter().any(|i| if cfg!(unix) { i.a } else { i.b })`) reads
+/// as present, though the expression's own value is not compile-time fixed —
+/// that one over-suppresses.
+pub fn expression_reads_cfg_macro(node: Node, source: &[u8]) -> bool {
+    if is_cfg_macro_invocation(node, source) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| expression_reads_cfg_macro(child, source))
+}
+
 /// True if `enum_item` has at least one variant gated behind a `#[cfg(...)]`
 /// (or `#[cfg_attr(...)]`) attribute, making the enum's variant set
 /// target-dependent.
@@ -8190,6 +8232,38 @@ mod tests {
                 is_gated_by_cfg(node, src.as_bytes(), "debug_assertions"),
                 expected,
                 "is_gated_by_cfg mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn expression_reads_cfg_macro_finds_nested_invocations_only() {
+        let test_cases = [
+            ("fn f() { if cfg!(unix) { a() } }", true),
+            ("fn f() { if !cfg!(windows) { a() } }", true),
+            ("fn f() { if cfg!(unix) && strict { a() } }", true),
+            ("fn f() { if core::cfg!(unix) { a() } }", true),
+            (
+                "fn f() { if cfg!(feature = \"a\") || cfg!(feature = \"b\") { a() } }",
+                true,
+            ),
+            // Negative space: a runtime call named `cfg` is not the `cfg!` macro.
+            ("fn f() { if cfg() { a() } }", false),
+            // Negative space: a field named `cfg` is not the `cfg!` macro.
+            ("fn f() { if opts.cfg { a() } }", false),
+            // Negative space: another macro in the condition.
+            ("fn f() { if matches!(x, Some(_)) { a() } }", false),
+            ("fn f() { if flag { a() } }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let condition = first_of_kind(tree.root_node(), "if_expression")
+                .and_then(|if_node| if_node.child_by_field_name("condition"))
+                .expect("snippet should contain an if condition");
+            assert_eq!(
+                expression_reads_cfg_macro(condition, src.as_bytes()),
+                expected,
+                "expression_reads_cfg_macro mismatch for `{src}`"
             );
         }
     }

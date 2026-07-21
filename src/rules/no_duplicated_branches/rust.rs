@@ -17,6 +17,14 @@
 //! still fire, which is the genuine case (two literally-equal `if let`
 //! branches).
 //!
+//! ## Compile-time gates
+//!
+//! An arm whose condition reads a `cfg!(...)` predicate is left alone: the
+//! compiler keeps it for some targets and drops it for others, so a body it
+//! shares with its neighbour is a per-configuration variant rather than a
+//! duplicate to merge away. A duplicate between two ungated arms of the same
+//! chain still flags.
+//!
 //! ## Dedup
 //!
 //! A single duplicate line is reported at most once per chain.
@@ -29,6 +37,7 @@ struct Branch {
     condition: String,
     body: String,
     is_let_condition: bool,
+    condition_reads_cfg: bool,
 }
 
 crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
@@ -77,9 +86,13 @@ fn check_if_branches(
     // arm; merging them would require reordering the chain, which changes
     // top-to-bottom evaluation when conditions overlap. Compare each arm
     // against its immediate predecessor only.
+    // An arm drops out of the comparison when it has no body to compare, or
+    // when its condition reads `cfg!` — see "Compile-time gates" above.
+    let is_excluded = |b: &Branch| b.body.is_empty() || b.condition_reads_cfg;
+
     let mut reported: FxHashSet<usize> = FxHashSet::default();
     for j in 1..branches.len() {
-        if branches[j].body.is_empty() || branches[j - 1].body.is_empty() {
+        if is_excluded(&branches[j]) || is_excluded(&branches[j - 1]) {
             continue;
         }
         if key(&branches[j]) == key(&branches[j - 1]) && reported.insert(branches[j].line) {
@@ -114,6 +127,8 @@ fn collect_if_branches(node: tree_sitter::Node, source: &[u8], branches: &mut Ve
     // body — correctly does not qualify.
     let is_let_condition =
         cond_node.is_some_and(|c| matches!(c.kind(), "let_condition" | "let_chain"));
+    let condition_reads_cfg =
+        cond_node.is_some_and(|c| crate::rules::rust_helpers::expression_reads_cfg_macro(c, source));
 
     if let Some(body) = node.child_by_field_name("consequence") {
         let line = body.start_position().row + 1;
@@ -123,6 +138,7 @@ fn collect_if_branches(node: tree_sitter::Node, source: &[u8], branches: &mut Ve
             condition,
             body: text,
             is_let_condition,
+            condition_reads_cfg,
         });
     }
 
@@ -144,6 +160,7 @@ fn collect_if_branches(node: tree_sitter::Node, source: &[u8], branches: &mut Ve
                             condition: String::new(),
                             body: text,
                             is_let_condition: false,
+                            condition_reads_cfg: false,
                         });
                         return;
                     }
@@ -215,6 +232,66 @@ mod tests {
     }
 }"#;
         assert!(run_on(src).is_empty());
+    }
+
+    // https://github.com/rbaumier/comply/issues/6810
+    #[test]
+    fn allows_duplicate_branches_under_cfg_macro_condition() {
+        let src = r#"fn arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "x64"
+    } else {
+        "x64"
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// The gate covers the compared pair only: two ungated arms sharing a body
+    /// are a real duplicate on every target, `cfg!` elsewhere in the chain or not.
+    #[test]
+    fn flags_adjacent_runtime_duplicate_in_a_chain_with_a_cfg_arm() {
+        let src = r#"fn f() {
+    if cfg!(unix) {
+        foo();
+    } else if b {
+        bar();
+    } else if c {
+        baz();
+    } else {
+        baz();
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// The gated arm may sit anywhere in the chain, not just first.
+    #[test]
+    fn allows_duplicate_branches_when_a_later_else_if_reads_cfg() {
+        let src = r#"fn f() {
+    if a {
+        foo();
+    } else if cfg!(unix) {
+        bar();
+    } else {
+        bar();
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// `cfg()` is a call expression, not the `cfg!` macro — nothing gates the
+    /// chain, so the adjacent duplicate bodies still flag.
+    #[test]
+    fn flags_duplicate_branches_under_runtime_call_named_cfg() {
+        let src = r#"fn f() {
+    if cfg() {
+        do_something();
+    } else {
+        do_something();
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
