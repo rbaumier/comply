@@ -6,6 +6,17 @@
 //! chain any of whose conditions reads a `cfg!(...)` predicate is left alone
 //! too — see `rust_helpers::expression_reads_cfg_macro` — as is one whose author
 //! wrote `#[allow(clippy::if_same_then_else)]`, the clippy lint this mirrors.
+//!
+//! The `cfg!` carve-out covers the whole chain, deliberately: an all-identical
+//! `cfg!` chain is read as a placeholder that documents an axis of variation the
+//! code has not needed yet (`if cfg!(target_arch = "aarch64") { "x64" } else
+//! { "x64" }` — issue #6810), and that reading is preferred over catching the
+//! opposite case, a `cfg!` chain whose arms were meant to differ and drifted
+//! into agreement. `no-duplicated-branches` scopes the same carve-out to the
+//! compared pair instead, because it judges two adjacent arms rather than the
+//! conditional as a whole, so it still reports a duplicate between two ungated
+//! arms of a partly gated chain.
+//!
 //! Match expressions are not currently checked — TODO(#8072).
 //! Branches are compared by their ordered AST leaf tokens, so formatting and
 //! indentation differences are ignored while string-literal content (including
@@ -45,8 +56,8 @@ fn block_interior_signature(block: tree_sitter::Node, source: &[u8]) -> String {
     out.join("\u{1f}")
 }
 
-/// Signature of an arbitrary expression/body node (used for match-arm values,
-/// which may be a block expression or a bare expression).
+/// Signature of an arbitrary expression/body node, which may be a block
+/// expression or a bare expression.
 fn node_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     let mut out = Vec::new();
     leaf_tokens(node, source, &mut out);
@@ -146,9 +157,8 @@ impl AstCheck for Check {
                     && !branches[0].is_empty()
                     && branches.iter().all(|b| *b == branches[0])
                 {
-                    // Checked last: the ancestor walk for the attribute costs
-                    // more than judging the chain does, and only a chain about
-                    // to be reported can be suppressed.
+                    // Checked last: only a chain about to be reported can be
+                    // suppressed.
                     if crate::rules::rust_helpers::has_clippy_allow(
                         node,
                         source_bytes,
@@ -172,6 +182,9 @@ impl AstCheck for Check {
                         });
                 }
             }
+            // TODO(#8072): unreachable — tree-sitter nests the arms in a
+            // `match_block`, so this scan of the `match_expression`'s own named
+            // children never matches one.
             "match_expression" => {
                 let mut arm_bodies: Vec<String> = Vec::new();
                 let mut cursor = node.walk();

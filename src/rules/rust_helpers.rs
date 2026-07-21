@@ -8237,7 +8237,7 @@ mod tests {
     }
 
     #[test]
-    fn expression_reads_cfg_macro_finds_nested_invocations_only() {
+    fn expression_reads_cfg_macro_matches_cfg_invocations_anywhere_in_the_expression() {
         let test_cases = [
             ("fn f() { if cfg!(unix) { a() } }", true),
             ("fn f() { if !cfg!(windows) { a() } }", true),
@@ -8254,6 +8254,11 @@ mod tests {
             // Negative space: another macro in the condition.
             ("fn f() { if matches!(x, Some(_)) { a() } }", false),
             ("fn f() { if flag { a() } }", false),
+            // Documents the `token_tree` blind spot rather than a wanted
+            // outcome: another macro's arguments stay unparsed, so a `cfg!`
+            // nested in one reads as absent. A grammar bump that starts
+            // re-parsing them would flip two rules' suppression and trip here.
+            ("fn f() { if outer!(cfg!(unix)) { a() } }", false),
         ];
         for (src, expected) in test_cases {
             let tree = parse(src);
