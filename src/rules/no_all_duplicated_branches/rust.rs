@@ -2,8 +2,11 @@
 //!
 //! Flag if/else chains that end in an unconditional `else` where every branch
 //! has identical code. A chain without a terminal `else` is gated rather than
-//! exhaustive, so identical branches are not pointless and are left alone.
-//! Also flags match expressions where all arms have identical bodies.
+//! exhaustive, so identical branches are not pointless and are left alone. A
+//! chain any of whose conditions reads a `cfg!(...)` predicate is left alone
+//! too — see `rust_helpers::expression_reads_cfg_macro` — as is one whose author
+//! wrote `#[allow(clippy::if_same_then_else)]`, the clippy lint this mirrors.
+//! Match expressions are not currently checked — TODO(#8072).
 //! Branches are compared by their ordered AST leaf tokens, so formatting and
 //! indentation differences are ignored while string-literal content (including
 //! internal whitespace) stays significant.
@@ -50,19 +53,36 @@ fn node_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     out.join("\u{1f}")
 }
 
-/// Collect the branch signatures of an `if`/`else if` chain and report whether
-/// the chain terminates with an unconditional `else { ... }` block. The chain
-/// only covers every case when such a terminal `else` is present; otherwise its
-/// body is gated by the conditions, so identical branches are not pointless.
-fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> (Vec<String>, bool) {
-    let mut branches = Vec::new();
+/// What the rule needs to know about an `if`/`else if` chain: one signature per
+/// branch, whether the chain terminates with an unconditional `else { ... }`,
+/// and whether any of its conditions reads a `cfg!(...)` predicate.
+#[derive(Default)]
+struct IfChain {
+    branch_signatures: Vec<String>,
+    has_terminal_else: bool,
+    is_compile_time_gated: bool,
+}
+
+/// Walk an `if`/`else if` chain into `chain`.
+///
+/// The chain only covers every case when a terminal `else` is present;
+/// otherwise its body is gated by the conditions, so identical branches are not
+/// pointless.
+fn collect_if_chain(if_node: tree_sitter::Node, source: &[u8], chain: &mut IfChain) {
+    if let Some(condition) = if_node.child_by_field_name("condition")
+        && crate::rules::rust_helpers::expression_reads_cfg_macro(condition, source)
+    {
+        chain.is_compile_time_gated = true;
+    }
 
     if let Some(consequence) = if_node.child_by_field_name("consequence") {
-        branches.push(block_interior_signature(consequence, source));
+        chain
+            .branch_signatures
+            .push(block_interior_signature(consequence, source));
     }
 
     let Some(alternative) = if_node.child_by_field_name("alternative") else {
-        return (branches, false);
+        return;
     };
 
     match alternative.kind() {
@@ -70,27 +90,26 @@ fn collect_if_branches(if_node: tree_sitter::Node, source: &[u8]) -> (Vec<String
             let mut cursor = alternative.walk();
             for child in alternative.children(&mut cursor) {
                 if child.kind() == "if_expression" {
-                    let (sub, has_terminal_else) = collect_if_branches(child, source);
-                    branches.extend(sub);
-                    return (branches, has_terminal_else);
+                    collect_if_chain(child, source, chain);
+                    return;
                 }
                 if child.kind() == "block" {
-                    branches.push(block_interior_signature(child, source));
-                    return (branches, true);
+                    chain
+                        .branch_signatures
+                        .push(block_interior_signature(child, source));
+                    chain.has_terminal_else = true;
+                    return;
                 }
             }
-            (branches, false)
         }
-        "if_expression" => {
-            let (sub, has_terminal_else) = collect_if_branches(alternative, source);
-            branches.extend(sub);
-            (branches, has_terminal_else)
-        }
+        "if_expression" => collect_if_chain(alternative, source, chain),
         "block" => {
-            branches.push(block_interior_signature(alternative, source));
-            (branches, true)
+            chain
+                .branch_signatures
+                .push(block_interior_signature(alternative, source));
+            chain.has_terminal_else = true;
         }
-        _ => (branches, false),
+        _ => {}
     }
 }
 
@@ -115,12 +134,29 @@ impl AstCheck for Check {
                     return;
                 }
 
-                let (branches, has_terminal_else) = collect_if_branches(node, source_bytes);
-                if has_terminal_else
+                let mut chain = IfChain::default();
+                collect_if_chain(node, source_bytes, &mut chain);
+                if chain.is_compile_time_gated {
+                    return;
+                }
+
+                let branches = &chain.branch_signatures;
+                if chain.has_terminal_else
                     && branches.len() >= 2
                     && !branches[0].is_empty()
                     && branches.iter().all(|b| *b == branches[0])
                 {
+                    // Checked last: the ancestor walk for the attribute costs
+                    // more than judging the chain does, and only a chain about
+                    // to be reported can be suppressed.
+                    if crate::rules::rust_helpers::has_clippy_allow(
+                        node,
+                        source_bytes,
+                        "if_same_then_else",
+                    ) {
+                        return;
+                    }
+
                     let pos = node.start_position();
                     diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -318,6 +354,162 @@ fn f() {
         assert!(run_on(source).is_empty());
     }
 
+    // https://github.com/rbaumier/comply/issues/6810
+    #[test]
+    fn allows_issue_snippet_gated_by_cfg_and_clippy_allow() {
+        let source = r#"
+#[allow(clippy::if_same_then_else)]
+fn arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "x64"
+    } else {
+        "x64"
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// The `cfg!` gate alone suppresses — the issue snippet's
+    /// `#[allow(clippy::if_same_then_else)]` is not what carries it.
+    #[test]
+    fn allows_identical_branches_under_cfg_macro_condition() {
+        let source = r#"
+fn arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "x64"
+    } else {
+        "x64"
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// An author's `#[allow]` of the clippy lint this rule mirrors suppresses on
+    /// its own, with no `cfg!` in sight.
+    #[test]
+    fn allows_identical_branches_under_matching_clippy_allow() {
+        let source = r#"
+#[allow(clippy::if_same_then_else)]
+fn f() {
+    if condition {
+        do_something();
+    } else {
+        do_something();
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// An `#[allow]` of some other lint says nothing about this duplication.
+    #[test]
+    fn flags_identical_branches_under_unrelated_clippy_allow() {
+        let source = r#"
+#[allow(clippy::needless_return)]
+fn f() {
+    if condition {
+        do_something();
+    } else {
+        do_something();
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Only the conditions gate the chain: a `cfg!` read inside the *bodies*
+    /// leaves the branching itself runtime control flow.
+    #[test]
+    fn flags_identical_branches_reading_cfg_in_their_bodies() {
+        let source = r#"
+fn f() {
+    if flag {
+        report(cfg!(unix));
+    } else {
+        report(cfg!(unix));
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A `cfg!` gate on an inner chain does not extend to the outer one, which
+    /// is judged on its own conditions.
+    #[test]
+    fn flags_outer_chain_when_only_a_nested_if_reads_cfg() {
+        let source = r#"
+fn f() {
+    if flag {
+        if cfg!(unix) {
+            do_something();
+        } else {
+            do_something();
+        }
+    } else {
+        if cfg!(unix) {
+            do_something();
+        } else {
+            do_something();
+        }
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// The `cfg!` may sit anywhere in the condition expression — the chain is a
+    /// compile-time gate either way.
+    #[test]
+    fn allows_identical_branches_under_compound_cfg_macro_condition() {
+        let source = r#"
+fn f() {
+    if !cfg!(target_os = "windows") && strict {
+        do_something();
+    } else {
+        do_something();
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A `cfg!` on any arm of the chain gates the whole chain.
+    #[test]
+    fn allows_identical_branches_when_a_later_else_if_reads_cfg() {
+        let source = r#"
+fn f() {
+    if a {
+        do_something();
+    } else if cfg!(unix) {
+        do_something();
+    } else {
+        do_something();
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// Negative space: a runtime call named `cfg` is not the `cfg!` macro, so
+    /// the chain is ordinary control flow and still flags.
+    #[test]
+    fn flags_identical_branches_under_runtime_call_named_cfg() {
+        let source = r#"
+fn f() {
+    if cfg() {
+        do_something();
+    } else {
+        do_something();
+    }
+}
+"#;
+        let d = run_on(source);
+        assert_eq!(d.len(), 1);
+    }
+
+    /// Vacuous until #8072 revives the match path; kept as its regression guard.
     #[test]
     fn allows_match_arms_differing_only_in_string_whitespace() {
         let source = r#"

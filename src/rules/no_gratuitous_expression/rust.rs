@@ -126,11 +126,7 @@ fn operand_adjacent_to_literal_is_cfg(node: tree_sitter::Node, source: &[u8]) ->
     } else {
         return false;
     };
-    operand.kind() == "macro_invocation"
-        && operand
-            .child_by_field_name("macro")
-            .and_then(|m| m.utf8_text(source).ok())
-            == Some("cfg")
+    crate::rules::rust_helpers::is_cfg_macro_invocation(operand, source)
 }
 
 #[cfg(test)]
@@ -206,6 +202,11 @@ mod tests {
     fn allows_cfg_toggle_without_allow() {
         // The `cfg!(...)` operand alone marks an intentional compile-time toggle.
         assert!(run_on("fn f() { if cfg!(debug_assertions) && false { } }").is_empty());
+    }
+
+    #[test]
+    fn allows_qualified_cfg_toggle() {
+        assert!(run_on("fn f() { if core::cfg!(debug_assertions) && false { } }").is_empty());
     }
 
     #[test]
