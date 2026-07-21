@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2023 rules across 146 categories.
+2024 rules across 146 categories.
 
 ## Categories
 
@@ -13,7 +13,7 @@
 - [api-design](#api-design) (7 rules)
 - [architecture](#architecture) (2 rules)
 - [async](#async) (4 rules)
-- [axum > security](#axum-security) (13 rules)
+- [axum > security](#axum-security) (14 rules)
 - [better-auth](#better-auth) (9 rules)
 - [better-auth > imports](#better-auth-imports) (1 rules)
 - [better-auth > security](#better-auth-security) (7 rules)
@@ -263,6 +263,7 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
+| `axum-bearer-missing-www-auth` | A `401 Unauthorized` response returned as `(StatusCode::UNAUTHORIZED, body).into_response()` in a file that never sets a `WWW-Authenticate` header — an RFC 7235 / RFC 6750 violation. | Attach a `WWW-Authenticate` challenge to the 401 response, e.g. return `(StatusCode::UNAUTHORIZED, [(header::WWW_AUTHENTICATE, "Bearer")], body)` or set the header on a `Response::builder()`. RFC 7235 requires every 401 to name the accepted authentication scheme so clients know how to authenticate. |
 | `axum-bearer-not-validated` | A Bearer token is extracted via `TypedHeader<Authorization<Bearer>>` but the extracted credential is never read — the handler accepts any token. | Read the extracted credential (`auth.token()`) and validate it — compare it against your token store or verify the JWT — then return `401` when it is invalid. A handler that extracts the bearer header but never touches the token accepts every request, forged tokens included. |
 | `axum-cookie-no-httponly` | Cookie built without `http_only` — it is readable from JavaScript (XSS vector). | Add `.http_only(true)` to the `Cookie::build(...)` chain so the cookie is not exposed to JavaScript. Setting `.http_only(false)` leaves it readable from scripts. |
 | `axum-cookie-no-samesite` | Cookie built without `same_site` — it inherits inconsistent cross-browser SameSite defaults. | Add `.same_site(SameSite::Lax)` (or `SameSite::Strict` for sensitive cookies) to the `Cookie::build(...)` chain so the SameSite policy is explicit rather than browser-dependent. |
