@@ -3006,6 +3006,12 @@ pub struct ProjectCtx {
     // — is not flagged.
     rust_non_debug_traits: OnceLock<FxHashMap<PathBuf, FxHashSet<String>>>,
 
+    // "Is this `.rs` file compiled only under `cfg(test)`?" — keyed by the file
+    // path asked about. Answering walks the `mod` declaration chain up to the
+    // crate root, reading one parent module file per link off disk, so the
+    // answer is memoized. See `rust_file_is_cfg_test_gated`.
+    rust_cfg_test_gated_cache: Mutex<FxHashMap<PathBuf, bool>>,
+
     // "Does this package register a global rate-limit middleware?" — i.e. an
     // `app.use(<rateLimiter>)` / `router.use(<rateLimiter>)` whose argument is a
     // recognized rate-limit middleware, in an indexed TS/JS source belonging to
@@ -5037,16 +5043,9 @@ impl ProjectCtx {
     ///
     /// [`is_inside_non_public_module`]: crate::rules::rust_helpers::is_inside_non_public_module
     pub fn rust_module_declared_private_in_parent(&self, path: &Path) -> bool {
-        let Some((module_name, parent_dir, sibling_stem)) = rust_module_parent_resolution(path)
-        else {
+        let Some((module_name, candidates)) = rust_module_parent_candidates(path) else {
             return false;
         };
-
-        let mut candidates: Vec<PathBuf> = ["mod.rs", "lib.rs", "main.rs"]
-            .iter()
-            .map(|f| parent_dir.join(f))
-            .collect();
-        candidates.push(parent_dir.join(format!("{sibling_stem}.rs")));
 
         for candidate in candidates {
             let Ok(src) = std::fs::read_to_string(&candidate) else {
@@ -5058,6 +5057,32 @@ impl ProjectCtx {
             }
         }
         false
+    }
+
+    /// True when the chain of `mod` declarations that reaches the Rust file at
+    /// `path` from the crate root crosses a `#[cfg(test)]` gate — e.g.
+    /// `#[cfg(test)] mod unit;` in `remote_attach/mod.rs` gates every file under
+    /// `remote_attach/unit/`, however deep.
+    ///
+    /// Rust rules that only apply to code shipped in the release binary consult
+    /// this so they stay silent in such a file: the whole file is already behind
+    /// the gate, so an item inside it needs no `#[cfg(test)]` of its own.
+    ///
+    /// Resolution walks child → parent module file on disk (see
+    /// [`rust_module_parent_candidates`]) and stops at the crate root or at the
+    /// first link whose declaration cannot be found — conservative, so a file
+    /// whose provenance is unknown stays treated as production code. Memoized
+    /// per queried path.
+    pub fn rust_file_is_cfg_test_gated(&self, path: &Path) -> bool {
+        if let Some(&cached) = self.rust_cfg_test_gated_cache.lock().unwrap().get(path) {
+            return cached;
+        }
+        let is_gated = rust_module_chain_is_cfg_test_gated(path);
+        self.rust_cfg_test_gated_cache
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), is_gated);
+        is_gated
     }
 
     /// True if a non-relative `spec` resolves to a local source file via the
@@ -5968,30 +5993,72 @@ pub(crate) fn source_declares_no_std(src: &str) -> bool {
     })
 }
 
-/// Resolve the module name, parent directory, and sibling-form stem for `path`,
-/// or `None` when `path` is a crate root or has no parent directory.
+/// Resolve the module name backed by `path` and the files that could carry its
+/// `mod <name>;` declaration, or `None` when `path` is a crate root or has no
+/// parent directory.
 ///
-/// For `<g>/<name>/mod.rs` the module is `<name>`, declared in `<g>` (the
-/// grandparent), whose non-`mod.rs` form would be `<g>.rs`. For `<dir>/<name>.rs`
-/// the module is `<name>`, declared in `<dir>`, whose non-`mod.rs` form would be
-/// `<dir>.rs`.
-fn rust_module_parent_resolution(path: &Path) -> Option<(String, PathBuf, String)> {
+/// `<g>/<name>/mod.rs` and `<dir>/<name>.rs` both back module `<name>`. Its
+/// parent module owns the enclosing directory `<d>` (`<g>` and `<dir>`
+/// respectively) and is written either inside that directory
+/// (`<d>/{mod,lib,main}.rs`) or, in the Rust-2018 flat form, as the directory's
+/// sibling file `<d>.rs`.
+fn rust_module_parent_candidates(path: &Path) -> Option<(String, Vec<PathBuf>)> {
     let file_name = path.file_name()?.to_str()?;
     let dir = path.parent()?;
 
-    if file_name == "mod.rs" {
-        let module_name = dir.file_name()?.to_str()?.to_owned();
-        let grandparent = dir.parent()?;
-        let sibling_stem = module_name.clone();
-        return Some((module_name, grandparent.to_path_buf(), sibling_stem));
-    }
+    let (module_name, parent_dir) = if file_name == "mod.rs" {
+        (dir.file_name()?.to_str()?.to_owned(), dir.parent()?)
+    } else {
+        let stem = path.file_stem()?.to_str()?;
+        if matches!(stem, "lib" | "main") {
+            return None;
+        }
+        (stem.to_owned(), dir)
+    };
 
-    let stem = path.file_stem()?.to_str()?;
-    if matches!(stem, "lib" | "main") {
-        return None;
+    let mut candidates: Vec<PathBuf> = ["mod.rs", "lib.rs", "main.rs"]
+        .iter()
+        .map(|f| parent_dir.join(f))
+        .collect();
+    if let (Some(grandparent), Some(dir_name)) = (
+        parent_dir.parent(),
+        parent_dir.file_name().and_then(|n| n.to_str()),
+    ) {
+        candidates.push(grandparent.join(format!("{dir_name}.rs")));
     }
-    let dir_stem = dir.file_name()?.to_str()?.to_owned();
-    Some((stem.to_owned(), dir.to_path_buf(), dir_stem))
+    Some((module_name, candidates))
+}
+
+/// Ceiling on the walk up the `mod` declaration chain. Each link either moves up
+/// a directory level or lands on the current directory's own module file, from
+/// which the next link must move up, so the walk terminates on its own; the
+/// bound only caps the disk reads a pathologically deep layout would cost.
+const RUST_MODULE_CHAIN_MAX_DEPTH: usize = 32;
+
+/// True when some link in the chain of `mod` declarations reaching `path` from
+/// the crate root is gated on `cfg(test)`. Walks child → parent, reading each
+/// parent module file off disk; stops at the crate root, at the first
+/// unresolvable link, or at the depth cap.
+fn rust_module_chain_is_cfg_test_gated(path: &Path) -> bool {
+    let mut current = path.to_path_buf();
+    for _ in 0..RUST_MODULE_CHAIN_MAX_DEPTH {
+        let Some((module_name, candidates)) = rust_module_parent_candidates(&current) else {
+            return false;
+        };
+        let declaration = candidates.into_iter().find_map(|candidate| {
+            let src = std::fs::read_to_string(&candidate).ok()?;
+            let gated = source_gates_module_on_cfg_test(&src, &module_name)?;
+            Some((candidate, gated))
+        });
+        let Some((parent_file, is_gated)) = declaration else {
+            return false;
+        };
+        if is_gated {
+            return true;
+        }
+        current = parent_file;
+    }
+    false
 }
 
 /// Whether `parent_src` declares a file-backed module `mod <name>;`:
@@ -6004,42 +6071,71 @@ fn rust_module_parent_resolution(path: &Path) -> Option<(String, PathBuf, String
 /// non-public. Only file-backed declarations (`mod <name>;`, no inline body)
 /// match — an inline `mod <name> { ... }` is not the parent of a split file.
 fn source_declares_module_private(parent_src: &str, name: &str) -> Option<bool> {
-    let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
-    let tree = parser.parse(parent_src, None)?;
+    let tree = parse_rust_source(parent_src)?;
     let bytes = parent_src.as_bytes();
-    find_file_backed_mod_visibility(tree.root_node(), name, bytes)
+    let decl = find_file_backed_mod(tree.root_node(), name, bytes)?;
+    let is_pub = decl
+        .children(&mut decl.walk())
+        .find(|c| c.kind() == "visibility_modifier")
+        .and_then(|m| m.utf8_text(bytes).ok())
+        .is_some_and(|text| text.trim() == "pub");
+    Some(!is_pub)
 }
 
-/// Walk the tree for a file-backed `mod_item` named `name` (no `body` field).
-/// Returns `Some(true)` when it has no bare-`pub` modifier, `Some(false)` when
-/// it does, and `None` when no such declaration exists.
-fn find_file_backed_mod_visibility(
-    node: tree_sitter::Node,
+/// Whether `parent_src` gates its file-backed module `mod <name>;` on
+/// `cfg(test)`: `Some(true)` when the declaration carries a `cfg` predicate
+/// activating `test` or sits in a file headed by `#![cfg(test)]`, `Some(false)`
+/// when neither does, `None` when the module is not declared here (so the caller
+/// tries the next candidate parent file).
+fn source_gates_module_on_cfg_test(parent_src: &str, name: &str) -> Option<bool> {
+    let tree = parse_rust_source(parent_src)?;
+    let bytes = parent_src.as_bytes();
+    let decl = find_file_backed_mod(tree.root_node(), name, bytes)?;
+    Some(crate::rules::rust_helpers::cfg_test_gates_compilation(
+        decl, bytes,
+    ))
+}
+
+/// Parse `src` with the Rust grammar, or `None` when the grammar cannot be
+/// loaded or the parse is aborted.
+fn parse_rust_source(src: &str) -> Option<tree_sitter::Tree> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
+    parser.parse(src, None)
+}
+
+/// The file-backed `mod_item` named `name` (no `body` field) declared at the top
+/// level of `root`, or `None` when the file declares no such module.
+///
+/// Only top-level declarations are considered, and only ones without a `#[path]`
+/// attribute: both an enclosing inline `mod` and a `#[path]` override change
+/// which file on disk backs the module, so such a declaration is not the parent
+/// of the `<dir>/<name>.rs` / `<dir>/<name>/mod.rs` file being resolved.
+fn find_file_backed_mod<'tree>(
+    root: tree_sitter::Node<'tree>,
     name: &str,
     source: &[u8],
-) -> Option<bool> {
-    if node.kind() == "mod_item"
-        && node.child_by_field_name("body").is_none()
-        && node
-            .child_by_field_name("name")
-            .and_then(|n| n.utf8_text(source).ok())
-            == Some(name)
-    {
-        let is_pub = node
-            .children(&mut node.walk())
-            .find(|c| c.kind() == "visibility_modifier")
-            .and_then(|m| m.utf8_text(source).ok())
-            .is_some_and(|text| text.trim() == "pub");
-        return Some(!is_pub);
-    }
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if let Some(found) = find_file_backed_mod_visibility(child, name, source) {
-            return Some(found);
-        }
-    }
-    None
+) -> Option<tree_sitter::Node<'tree>> {
+    let mut cursor = root.walk();
+    root.named_children(&mut cursor).find(|node| {
+        node.kind() == "mod_item"
+            && node.child_by_field_name("body").is_none()
+            && node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                == Some(name)
+            && !crate::rules::rust_helpers::any_outer_attribute(*node, source, attr_is_path_override)
+    })
+}
+
+/// True when an attribute's source text is a `#[path = "…"]` override, which
+/// decouples the module's name from the file backing it.
+fn attr_is_path_override(text: &str) -> bool {
+    text.strip_prefix("#[")
+        .unwrap_or(text)
+        .trim_start()
+        .strip_prefix("path")
+        .is_some_and(|rest| rest.trim_start().starts_with('='))
 }
 
 /// Collect the base type names of every hand-written `impl Debug for <Type>` in
@@ -8896,25 +8992,165 @@ path = "tools/tool.rs"
         assert_eq!(source_declares_module_private("mod foo {}", "foo"), None);
         // Not declared at all → None, so the caller tries the next candidate.
         assert_eq!(source_declares_module_private("mod bar;", "foo"), None);
+        // A declaration nested in an inline module backs `<dir>/outer/foo.rs`,
+        // and a `#[path]` override backs the file it names — neither backs
+        // `<dir>/foo.rs`, so neither answers for it.
+        assert_eq!(
+            source_declares_module_private("mod outer {\n    mod foo;\n}", "foo"),
+            None
+        );
+        assert_eq!(
+            source_declares_module_private("#[path = \"stubs/f.rs\"]\nmod foo;", "foo"),
+            None
+        );
     }
 
     #[test]
-    fn rust_module_parent_resolution_handles_both_forms_and_crate_root() {
-        // `<g>/<name>/mod.rs` → module `<name>`, declared in `<g>`.
-        let (name, dir, sibling) =
-            rust_module_parent_resolution(Path::new("/c/src/platform_impl/mod.rs")).unwrap();
+    fn rust_module_parent_candidates_handles_both_forms_and_crate_root() {
+        // `<g>/<name>/mod.rs` → module `<name>`, declared in `<g>` — either in
+        // `<g>`'s own module file or in the flat sibling `<g>.rs`.
+        let (name, candidates) =
+            rust_module_parent_candidates(Path::new("/c/src/platform_impl/mod.rs")).unwrap();
         assert_eq!(name, "platform_impl");
-        assert_eq!(dir, Path::new("/c/src"));
-        assert_eq!(sibling, "platform_impl");
-        // `<dir>/<name>.rs` → module `<name>`, declared in `<dir>`.
-        let (name, dir, sibling) =
-            rust_module_parent_resolution(Path::new("/c/src/platform.rs")).unwrap();
-        assert_eq!(name, "platform");
-        assert_eq!(dir, Path::new("/c/src"));
-        assert_eq!(sibling, "src");
+        assert_eq!(
+            candidates,
+            [
+                Path::new("/c/src/mod.rs"),
+                Path::new("/c/src/lib.rs"),
+                Path::new("/c/src/main.rs"),
+                Path::new("/c/src.rs"),
+            ]
+        );
+        // `<dir>/<name>.rs` → module `<name>`, declared in `<dir>`. The flat
+        // form of `<dir>`'s own module file is its sibling, not a file nested
+        // inside it.
+        let (name, candidates) =
+            rust_module_parent_candidates(Path::new("/c/src/platform_impl/windows.rs")).unwrap();
+        assert_eq!(name, "windows");
+        assert_eq!(
+            candidates,
+            [
+                Path::new("/c/src/platform_impl/mod.rs"),
+                Path::new("/c/src/platform_impl/lib.rs"),
+                Path::new("/c/src/platform_impl/main.rs"),
+                Path::new("/c/src/platform_impl.rs"),
+            ]
+        );
         // Crate roots have no parent module.
-        assert!(rust_module_parent_resolution(Path::new("/c/src/lib.rs")).is_none());
-        assert!(rust_module_parent_resolution(Path::new("/c/src/main.rs")).is_none());
+        assert!(rust_module_parent_candidates(Path::new("/c/src/lib.rs")).is_none());
+        assert!(rust_module_parent_candidates(Path::new("/c/src/main.rs")).is_none());
+    }
+
+    #[test]
+    fn source_gates_module_on_cfg_test_reads_the_declaration_gate() {
+        assert_eq!(
+            source_gates_module_on_cfg_test("#[cfg(test)]\nmod unit;", "unit"),
+            Some(true)
+        );
+        // Compound predicates activating `test` count too.
+        assert_eq!(
+            source_gates_module_on_cfg_test("#[cfg(all(test, unix))]\nmod unit;", "unit"),
+            Some(true)
+        );
+        // A `#![cfg(test)]` file header gates every module it declares.
+        assert_eq!(
+            source_gates_module_on_cfg_test("#![cfg(test)]\nmod unit;", "unit"),
+            Some(true)
+        );
+        // No attribute activating `test` → the file ships in release builds.
+        assert_eq!(
+            source_gates_module_on_cfg_test("mod unit;", "unit"),
+            Some(false)
+        );
+        assert_eq!(
+            source_gates_module_on_cfg_test("#[cfg(not(test))]\nmod unit;", "unit"),
+            Some(false)
+        );
+        // `cfg_attr` applies another attribute conditionally; the module itself
+        // is compiled either way, so it is not a gate.
+        assert_eq!(
+            source_gates_module_on_cfg_test("#[cfg_attr(test, allow(dead_code))]\nmod unit;", "unit"),
+            Some(false)
+        );
+        // A feature *value* that spells `test` is not the `test` cfg option.
+        assert_eq!(
+            source_gates_module_on_cfg_test("#[cfg(feature = \"test-util\")]\nmod unit;", "unit"),
+            Some(false)
+        );
+        // Not declared here → the caller tries the next candidate parent file.
+        assert_eq!(source_gates_module_on_cfg_test("mod other;", "unit"), None);
+        // An inline module is not the parent of a split file.
+        assert_eq!(
+            source_gates_module_on_cfg_test("#[cfg(test)]\nmod unit {}", "unit"),
+            None
+        );
+        // Nesting adds a path component: `mod harness { mod unit; }` backs
+        // `<dir>/harness/unit.rs`, never the `<dir>/unit.rs` being walked.
+        assert_eq!(
+            source_gates_module_on_cfg_test("#[cfg(test)]\nmod harness {\n    mod unit;\n}", "unit"),
+            None
+        );
+        // A `#[path]` override decouples the module name from the file backing
+        // it, so the declaration says nothing about `<dir>/unit.rs`.
+        assert_eq!(
+            source_gates_module_on_cfg_test("#[cfg(test)]\n#[path = \"stubs/u.rs\"]\nmod unit;", "unit"),
+            None
+        );
+    }
+
+    #[test]
+    fn rust_file_is_cfg_test_gated_walks_the_whole_module_chain() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // `src/remote_attach/mod.rs` gates the `unit` directory, which in turn
+        // declares the leaf file: the leaf is test-only even though its own
+        // declaration carries no `#[cfg(test)]` (issue #6815).
+        let dir = TempDir::new().unwrap();
+        let unit = dir.path().join("src/remote_attach/unit");
+        fs::create_dir_all(&unit).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "mod remote_attach;\n").unwrap();
+        let gating_parent = dir.path().join("src/remote_attach/mod.rs");
+        fs::write(&gating_parent, "#[cfg(test)]\nmod unit;\nmod client;\n").unwrap();
+        fs::write(unit.join("mod.rs"), "mod remote_attach_tests;\n").unwrap();
+        let leaf = unit.join("remote_attach_tests.rs");
+        fs::write(&leaf, "").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.rust_file_is_cfg_test_gated(&leaf));
+        // A sibling the same parent declares without a gate ships in the binary.
+        let shipped = dir.path().join("src/remote_attach/client.rs");
+        fs::write(&shipped, "").unwrap();
+        assert!(!ctx.rust_file_is_cfg_test_gated(&shipped));
+        // The crate root itself is never gated by a parent declaration.
+        assert!(!ctx.rust_file_is_cfg_test_gated(&dir.path().join("src/lib.rs")));
+        // Memoized: the second query answers without re-reading the chain, so it
+        // still reports the leaf as gated once the gating parent is gone.
+        fs::remove_file(&gating_parent).unwrap();
+        assert!(
+            ctx.rust_file_is_cfg_test_gated(&leaf),
+            "second query must be served from the memo"
+        );
+    }
+
+    #[test]
+    fn rust_file_is_cfg_test_gated_resolves_the_flat_module_form() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Rust-2018 layout: the parent module lives in `remote_attach.rs`, a
+        // sibling of the `remote_attach/` directory it owns.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src/remote_attach")).unwrap();
+        fs::write(
+            dir.path().join("src/remote_attach.rs"),
+            "#[cfg(test)]\nmod unit;\n",
+        )
+        .unwrap();
+        let leaf = dir.path().join("src/remote_attach/unit.rs");
+        fs::write(&leaf, "").unwrap();
+
+        assert!(ProjectCtx::empty().rust_file_is_cfg_test_gated(&leaf));
     }
 
     #[test]

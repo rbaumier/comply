@@ -2,9 +2,10 @@
 //!
 //! Walks inline `mod_item` nodes whose name is `tests` (or `test`) — those
 //! with a `declaration_list` body — and checks the preceding `attribute_item`
-//! siblings for an attribute that activates the `test` cfg — `#[cfg(test)]`,
-//! compound forms like `#[cfg(all(test, …))]` and `#[cfg(any(test, …))]`, and
-//! `#[cfg_attr(test, …)]`. Flag if absent.
+//! siblings for a `cfg` predicate that activates `test` — `#[cfg(test)]` and
+//! compound forms like `#[cfg(all(test, …))]` / `#[cfg(any(test, …))]`. Flag if
+//! absent. `#[cfg_attr(test, …)]` does not count: it applies another attribute
+//! conditionally and leaves the module compiled in every build.
 //!
 //! A module named `test`/`tests` is only flagged when its body actually
 //! contains a test-attributed function (`#[test]`, `#[tokio::test]`,
@@ -16,12 +17,20 @@
 //! flagged.
 //!
 //! Only inline `mod tests { … }` blocks are checked. An external declaration
-//! `mod tests;` is gated by an inner `#![cfg(test)]` in the referenced file
-//! (`tests.rs` / `tests/mod.rs`), which a single-file check cannot see, so it
-//! is skipped.
+//! `mod tests;` has no body to inspect, and the gate that matters for it is the
+//! inner `#![cfg(test)]` of the referenced file (`tests.rs` / `tests/mod.rs`)
+//! rather than anything on the declaration, so it is skipped.
+//!
+//! A module already gated on `cfg(test)` some other way is not flagged: the gate
+//! can open the module's own body or an enclosing module's (`#![cfg(test)]`), sit
+//! on an enclosing module or on the file, or sit on any `mod <name>;` declaration
+//! along the chain that reaches this file from the crate root
+//! (`ProjectCtx::rust_file_is_cfg_test_gated`). Adding a redundant `#[cfg(test)]`
+//! there would change nothing about what ships.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::cfg_test_gates_compilation;
 
 #[derive(Debug)]
 pub struct Check;
@@ -48,10 +57,9 @@ impl AstCheck for Check {
         if name != "tests" && name != "test" {
             return;
         }
-        // External declaration `mod tests;` has no `declaration_list` body; its
-        // gating `#![cfg(test)]` lives in the referenced file, which this
-        // single-file check cannot see. Only inline `mod tests { … }` blocks
-        // can carry the outer `#[cfg(test)]` this rule looks for.
+        // External declaration `mod tests;` has no `declaration_list` body — only
+        // an inline `mod tests { … }` holds the test functions this rule looks
+        // for.
         let Some(body) = node.child_by_field_name("body") else {
             return;
         };
@@ -62,7 +70,13 @@ impl AstCheck for Check {
         if !body_has_test_fn(body, source_bytes) {
             return;
         }
-        if crate::rules::rust_helpers::has_test_attribute(node, source_bytes) {
+        // Nothing to add when the gate is already there: on the module, on the
+        // scope compiling it, or on a `mod <name>;` along the chain of module
+        // declarations reaching this file from the crate root — zellij's
+        // `#[cfg(test)] mod unit;` gates every file under `unit/`, however deep.
+        if cfg_test_gates_compilation(node, source_bytes)
+            || ctx.project.rust_file_is_cfg_test_gated(ctx.path)
+        {
             return;
         }
         let pos = node.start_position();
@@ -311,6 +325,120 @@ pub mod test {
             "src/lib.rs",
         );
         assert_eq!(diags.len(), 1, "must still flag mod tests in a src/ file");
+    }
+
+    /// Stage a crate on disk and run the rule on `target_rel`, so the
+    /// module-declaration chain that reaches it is resolvable off disk.
+    fn run_in_crate(files: &[(&str, &str)], target_rel: &str, target_src: &str) -> Vec<Diagnostic> {
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let target_path = dir.path().join(target_rel);
+        for (rel, src) in files {
+            let path = dir.path().join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, src).unwrap();
+        }
+        fs::create_dir_all(target_path.parent().unwrap()).unwrap();
+        fs::write(&target_path, target_src).unwrap();
+        crate::rules::test_helpers::run_rule_gated(&Check, target_src, &target_path)
+    }
+
+    #[test]
+    fn does_not_flag_mod_tests_in_file_included_under_cfg_test() {
+        // `remote_attach/mod.rs` pulls the whole `unit/` directory in behind
+        // `#[cfg(test)]`, so nothing under it ships in a release binary and the
+        // inner `mod tests` blocks need no redundant gate (issue #6815).
+        let source = "\
+#[cfg(feature = \"web_server_capability\")]
+mod tests {
+    #[tokio::test]
+    async fn test_attach() {}
+}
+
+#[cfg(not(feature = \"web_server_capability\"))]
+mod tests {
+    #[test]
+    fn test_url_parsing() {}
+}";
+        let diags = run_in_crate(
+            &[
+                ("src/lib.rs", "mod remote_attach;\n"),
+                ("src/remote_attach/mod.rs", "#[cfg(test)]\nmod unit;\n"),
+                (
+                    "src/remote_attach/unit/mod.rs",
+                    "mod remote_attach_tests;\n",
+                ),
+            ],
+            "src/remote_attach/unit/remote_attach_tests.rs",
+            source,
+        );
+        assert!(
+            diags.is_empty(),
+            "must not flag mod tests in a file the parent module includes under #[cfg(test)]"
+        );
+    }
+
+    #[test]
+    fn still_flags_mod_tests_in_file_included_unconditionally() {
+        // Same layout, no `#[cfg(test)]` on the `mod unit;` declaration: the file
+        // is compiled into the release binary, so the gate is missing.
+        let diags = run_in_crate(
+            &[
+                ("src/lib.rs", "mod remote_attach;\n"),
+                ("src/remote_attach/mod.rs", "mod unit;\n"),
+                (
+                    "src/remote_attach/unit/mod.rs",
+                    "mod remote_attach_tests;\n",
+                ),
+            ],
+            "src/remote_attach/unit/remote_attach_tests.rs",
+            "mod tests { #[test] fn t() {} }",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "must still flag mod tests in a file that ships in the release binary"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_mod_tests_in_cfg_test_file_or_module() {
+        // The compilation scope is already `cfg(test)` inside the file itself:
+        // a `#![cfg(test)]` file attribute, an enclosing gated module, or the
+        // module's own body opening with `#![cfg(test)]`.
+        let cases = [
+            "#![cfg(test)]\nmod tests { #[test] fn t() {} }",
+            "#[cfg(test)]\nmod harness { mod tests { #[test] fn t() {} } }",
+            "mod tests { #![cfg(test)]\n#[test] fn t() {} }",
+            "mod harness { #![cfg(test)]\nmod tests { #[test] fn t() {} } }",
+        ];
+        for source in cases {
+            assert!(
+                run_on(source).is_empty(),
+                "should not flag a module already compiled under cfg(test): {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_mod_tests_under_a_cfg_attr_test_scope() {
+        // `#[cfg_attr(test, …)]` applies another attribute conditionally and
+        // leaves the item compiled in every build, so it gates nothing: the
+        // `mod tests` still ships and still needs `#[cfg(test)]`.
+        let cases = [
+            // Directly on the module — the form found in real code.
+            "#[cfg_attr(test, allow(dead_code))]\nmod tests { #[test] fn t() {} }",
+            "#![cfg_attr(test, allow(dead_code))]\nmod tests { #[test] fn t() {} }",
+            "#[cfg_attr(test, allow(dead_code))]\nmod harness { mod tests { #[test] fn t() {} } }",
+        ];
+        for source in cases {
+            assert_eq!(
+                run_on(source).len(),
+                1,
+                "cfg_attr is not a compilation gate: {source}"
+            );
+        }
     }
 
     #[test]

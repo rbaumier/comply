@@ -602,6 +602,19 @@ mod tests {
     }
 
     #[test]
+    fn exempts_pub_use_glob_in_split_file_declared_by_flat_parent_module() {
+        // Rust-2018 flat layout: the parent module of `src/platform_impl/x.rs`
+        // is `src/platform_impl.rs`, a sibling of the directory it owns.
+        let diags = run_split_module(
+            "src/platform_impl.rs",
+            "mod platform;\n",
+            "src/platform_impl/platform.rs",
+            "pub use foo::*;\n",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
     fn still_flags_pub_use_glob_in_split_file_public_module_issue_4501() {
         // A `pub mod platform_impl;` parent keeps the module public, so the glob
         // reaches the crate's API -> still flagged.

@@ -447,30 +447,90 @@ fn subtree_declares_result_alias(node: Node, source: &[u8]) -> bool {
 /// `unwrap`, `panic!`, `let _ = fallible()`, etc.) call this helper
 /// to decide whether a candidate should be skipped.
 pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
-    // File-level inner attribute: `#![cfg(test)]` on the crate root.
+    file_has_inner_attribute(node, source, cfg_predicate_activates_test)
+        || enclosing_item_has_attribute(node, source, attr_marks_test)
+}
+
+/// True if the author gated `item`'s compilation on `test`. Every legal
+/// spelling of that gate counts, whether it sits on the item or on a scope
+/// containing it:
+///
+/// - a `cfg` attribute on `item` or on an enclosing function / module / impl
+/// - an inner `#![cfg(test)]` opening `item`'s own module body or an enclosing
+///   module's body
+/// - an inner `#![cfg(test)]` heading the file
+///
+/// Narrower than [`is_in_test_context`], which also counts a `#[test]` function
+/// and `#[cfg_attr(test, …)]`: neither takes the item out of a release build.
+/// Rules reasoning about what ships in the binary want this one.
+pub fn cfg_test_gates_compilation(item: Node, source: &[u8]) -> bool {
+    if file_has_inner_attribute(item, source, cfg_gates_compilation_on_test) {
+        return true;
+    }
+    let mut current = Some(item);
+    while let Some(node) = current {
+        let is_gated = is_attributable_scope(node)
+            && (any_outer_attribute(node, source, cfg_gates_compilation_on_test)
+                || module_body_has_inner_attribute(node, source, cfg_gates_compilation_on_test));
+        if is_gated {
+            return true;
+        }
+        current = node.parent();
+    }
+    false
+}
+
+/// True if `item` is a module whose body opens with an inner attribute (`#![…]`)
+/// satisfying `predicate`. A module body's inner attributes apply to the module,
+/// so `mod tests { #![cfg(test)] … }` gates it exactly as an outer
+/// `#[cfg(test)]` on the declaration would.
+fn module_body_has_inner_attribute(
+    item: Node,
+    source: &[u8],
+    predicate: impl Fn(&str) -> bool,
+) -> bool {
+    if item.kind() != "mod_item" {
+        return false;
+    }
+    let Some(body) = item.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    body.children(&mut cursor).any(|child| {
+        child.kind() == "inner_attribute_item" && child.utf8_text(source).is_ok_and(&predicate)
+    })
+}
+
+/// True if the file containing `node` carries an inner attribute (`#![…]`)
+/// satisfying `predicate`.
+fn file_has_inner_attribute(node: Node, source: &[u8], predicate: impl Fn(&str) -> bool) -> bool {
     let mut root = node;
     while let Some(parent) = root.parent() {
         root = parent;
     }
     let mut cursor = root.walk();
-    for child in root.children(&mut cursor) {
-        if child.kind() != "inner_attribute_item" {
-            continue;
-        }
-        if let Ok(text) = child.utf8_text(source)
-            && cfg_predicate_activates_test(text)
-        {
-            return true;
-        }
-    }
+    root.children(&mut cursor).any(|child| {
+        child.kind() == "inner_attribute_item" && child.utf8_text(source).is_ok_and(&predicate)
+    })
+}
 
-    // Outer `#[test]` / `#[cfg(test)]` on an enclosing function, module, or
-    // impl block (a cfg-gated `impl Trait for T` is a common test-only shape).
+/// True if `node` is an item an attribute can scope: a function, a module, or an
+/// impl block. A cfg-gated `impl Trait for T` is a common test-only shape, which
+/// is why impl blocks count alongside the other two.
+fn is_attributable_scope(node: Node) -> bool {
+    matches!(node.kind(), "function_item" | "mod_item" | "impl_item")
+}
+
+/// True if an enclosing [attributable scope](is_attributable_scope) carries an
+/// outer attribute satisfying `predicate`.
+fn enclosing_item_has_attribute(
+    node: Node,
+    source: &[u8],
+    predicate: impl Fn(&str) -> bool,
+) -> bool {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
-        if matches!(parent.kind(), "function_item" | "mod_item" | "impl_item")
-            && has_test_attribute(parent, source)
-        {
+        if is_attributable_scope(parent) && any_outer_attribute(parent, source, &predicate) {
             return true;
         }
         cur = parent;
@@ -513,23 +573,9 @@ pub fn is_gated_by_cfg(node: Node, source: &[u8], flag: &str) -> bool {
 /// interleaved doc comments) is a `#[cfg(…)]` / `#[cfg_attr(…)]` whose predicate
 /// activates `flag`. Mirrors [`has_test_attribute`]'s preceding-sibling scan.
 fn item_has_cfg_flag(item: Node, source: &[u8], flag: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "attribute_item" => {
-                if let Ok(text) = s.utf8_text(source)
-                    && cfg_predicate_activates(text, flag)
-                {
-                    return true;
-                }
-            }
-            // Doc comments may interleave the attribute and its item; skip them.
-            "line_comment" | "block_comment" => {}
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_outer_attribute(item, source, |text| {
+        cfg_predicate_activates(text, flag, CFG_PREDICATE_KEYWORDS)
+    })
 }
 
 /// True if `node` is inside a [Kani](https://model-checking.github.io/kani/)
@@ -721,17 +767,27 @@ pub fn is_in_fn_main(node: Node, source: &[u8]) -> bool {
 /// in any order; they are skipped, not treated as the end of the attribute
 /// block.
 pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
+    any_outer_attribute(item, source, attr_marks_test)
+}
+
+/// True when any outer attribute attached to `item` satisfies `predicate`, which
+/// receives one attribute's full source text (`#[cfg(test)]`, `#[path = "x.rs"]`,
+/// …).
+///
+/// In tree-sitter-rust an item's outer attributes are the `attribute_item` nodes
+/// immediately preceding it. Doc comments (`///`, `/** … */`) may interleave them
+/// in any order; they are skipped, not treated as the end of the attribute block.
+pub fn any_outer_attribute(item: Node, source: &[u8], predicate: impl Fn(&str) -> bool) -> bool {
     let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
         match s.kind() {
             "attribute_item" => {
                 if let Ok(text) = s.utf8_text(source)
-                    && attr_marks_test(text)
+                    && predicate(text)
                 {
                     return true;
                 }
             }
-            // Doc comments may interleave the attributes; skip them (see docblock).
             "line_comment" | "block_comment" => {}
             _ => break,
         }
@@ -1093,20 +1149,39 @@ fn rust_path_segments_into(node: Node, source: &[u8], out: &mut Vec<String>) {
 /// `all(test, …)` / `any(test, …)` (any depth) count, while `not(test)` and
 /// `all(not(test), …)` do not.
 fn cfg_predicate_activates_test(text: &str) -> bool {
-    cfg_predicate_activates(text, b"test")
+    cfg_predicate_activates(text, b"test", CFG_PREDICATE_KEYWORDS)
 }
 
-/// True if `text` contains a `cfg(…)` / `cfg_attr(…)` predicate in which the
+/// Attribute keywords whose parenthesized predicate is scanned when asking
+/// whether an attribute *mentions* a configuration option. `cfg_attr(` is
+/// included: `#[cfg_attr(test, …)]` marks an item as test-relevant even though
+/// it compiles unconditionally.
+const CFG_PREDICATE_KEYWORDS: &[&str] = &["cfg_attr(", "cfg("];
+
+/// True if `text` is a `cfg(…)` attribute whose predicate activates `test`
+/// positively — the author made the item it decorates conditional on `test`.
+///
+/// Narrower than [`cfg_predicate_activates_test`], which also accepts
+/// `#[cfg_attr(test, …)]`: that form applies *another attribute* conditionally
+/// and leaves the item itself compiled unconditionally, so it gates nothing.
+///
+/// `cfg(any(test, feature = "x"))` counts, so this answers "the author gated
+/// this on `test`", not "this is provably absent from every release build".
+pub fn cfg_gates_compilation_on_test(text: &str) -> bool {
+    cfg_predicate_activates(text, b"test", &["cfg("])
+}
+
+/// True if `text` contains a predicate opened by one of `keywords` in which the
 /// configuration option `flag` (e.g. `b"test"`, `b"debug_assertions"`) appears
 /// as a positive standalone predicate — not lexically inside a `not(…)` group.
 /// `all(flag, …)` / `any(flag, …)` (any depth) activate it, while `not(flag)`
 /// and `all(not(flag), …)` do not.
-fn cfg_predicate_activates(text: &str, flag: &[u8]) -> bool {
+fn cfg_predicate_activates(text: &str, flag: &[u8], keywords: &[&str]) -> bool {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        // Find the start of a `cfg(` or `cfg_attr(` predicate.
-        if let Some(open) = cfg_arg_open(text, &mut i) {
+        // Find the start of a predicate opened by one of `keywords`.
+        if let Some(open) = cfg_arg_open(text, &mut i, keywords) {
             if flag_active_in_group(bytes, open, flag) {
                 return true;
             }
@@ -1117,19 +1192,18 @@ fn cfg_predicate_activates(text: &str, flag: &[u8]) -> bool {
     false
 }
 
-/// If a `cfg(` / `cfg_attr(` token begins at the byte cursor `*i`, advance `*i`
-/// past the keyword and opening paren and return the index of the first byte
-/// inside the parentheses. Otherwise return `None` without moving `*i`.
+/// If one of `keywords` begins at the byte cursor `*i`, advance `*i` past that
+/// keyword and its opening paren and return the index of the first byte inside
+/// the parentheses. Otherwise return `None` without moving `*i`.
 ///
 /// Returns `None` at a byte that is not a UTF-8 char boundary (the interior of a
-/// multi-byte character): the ASCII `cfg(` / `cfg_attr(` keywords can only begin
-/// on a char boundary, so skipping such a byte loses no match, and the caller
-/// advances `*i` past it.
-fn cfg_arg_open(text: &str, i: &mut usize) -> Option<usize> {
+/// multi-byte character): the ASCII keywords can only begin on a char boundary,
+/// so skipping such a byte loses no match, and the caller advances `*i` past it.
+fn cfg_arg_open(text: &str, i: &mut usize, keywords: &[&str]) -> Option<usize> {
     if !text.is_char_boundary(*i) {
         return None;
     }
-    for keyword in ["cfg_attr(", "cfg("] {
+    for keyword in keywords {
         if text[*i..].starts_with(keyword) {
             *i += keyword.len();
             return Some(*i);
@@ -1141,6 +1215,10 @@ fn cfg_arg_open(text: &str, i: &mut usize) -> Option<usize> {
 /// Scan a parenthesized cfg predicate group starting at byte `start` (the first
 /// byte inside the opening paren) up to its matching close paren, returning true
 /// if a positive `flag` identifier appears outside any `not(…)`.
+///
+/// String literals are skipped whole: a cfg option's *value* (`feature =
+/// "test-util"`) is never an option *name*, so the identifiers inside it must
+/// not be matched against `flag`.
 fn flag_active_in_group(bytes: &[u8], start: usize, flag: &[u8]) -> bool {
     // One entry per currently-open paren: true if that group is a `not(…)`.
     // Pushed for the implicit `cfg(`/`cfg_attr(` paren we are already inside.
@@ -1165,22 +1243,43 @@ fn flag_active_in_group(bytes: &[u8], start: usize, flag: &[u8]) -> bool {
             }
             continue;
         }
-        match b {
+        i = match b {
             b'(' => {
                 negation_stack.push(pending_not);
                 pending_not = false;
+                i + 1
             }
             b')' => {
                 negation_stack.pop();
+                i + 1
             }
-            b if b.is_ascii_whitespace() => {}
+            b'"' => {
+                pending_not = false;
+                end_of_string_literal(bytes, i)
+            }
+            b if b.is_ascii_whitespace() => i + 1,
             _ => {
                 pending_not = false;
+                i + 1
             }
-        }
-        i += 1;
+        };
     }
     false
+}
+
+/// Index just past the string literal whose opening quote is at `open`, or
+/// `bytes.len()` when the literal is unterminated. Backslash escapes the next
+/// byte, so `"a\"b"` closes on its final quote.
+fn end_of_string_literal(bytes: &[u8], open: usize) -> usize {
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
 }
 
 fn is_ident_byte(b: u8) -> bool {
@@ -8420,6 +8519,50 @@ mod tests {
                 "is_suppressed_by_clippy_allow mismatch for `{src}`"
             );
         }
+    }
+
+    #[test]
+    fn cfg_gates_compilation_on_test_accepts_only_real_compilation_gates() {
+        for gate in [
+            "#[cfg(test)]",
+            "#![cfg(test)]",
+            "#[cfg(all(test, unix))]",
+            "#[cfg(any(test, feature = \"x\"))]",
+        ] {
+            assert!(cfg_gates_compilation_on_test(gate), "should gate: {gate}");
+        }
+        for not_a_gate in [
+            // Applies another attribute conditionally; the item is compiled
+            // either way.
+            "#[cfg_attr(test, allow(dead_code))]",
+            "#[cfg(not(test))]",
+            "#[cfg(feature = \"x\")]",
+            // `test` inside a cfg option's *value* is not the option name.
+            "#[cfg(feature = \"test-util\")]",
+            "#[cfg(feature = \"test\")]",
+            "#[test]",
+        ] {
+            assert!(
+                !cfg_gates_compilation_on_test(not_a_gate),
+                "should not gate: {not_a_gate}"
+            );
+        }
+    }
+
+    #[test]
+    fn cfg_predicate_ignores_the_test_token_inside_a_string_value() {
+        // The identifier scan must not read cfg option names out of a string
+        // literal: `feature = "test-util"` names a feature, not the `test` cfg.
+        assert!(!cfg_predicate_activates_test("#[cfg(feature = \"test-util\")]"));
+        assert!(cfg_predicate_activates_test(
+            "#[cfg(all(test, feature = \"x\"))]"
+        ));
+        // A backslash escapes the next byte, so the literal runs to its final
+        // quote; an unterminated one swallows the rest of the text.
+        assert!(!cfg_predicate_activates_test(
+            "#[cfg(feature = \"a\\\"test\")]"
+        ));
+        assert!(!cfg_predicate_activates_test("#[cfg(feature = \"test"));
     }
 
     #[test]
