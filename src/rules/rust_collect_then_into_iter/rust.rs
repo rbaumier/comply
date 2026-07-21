@@ -12,6 +12,23 @@
 //! proven to be a `Vec` or carry semantics (dedup, ordering, keying)
 //! that the round-trip preserves.
 //!
+//! The chain is left alone when the round-tripped iterator — directly in
+//! the chain, or through the variable it is `let`-bound to — receives a
+//! method needing more than `Iterator`: `DoubleEndedIterator` (`.rev()`,
+//! `.next_back()`, …), `ExactSizeIterator` (`.len()`), or
+//! `vec::IntoIter`'s inherent slice access. `vec::IntoIter` offers those
+//! whatever the `Vec` was built from, whereas whether an adapter chain
+//! does depends on element types the AST does not carry
+//! (`Take<Rev<Chars>>` is not `DoubleEndedIterator`, so `.rev()` on it
+//! does not compile). Which side of that line a chain falls on is
+//! therefore not decidable here, so the exemption is deliberately
+//! conservative: a chain that already satisfies the bound is left alone
+//! too. The search stops at a `collect`, past which the receiver is a
+//! container whose `len` or `rev` says nothing about the round-trip;
+//! when the chain is instead `let`-bound, it carries on over the uses of
+//! that binding while it is live, so a call on a shadowing rebinding of
+//! the name does not count.
+//!
 //! The chain is also left alone when the owned iterator *escapes* its
 //! scope — it is a `return`/function-tail value, a struct field
 //! initializer, the right-hand side of an assignment, a `match`-arm value
@@ -78,6 +95,18 @@ impl AstCheck for Check {
         if !receiver_is_collect_call(receiver, source_bytes) {
             return;
         }
+        // The `Vec` is load-bearing when the round-tripped iterator receives a
+        // method only the materialized collection is guaranteed to offer —
+        // directly in the chain, or through the variable the chain is bound to.
+        match chain_outcome(node, source_bytes) {
+            ChainOutcome::NeedsMoreThanIterator => return,
+            ChainOutcome::StillTheIterator => {
+                if binding_needs_more_than_iterator(node, source_bytes) {
+                    return;
+                }
+            }
+            ChainOutcome::Collected => {}
+        }
         // In a test context the concrete `Vec::IntoIter` type is load-bearing
         // (see module docs): the round-trip selects a type, not an allocation.
         if crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
@@ -100,6 +129,129 @@ impl AstCheck for Check {
             Severity::Error,
         ));
     }
+}
+
+/// Method names whose receiver must satisfy a bound stronger than
+/// `Iterator`: the `DoubleEndedIterator` methods, `rposition`
+/// (`DoubleEndedIterator + ExactSizeIterator`), `ExactSizeIterator`'s
+/// `len`, and `vec::IntoIter`'s inherent slice accessors. `vec::IntoIter`
+/// offers all of them whatever the `Vec` was built from, whereas whether
+/// an adapter chain does depends on element types the AST does not carry
+/// (`Take<Rev<Chars>>` is not `DoubleEndedIterator`).
+const NEEDS_MORE_THAN_ITERATOR: &[&str] = &[
+    "rev",
+    "next_back",
+    "nth_back",
+    "rfind",
+    "rfold",
+    "try_rfold",
+    "rposition",
+    "len",
+    "as_slice",
+    "as_mut_slice",
+];
+
+/// What the method chain hanging off the `into_iter()` call does with the owned
+/// iterator.
+enum ChainOutcome {
+    /// A link is one of `NEEDS_MORE_THAN_ITERATOR`.
+    NeedsMoreThanIterator,
+    /// The chain ends with its value still that iterator.
+    StillTheIterator,
+    /// A `collect` link ends the iterator: the chain's value is a container
+    /// from there on, and its `len` or `rev` says nothing about the round-trip.
+    Collected,
+}
+
+/// Reads the method chain hanging off `node`: `.method()` links, turbofished or
+/// not, whose receiver is the chain so far. A call nested in an argument or a
+/// closure has another receiver and is not a link.
+fn chain_outcome(node: tree_sitter::Node, source: &[u8]) -> ChainOutcome {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "field_expression" if parent.child_by_field_name("value") == Some(current) => {
+                let Some(field) = parent.child_by_field_name("field") else {
+                    return ChainOutcome::StillTheIterator;
+                };
+                let name = field.utf8_text(source).unwrap_or("");
+                if name == "collect" {
+                    return ChainOutcome::Collected;
+                }
+                if NEEDS_MORE_THAN_ITERATOR.contains(&name) {
+                    return ChainOutcome::NeedsMoreThanIterator;
+                }
+            }
+            // The call applying the link, and the turbofish it may carry.
+            "call_expression" | "generic_function"
+                if parent.child_by_field_name("function") == Some(current) => {}
+            _ => return ChainOutcome::StillTheIterator,
+        }
+        current = parent;
+    }
+    ChainOutcome::StillTheIterator
+}
+
+/// True when the chain is bound by a `let` whose variable later receives one of
+/// `NEEDS_MORE_THAN_ITERATOR` — `let mut it = …into_iter(); it.next_back();`.
+/// The binding carries the same requirement as a directly chained call.
+///
+/// Call only when `chain_outcome` is `StillTheIterator`: past a `collect` the
+/// binding holds the container, not the iterator.
+///
+/// Only uses over which this binding is live count (see `binding_live_range`),
+/// so a same-named receiver inside the declaration itself (`let it = it.rev()…`)
+/// does not answer for this iterator.
+fn binding_needs_more_than_iterator(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(let_decl) = chain_outermost(node)
+        .parent()
+        .filter(|parent| parent.kind() == "let_declaration")
+    else {
+        return false;
+    };
+    let Some((name, scope)) = let_binding_name_and_scope(let_decl, source) else {
+        return false;
+    };
+    let live = binding_live_range(scope, let_decl, name, source);
+    any_named_use(scope, name, source, |ident| {
+        live.contains(&ident.start_byte()) && receives_more_than_iterator(ident, source)
+    })
+}
+
+/// The byte range over which a use of `name` in `scope` refers to the variable
+/// `let_decl` binds: from the end of the declaration to the end of the next
+/// declaration in the same block rebinding the name, or to the end of the
+/// block. The rebinding's own initializer is inside the range — it is evaluated
+/// before the name is rebound, so it still reads this variable. A rebinding
+/// inside a nested block is not tracked.
+fn binding_live_range(
+    scope: tree_sitter::Node,
+    let_decl: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> std::ops::Range<usize> {
+    let start = let_decl.end_byte();
+    let mut cursor = scope.walk();
+    let end = scope
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "let_declaration" && child.start_byte() >= start)
+        .find(|child| let_binding_name(*child, source) == Some(name))
+        .map_or(scope.end_byte(), |rebinding| rebinding.end_byte());
+    start..end
+}
+
+/// True when `ident` is the receiver of one of `NEEDS_MORE_THAN_ITERATOR`.
+fn receives_more_than_iterator(ident: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = ident.parent() else {
+        return false;
+    };
+    if parent.kind() != "field_expression" || parent.child_by_field_name("value") != Some(ident) {
+        return false;
+    }
+    let Some(field) = parent.child_by_field_name("field") else {
+        return false;
+    };
+    NEEDS_MORE_THAN_ITERATOR.contains(&field.utf8_text(source).unwrap_or(""))
 }
 
 /// True when the `into_iter()` result is immediately re-collected —
@@ -184,15 +336,18 @@ fn chain_escapes(node: tree_sitter::Node, source: &[u8]) -> bool {
 
 /// Walks up from the `into_iter()` call to the outermost expression of
 /// its method chain: while the parent is a `field_expression` whose
-/// `value` is the current node, or a `call_expression` whose `function`
-/// is the current node (the `.method().method()` continuation), the
-/// last such node is the chain's outermost expression.
+/// `value` is the current node, or a `call_expression` — or the
+/// `generic_function` carrying a link's turbofish — whose `function` is the
+/// current node (the `.method().method()` continuation), the last such node
+/// is the chain's outermost expression.
 fn chain_outermost(node: tree_sitter::Node) -> tree_sitter::Node {
     let mut current = node;
     while let Some(parent) = current.parent() {
         let continues = match parent.kind() {
             "field_expression" => parent.child_by_field_name("value") == Some(current),
-            "call_expression" => parent.child_by_field_name("function") == Some(current),
+            "call_expression" | "generic_function" => {
+                parent.child_by_field_name("function") == Some(current)
+            }
             _ => false,
         };
         if continues {
@@ -222,20 +377,34 @@ fn enclosing_match_expression(match_arm: tree_sitter::Node) -> Option<tree_sitte
 /// `vec::IntoIter` fills a field of concrete type, so the `collect` is
 /// load-bearing. A binding to `_`, a non-identifier pattern, or a variable
 /// consumed locally (a `for` subject, a call argument, …) is not an escape.
+/// Uses are matched by name across the block, so a later rebinding of the name
+/// fed into a struct field counts as this binding's escape.
 fn let_binding_feeds_struct_field(let_decl: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(pattern) = let_decl.child_by_field_name("pattern") else {
+    let Some((name, scope)) = let_binding_name_and_scope(let_decl, source) else {
         return false;
     };
-    let Some(binding) = binding_identifier(pattern) else {
-        return false;
-    };
-    let Ok(name) = binding.utf8_text(source) else {
-        return false;
-    };
-    let Some(scope) = enclosing_block(let_decl) else {
-        return false;
-    };
-    identifier_feeds_struct_field(scope, name, source)
+    any_named_use(scope, name, source, is_struct_field_value)
+}
+
+/// The single variable a `let` binds, paired with the block that scopes it. A
+/// `_`, tuple, or struct-destructuring pattern binds no single variable to
+/// track and yields `None`, as does a `let` outside any block.
+fn let_binding_name_and_scope<'tree, 'src>(
+    let_decl: tree_sitter::Node<'tree>,
+    source: &'src [u8],
+) -> Option<(&'src str, tree_sitter::Node<'tree>)> {
+    Some((
+        let_binding_name(let_decl, source)?,
+        enclosing_block(let_decl)?,
+    ))
+}
+
+/// The single variable a `let` binds, or `None` for a pattern that binds no
+/// single variable to track.
+fn let_binding_name<'src>(let_decl: tree_sitter::Node, source: &'src [u8]) -> Option<&'src str> {
+    let pattern = let_decl.child_by_field_name("pattern")?;
+    let binding = binding_identifier(pattern)?;
+    binding.utf8_text(source).ok()
 }
 
 /// Resolves a `let` pattern to its single bound identifier, unwrapping a
@@ -266,22 +435,22 @@ fn enclosing_block(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
     None
 }
 
-/// True when any `identifier` named `name` within `scope` is the value of
-/// a struct-field initializer — a `shorthand_field_initializer` or the
-/// `value` of an explicit `field_initializer`.
-fn identifier_feeds_struct_field(scope: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+/// True when some `identifier` named `name` anywhere under `scope` satisfies
+/// `is_match`.
+fn any_named_use(
+    scope: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+    is_match: impl Fn(tree_sitter::Node) -> bool,
+) -> bool {
     let mut stack = vec![scope];
     while let Some(node) = stack.pop() {
-        if node.kind() == "identifier"
-            && node.utf8_text(source) == Ok(name)
-            && is_struct_field_value(node)
-        {
+        let names_the_binding = node.kind() == "identifier" && node.utf8_text(source) == Ok(name);
+        if names_the_binding && is_match(node) {
             return true;
         }
         let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            stack.push(child);
-        }
+        stack.extend(node.named_children(&mut cursor));
     }
     false
 }
@@ -550,6 +719,142 @@ mod tests {
         // state is often bound `mut` to be advanced later).
         let source = "fn with_struct(cv: CV, given_fields: &[&str]) -> Self { let mut keys = given_fields.into_iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter(); Self { cv, keys } }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_rev_directly_after_into_iter() {
+        // Issue #6814 (zellij, ui/text_utils.rs): `Take<Rev<Chars>>` is not
+        // `DoubleEndedIterator`, so `.rev()` only compiles on the `Vec`'s
+        // `IntoIter` — dropping the pair would break the build.
+        let source = "fn f(text: &str, truncate_at: usize) -> String { text.chars().rev().take(truncate_at).collect::<Vec<_>>().into_iter().rev().collect() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_rev_further_down_the_chain() {
+        // `Map<I>` is `DoubleEndedIterator` only when `I` is, so the `Vec`
+        // is still what makes the `.rev()` compile.
+        let source = "fn f() { for x in it.take(n).collect::<Vec<_>>().into_iter().map(g).rev() {} }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_every_method_needing_more_than_iterator() {
+        // The method names are the gate's interface: each one only resolves on
+        // the materialized `vec::IntoIter`, so all of them must exempt.
+        let methods = [
+            "rev",
+            "next_back",
+            "nth_back",
+            "rfind",
+            "rfold",
+            "try_rfold",
+            "rposition",
+            "len",
+            "as_slice",
+            "as_mut_slice",
+        ];
+        assert_eq!(
+            methods.len(),
+            NEEDS_MORE_THAN_ITERATOR.len(),
+            "a new gated method must be listed here too"
+        );
+        for method in methods {
+            let source =
+                format!("fn f() {{ let _ = it.take(n).collect::<Vec<_>>().into_iter().{method}(); }}");
+            assert!(run_on(&source).is_empty(), "`.{method}()` must exempt");
+        }
+    }
+
+    #[test]
+    fn allows_capability_method_reached_through_a_turbofished_link() {
+        // A turbofished adapter is still a link of the chain, so the `.rev()`
+        // behind it is still the chain's requirement.
+        let source =
+            "fn f() { let _ = it.take(n).collect::<Vec<_>>().into_iter().map::<u32, _>(g).rev().count(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_binding_whose_later_use_needs_more_than_iterator() {
+        // The requirement can sit one binding away: `next_back` only resolves
+        // because `it` is the `Vec`'s `IntoIter`.
+        let source = "fn f(text: &str, n: usize) { let mut it = text.chars().rev().take(n).collect::<Vec<_>>().into_iter(); while let Some(c) = it.next_back() { drop(c); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_binding_reached_through_a_turbofished_tail_link() {
+        // The chain ends on a turbofished adapter, so finding the binding means
+        // walking through the `generic_function` that carries the turbofish.
+        let source = "fn f(text: &str, n: usize) { let mut it = text.chars().rev().take(n).collect::<Vec<_>>().into_iter().map::<char, _>(g); it.next_back(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_binding_read_by_its_own_rebinding() {
+        // `let it = it.rev();` reads the round-tripped iterator before the name
+        // is rebound, so the `.rev()` is still this chain's requirement.
+        let source = "fn f(text: &str, n: usize) { let it = text.chars().rev().take(n).collect::<Vec<_>>().into_iter(); let it = it.rev(); for c in it { drop(c); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_escape_via_turbofished_tail_in_return_position() {
+        // The escape check must reach the chain's outermost expression through
+        // the turbofish too, or the tail is not seen as escaping.
+        let source = "fn f() -> impl Iterator<Item = u32> { xs.iter().collect::<Vec<_>>().into_iter().map::<u32, _>(g) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_binding_of_a_chain_that_ends_in_a_collect() {
+        // Negative space: the `let` binds the collected `Vec`, so `words.len()`
+        // is `Vec::len` — the round-trip inside the chain is still wasted.
+        let source = "fn f(line: &str) { let words = line.split(' ').collect::<Vec<_>>().into_iter().map(norm).collect::<Vec<_>>(); consume(words.len()); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_the_binding_shadows_the_receiver_of_an_upstream_rev() {
+        // Negative space: the `.rev()` belongs to the *previous* `it`, applied
+        // before the round-trip — the binding under test is never a `rev`
+        // receiver, so the wasted allocation must still be reported.
+        let source = "fn f(it: Chars) { let it = it.rev().collect::<Vec<_>>().into_iter(); for c in it { drop(c); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_only_a_later_rebinding_needs_more_than_iterator() {
+        // Negative space: `data.len()` reads the `Vec` bound after the chain,
+        // not the round-tripped iterator.
+        let source = "fn f() { let data = xs.iter().collect::<Vec<_>>().into_iter(); consume(data); let data = vec![1, 2]; consume(data.len()); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_capability_method_after_a_downstream_collect() {
+        // Negative space: past the second `collect` the receiver is a `Vec`, so
+        // `.len()` is `Vec::len` — the round-trip remains a wasted allocation.
+        let source =
+            "fn f() { let n = it.take(k).collect::<Vec<_>>().into_iter().collect::<Vec<_>>().len(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_rev_only_precedes_the_collect() {
+        // Negative space: a `.rev()` upstream of the `collect` is already
+        // applied — it says nothing about what the round-trip enables.
+        let source = "fn f() { let _: Vec<_> = xs.iter().rev().collect::<Vec<_>>().into_iter().collect(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_rev_is_inside_a_downstream_closure() {
+        // Negative space: `.rev()` on another receiver inside a closure is not
+        // a link of the chain, so the round-trip stays a wasted allocation.
+        let source = "fn f() { let _: Vec<_> = it.collect::<Vec<_>>().into_iter().map(|s| s.chars().rev()).collect(); }";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
