@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2021 rules across 146 categories.
+2022 rules across 146 categories.
 
 ## Categories
 
@@ -13,7 +13,7 @@
 - [api-design](#api-design) (7 rules)
 - [architecture](#architecture) (2 rules)
 - [async](#async) (4 rules)
-- [axum > security](#axum-security) (11 rules)
+- [axum > security](#axum-security) (12 rules)
 - [better-auth](#better-auth) (9 rules)
 - [better-auth > imports](#better-auth-imports) (1 rules)
 - [better-auth > security](#better-auth-security) (7 rules)
@@ -272,6 +272,7 @@
 | `axum-cors-regex-unanchored` | A CORS origin regex used in an `AllowOrigin::predicate` closure without a trailing `$` anchor matches more than intended (e.g. `https://good.example.com.attacker.com`). | Anchor the origin regex at the end with `$`: `Regex::new(r"^https://.*\.example\.com$")`. |
 | `axum-cors-wildcard` | Permissive CORS allows any origin to access the axum API. | Restrict the origin: `CorsLayer::new().allow_origin("https://your-domain.com".parse::<HeaderValue>().unwrap())`. `CorsLayer::permissive()`, `CorsLayer::very_permissive()`, and `.allow_origin(Any)` let every origin reach the API. |
 | `axum-jwt-cookie-no-httponly` | Cookie carrying a JWT (`jsonwebtoken::encode`) is built without `http_only` — the token is readable from JavaScript (XSS). | Add `.http_only(true)` to the `Cookie::build(...)` chain that stores a JWT so the token cannot be read by scripts. Setting `.http_only(false)` leaves it exposed. |
+| `axum-jwt-decode-unchecked` | A `jsonwebtoken::decode`/`decode_header` result is consumed with `.unwrap()`/`.expect()` — an invalid or expired token panics instead of being rejected. | Handle the `Result` instead of unwrapping it: propagate it with `?` or `match` on the `Err` arm and return `401`. `.unwrap()`/`.expect()` turns a forged, malformed, or expired token into a panic (a request-triggered denial-of-service) rather than a rejected request. |
 | `axum-jwt-missing-exp` | `jsonwebtoken` `Validation` has `validate_exp` set to `false` — expired tokens are accepted. | Leave `validate_exp` at its default (`true`) so `jsonwebtoken` rejects expired tokens; a `Validation` built with `Validation::new(alg)` already validates `exp`. Remove the `validate_exp = false` assignment. |
 | `axum-jwt-secret-hardcoded` | JWT signing secret passed to `jsonwebtoken` `EncodingKey::from_secret`/`DecodingKey::from_secret` is a hardcoded literal — leaks via source control. | Read the secret from `std::env::var("JWT_SECRET")` or a secret manager and pass the resolved bytes (e.g. `EncodingKey::from_secret(secret.as_bytes())`); never embed the secret as a string/byte-string literal. |
 
