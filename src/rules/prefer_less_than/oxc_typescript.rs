@@ -1,30 +1,36 @@
-//! prefer-less-than oxc backend.
+//! prefer-less-than oxc backend — flag `>` / `>=` comparisons whose left operand
+//! is strictly more constant-like than the right, and suggest the swapped
+//! `<` / `<=` form. When the right operand is at least as constant-like
+//! (`MAX > 0`, `a > b`), swapping would create a Yoda condition rather than
+//! remove one.
 
+use super::Constness;
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression};
 use std::sync::Arc;
 
 pub struct Check;
 
-/// True when `expr` is a Yoda-style left operand: a literal value or a named
-/// constant (SCREAMING_SNAKE_CASE identifier, possibly the final property of a
-/// member access). For these, inverting `a > b` to `b < a` puts the variable
-/// first and reads more naturally; otherwise `a > b` already reads naturally.
-fn is_literal_or_constant_left(expr: &Expression) -> bool {
-    match expr {
+/// Rank an oxc operand expression on the `Constness` scale.
+fn constness(expr: &Expression) -> Constness {
+    // `peel_parens` makes `MAX > (0)` rank like `MAX > 0`.
+    match peel_parens(expr) {
         Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
         | Expression::StringLiteral(_)
         | Expression::BooleanLiteral(_)
-        | Expression::NullLiteral(_)
-        | Expression::UnaryExpression(_) => true,
-        Expression::Identifier(id) => super::is_screaming_snake_case(id.name.as_str()),
+        | Expression::NullLiteral(_) => Constness::Literal,
+        // Unary `-` / `!` keeps the value-ness of its argument, so `-1` ranks as
+        // a literal while `-x` and `typeof x` stay subjects.
+        Expression::UnaryExpression(unary) => constness(&unary.argument),
+        Expression::Identifier(id) => super::name_constness(id.name.as_str()),
         // `Limits.MAX` — the final property determines constness.
         Expression::StaticMemberExpression(member) => {
-            super::is_screaming_snake_case(member.property.name.as_str())
+            super::name_constness(member.property.name.as_str())
         }
-        _ => false,
+        _ => Constness::Subject,
     }
 }
 
@@ -56,7 +62,7 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        if !is_literal_or_constant_left(&bin.left) {
+        if constness(&bin.left) <= constness(&bin.right) {
             return;
         }
 
@@ -103,6 +109,8 @@ mod tests {
         let d = run_on("const r = 5 > x;");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("`<`"));
+        assert_eq!(run_on("const r = (5) > x;").len(), 1);
+        assert_eq!(run_on("const r = 100n > count;").len(), 1);
     }
 
     #[test]
@@ -140,6 +148,38 @@ mod tests {
     fn allows_non_constant_identifier_left() {
         assert!(run_on("const r = a > b;").is_empty());
         assert!(run_on("const r = b > a;").is_empty());
+    }
+
+    // The TS spelling of the constant-vs-literal case — see `Constness`.
+    #[test]
+    fn allows_constant_vs_literal() {
+        assert!(run_on("const r = MAX > 0;").is_empty());
+        assert!(run_on("const r = Limits.MAX_DIFF_LINES >= 1;").is_empty());
+        assert!(run_on("const r = MAX > 100n;").is_empty());
+        assert!(run_on("const r = MAX > (0);").is_empty());
+    }
+
+    // Equal ranks on both sides: the strict rank test rejects either direction.
+    #[test]
+    fn allows_equal_rank_operands() {
+        assert!(run_on("const r = 5 > 3;").is_empty());
+        assert!(run_on("const r = MAX > MIN;").is_empty());
+    }
+
+    #[test]
+    fn allows_negated_variable_vs_literal() {
+        assert!(run_on("const r = -x > 5;").is_empty());
+        assert!(run_on("const r = typeof x > 5;").is_empty());
+    }
+
+    #[test]
+    fn flags_negative_literal_left() {
+        assert_eq!(run_on("const r = -1 > x;").len(), 1);
+    }
+
+    #[test]
+    fn flags_literal_vs_constant() {
+        assert_eq!(run_on("const r = 5 > MAX;").len(), 1);
     }
 
     #[test]
