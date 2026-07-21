@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2012 rules across 146 categories.
+2013 rules across 146 categories.
 
 ## Categories
 
@@ -13,7 +13,7 @@
 - [api-design](#api-design) (7 rules)
 - [architecture](#architecture) (2 rules)
 - [async](#async) (4 rules)
-- [axum > security](#axum-security) (2 rules)
+- [axum > security](#axum-security) (3 rules)
 - [better-auth](#better-auth) (9 rules)
 - [better-auth > imports](#better-auth-imports) (1 rules)
 - [better-auth > security](#better-auth-security) (7 rules)
@@ -264,6 +264,7 @@
 | Rule | Description | Remediation |
 |------|-------------|-------------|
 | `axum-cors-credentials-wildcard` | Combining CORS credentials with a wildcard origin is rejected by browsers and exposes the axum API to every site. | Pair `.allow_credentials(true)` with a specific origin: `.allow_origin("https://your-domain.com".parse::<HeaderValue>().unwrap())`. `.allow_origin(Any)` and `CorsLayer::very_permissive()` cannot be combined with credentials safely. |
+| `axum-cors-methods-wildcard` | Combining CORS credentials with wildcard methods lets every HTTP verb reach the axum API from credentialed requests. | Pair `.allow_credentials(true)` with an explicit method list: `.allow_methods([Method::GET, Method::POST])`. `.allow_methods(Any)` and `CorsLayer::very_permissive()` cannot be combined with credentials safely. |
 | `axum-cors-wildcard` | Permissive CORS allows any origin to access the axum API. | Restrict the origin: `CorsLayer::new().allow_origin("https://your-domain.com".parse::<HeaderValue>().unwrap())`. `CorsLayer::permissive()`, `CorsLayer::very_permissive()`, and `.allow_origin(Any)` let every origin reach the API. |
 
 ## better-auth
