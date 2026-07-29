@@ -127,6 +127,13 @@ min_indent = 4
 max_comment_tokens = 6
 overlap_threshold = 0.80
 
+# Maximum total words in one comment block. Consecutive `//` lines merge into a
+# single block; each `/* */` stands alone. Doc comments (`///`, `//!`, `/**`,
+# `/*!`) and license banners are exempt — the budget targets implementation-note
+# bloat, not API prose.
+[rules.comment-max-block-words]
+max = 50
+
 # When non-empty, jsdoc-missing-example only fires on files whose path matches
 # at least one of these glob patterns. Leave empty (the default) to require
 # @example on every exported function with JSDoc regardless of file location.
