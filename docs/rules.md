@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2026 rules across 147 categories.
+2027 rules across 147 categories.
 
 ## Categories
 
@@ -21,7 +21,7 @@
 - [better-result](#better-result) (20 rules)
 - [bundle-size](#bundle-size) (3 rules)
 - [ci-cd](#ci-cd) (9 rules)
-- [code-quality](#code-quality) (258 rules)
+- [code-quality](#code-quality) (259 rules)
 - [code-quality > imports](#code-quality-imports) (4 rules)
 - [code-quality > regex](#code-quality-regex) (17 rules)
 - [comments](#comments) (5 rules)
@@ -378,6 +378,7 @@
 | `catch-error-name` | The catch parameter should be named `error`. | Rename the catch parameter to `error` (or a suffixed variant like `parseError` when disambiguating nested catches). Use `_` if the parameter is unused. |
 | `cognitive-complexity` | Function cognitive complexity exceeds 5. | Simplify by extracting helpers, removing nesting, or splitting into smaller functions. Cognitive complexity measures how hard a function is to understand. |
 | `comma-or-logical-or-case` | Switch `case` uses comma or `\|\|` instead of fall-through. | Use separate `case` clauses with fall-through instead of comma or `\|\|` in a single `case`. |
+| `comment-max-block-words` | Comment block exceeds the configured word budget. | Trim the block or move the long-form explanation into a doc comment — an oversized inline block stops being read. |
 | `comment-max-words` | Comment sentence exceeds 25 words. | Split long comment sentences — one idea per sentence keeps the intent scannable. |
 | `consistent-date-clone` | Prefer `new Date(date)` over `new Date(date.getTime())` for cloning. | Remove the unnecessary `.getTime()` / `.valueOf()` call — `new Date(date)` already clones correctly. |
 | `consistent-destructuring` | Use destructured variables over properties. | A property was already destructured from this object — destructure this property too instead of accessing it via dot notation. |
