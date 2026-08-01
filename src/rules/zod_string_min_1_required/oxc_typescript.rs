@@ -146,21 +146,72 @@ fn callee_name(expr: &Expression) -> Option<String> {
     }
 }
 
+/// zod/mini check functions that constrain length or content — the functional
+/// equivalents of the classic-API continuations above.
+const VALID_MINI_CHECKS: &[&str] = &[
+    "minLength",
+    "maxLength",
+    "length",
+    "regex",
+    "startsWith",
+    "endsWith",
+    "trim",
+    "toLowerCase",
+    "toUpperCase",
+    "lowercase",
+    "uppercase",
+];
+
 /// Check if this call expression is the object of a parent member expression
 /// with a valid continuation method. We do this by checking if this call is
 /// wrapped in a `z.string().min(1)` style chain via the source text around
-/// the call span.
+/// the call span. The zod/mini spelling `z.string().check(z.minLength(1))`
+/// counts when the `.check(...)` arguments contain a constraining check.
 fn is_chained_with_valid_continuation(call_end: u32, source: &str) -> bool {
     let rest = &source[call_end as usize..];
     let trimmed = rest.trim_start();
-    if let Some(after_dot) = trimmed.strip_prefix('.') {
-        let method: String = after_dot
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric())
-            .collect();
-        return VALID_CONTINUATIONS.contains(&method.as_str());
+    let Some(after_dot) = trimmed.strip_prefix('.') else {
+        return false;
+    };
+    let method: String = after_dot
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if VALID_CONTINUATIONS.contains(&method.as_str()) {
+        return true;
+    }
+    if method == "check" {
+        let arguments = balanced_parenthesized_span(&after_dot[method.len()..]);
+        return VALID_MINI_CHECKS
+            .iter()
+            .any(|check| arguments.contains(check));
     }
     false
+}
+
+/// The content of the balanced `(...)` group that `rest` starts with (after
+/// optional whitespace), or an empty string when there is none. Bounds the
+/// zod/mini check-name search to the `.check(...)` arguments so names from
+/// later fields cannot satisfy the rule.
+fn balanced_parenthesized_span(rest: &str) -> &str {
+    let trimmed = rest.trim_start();
+    let Some(inner) = trimmed.strip_prefix('(') else {
+        return "";
+    };
+    let mut depth = 1_usize;
+    for (index, character) in inner.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &inner[..index];
+                }
+            }
+            _ => {}
+        }
+    }
+    ""
 }
 
 pub struct Check;
@@ -255,6 +306,30 @@ mod tests {
     #[test]
     fn allows_min() {
         assert!(run("z.string().min(1)").is_empty());
+    }
+
+    // Regression for issue #8093: zod/mini spells constraints through the
+    // functional `.check(...)` API — there is no `.min()` method to chain.
+    #[test]
+    fn allows_mini_check_min_length() {
+        assert!(run("z.string().check(z.minLength(1))").is_empty());
+        assert!(run("z.string().check(z.minLength(1)).brand()").is_empty());
+        assert!(run("z.string().check(z.regex(/^a+$/))").is_empty());
+    }
+
+    #[test]
+    fn flags_mini_check_without_constraint() {
+        assert_eq!(run("const s = z.object({ name: z.string().check(z.refine((v) => v)) })").len(), 1);
+    }
+
+    // A constraining check on a LATER field must not satisfy an earlier bare
+    // `z.string()` — the search is bounded to the `.check(...)` arguments.
+    #[test]
+    fn flags_bare_string_before_checked_neighbor() {
+        assert_eq!(
+            run("const s = z.object({ a: z.string(), b: z.string().check(z.minLength(1)) })").len(),
+            1,
+        );
     }
 
     #[test]
