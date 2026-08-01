@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2027 rules across 147 categories.
+2028 rules across 147 categories.
 
 ## Categories
 
@@ -139,7 +139,7 @@
 - [testing > playwright](#testing-playwright) (2 rules)
 - [testing > testing-library](#testing-testing-library) (3 rules)
 - [testing > vitest](#testing-vitest) (7 rules)
-- [typescript](#typescript) (181 rules)
+- [typescript](#typescript) (182 rules)
 - [typescript > async](#typescript-async) (4 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
@@ -2606,6 +2606,7 @@
 | `typescript/prefer-ts-expect-error` | Use `@ts-expect-error` instead of `@ts-ignore`. | Replace `@ts-ignore` with `@ts-expect-error`. The latter errors when the suppressed issue is fixed, preventing bit-rot. |
 | `unicorn/no-array-for-each` | Prefer `for...of` loops over `Array.forEach`. | Replace `.forEach(x => ...)` with `for (const x of arr)`. forEach can't break/continue and confuses async flows. |
 | `unicorn/prefer-array-flat-map` | Use `flatMap` instead of `map().flat()`. | Chain `.flatMap(...)` once instead of `.map(...).flat()` — one pass instead of two. |
+| `unknown-shape-prefer-schema` | Validating the shape of a value explicitly typed `unknown` with hand-written property checks (`typeof v.x`, `v.x === 'tag'`, `'key' in v`) is a hand-rolled schema — use a schema validator (zod, valibot, …). | Declare the shape once and parse the value at the boundary, e.g. `const Bubble = z.object({ type: z.literal('text'), text: z.string() }); Bubble.safeParse(value)`. The parsed result is typed, so the guard and its call sites disappear. |
 | `use-type-alias` | Repeated complex inline type annotations should be extracted into a type alias. | Create a `type` alias for the repeated annotation and use it in all positions. |
 | `vars-on-top` | `var` declarations should sit at the top of their scope. | Move `var` declarations to the top of the function so the code matches their hoisted semantics — or better, switch to `let`/`const`. |
 | `yoda` | Yoda conditions read backwards. | Write `value === 'literal'`, not `'literal' === value`. Putting the variable first reads naturally. |
