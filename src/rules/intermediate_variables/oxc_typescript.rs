@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, UnaryOperator};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -48,6 +48,27 @@ fn count_logical_ops(expr: &Expression) -> usize {
     }
 }
 
+/// Reports whether every operand of the logical chain is a bare
+/// identifier.
+///
+/// The walk descends the logical spine plus the two transparent
+/// wrappers a boolean operand can carry — parentheses and `!`. Every
+/// other expression kind is an operand that still holds an unnamed
+/// expression: a call, a member access, a comparison, `typeof x`.
+fn every_operand_is_named(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(_) => true,
+        Expression::ParenthesizedExpression(paren) => every_operand_is_named(&paren.expression),
+        Expression::UnaryExpression(un) => {
+            un.operator == UnaryOperator::LogicalNot && every_operand_is_named(&un.argument)
+        }
+        Expression::LogicalExpression(log) => {
+            every_operand_is_named(&log.left) && every_operand_is_named(&log.right)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -70,6 +91,9 @@ impl OxcCheck for Check {
         if count_logical_ops(&if_stmt.test) < min_ops {
             return;
         }
+        if every_operand_is_named(&if_stmt.test) {
+            return;
+        }
         let span = if_stmt.test.span();
         let (line, col) = byte_offset_to_line_col(semantic.source_text(), span.start as usize);
         diagnostics.push(Diagnostic {
@@ -77,7 +101,7 @@ impl OxcCheck for Check {
             line,
             column: col,
             rule_id: super::META.id.into(),
-            message: "`if` condition chains three or more boolean operands \u{2014} extract parts into named local variables.".into(),
+            message: "`if` condition chains three or more boolean operands \u{2014} extract the inline parts into named local variables.".into(),
             severity: Severity::Error,
             span: None,
         });
