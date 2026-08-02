@@ -251,7 +251,7 @@ fn reference_is_chai_registration_arg(
 /// inline-callback form (`Assertion.addMethod('x', function () {…})`) is handled
 /// by `is_chai_registration_callback`. The function's name symbol is resolved and
 /// its references enumerated via the symbol table — the same mechanism
-/// `is_constructor_function` uses to trace how a named function is later used.
+/// `is_receiver_bound_function` uses to trace how a named function is later used.
 fn is_chai_registration_callback_by_reference(
     func: &oxc_ast::ast::Function,
     semantic: &oxc_semantic::Semantic,
@@ -495,12 +495,20 @@ fn is_constructor_name(name: &str) -> bool {
 /// function's `this` at call time:
 /// - `new F(...)` — constructor invocation,
 /// - `F.call(this, ...)` / `F.apply(...)` / `F.bind(...)` — explicit binding,
-/// - `x.member = F` — assigned as a method value (receives the receiver as `this`).
+/// - `x.member = F` — assigned as a method value (receives the receiver as `this`),
+/// - `{ member: F }` / `{ F }` — the object-literal form of the same method
+///   slot; a later `obj.member(...)` binds `obj`. The check is positional: it
+///   accepts the slot without proving such a call exists.
+///
+/// The property branch requires the reference to be the property *value*, so a
+/// computed key (`{ [F]: 1 }`) does not match. The shorthand form (`{ F }`) gives
+/// key and value the same span, so the value check accepts it.
 fn reference_binds_this(
     ref_node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let nodes = semantic.nodes();
+    let ref_span = nodes.kind(ref_node_id).span();
     match nodes.kind(nodes.parent_id(ref_node_id)) {
         AstKind::NewExpression(_) => true,
         AstKind::StaticMemberExpression(member) => {
@@ -511,17 +519,19 @@ fn reference_binds_this(
                 assign.left,
                 AssignmentTarget::StaticMemberExpression(_)
                     | AssignmentTarget::ComputedMemberExpression(_)
-            ) && assign.right.span() == nodes.kind(ref_node_id).span()
+            ) && assign.right.span() == ref_span
         }
+        AstKind::ObjectProperty(prop) => prop.value.span() == ref_span,
         _ => false,
     }
 }
 
-/// True when the standalone `function` at `func` is a constructor function whose
-/// `this` is bound at call time — either by the PascalCase naming convention, or
-/// because its name is referenced as `new`/`.call`/`.apply`/`.bind`/method-value
-/// somewhere in the module.
-fn is_constructor_function(
+/// True when the standalone `function` at `func` gets its `this` from the call
+/// site — either by the PascalCase constructor-naming convention, or because its
+/// name is referenced somewhere in the module in a position that supplies a
+/// receiver: `new`/`.call`/`.apply`/`.bind`, a method-value assignment, or an
+/// object-literal property value.
+fn is_receiver_bound_function(
     func: &oxc_ast::ast::Function,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
@@ -543,9 +553,10 @@ fn is_constructor_function(
 /// True when `func_id` is a `function` expression that is the initializer of a
 /// `const`/`let`/`var` binding whose name is referenced somewhere in the module
 /// in a way that binds `this` at call time — `name.bind(this)`, `name.call(...)`,
-/// `name.apply(...)`, `new name(...)`, or assigned as a method value
-/// (`x.member = name`). This generalizes the named-function logic in
-/// `is_constructor_function` to anonymous function expressions held in a variable:
+/// `name.apply(...)`, `new name(...)`, assigned as a method value
+/// (`x.member = name`), or installed as an object-literal property value
+/// (`{ member: name }`). This generalizes the named-function logic in
+/// `is_receiver_bound_function` to anonymous function expressions held in a variable:
 /// `const localeData = function () { … this.$locale() … }` that is later invoked
 /// via `localeData.bind(this)()` (the dayjs plugin / bound-method idiom) has its
 /// `this` supplied at the binding site, so `this` in the body is intentional.
@@ -782,18 +793,19 @@ fn is_valid_this_context(
                 if function_body_has_jquery_this(ancestor.id(), semantic) {
                     return true;
                 }
-                // Constructor function: a PascalCase `function`, or one
-                // referenced via `new`/`.call(this)`/`.apply`/`.bind` or
-                // assigned as a method value, gets the instance as `this`.
-                if is_constructor_function(func, semantic) {
+                // Receiver-bound function: a PascalCase `function`, or one
+                // referenced via `new`/`.call(this)`/`.apply`/`.bind`, assigned
+                // as a method value, or installed as an object-literal property
+                // (`const api = { inject }`), gets its receiver as `this`.
+                if is_receiver_bound_function(func, semantic) {
                     return true;
                 }
                 // Var-bound function referenced for `this`: an anonymous
                 // `function` expression held in a `const`/`let`/`var` whose
-                // binding is later invoked via `.bind(this)`/`.call`/`.apply`,
-                // with `new`, or assigned as a method value, has its `this`
-                // supplied at the binding site (`const localeData = function () {
-                // this.$locale() }` called as `localeData.bind(this)()`).
+                // binding later appears in a receiver-supplying position —
+                // `.bind(this)`/`.call`/`.apply`, `new`, a method-value
+                // assignment, or an object-literal property — takes its `this`
+                // from that site.
                 if is_var_bound_function_referenced_for_this(ancestor.id(), semantic) {
                     return true;
                 }
@@ -1082,6 +1094,40 @@ mod tests {
         // constructor or bound method still has a stray `this`.
         let diags = run_on("function foo() {\n  return this.bar;\n}\nfoo();");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_function_declaration_referenced_as_shorthand_property() {
+        // Regression for #6825: fastify declares its public-API methods as
+        // standalone `function` declarations and collects them into the instance
+        // object with shorthand properties (`const fastify = { inject, addHook }`).
+        // Called as `fastify.inject(...)`, the object is the receiver.
+        let src = "function inject (opts) {\n  return this.ready(opts);\n}\nfunction addHook (name, fn) {\n  this.after(fn);\n  return this;\n}\nconst fastify = {\n  version: '1.0.0',\n  inject,\n  addHook\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_declaration_referenced_as_explicit_key_property() {
+        // The explicit `{ key: fn }` spelling of the shorthand form above lands
+        // the function in the same method slot, so it binds `this` the same way.
+        let src = "function inject (opts) {\n  return this.ready(opts);\n}\nconst fastify = { inject: inject };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_collected_into_an_array_not_an_object() {
+        // Negative-space guard for #6825: an array element is not a property
+        // slot, so no call site supplies a receiver and the `this` stays unbound.
+        let src = "function inject (opts) {\n  return this.ready(opts);\n}\nconst all = [inject];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_function_referenced_only_as_a_computed_property_key() {
+        // Negative-space guard for #6825: a reference in computed-key position is
+        // not the property value, so it installs nothing and supplies no receiver.
+        let src = "function inject () {\n  return this.ready();\n}\nconst byFn = { [inject]: 1 };";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
@@ -1458,6 +1504,15 @@ mod tests {
         // on a var-held function expression supply `this` the same way `.bind`
         // does.
         let src = "const fn = function () {\n  return this.x;\n};\nfn.call(obj);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_var_bound_function_placed_in_object_literal() {
+        // A `function` expression held in a `const` and then collected into an
+        // object literal reaches the same method slot as a `function` declaration
+        // does, so the object supplies its receiver.
+        let src = "const inject = function () {\n  return this.ready();\n};\nconst fastify = { inject };";
         assert!(run_on(src).is_empty());
     }
 
