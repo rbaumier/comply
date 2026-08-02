@@ -2683,6 +2683,12 @@ impl CargoManifest {
     /// `salvo_core`, `salvo_extra`; package `helix-dap` → `helix_dap_types`).
     /// Used to recognize an umbrella/facade crate's wholesale re-export of its
     /// own core sub-crate's public API.
+    ///
+    /// The test is name-based, so an independently published crate whose name
+    /// starts with the identifier plus `_` (`futures` → `futures_lite`) is
+    /// exempted as well. Requiring real Cargo workspace membership instead
+    /// would drop the exemption for umbrella crates whose family sub-crate
+    /// ships as a registry dependency.
     #[must_use]
     pub fn is_own_family_subcrate(&self, root: &str) -> bool {
         self.crate_identifier().is_some_and(|prefix| {
