@@ -1,5 +1,5 @@
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_reproducible};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
@@ -14,49 +14,6 @@ fn is_test_file(path: &std::path::Path) -> bool {
 
 fn span_text(source: &str, span: oxc_span::Span) -> &str {
     &source[span.start as usize..span.end as usize]
-}
-
-/// True when `expr` is, or syntactically contains, a `CallExpression`.
-///
-/// Two separate invocations of a call are not referentially guaranteed to be
-/// equal — calling twice can return different results — so `expect(f()).toBe(f())`
-/// is a meaningful identity / memoization / caching assertion, not a value that is
-/// trivially equal to itself. Operands made only of literals, identifiers and
-/// call-free member access are deterministic and side-effect-free, so an
-/// identical-text self-compare on those is always true and stays flagged.
-fn contains_call(expr: &Expression) -> bool {
-    use Expression as E;
-    match expr {
-        E::CallExpression(_) => true,
-        E::ParenthesizedExpression(p) => contains_call(&p.expression),
-        E::ChainExpression(c) => match &c.expression {
-            oxc_ast::ast::ChainElement::CallExpression(_) => true,
-            oxc_ast::ast::ChainElement::TSNonNullExpression(n) => contains_call(&n.expression),
-            oxc_ast::ast::ChainElement::StaticMemberExpression(m) => contains_call(&m.object),
-            oxc_ast::ast::ChainElement::ComputedMemberExpression(m) => {
-                contains_call(&m.object) || contains_call(&m.expression)
-            }
-            oxc_ast::ast::ChainElement::PrivateFieldExpression(m) => contains_call(&m.object),
-        },
-        E::TSNonNullExpression(n) => contains_call(&n.expression),
-        E::TSAsExpression(a) => contains_call(&a.expression),
-        E::TSSatisfiesExpression(a) => contains_call(&a.expression),
-        E::TSTypeAssertion(a) => contains_call(&a.expression),
-        E::TSInstantiationExpression(a) => contains_call(&a.expression),
-        E::StaticMemberExpression(m) => contains_call(&m.object),
-        E::ComputedMemberExpression(m) => {
-            contains_call(&m.object) || contains_call(&m.expression)
-        }
-        E::PrivateFieldExpression(m) => contains_call(&m.object),
-        E::UnaryExpression(u) => contains_call(&u.argument),
-        E::AwaitExpression(a) => contains_call(&a.argument),
-        E::BinaryExpression(b) => contains_call(&b.left) || contains_call(&b.right),
-        E::LogicalExpression(l) => contains_call(&l.left) || contains_call(&l.right),
-        E::ConditionalExpression(c) => {
-            contains_call(&c.test) || contains_call(&c.consequent) || contains_call(&c.alternate)
-        }
-        _ => false,
-    }
 }
 
 impl OxcCheck for Check {
@@ -109,16 +66,17 @@ impl OxcCheck for Check {
         if actual_text.is_empty() || actual_text != expected_text {
             return;
         }
-        // Call-bearing operands (e.g. `probe.entry(p)`, `f()`, `cache.get(k)`) are not
-        // referentially stable across two evaluations, so `.toBe`/`.toEqual` on them is a
-        // meaningful identity/memoization assertion, not an always-true self-compare.
+        // Operands that are not reproducible (e.g. `probe.entry(p)`, `f()`, `cache.get(k)`)
+        // can return a different value on each of the two evaluations, so `.toBe`/`.toEqual`
+        // on them is a meaningful identity/memoization assertion, not an always-true
+        // self-compare.
         let (Some(actual_expr), Some(expected_expr)) = (
             expect_call.arguments[0].as_expression(),
             call.arguments[0].as_expression(),
         ) else {
             return;
         };
-        if contains_call(actual_expr) || contains_call(expected_expr) {
+        if !expression_is_reproducible(actual_expr) || !expression_is_reproducible(expected_expr) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -204,5 +162,33 @@ mod tests {
     #[test]
     fn flags_identical_member_access() {
         assert_eq!(run_test_file("  expect(obj.prop).toBe(obj.prop);").len(), 1);
+    }
+
+    #[test]
+    fn flags_identical_object_literals() {
+        assert_eq!(run_test_file("  expect({ a: 1 }).toEqual({ a: 1 });").len(), 1);
+    }
+
+    #[test]
+    fn allows_object_literals_holding_a_call() {
+        assert!(run_test_file("  expect({ a: f() }).toEqual({ a: f() });").is_empty());
+    }
+
+    // Spreading an iterable drains it, so the two arrays hold different elements.
+    #[test]
+    fn allows_spread_array_operands() {
+        assert!(run_test_file("  expect([...gen]).toEqual([...gen]);").is_empty());
+    }
+
+    // Awaiting the same settled promise twice yields the same value, so the
+    // assertion is still vacuous; awaiting two calls is not.
+    #[test]
+    fn flags_identical_awaited_bindings() {
+        assert_eq!(run_test_file("  expect(await p).toBe(await p);").len(), 1);
+    }
+
+    #[test]
+    fn allows_awaited_calls() {
+        assert!(run_test_file("  expect(await load()).toBe(await load());").is_empty());
     }
 }

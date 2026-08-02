@@ -2040,6 +2040,110 @@ pub fn subtree_string_literal_contains(node: Node, source: &[u8], needle: &str) 
     false
 }
 
+/// Named tree-sitter kinds that read state without an explicit call: paths,
+/// literals, aggregate literals, borrows, field, index and range access, the
+/// operators over those, and the type syntax a turbofish path carries.
+const REPRODUCIBLE_EXPRESSION_KINDS: &[&str] = &[
+    // Paths and primary expressions.
+    "crate",
+    "field_identifier",
+    "identifier",
+    "scoped_identifier",
+    "self",
+    "super",
+    // Literals and their inner pieces.
+    "boolean_literal",
+    "char_literal",
+    "escape_sequence",
+    "float_literal",
+    "integer_literal",
+    "negative_literal",
+    "raw_string_literal",
+    "string_content",
+    "string_literal",
+    "unit_expression",
+    // Aggregate literals.
+    "array_expression",
+    "base_field_initializer",
+    "field_initializer",
+    "field_initializer_list",
+    "shorthand_field_initializer",
+    "struct_expression",
+    "tuple_expression",
+    // Operators over the above.
+    "binary_expression",
+    "field_expression",
+    "index_expression",
+    "mutable_specifier",
+    "parenthesized_expression",
+    "range_expression",
+    "reference_expression",
+    "type_cast_expression",
+    "unary_expression",
+    // Turbofish type syntax, as in `Limits::<u8>::MAX`.
+    "generic_type",
+    "lifetime",
+    "pointer_type",
+    "primitive_type",
+    "reference_type",
+    "scoped_type_identifier",
+    "type_arguments",
+    "type_identifier",
+];
+
+/// True when the expression rooted at `node` reads the same value each time it
+/// is evaluated.
+///
+/// Accepts only the node kinds in [`REPRODUCIBLE_EXPRESSION_KINDS`], so
+/// anything else — a `call_expression`, a `macro_invocation`, an
+/// `await_expression`, a block — answers `false`. Tree-sitter cannot see what a
+/// callee does, and a macro body stays unexpanded token soup, so neither can be
+/// shown to be reproducible. The motivating case is `chars.next()`: two
+/// textually identical calls read two different characters, because `next`
+/// advances the iterator.
+///
+/// The answer is a syntactic approximation, on both sides:
+///
+/// - An operator, an index, or a deref on a user type dispatches to an
+///   `Add`/`Index`/`Deref` impl, which is user code this predicate does not see
+///   through. Treating those as reproducible is deliberate — clippy's `eq_op`
+///   draws the same line — because denying them would silence the shapes the
+///   guarded rules exist for.
+/// - `try_expression` (`x?`) is left out, so an operand holding one is rejected
+///   even when it is in fact reproducible. `?` is control flow: it returns
+///   early and runs `From::from` on the error path.
+///
+/// Rules that infer "both operands hold the same value" from identical source
+/// text are sound only on operands this predicate accepts. The whitelist
+/// direction trades recall for precision: an unlisted form is rejected and the
+/// rule stays silent.
+pub fn expression_is_reproducible(node: Node) -> bool {
+    let mut cursor = node.walk();
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        // Comments sit between the tokens of an operand and evaluate to nothing.
+        if matches!(current.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        if current.is_named() && !REPRODUCIBLE_EXPRESSION_KINDS.contains(&current.kind()) {
+            return false;
+        }
+        // The target type of a cast is syntax, not evaluated code, so only the
+        // cast operand is walked.
+        if current.kind() == "type_cast_expression" {
+            let Some(value) = current.child_by_field_name("value") else {
+                return false;
+            };
+            stack.push(value);
+            continue;
+        }
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    true
+}
+
 /// True if `node` sits inside a trait implementation (`impl Trait for Type`).
 ///
 /// Walks up via `node.parent()` to the *nearest* enclosing `impl_item` and
@@ -10116,6 +10220,70 @@ mod tests {
                 cast_operand_is_raw_pointer(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_raw_pointer mismatch for `{src}`"
+            );
+        }
+    }
+
+    /// Find the first `let_declaration`'s initializer.
+    fn first_let_value(node: Node) -> Option<Node> {
+        if node.kind() == "let_declaration" {
+            return node.child_by_field_name("value");
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_let_value(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    // Guards the kind strings in `REPRODUCIBLE_EXPRESSION_KINDS`: a typo there
+    // degrades silently to a rule that never fires.
+    #[test]
+    fn expression_is_reproducible_accepts_call_free_forms() {
+        let cases: &[(&str, bool)] = &[
+            ("fn f() { let _ = flag; }", true),
+            ("fn f() { let _ = self.count; }", true),
+            ("fn f() { let _ = point.0; }", true),
+            ("fn f() { let _ = Limits::MAX; }", true),
+            ("fn f() { let _ = xs[0]; }", true),
+            ("fn f() { let _ = buf[..n]; }", true),
+            ("fn f() { let _ = map[&key]; }", true),
+            ("fn f() { let _ = *flag; }", true),
+            ("fn f() { let _ = !flag; }", true),
+            ("fn f() { let _ = (a + b); }", true),
+            ("fn f() { let _ = n as u32; }", true),
+            ("fn f() { let _ = p as *const u8; }", true),
+            // A cast target is never walked, so exotic type syntax still passes.
+            ("fn f() { let _ = p as *const dyn Send; }", true),
+            ("fn f() { let _ = p as fn(u8) -> u8; }", true),
+            ("fn f() { let _ = p as <T as Trait>::Out; }", true),
+            ("fn f() { let _ = (a, b); }", true),
+            ("fn f() { let _ = [1, 2]; }", true),
+            ("fn f() { let _ = Point { x: 1, y }; }", true),
+            ("fn f() { let _ = Point { x: 1, ..base }; }", true),
+            ("fn f() { let _ = \"a\\nb\"; }", true),
+            ("fn f() { let _ = &mut buf; }", true),
+            ("fn f() { let _ = self /* note */ .count; }", true),
+            // Anything that runs an explicit call is rejected.
+            ("fn f() { let _ = chars.next(); }", false),
+            ("fn f() { let _ = compute(); }", false),
+            ("fn f() { let _ = xs[i.next()]; }", false),
+            ("fn f() { let _ = Point { x: g() }; }", false),
+            ("fn f() { let _ = matches!(v, Some(_)); }", false),
+            ("fn f() { let _ = fut.await; }", false),
+            ("fn f() { let _ = result?; }", false),
+            ("fn f() { let _ = { a }; }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let value = first_let_value(tree.root_node())
+                .expect("snippet should contain a let initializer");
+            assert_eq!(
+                expression_is_reproducible(value),
+                *expected,
+                "expression_is_reproducible mismatch for `{src}`"
             );
         }
     }

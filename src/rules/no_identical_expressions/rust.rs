@@ -9,8 +9,15 @@
 //! form is overwhelmingly this idiom, so it is exempted in general (a deliberate
 //! precision-over-recall tradeoff). Every other identical-operand expression
 //! (`a && a`, `a - a`, `a / a`, …) is still flagged.
+//!
+//! Identical source text proves identical values only for reproducible
+//! operands, so both sides must satisfy
+//! [`rust_helpers::expression_is_reproducible`](crate::rules::rust_helpers::expression_is_reproducible).
+//! `chars.next().is_some_and(f) && chars.next().is_some_and(f)` reads two
+//! different characters: the calls advance the iterator between the two reads.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::expression_is_reproducible;
 
 const FLAGGED_OPS: &[&str] = &["&&", "||", "-", "/"];
 
@@ -33,7 +40,10 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    if left_text == right_text {
+    if left_text == right_text
+        && expression_is_reproducible(left)
+        && expression_is_reproducible(right)
+    {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -122,6 +132,84 @@ mod tests {
     #[test]
     fn allows_different_sides() {
         assert!(run_on("fn f() { if a == b {} }").is_empty());
+    }
+
+    // Issue #6853 (astral-sh/uv exclude_newer.rs): each `chars.next()` consumes
+    // the next character, so the two identical texts read different values.
+    #[test]
+    fn allows_repeated_iterator_next_calls() {
+        let src = "fn f(after_sign: &str) -> bool { let mut chars = after_sign.chars(); \
+                   chars.next().is_some_and(|c| c.is_ascii_digit()) \
+                   && chars.next().is_some_and(|c| c.is_ascii_digit()) }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Issue #6853 (astral-sh/uv metadata.rs): same shape on a `Split` iterator.
+    #[test]
+    fn allows_repeated_split_next_calls() {
+        let src = "fn f(s: &str) -> bool { let mut parts = s.split(\" :: \"); \
+                   parts.next().is_some_and(|p| !p.is_empty()) \
+                   && parts.next().is_some_and(|p| !p.is_empty()) }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A macro body stays unexpanded tokens, so the walker cannot see the
+    // `next()` inside it — the operand is not provably reproducible.
+    #[test]
+    fn allows_identical_macro_invocations() {
+        let src = "fn f(it: &mut I) -> bool { matches!(it.next(), Some(_)) \
+                   && matches!(it.next(), Some(_)) }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A call-free operand still fires, so the silence above comes from the call
+    // and not from the operator.
+    #[test]
+    fn flags_identical_call_free_operands_of_the_same_shape() {
+        let d = run_on("fn f(a: bool, b: bool) -> bool { a && a }");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn flags_identical_field_access() {
+        let d = run_on("fn f(&self) -> u32 { self.count - self.count }");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn flags_identical_index_expressions() {
+        let d = run_on("fn f(xs: &[u32]) -> u32 { xs[0] / xs[0] }");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn flags_identical_cast_operands() {
+        let d = run_on("fn f(n: u8) -> u32 { n as u32 - n as u32 }");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn flags_identical_scoped_constants() {
+        let d = run_on("fn f() -> u32 { Limits::MAX - Limits::MAX }");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn flags_identical_dereference_operands() {
+        let d = run_on("fn f(flag: &bool) -> bool { *flag && *flag }");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn flags_identical_borrowed_index_operands() {
+        let d = run_on("fn f(map: &Map, key: Key) -> u32 { map[&key] - map[&key] }");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn flags_identical_slice_range_operands() {
+        let d = run_on("fn f(buf: &[u8], n: usize) -> bool { buf[..n] && buf[..n] }");
+        assert_eq!(d.len(), 1, "{d:?}");
     }
 
     // diesel test code intentionally uses `value - value` to verify SQL null
