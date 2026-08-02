@@ -2656,30 +2656,53 @@ impl CargoManifest {
         })
     }
 
+    /// This package's `[package].name` spelled as Rust source spells it. Cargo
+    /// accepts `-` in a package name, but a Rust identifier cannot contain one,
+    /// so the crate reaches source code with every `-` replaced by `_`
+    /// (`helix-dap` → `helix_dap`). Every comparison between the manifest name
+    /// and an identifier read from Rust code goes through this accessor. A
+    /// comparison against the raw `name` puts a Cargo spelling against a Rust
+    /// spelling, so it never matches for a hyphenated package.
+    ///
+    /// An explicit `[lib] name` is out of scope: the conventions that consume
+    /// this accessor (Cargo sub-crate family, first-party asm symbols) key off
+    /// the package name, never off the lib target name.
+    #[must_use]
+    pub fn crate_identifier(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.name.as_deref().map(|n| {
+            if n.contains('-') {
+                std::borrow::Cow::Owned(n.replace('-', "_"))
+            } else {
+                std::borrow::Cow::Borrowed(n)
+            }
+        })
+    }
+
     /// True when `root` is a sibling sub-crate of this package's Cargo family —
-    /// its name starts with `<package_name>_` (e.g. package `salvo` → `salvo_core`,
-    /// `salvo_extra`). Used to recognize an umbrella/facade crate's wholesale
-    /// re-export of its own core sub-crate's public API.
+    /// its name starts with the crate identifier plus `_` (package `salvo` →
+    /// `salvo_core`, `salvo_extra`; package `helix-dap` → `helix_dap_types`).
+    /// Used to recognize an umbrella/facade crate's wholesale re-export of its
+    /// own core sub-crate's public API.
     #[must_use]
     pub fn is_own_family_subcrate(&self, root: &str) -> bool {
-        self.name
-            .as_deref()
-            .is_some_and(|n| root.strip_prefix(n).is_some_and(|rest| rest.starts_with('_')))
+        self.crate_identifier().is_some_and(|prefix| {
+            root.strip_prefix(prefix.as_ref())
+                .is_some_and(|rest| rest.starts_with('_'))
+        })
     }
 
     /// True when `symbol` is a foreign-function name namespaced under this
-    /// crate's own name — `<package_name>_<rest>` (e.g. package `rav1e` →
-    /// `rav1e_avg_8bpc_avx2`). A crate names its hand-written assembly /
+    /// crate's own name — the crate identifier followed by `_<rest>` (package
+    /// `rav1e` → `rav1e_avg_8bpc_avx2`, package `my-codec` →
+    /// `my_codec_blend_avx2`). A crate names its hand-written assembly /
     /// intrinsic symbols after itself so they are recognizably first-party and
     /// don't collide; an external library exports its own names (`SSL_connect`,
-    /// `deflate`), never under the consuming crate's name. Package-name hyphens
-    /// are normalized to `_` since Rust symbol identifiers cannot contain `-`.
+    /// `deflate`), never under the consuming crate's name.
     #[must_use]
     pub fn owns_asm_symbol(&self, symbol: &str) -> bool {
-        self.name.as_deref().is_some_and(|n| {
-            let prefix = n.replace('-', "_");
+        self.crate_identifier().is_some_and(|prefix| {
             symbol
-                .strip_prefix(&prefix)
+                .strip_prefix(prefix.as_ref())
                 .is_some_and(|rest| rest.starts_with('_'))
         })
     }
@@ -8931,6 +8954,29 @@ path = "tools/tool.rs"
         assert!(
             !salvo.is_own_family_subcrate("othercrate_core"),
             "`othercrate_core` does not start with `salvo_` => not in the family"
+        );
+
+        // Hyphenated package: same family, other spelling.
+        let helix_dap = parse_name("helix-dap");
+        assert!(
+            helix_dap.is_own_family_subcrate("helix_dap_types"),
+            "package `helix-dap` reaches Rust as `helix_dap` => `helix_dap_types` is family"
+        );
+        assert!(
+            !helix_dap.is_own_family_subcrate("helix_core"),
+            "`helix_core` belongs to package `helix-core`, not to `helix-dap`"
+        );
+        assert!(
+            !helix_dap.is_own_family_subcrate("helix_dap"),
+            "the crate identifier itself has no `_` separator => not a sub-crate"
+        );
+        assert!(
+            !helix_dap.is_own_family_subcrate("helix_dapx"),
+            "`helix_dapx` lacks the `_` separator => not a family sub-crate"
+        );
+        assert!(
+            parse_name("nu-cmd-lang").is_own_family_subcrate("nu_cmd_lang_extra"),
+            "every `-` is normalized, not just the first"
         );
 
         let no_name = CargoManifest::parse("[lib]\nname = \"anon\"\n", dir).unwrap();
