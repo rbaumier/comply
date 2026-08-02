@@ -2979,6 +2979,12 @@ pub struct ProjectCtx {
     // the same package directory.
     bazel_ng_package_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
+    // "Is this `story/` directory a UI story catalog?" — does it directly hold
+    // a `*.story.*` file, keyed by that directory. Histoire groups its stories
+    // with the helper components they render, which carry no marker of their
+    // own. Read lazily on first miss and memoized per directory.
+    story_catalog_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
+
     // Absolute directories declared as a Prisma `generator { output = … }` in
     // each `schema.prisma`, keyed by that schema's directory. The generated
     // client lands here at `prisma generate` time; the directory is gitignored
@@ -4224,6 +4230,27 @@ impl ProjectCtx {
         };
         let root = self.registry_distribution_root(start_dir);
         root.is_some_and(|root| path.starts_with(&root))
+    }
+
+    /// True when `path` sits under a `story/` directory that directly holds at
+    /// least one `*.story.*` or `*.stories.*` file.
+    ///
+    /// Histoire — the Vue-native Storybook — names its stories
+    /// `<Name>.story.vue` and groups them in a `story/` directory together with
+    /// the helper components they render, which carry no story marker of their
+    /// own. A `story/` segment alone is not evidence (a publishing app keeps a
+    /// `story/` domain directory), so the directory qualifies only when a
+    /// canonical story file sits in it.
+    pub fn in_story_catalog_dir(&self, path: &Path) -> bool {
+        let Some(dir) = nearest_story_dir(path) else {
+            return false;
+        };
+        if let Some(&hit) = self.story_catalog_dir_cache.lock().unwrap().get(&dir) {
+            return hit;
+        }
+        let is_catalog = dir_holds_story_file(&dir);
+        self.story_catalog_dir_cache.lock().unwrap().entry(dir).or_insert(is_catalog);
+        is_catalog
     }
 
     /// True when `path` is a PartyKit server entry file — declared as `main` or
@@ -5857,6 +5884,35 @@ fn collect_workspace_member_name_dirs(root: &Path) -> FxHashMap<String, PathBuf>
     map
 }
 
+/// The nearest ancestor directory of `path` named `story`, or `None` when no
+/// ancestor carries that name. `ancestors` yields `path` itself first, and
+/// `path` names a file here, so the walk starts at its parent.
+fn nearest_story_dir(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .skip(1)
+        .find(|dir| {
+            dir.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("story"))
+        })
+        .map(Path::to_path_buf)
+}
+
+/// True when `dir` directly holds a story file — one whose name carries the
+/// `.story.` or `.stories.` infix (`ComboboxBasic.story.vue`). Both infixes are
+/// the evidence [`crate::rules::file_ctx::scan_path`] reads from a filename.
+fn dir_holds_story_file(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry.file_name().to_str().is_some_and(|name| {
+            let lower = name.to_ascii_lowercase();
+            lower.contains(".story.") || lower.contains(".stories.")
+        })
+    })
+}
+
 /// Collect the union of every dependency name declared in every `package.json`
 /// under `root` (excluding `node_modules` and dot-directories), bounded by a
 /// depth limit so a pathologically deep tree can't blow the stack or stall.
@@ -6774,6 +6830,86 @@ mod tests {
         assert!(pkg.scripts_invoke_dep_binary("@manypkg/cli"));
         // A library dep whose binary no script runs is not exempted.
         assert!(!pkg.scripts_invoke_dep_binary("lodash"));
+    }
+
+    /// radix-vue's Histoire layout (issue #6850): the helper components a story
+    /// renders sit in the same `story/` directory and carry no story marker.
+    #[test]
+    fn story_dir_holding_a_story_file_is_a_catalog() {
+        let dir = TempDir::new().unwrap();
+        let story = dir.path().join("packages/core/src/Combobox/story");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::write(story.join("ComboboxBasic.story.vue"), "").unwrap();
+        std::fs::write(story.join("_Combobox.vue"), "").unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.in_story_catalog_dir(&story.join("_Combobox.vue")));
+    }
+
+    #[test]
+    fn story_domain_dir_is_not_a_catalog() {
+        let dir = TempDir::new().unwrap();
+        let story = dir.path().join("src/story");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::write(story.join("NewsFeed.vue"), "").unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.in_story_catalog_dir(&story.join("NewsFeed.vue")));
+    }
+
+    #[test]
+    fn story_catalog_needs_a_story_directory() {
+        let dir = TempDir::new().unwrap();
+        let components = dir.path().join("src/components");
+        std::fs::create_dir_all(&components).unwrap();
+        std::fs::write(components.join("Button.story.vue"), "").unwrap();
+        std::fs::write(components.join("Button.vue"), "").unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.in_story_catalog_dir(&components.join("Button.vue")));
+    }
+
+    /// Storybook's plural naming is the same evidence, and a directory name is
+    /// matched whatever its case.
+    #[test]
+    fn story_catalog_reads_plural_naming_and_ignores_directory_case() {
+        let dir = TempDir::new().unwrap();
+        let story = dir.path().join("src/Story");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::write(story.join("Button.stories.ts"), "").unwrap();
+        std::fs::write(story.join("Harness.vue"), "").unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.in_story_catalog_dir(&story.join("Harness.vue")));
+    }
+
+    /// The story file sits in the catalog directory, not in the sub-directory a
+    /// helper is filed under, so the walk climbs to the nearest `story/`.
+    #[test]
+    fn story_catalog_covers_files_nested_below_it() {
+        let dir = TempDir::new().unwrap();
+        let story = dir.path().join("src/Combobox/story");
+        std::fs::create_dir_all(story.join("parts")).unwrap();
+        std::fs::write(story.join("ComboboxBasic.story.vue"), "").unwrap();
+        std::fs::write(story.join("parts/Option.vue"), "").unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.in_story_catalog_dir(&story.join("parts/Option.vue")));
+    }
+
+    /// The verdict is read once per directory: a sibling of the file that
+    /// primed the cache answers from it, without a second `read_dir`.
+    #[test]
+    fn story_catalog_verdict_is_memoized_per_directory() {
+        let dir = TempDir::new().unwrap();
+        let story = dir.path().join("src/Combobox/story");
+        std::fs::create_dir_all(&story).unwrap();
+        let marker = story.join("ComboboxBasic.story.vue");
+        std::fs::write(&marker, "").unwrap();
+        let helper = story.join("_Combobox.vue");
+        std::fs::write(&helper, "").unwrap();
+        let sibling = story.join("_ComboboxTagsInput.vue");
+        std::fs::write(&sibling, "").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.in_story_catalog_dir(&helper));
+        std::fs::remove_file(&marker).unwrap();
+        assert!(ctx.in_story_catalog_dir(&sibling));
     }
 
     #[test]
