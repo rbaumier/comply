@@ -17,6 +17,14 @@
 //! conditional as a whole, so it still reports a duplicate between two ungated
 //! arms of a partly gated chain.
 //!
+//! A chain is also left alone when one of its branches names something its own
+//! `if let` condition binds. The pattern binding shadows whatever the name meant
+//! outside, so the `else` branch's use of that same name reads a different
+//! binding: identical tokens, different values. The name only has to appear —
+//! whether it resolves to the binding or to something else that spells the same,
+//! such as a module path or a re-`let` inside the branch, is not decided, since
+//! naming it too readily costs a missed report and never a wrong one.
+//!
 //! Match expressions are not currently checked — TODO(#8072).
 //! Branches are compared by their ordered AST leaf tokens, so formatting and
 //! indentation differences are ignored while string-literal content (including
@@ -64,14 +72,143 @@ fn node_signature(node: tree_sitter::Node, source: &[u8]) -> String {
     out.join("\u{1f}")
 }
 
+/// Names bound by `pattern`, appended to `out`.
+///
+/// Only an `identifier` and a `shorthand_field_identifier` (`bar` in
+/// `Foo { bar }`) name a binding. A struct field's name is a `field_identifier`
+/// (`bar` in `Foo { bar: x }`) and never counts. Two paths that would otherwise
+/// reach an `identifier` are cut: the `type` field of a tuple-struct or struct
+/// pattern (`Some` in `Some(x)`) and a `scoped_identifier` (`Cow::Borrowed`).
+///
+/// A bare path that names a unit struct, a unit enum variant or a const is
+/// spelled exactly like a binding in pattern position, so it is collected as
+/// one. Collecting too much only ever silences the rule, which is the safe
+/// direction: the reverse would report branches that do not match.
+fn pattern_bound_names<'a>(pattern: tree_sitter::Node, source: &'a [u8], out: &mut Vec<&'a str>) {
+    match pattern.kind() {
+        "identifier" | "shorthand_field_identifier" => {
+            if let Ok(name) = pattern.utf8_text(source) {
+                out.push(name);
+            }
+            return;
+        }
+        "scoped_identifier" => return,
+        _ => {}
+    }
+
+    let constructor_path_id = pattern.child_by_field_name("type").map(|node| node.id());
+    let mut cursor = pattern.walk();
+    for child in pattern.named_children(&mut cursor) {
+        if Some(child.id()) != constructor_path_id {
+            pattern_bound_names(child, source, out);
+        }
+    }
+}
+
+/// Names bound by the `let` patterns of an `if` condition, appended to `out`.
+///
+/// Covers a bare `if let PAT = EXPR` (`let_condition`) and a `&&` let-chain
+/// (`if a && let PAT = EXPR`, `let_chain`). A `let` nested deeper — inside a
+/// closure in the condition, say — binds nothing the branch body can read, so it
+/// is not walked.
+fn condition_bound_names<'a>(
+    condition: tree_sitter::Node,
+    source: &'a [u8],
+    out: &mut Vec<&'a str>,
+) {
+    match condition.kind() {
+        "let_condition" => {
+            if let Some(pattern) = condition.child_by_field_name("pattern") {
+                pattern_bound_names(pattern, source, out);
+            }
+        }
+        "let_chain" => {
+            let mut cursor = condition.walk();
+            for child in condition.named_children(&mut cursor) {
+                condition_bound_names(child, source, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether `node` reads one of `names`.
+///
+/// A read is either a plain `identifier` — field and method names parse as
+/// `field_identifier`, so `v.len()` is not a read of a binding named `len` — or
+/// an inline capture in a macro's format string, as the argument
+/// (`println!("{v}")`) or as a width or precision argument
+/// (`println!("{value:v$}")`).
+fn reads_any_name(node: tree_sitter::Node, source: &[u8], names: &[&str]) -> bool {
+    if node.child_count() == 0 {
+        return node.kind() == "identifier"
+            && node.utf8_text(source).is_ok_and(|text| names.contains(&text));
+    }
+    if node.kind() == "macro_invocation" && macro_literal_captures_any_name(node, source, names) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| reads_any_name(child, source, names))
+}
+
+/// Whether a string literal anywhere under `node` captures one of `names`
+/// inline, the way `format!("{v}")` and `println!("{v:?}")` do. Every macro is
+/// scanned, formatting or not, so a literal that merely spells a capture
+/// (`env!("{v}")`) counts; that only ever silences the rule.
+fn macro_literal_captures_any_name(node: tree_sitter::Node, source: &[u8], names: &[&str]) -> bool {
+    if matches!(node.kind(), "string_literal" | "raw_string_literal") {
+        return node
+            .utf8_text(source)
+            .is_ok_and(|text| format_string_captures_any_name(text, names));
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| macro_literal_captures_any_name(child, source, names))
+}
+
+/// Whether `text` names one of `names` inside a `{...}` field — as the argument
+/// itself (`{v}`, `{v:?}`) or as the width or precision argument (`{value:v$}`,
+/// `{value:.v$}`), which capture from scope just the same. `{{` is an escaped
+/// brace and opens no field. Any identifier-shaped word of the field counts, so
+/// a fill character can be read as a capture; that only ever silences the rule.
+fn format_string_captures_any_name(text: &str, names: &[&str]) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while let Some(offset) = bytes[index..].iter().position(|byte| *byte == b'{') {
+        let open = index + offset;
+        if bytes.get(open + 1) == Some(&b'{') {
+            index = open + 2;
+            continue;
+        }
+        let start = open + 1;
+        let Some(close) = bytes[start..].iter().position(|byte| *byte == b'}') else {
+            return false;
+        };
+        let end = start + close;
+        let field_names_one = text.get(start..end).is_some_and(|field| {
+            field
+                .split(|character: char| character != '_' && !character.is_ascii_alphanumeric())
+                .any(|word| names.contains(&word))
+        });
+        if field_names_one {
+            return true;
+        }
+        index = end + 1;
+    }
+    false
+}
+
 /// What the rule needs to know about an `if`/`else if` chain: one signature per
 /// branch, whether the chain terminates with an unconditional `else { ... }`,
-/// and whether any of its conditions reads a `cfg!(...)` predicate.
+/// whether any of its conditions reads a `cfg!(...)` predicate, and whether a
+/// branch reads a name its own condition's `let` pattern binds.
 #[derive(Default)]
 struct IfChain {
     branch_signatures: Vec<String>,
     has_terminal_else: bool,
     is_compile_time_gated: bool,
+    reads_pattern_binding: bool,
 }
 
 /// Walk an `if`/`else if` chain into `chain`.
@@ -80,13 +217,22 @@ struct IfChain {
 /// otherwise its body is gated by the conditions, so identical branches are not
 /// pointless.
 fn collect_if_chain(if_node: tree_sitter::Node, source: &[u8], chain: &mut IfChain) {
-    if let Some(condition) = if_node.child_by_field_name("condition")
+    let condition = if_node.child_by_field_name("condition");
+
+    if let Some(condition) = condition
         && crate::rules::rust_helpers::expression_reads_cfg_macro(condition, source)
     {
         chain.is_compile_time_gated = true;
     }
 
     if let Some(consequence) = if_node.child_by_field_name("consequence") {
+        if let Some(condition) = condition {
+            let mut bound_names = Vec::new();
+            condition_bound_names(condition, source, &mut bound_names);
+            if !bound_names.is_empty() && reads_any_name(consequence, source, &bound_names) {
+                chain.reads_pattern_binding = true;
+            }
+        }
         chain
             .branch_signatures
             .push(block_interior_signature(consequence, source));
@@ -147,7 +293,7 @@ impl AstCheck for Check {
 
                 let mut chain = IfChain::default();
                 collect_if_chain(node, source_bytes, &mut chain);
-                if chain.is_compile_time_gated {
+                if chain.is_compile_time_gated || chain.reads_pattern_binding {
                     return;
                 }
 
@@ -520,6 +666,230 @@ fn f() {
 "#;
         let d = run_on(source);
         assert_eq!(d.len(), 1);
+    }
+
+    // https://github.com/rbaumier/comply/issues/6854
+    #[test]
+    fn allows_if_let_binding_shadowing_a_name_read_by_both_branches() {
+        let source = r#"
+fn filename(&self) -> Result<Cow<'_, str>, Error> {
+    let filename = self.url.filename()?;
+    if let Some((_, filename)) = filename.rsplit_once('@') {
+        Ok(Cow::Borrowed(filename))
+    } else {
+        Ok(Cow::Borrowed(filename))
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// The mirror of the issue snippet: same `if let`, but the branches never
+    /// read the binding, so nothing is shadowed and the conditional is pointless.
+    #[test]
+    fn flags_identical_branches_when_the_if_let_binding_is_unread() {
+        let source = r#"
+fn f() {
+    if let Some((_, filename)) = path.rsplit_once('@') {
+        do_something();
+    } else {
+        do_something();
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Each `if let` arm rebinds the name from a different scrutinee, so the
+    /// three identical bodies read three different values.
+    #[test]
+    fn allows_else_if_let_arms_rebinding_the_name_they_read() {
+        let source = r#"
+fn f() {
+    if let Some(v) = a {
+        take(v);
+    } else if let Some(v) = b {
+        take(v);
+    } else {
+        take(v);
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A let-chain binds just as a bare `if let` does.
+    #[test]
+    fn allows_let_chain_binding_read_by_both_branches() {
+        let source = r#"
+fn f() {
+    if ready && let Some(v) = a {
+        take(v);
+    } else {
+        take(v);
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// Destructuring a struct binds through the shorthand field too.
+    #[test]
+    fn allows_struct_pattern_shorthand_binding_read_by_both_branches() {
+        let source = r#"
+fn f() {
+    if let Point { x, .. } = p {
+        take(x);
+    } else {
+        take(x);
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// Negative space: the constructor path of the pattern is not a binding, so
+    /// branches that merely name `Ok` again stay duplicates.
+    #[test]
+    fn flags_identical_branches_reading_the_patterns_constructor_path() {
+        let source = r#"
+fn f() {
+    if let Ok(v) = a {
+        Ok(())
+    } else {
+        Ok(())
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Negative space: a method name is a `field_identifier`, not a read of the
+    /// binding that happens to share its spelling.
+    #[test]
+    fn flags_identical_branches_whose_method_name_matches_the_binding() {
+        let source = r#"
+fn f() {
+    if let Some(len) = bound {
+        report(v.len());
+    } else {
+        report(v.len());
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Negative space: a bare scoped path in pattern position binds nothing, so
+    /// a branch that names its last segment stays a duplicate.
+    #[test]
+    fn flags_identical_branches_reading_a_scoped_path_pattern() {
+        let source = r#"
+fn f() {
+    if let Ordering::Less = x {
+        take(Less);
+    } else {
+        take(Less);
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Negative space: in `Point { x: px }` the field name `x` is not a binding,
+    /// so branches reading the outer `x` stay duplicates.
+    #[test]
+    fn flags_identical_branches_reading_a_struct_patterns_field_name() {
+        let source = r#"
+fn f() {
+    if let Point { x: px } = p {
+        take(x);
+    } else {
+        take(x);
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A width argument captures from scope, so `{value:w$}` reads `w` just as
+    /// `{w}` would.
+    #[test]
+    fn allows_inline_width_capture_of_the_binding() {
+        let source = r#"
+fn f() {
+    if let Some(w) = a {
+        println!("{value:w$}");
+    } else {
+        println!("{value:w$}");
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A precision argument captures the same way.
+    #[test]
+    fn allows_inline_precision_capture_of_the_binding() {
+        let source = r#"
+fn f() {
+    if let Some(p) = a {
+        println!("{value:.p$}");
+    } else {
+        println!("{value:.p$}");
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// An inline format capture reads the binding just as `println!("{}", v)`
+    /// does, so the two spellings must agree.
+    #[test]
+    fn allows_inline_format_capture_of_the_binding() {
+        let source = r#"
+fn f() {
+    if let Some(v) = a {
+        println!("value={v:?}");
+    } else {
+        println!("value={v:?}");
+    }
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// Negative space: `{{v}}` is an escaped brace printing the text `{v}`, not
+    /// a capture, and the surrounding literal names nothing else.
+    #[test]
+    fn flags_identical_branches_whose_format_string_escapes_the_braces() {
+        let source = r#"
+fn f() {
+    if let Some(v) = a {
+        println!("{{v}}");
+    } else {
+        println!("{{v}}");
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Negative space: an `if let` nested inside a closure in the condition
+    /// binds only within that closure, so the bodies' `v` is the outer one and
+    /// the duplicate still flags.
+    #[test]
+    fn flags_identical_branches_when_an_if_let_hides_inside_a_condition_closure() {
+        let source = r#"
+fn f() {
+    if items.iter().any(|item| if let Some(v) = item.get() { v > 0 } else { false }) {
+        take(v);
+    } else {
+        take(v);
+    }
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     /// Vacuous until #8072 revives the match path; kept as its regression guard.
