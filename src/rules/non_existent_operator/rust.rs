@@ -1,7 +1,8 @@
 //! non-existent-operator Rust backend.
 //!
-//! Detect `=+`, `=-`, `=!` typo operators. In Rust, `x =+ 1` parses as
-//! `x = (+1)` — an assignment with a unary plus.
+//! Detect the `=-` and `=!` typo operators. `x =- 1` parses as `x = -1`, an
+//! assignment of a negated value, while the text reads as a single `-=` token.
+//! Spacing decides — see [`super::reads_as_compact_assignment`].
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -11,42 +12,35 @@ crate::ast_check! { on ["assignment_expression"] => |node, source, ctx, diagnost
         return;
     }
 
-    let Some(unary_op) = rhs.child(0) else { return };
-    let unary_text = unary_op.utf8_text(source).unwrap_or("");
-    if unary_text != "-" && unary_text != "!" {
-        return;
-    }
-
-    // Check adjacency: `=` and unary op must be adjacent.
-    // Find the `=` operator node.
-    let mut eq_node = None;
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.utf8_text(source).unwrap_or("") == "=" {
-            eq_node = Some(child);
-            break;
-        }
-    }
-    let Some(eq) = eq_node else { return };
-    let eq_end = eq.end_byte();
-    let unary_start = unary_op.start_byte();
-
-    if eq_end != unary_start {
-        return; // there's a space — intentional `x = -1`.
-    }
-
-    let pos = node.start_position();
-    let suggested = match unary_text {
+    let Some(sign) = rhs.child(0) else { return };
+    let sign_text = sign.utf8_text(source).unwrap_or("");
+    let suggested = match sign_text {
         "-" => "-=",
         "!" => "!=",
         _ => return,
     };
+
+    let mut cursor = node.walk();
+    let Some(eq) = node.children(&mut cursor).find(|child| child.kind() == "=") else {
+        return;
+    };
+
+    if eq.end_byte() != sign.start_byte() {
+        return; // `x = -1` keeps them apart: a real unary sign.
+    }
+
+    // `x=-1` and `flag=!other` are compact assignments of a signed value.
+    if super::reads_as_compact_assignment(ctx.source, eq.start_byte()) {
+        return;
+    }
+
+    let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "non-existent-operator".into(),
-        message: format!("Typo: `={unary_text}` should be `{suggested}`."),
+        message: format!("Typo: `={sign_text}` should be `{suggested}`."),
         severity: Severity::Error,
         span: None,
     });
@@ -79,5 +73,32 @@ mod tests {
     #[test]
     fn allows_intentional_negative() {
         assert!(run_on("fn f() { let mut x = 0; x = -1; }").is_empty());
+    }
+
+    #[test]
+    fn flags_typo_operators() {
+        assert_eq!(run_on("fn f() { let mut x = 0; x =- 1; }").len(), 1);
+        assert_eq!(run_on("fn f() { let mut x = 0; x=- 1; }").len(), 1);
+        assert_eq!(
+            run_on("fn f(o: bool) { let mut b = false; b =! o; }").len(),
+            1
+        );
+    }
+
+    /// A space on one side of the `=`/sign pair is enough to make their contact
+    /// meaningful: no formatter writes an assignment that way.
+    #[test]
+    fn flags_half_spaced_typo_operators() {
+        assert_eq!(run_on("fn f() { let mut x = 0; x =-1; }").len(), 1);
+        assert_eq!(run_on("fn f(o: bool) { let mut b = false; b =!o; }").len(), 1);
+    }
+
+    /// Compact spacing glues every token to the next one, so the sign touching
+    /// the `=` says nothing: it stays a unary sign on the value.
+    #[test]
+    fn allows_compact_unary_sign() {
+        assert!(run_on("fn f() { let mut x = 0; x=-1; }").is_empty());
+        assert!(run_on("fn f(o: bool) { let mut b = false; b=!o; }").is_empty());
+        assert!(run_on("fn f() { let mut x = 0; x=-(1 + 2); }").is_empty());
     }
 }
