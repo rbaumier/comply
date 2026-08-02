@@ -13,7 +13,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Explicit types on variables initialized with literals are redundant — TypeScript infers them.",
     remediation: "Remove the type annotation and let TypeScript infer the type.",
     severity: Severity::Error,
-    doc_url: None,
+    doc_url: Some("https://typescript-eslint.io/rules/no-inferrable-types/"),
     categories: &["typescript"],
 
     skip_in_test_dir: false,

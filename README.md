@@ -138,7 +138,7 @@ Run `comply explain <rule-id>` for the full rationale behind any of these, or br
 - **Auto-fix** — `--fix` applies fixes for any rule whose backend supports them.
 - **Interactive TUI** — browse and triage diagnostics in your terminal.
 - **Editor integration** — built-in Language Server (LSP) for inline diagnostics as you type.
-- **Inline suppressions with mandatory justification** — `// comply-ignore:` requires a reason, so silenced rules stay accountable.
+- **Inline suppressions with mandatory justification** — `// comply-ignore:` requires a reason, so silenced rules stay accountable. Your project's own `eslint-disable-line` directives are honored too.
 - **Type-aware analysis** — rules that query a real TypeScript checker for deeper correctness checks; always on and requires a TypeScript toolchain (Node + `@typescript/native-preview`).
 
 ## Getting started
@@ -238,6 +238,8 @@ throw err;
 ```
 
 Suppress a rule for an entire file with `// comply-ignore-file: <rule-id> — <reason>`.
+
+comply also honors the inline ESLint directives your project already wrote, for the comply rule that re-implements the named ESLint rule: `// eslint-disable-line <rule>` and `// eslint-disable-next-line <rule>`, in either comment syntax. The plugin prefix does not matter — `@typescript-eslint/no-explicit-any`, `typescript/no-explicit-any` and `no-explicit-any` all reach `ts-no-explicit-any`. A directive naming no rule suppresses nothing, and the file-scope `eslint-disable` / `eslint-enable` range form is not honored — comply tracks no enable/disable range.
 
 ## Editor integration
 

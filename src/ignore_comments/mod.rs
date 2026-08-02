@@ -1,10 +1,17 @@
-//! comply-ignore parser — scans source for suppression comments + filters diagnostics.
+//! Suppression parser — scans source for suppression comments + filters diagnostics.
 //!
-//! Format: `// comply-ignore: <rule-id> — <justification>` (em-dash or ` -- `).
+//! comply's own format is `// comply-ignore: <rule-id> — <justification>`
+//! (em-dash or ` -- `):
 //! - **Above-line:** marker is the only thing on the line → suppresses next line.
 //! - **Trailing:** marker comes after code on the same line → suppresses current line.
 //! - **String literals:** markers inside `"..."`, `'...'`, or `` `...` `` are ignored.
 //! - Justification is mandatory; missing → emit `comply-ignore-missing-justification`.
+//!
+//! ESLint directives written by the author of the scanned project are honored
+//! for the comply rule that re-implements the named ESLint rule:
+//! `// eslint-disable-line rule-a`, `// eslint-disable-next-line rule-a` and
+//! the `/* eslint rule-a: 0 */` config comment. A directive naming no rule
+//! suppresses nothing.
 
 mod eslint_config;
 mod line;
@@ -38,7 +45,55 @@ pub fn has_suppression_marker(source: &str) -> bool {
     source.contains("comply-ignore") || source.contains("eslint")
 }
 
-/// Parse all comply-ignore comments in source text.
+/// Every directive found in `source`, with the line bookkeeping the target
+/// resolution needs.
+struct ScannedDirectives {
+    /// Each parsed directive, keyed by the line it sits on.
+    parses: Vec<(usize, line::LineParse)>,
+    /// Lines carrying nothing but a directive comment. An above-line marker
+    /// forwards past these to reach the code it was aimed at (ESLint
+    /// behaviour, rbaumier/comply#22). A line whose directive trails code is
+    /// not in this set: the walk must stop on it, since that code is the
+    /// target.
+    marker_lines: FxHashSet<usize>,
+    /// Number of lines in the file, which bounds the forwarding walk.
+    last_line: usize,
+}
+
+fn scan_directives(path: &Path, source: &str) -> ScannedDirectives {
+    let mut parses = Vec::new();
+    let mut marker_lines = FxHashSet::default();
+    let mut last_line = 0;
+    for (idx, raw_line) in source.lines().enumerate() {
+        last_line = idx + 1;
+        if let Some(parsed) = line::parse(path, raw_line, last_line) {
+            if parsed.is_comment_only_line {
+                marker_lines.insert(last_line);
+            }
+            parses.push((last_line, parsed));
+        }
+    }
+    ScannedDirectives { parses, marker_lines, last_line }
+}
+
+/// Lines covered by a JSDoc block. Forwarding an above-line marker skips them
+/// so a marker above `/** ... */` still reaches the declaration below (#185).
+fn jsdoc_lines(source: &str) -> FxHashSet<usize> {
+    let mut lines: FxHashSet<usize> = FxHashSet::default();
+    let mut in_block = false;
+    for (idx, raw_line) in source.lines().enumerate() {
+        let trimmed = raw_line.trim_start();
+        let after_open = trimmed.strip_prefix("/**");
+        if !in_block && after_open.is_none() {
+            continue;
+        }
+        lines.insert(idx + 1);
+        in_block = !after_open.unwrap_or(trimmed).contains("*/");
+    }
+    lines
+}
+
+/// Parse every suppression directive in source text.
 pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     let mut suppressions: FxHashMap<usize, FxHashSet<String>> = FxHashMap::default();
     let mut file_suppressions: FxHashSet<String> = FxHashSet::default();
@@ -48,49 +103,12 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     // a line-1 ignore in a BOM-prefixed file would never apply otherwise.
     let source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
 
-    // Pass 1 — parse every line and remember which lines are themselves
-    // marker lines. Needed in pass 2 to forward above-line markers past
-    // stacked siblings (ESLint behaviour, rbaumier/comply#22).
-    let mut parses: Vec<(usize, line::LineParse)> = Vec::new();
-    let mut marker_lines: FxHashSet<usize> = FxHashSet::default();
-    let mut last_line = 0usize;
-    for (idx, raw_line) in source.lines().enumerate() {
-        let line_num = idx + 1;
-        last_line = line_num;
-        if let Some(parsed) = line::parse(path, raw_line, line_num) {
-            marker_lines.insert(line_num);
-            parses.push((line_num, parsed));
-        }
-    }
+    let ScannedDirectives { parses, marker_lines, last_line } = scan_directives(path, source);
+    let jsdoc_lines = jsdoc_lines(source);
 
-    // Skip JSDoc lines when forwarding above-line markers so a `// comply-ignore` above `/** ... */` still reaches the declaration below (#185).
-    let mut jsdoc_lines: FxHashSet<usize> = FxHashSet::default();
-    {
-        let mut in_block = false;
-        for (idx, raw_line) in source.lines().enumerate() {
-            let line_num = idx + 1;
-            let trimmed = raw_line.trim_start();
-            if !in_block {
-                if trimmed.starts_with("/**") {
-                    jsdoc_lines.insert(line_num);
-                    let after_open = &trimmed[3..];
-                    if !after_open.contains("*/") {
-                        in_block = true;
-                    }
-                }
-            } else {
-                jsdoc_lines.insert(line_num);
-                if trimmed.contains("*/") {
-                    in_block = false;
-                }
-            }
-        }
-    }
-
-    // Pass 2 — apply each parse. Above-line markers whose immediate
-    // target is itself a marker line or a JSDoc line walk past those
-    // siblings to the first real code line, so stacked markers union
-    // their rules onto the same eventual target.
+    // Apply each parse. An above-line marker whose immediate target is itself
+    // a marker line or a JSDoc line walks past those siblings to the first
+    // real code line, so stacked markers union their rules onto one target.
     for (line_num, parsed) in parses {
         if let Some(d) = parsed.bad_ignore {
             bad_ignores.push(d);
@@ -111,12 +129,12 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
             Some(line_no) => {
                 let entry = suppressions.entry(line_no).or_default();
                 for rule in parsed.rule_ids {
-                    entry.insert(rule);
+                    insert_suppressed_name(entry, rule);
                 }
             }
             None => {
                 for rule in parsed.rule_ids {
-                    file_suppressions.insert(rule);
+                    insert_suppressed_name(&mut file_suppressions, rule);
                 }
             }
         }
@@ -126,7 +144,7 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     // for the file. Treat each off-severity rule as a file-level suppression,
     // honoring the same syntax codegen output (AWS SDK Smithy, etc.) relies on.
     for rule in eslint_config::off_rules(source) {
-        file_suppressions.insert(rule);
+        insert_suppressed_name(&mut file_suppressions, rule);
     }
 
     IgnoreResult {
@@ -136,34 +154,47 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     }
 }
 
-/// Sibling ids whose `comply-ignore` directive also suppresses `rule_id`. Two
-/// cases share this map:
+/// Record a rule name a directive turned off, plus its unprefixed form when it
+/// carries a plugin scope.
 ///
-/// 1. **Shared-intent siblings.** `no-clones` and `no-duplicate-type-definition`
-///    both flag the exact same intentional structural duplication, so one
-///    acknowledgement covers both rather than forcing two stacked markers.
-/// 2. **Canonicalised aliases (#5768).** Each value-typed rule below is enforced
-///    under a single canonical id (the duplicate oxlint-passthrough / tsgolint
-///    backends were de-registered). A directive that still cites a former alias id
-///    keeps suppressing the canonical finding now emitted in its place.
+/// Which prefix a directive uses is the scanned project's choice — oxlint
+/// writes `typescript/no-explicit-any` where ESLint writes
+/// `@typescript-eslint/no-explicit-any` — so the unprefixed name is the only
+/// key that matches across configs. `is_suppressed` looks rules up by it.
+fn insert_suppressed_name(suppressed: &mut FxHashSet<String>, name: String) {
+    let bare = crate::rules::meta_registry::unprefixed_rule_name(&name);
+    if bare.len() != name.len() {
+        suppressed.insert(bare.to_string());
+    }
+    suppressed.insert(name);
+}
+
+/// Sibling ids whose `comply-ignore` directive also suppresses `rule_id`.
+/// `no-clones` and `no-duplicate-type-definition` both flag the exact same
+/// intentional structural duplication, so one acknowledgement covers both
+/// rather than forcing two stacked markers.
 fn suppression_aliases(rule_id: &str) -> &'static [&'static str] {
     match rule_id {
         "no-duplicate-type-definition" => &["no-clones"],
-        "ts-no-explicit-any" => &["typescript/no-explicit-any", "no-explicit-any"],
-        "ts-no-inferrable-types" => &["no-inferrable-types"],
-        "promise-prefer-await-to-then" => &["promise/prefer-await-to-then"],
-        "consistent-type-imports" => &["typescript/consistent-type-imports"],
         _ => &[],
     }
 }
 
-/// Whether `rule_id` is suppressed within `suppressed` — directly or because a
-/// sibling rule that covers it (see `suppression_aliases`) is present.
+/// Whether `rule_id` is suppressed within `suppressed`. Three ways to match:
+/// the id itself, a sibling rule that covers it (see `suppression_aliases`),
+/// or the ESLint rule this one re-implements — which is how a directive
+/// written for ESLint (`@typescript-eslint/no-empty-function`) reaches the
+/// comply rule enforcing it (`ts-no-empty-function`).
 fn is_suppressed(rule_id: &str, suppressed: &FxHashSet<String>) -> bool {
+    if suppressed.is_empty() {
+        return false;
+    }
     suppressed.contains(rule_id)
         || suppression_aliases(rule_id)
             .iter()
             .any(|alias| suppressed.contains(*alias))
+        || crate::rules::meta_registry::upstream_eslint_rule(rule_id)
+            .is_some_and(|upstream| suppressed.contains(upstream))
 }
 
 /// Filter diagnostics by removing suppressed ones, then append bad-ignore diagnostics.
@@ -538,6 +569,233 @@ mod tests {
         let kept = apply_suppressions(vec![diag(2, "no-var")], Path::new("t.ts"), s);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].rule_id.as_ref(), "no-var");
+    }
+
+    #[test]
+    fn eslint_disable_next_line_suppresses_the_equivalent_comply_rule() {
+        // Regression for rbaumier/comply#1633 — the sveltejs/kit example. The
+        // author already told ESLint these expressions are deliberate.
+        let s = "untrack(() => {\n\
+                 // eslint-disable-next-line @typescript-eslint/no-unused-expressions\n\
+                 params.x;\n\
+                 });\n";
+        let kept = apply_suppressions(
+            vec![diag(3, "ts-no-unused-expressions")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert!(kept.is_empty(), "expected the directive to be honored, got {kept:?}");
+    }
+
+    #[test]
+    fn eslint_disable_line_suppresses_its_own_line() {
+        let s = "export function noop() {} // eslint-disable-line @typescript-eslint/no-empty-function\n";
+        let kept = apply_suppressions(vec![diag(1, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn eslint_disable_accepts_every_prefix_form_of_the_same_rule() {
+        // A project's ESLint config decides the prefix its directives carry.
+        for named in [
+            "@typescript-eslint/no-empty-function",
+            "typescript/no-empty-function",
+            "no-empty-function",
+            "ts-no-empty-function",
+        ] {
+            let s = format!("// eslint-disable-next-line {named}\nexport function noop() {{}}\n");
+            let kept =
+                apply_suppressions(vec![diag(2, "ts-no-empty-function")], Path::new("t.ts"), &s);
+            assert!(kept.is_empty(), "directive `{named}` should suppress the rule");
+        }
+    }
+
+    #[test]
+    fn eslint_disable_naming_another_rule_suppresses_nothing() {
+        let s = "// eslint-disable-next-line @typescript-eslint/no-explicit-any\n\
+                 export function noop() {}\n";
+        let kept = apply_suppressions(vec![diag(2, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].rule_id.as_ref(), "ts-no-empty-function");
+    }
+
+    #[test]
+    fn eslint_disable_without_a_rule_list_suppresses_nothing() {
+        // A blanket disable is another linter's decision about its own rules;
+        // it says nothing about the comply rules firing on that line.
+        let s = "// eslint-disable-next-line\nexport function noop() {}\n";
+        let kept = apply_suppressions(vec![diag(2, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn eslint_disable_next_line_does_not_leak_past_its_target() {
+        let s = "// eslint-disable-next-line @typescript-eslint/no-empty-function\n\
+                 export function noop() {}\n\
+                 export function noop2() {}\n";
+        let kept = apply_suppressions(
+            vec![diag(2, "ts-no-empty-function"), diag(3, "ts-no-empty-function")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].line, 3);
+    }
+
+    #[test]
+    fn eslint_disable_block_comment_form_is_honored() {
+        let s = "/* eslint-disable-next-line @typescript-eslint/no-empty-function */\n\
+                 export function noop() {}\n";
+        let kept = apply_suppressions(vec![diag(2, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn file_scope_eslint_disable_directive_is_not_honored() {
+        // The file-scope opener below starts a range that a matching enable
+        // directive closes; comply reads no range, so honoring the opener
+        // alone would silence the rule past the author's intent.
+        let s = "/* eslint-disable @typescript-eslint/no-empty-function */\n\
+                 export function noop() {}\n";
+        let kept = apply_suppressions(vec![diag(2, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn eslint_disable_inside_a_string_literal_is_ignored() {
+        let s = "const banner = \"// eslint-disable-next-line @typescript-eslint/no-empty-function\";\n\
+                 export function noop() {}\n";
+        let kept = apply_suppressions(vec![diag(2, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn eslint_disable_needs_no_justification() {
+        // The mandatory-justification rule is comply's own convention; ESLint
+        // directives must not be reported as malformed comply markers.
+        let r = parse_ignores(
+            Path::new("t.ts"),
+            "// eslint-disable-next-line @typescript-eslint/no-empty-function\nnoop();\n",
+        );
+        assert!(r.bad_ignores.is_empty());
+    }
+
+    #[test]
+    fn marker_above_a_line_with_a_trailing_directive_stops_on_that_line() {
+        // The trailing directive does not turn its line into a comment line;
+        // the marker above still targets the code it sits on.
+        let s = "// comply-ignore: rule-a — A\n\
+                 export function noop() {} // eslint-disable-line no-empty-function\n\
+                 export function noop2() {}\n";
+        let kept = apply_suppressions(
+            vec![diag(2, "rule-a"), diag(3, "rule-a")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].line, 3);
+    }
+
+    #[test]
+    fn marker_above_a_line_with_a_block_directive_and_code_stops_on_that_line() {
+        // A block directive ends mid-line, so code after it keeps the line a
+        // code line — the marker above must not forward past it.
+        let s = "// comply-ignore: rule-a — A\n\
+                 /* eslint-disable-next-line no-console */ export function noop() {}\n\
+                 export function noop2() {}\n";
+        let kept = apply_suppressions(
+            vec![diag(2, "rule-a"), diag(3, "rule-a")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].line, 3);
+    }
+
+    #[test]
+    fn eslint_directive_inside_a_doc_block_suppresses_nothing() {
+        // A rule name quoted in an `@example` must not silence that rule on
+        // the declaration the block documents.
+        let s = "/**\n\
+                 * Adapter for the legacy payload.\n\
+                 *\n\
+                 * @example\n\
+                 * // eslint-disable-next-line @typescript-eslint/no-empty-function\n\
+                 * export function noop() {}\n\
+                 */\n\
+                 export function noop() {}\n";
+        let kept = apply_suppressions(vec![diag(8, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn eslint_directive_inside_an_unpadded_block_is_honored() {
+        // A block comment whose interior lines carry no `*` leaves no trace on
+        // them, so the per-line scan reads the directive as an instruction.
+        // Pinned because the state that would see it is what silences whole
+        // files; see `is_block_comment_padding`.
+        let s = concat!(
+            "/*\n",
+            "// eslint-disable-next-line @typescript-eslint/no-empty-function\n",
+            "*/ export function noop() {}\n",
+        );
+        let kept = apply_suppressions(vec![diag(3, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn a_comment_opener_inside_a_string_does_not_silence_the_rest_of_the_file() {
+        // The scan reads one line at a time, so a `/*` written inside a
+        // template literal is not a comment opener and must not stop the
+        // markers below it from being read.
+        let s = concat!(
+            "export const TPL = `\n",
+            "  /* pattern\n",
+            "`;\n",
+            "// comply-ignore: rule-a — deliberate\n",
+            "export const value = 1;\n",
+        );
+        let kept = apply_suppressions(vec![diag(5, "rule-a")], Path::new("t.ts"), s);
+        assert!(kept.is_empty(), "the marker below the template still applies, got {kept:?}");
+    }
+
+    #[test]
+    fn marker_after_a_block_comment_close_keeps_its_own_line_and_column() {
+        let s = concat!(
+            "/* doc\n",
+            "   more */ // comply-ignore: rule-a\n",
+            "export const p = 1;\n",
+        );
+        let r = parse_ignores(Path::new("t.ts"), s);
+        // The marker trails the closing delimiter, so it targets its own line.
+        assert!(r.suppressions.get(&2).is_some_and(|rules| rules.contains("rule-a")));
+        // The column counts from the start of the line, not from the delimiter.
+        assert_eq!(r.bad_ignores.len(), 1);
+        assert_eq!(r.bad_ignores[0].column, 12);
+    }
+
+    #[test]
+    fn marker_above_a_line_with_a_trailing_comply_marker_stops_on_that_line() {
+        // Same forwarding rule for comply's own marker: the trailing marker
+        // does not turn its line into a comment line.
+        let s = "// comply-ignore: rule-a — A\n\
+                 export const p = 1; // comply-ignore: rule-b — B\n\
+                 export const q = 2;\n";
+        let kept = apply_suppressions(
+            vec![diag(2, "rule-a"), diag(3, "rule-a")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].line, 3);
+    }
+
+    #[test]
+    fn eslint_directive_named_in_prose_suppresses_nothing() {
+        let s = "// never add eslint-disable-next-line @typescript-eslint/no-empty-function\n\
+                 export function noop() {}\n";
+        let kept = apply_suppressions(vec![diag(2, "ts-no-empty-function")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
     }
 
     #[test]
