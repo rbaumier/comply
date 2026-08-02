@@ -213,6 +213,36 @@ export class UsersController {
     }
 
     #[test]
+    fn allows_error_in_nestjs_transport_server_implementation() {
+        // Issue #6859: a transport-layer server implementation imports a deep
+        // `@nestjs/common` subpath and throws from a class getter for an unsupported
+        // operation. The file registers no route, so no throw in it is an API response.
+        let src = r#"
+import { isObject } from '@nestjs/common/utils/shared.utils'
+export class ServerGrpc extends Server {
+    get status(): never {
+        throw new Error('The "status" attribute is not supported by the gRPC transport')
+    }
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_bare_error_in_route_handler_with_nestjs_import_present() {
+        // The rule reads the AST ancestors, not the import list. A `@nestjs` import
+        // does not stop the rule firing on a real route handler in the same file.
+        let src = r#"
+import { Logger } from '@nestjs/common'
+app.get('/health', (req, res) => {
+    Logger.log('health')
+    throw new Error('unhealthy')
+})
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn allows_error_with_fastify_type_import_and_no_route() {
         // Issue #7755: `FastifyBaseLogger` is a type-only import threaded through the
         // DI logger; the file registers no route, so the precondition guard throw is
