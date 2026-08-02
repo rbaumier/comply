@@ -451,31 +451,35 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
         || enclosing_item_has_attribute(node, source, attr_marks_test)
 }
 
-/// True if the author gated `item`'s compilation on `test`. Every legal
-/// spelling of that gate counts, whether it sits on the item or on a scope
+/// True if the author gated `node`'s compilation on `test`. Every legal
+/// spelling of that gate counts, whether it sits on the node or on a scope
 /// containing it:
 ///
-/// - a `cfg` attribute on `item` or on an enclosing function / module / impl
-/// - an inner `#![cfg(test)]` opening `item`'s own module body or an enclosing
+/// - a `cfg` attribute on `node` itself, whatever its kind (`#[cfg(test)] use
+///   sqlx::PgPool;` gates an import as much as a function), or on any enclosing
+///   scope that can carry one: an item, a block, a match arm
+/// - an inner `#![cfg(test)]` opening `node`'s own module body or an enclosing
 ///   module's body
 /// - an inner `#![cfg(test)]` heading the file
 ///
 /// Narrower than [`is_in_test_context`], which also counts a `#[test]` function
 /// and `#[cfg_attr(test, …)]`: neither takes the item out of a release build.
 /// Rules reasoning about what ships in the binary want this one.
-pub fn cfg_test_gates_compilation(item: Node, source: &[u8]) -> bool {
-    if file_has_inner_attribute(item, source, cfg_gates_compilation_on_test) {
+pub fn cfg_test_gates_compilation(node: Node, source: &[u8]) -> bool {
+    if file_has_inner_attribute(node, source, cfg_gates_compilation_on_test) {
         return true;
     }
-    let mut current = Some(item);
-    while let Some(node) = current {
-        let is_gated = is_attributable_scope(node)
-            && (any_outer_attribute(node, source, cfg_gates_compilation_on_test)
-                || module_body_has_inner_attribute(node, source, cfg_gates_compilation_on_test));
-        if is_gated {
+    let mut current = Some(node);
+    while let Some(scope) = current {
+        // `any_outer_attribute` stops at the first non-attribute sibling and
+        // `module_body_has_inner_attribute` self-guards on `mod_item`, so a node
+        // that cannot carry an attribute simply answers false.
+        if any_outer_attribute(scope, source, cfg_gates_compilation_on_test)
+            || module_body_has_inner_attribute(scope, source, cfg_gates_compilation_on_test)
+        {
             return true;
         }
-        current = node.parent();
+        current = scope.parent();
     }
     false
 }
@@ -954,10 +958,9 @@ pub fn file_imports_jwt_crate(node: Node, source: &[u8]) -> bool {
     }
     let mut leaves = Vec::new();
     collect_use_leaves(root, source, &mut leaves);
-    leaves.iter().any(|leaf| {
-        let crate_name = leaf.module.first().unwrap_or(&leaf.local);
-        JWT_CRATES.contains(&crate_name.as_str())
-    })
+    leaves
+        .iter()
+        .any(|leaf| JWT_CRATES.contains(&use_leaf_crate(leaf)))
 }
 
 /// True if the file containing `node` binds the local name `local` to a known
@@ -979,8 +982,7 @@ pub fn file_binds_name_to_jwt_crate(node: Node, source: &[u8], local: &str) -> b
     let mut explicit: Option<bool> = None;
     let mut has_jwt_glob = false;
     for leaf in &leaves {
-        let crate_name = leaf.module.first().unwrap_or(&leaf.local);
-        let is_jwt = JWT_CRATES.contains(&crate_name.as_str());
+        let is_jwt = JWT_CRATES.contains(&use_leaf_crate(leaf));
         if leaf.local == "*" {
             has_jwt_glob |= is_jwt;
         } else if leaf.local == local {
@@ -990,11 +992,127 @@ pub fn file_binds_name_to_jwt_crate(node: Node, source: &[u8], local: &str) -> b
     explicit.unwrap_or(has_jwt_glob)
 }
 
+/// The bounded set of database driver / ORM / connection-pool crates. A file
+/// that never reaches one of these does not talk to a database, so a generic
+/// method name it calls (`execute`, `query`, `insert`, …) belongs to some other
+/// client — HTTP, gRPC, object storage — and database rules must not read it as
+/// a query. Crate names are spelled as they appear in Rust paths, with
+/// underscores (`tokio-postgres` → `tokio_postgres`).
+pub const DB_CRATES: &[&str] = &[
+    "sqlx",
+    "sqlx_core",
+    "sea_query",
+    "diesel",
+    "diesel_async",
+    "sea_orm",
+    "rbatis",
+    "prisma_client_rust",
+    "tokio_postgres",
+    "postgres",
+    "deadpool_postgres",
+    "bb8_postgres",
+    "r2d2_postgres",
+    "mysql",
+    "mysql_async",
+    "rusqlite",
+    "libsql",
+    "duckdb",
+    "mongodb",
+    "redis",
+    "surrealdb",
+    "tiberius",
+    "clickhouse",
+    "scylla",
+];
+
+/// True if the file containing `node` reaches a known database crate (one of
+/// [`DB_CRATES`]).
+///
+/// Provenance comes from two forms, both crate-anchored and neither dependent
+/// on a user-chosen identifier:
+/// - a `use` declaration, resolved through the same [`collect_use_leaves`]
+///   scanner as the JWT and async-mutex checks, so grouped
+///   (`use sqlx::{PgPool, Row}`), glob (`use diesel::prelude::*`), aliased
+///   (`use sqlx::PgPool as Db`) and bare-crate (`use sqlx;`) forms all resolve
+///   to the leaf's crate segment;
+/// - a qualified path (`sqlx::query!(…)`, `tokio_postgres::connect(…)`), which
+///   needs no import at all, resolved to its leftmost segment.
+///
+/// A local module named `db` reached via `use crate::db::…` does not match: its
+/// crate segment is `crate`. A reference that a `#[cfg(test)]` gate keeps out of
+/// the release build does not match either: a test module reaching a database
+/// says nothing about the production code beside it. A path written inside an
+/// attribute or a macro body (`#[derive(sqlx::FromRow)]`) does not match: the
+/// grammar lexes a token tree as flat tokens, with no path node to resolve.
+/// A whole-crate alias (`use sqlx as db;`) does not match either: the leaf keeps
+/// the alias and drops the crate it renames.
+pub fn file_references_db_crate(node: Node, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+
+    let mut leaves = Vec::new();
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "use_declaration" {
+            leaves.clear();
+            collect_use_leaves(current, source, &mut leaves);
+            if leaves.iter().map(use_leaf_crate).any(is_db_crate)
+                && !cfg_test_gates_compilation(current, source)
+            {
+                return true;
+            }
+            // A `use` declaration holds nothing but its own path.
+            continue;
+        }
+        if matches!(current.kind(), "scoped_identifier" | "scoped_type_identifier")
+            && path_root_segment(current, source).is_some_and(is_db_crate)
+            && !cfg_test_gates_compilation(current, source)
+        {
+            return true;
+        }
+        // Descend even into a path: a turbofish or a qualified-trait prefix
+        // (`Vec::<sqlx::PgRow>`, `<T as sqlx::Executor>`) nests a whole path of
+        // its own where a segment would be.
+        stack.extend(current.named_children(&mut cursor));
+    }
+    false
+}
+
+/// True if `name` is one of [`DB_CRATES`].
+fn is_db_crate(name: &str) -> bool {
+    DB_CRATES.contains(&name)
+}
+
+/// The leftmost segment of a plain `::`-separated path — the crate or root module
+/// it hangs off. Walks the `path` field of expression (`scoped_identifier`) and
+/// type (`scoped_type_identifier`) paths alike. A path prefixed by a turbofish or
+/// a qualified-trait form has no leading segment to read, and yields that prefix
+/// text instead — never a bare crate name.
+fn path_root_segment<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut current = node;
+    while matches!(
+        current.kind(),
+        "scoped_identifier" | "scoped_type_identifier"
+    ) {
+        current = current.child_by_field_name("path")?;
+    }
+    current.utf8_text(source).ok()
+}
+
 /// A single leaf symbol of a `use` declaration: the module segments preceding
 /// the bound name, and the local binding name (`*` for a glob import).
 struct UsePathLeaf {
     module: Vec<String>,
     local: String,
+}
+
+/// The crate a `use` leaf hangs off: the first module segment, or the bound name
+/// itself for a bare-crate import (`use sqlx;`).
+fn use_leaf_crate(leaf: &UsePathLeaf) -> &str {
+    leaf.module.first().unwrap_or(&leaf.local)
 }
 
 /// True if the file rooted at `root` binds the type name `local` to a known
@@ -8045,6 +8163,20 @@ mod tests {
         None
     }
 
+    /// Find the first node of `kind` anywhere in the tree.
+    fn first_node_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_node_of_kind(child, kind) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     /// Find the first `macro_invocation` node anywhere in the tree.
     fn first_macro_invocation(node: Node) -> Option<Node> {
         if node.kind() == "macro_invocation" {
@@ -10284,6 +10416,110 @@ mod tests {
                 expression_is_reproducible(value),
                 *expected,
                 "expression_is_reproducible mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn file_references_db_crate_reads_import_and_path_provenance() {
+        let cases: &[(&str, bool)] = &[
+            ("use sqlx::PgPool;\nfn f() {}", true),
+            ("use sqlx::{PgPool, Row};\nfn f() {}", true),
+            ("use diesel::prelude::*;\nfn f() {}", true),
+            ("use sea_query::IndexCreateStatement;\nfn f() {}", true),
+            ("use sqlx::PgPool as Db;\nfn f() {}", true),
+            ("use mongodb;\nfn f() {}", true),
+            // A qualified path is provenance on its own, with no `use`.
+            ("fn f() { sqlx::query(\"SELECT 1\"); }", true),
+            ("fn f() { sqlx::query!(\"SELECT 1\"); }", true),
+            ("async fn f() { tokio_postgres::connect(url, tls).await; }", true),
+            ("fn f() -> tokio_postgres::Client { todo!() }", true),
+            // Non-database clients that share the receiver vocabulary.
+            ("use reqwest_middleware::ClientWithMiddleware;\nfn f() {}", false),
+            ("use tonic::transport::Channel;\nfn f() {}", false),
+            ("fn f() { reqwest::Client::new(); }", false),
+            // A local module named after a database is not a database crate.
+            ("use crate::db::Pool;\nfn f() {}", false),
+            ("fn f() { crate::sqlx::query(\"SELECT 1\"); }", false),
+            // A reference the release build never compiles is not provenance
+            // for the production code beside it.
+            ("fn f() {}\n#[cfg(test)]\nmod tests {\n    use sqlx::PgPool;\n}", false),
+            ("fn f() {}\n#[cfg(test)]\nmod tests {\n    fn t() { sqlx::query(\"SELECT 1\"); }\n}", false),
+            ("#[cfg(test)]\nuse sqlx::PgPool;\nfn f() {}", false),
+            ("#[cfg(test)]\nstruct Harness { pool: sqlx::PgPool }\nfn f() {}", false),
+            // A path nested behind a turbofish or a qualified-trait prefix is
+            // still reached.
+            ("fn f() { let rows = Vec::<sqlx::postgres::PgRow>::new(); }", true),
+            ("async fn f() { <Pool as sqlx::Executor>::fetch(id).await; }", true),
+            ("fn f() {}", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let function =
+                first_function_item(tree.root_node()).expect("snippet should contain a function");
+            assert_eq!(
+                file_references_db_crate(function, src.as_bytes()),
+                *expected,
+                "file_references_db_crate mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cfg_test_gates_compilation_reads_the_gate_on_any_enclosing_scope() {
+        let cases: &[(&str, &str, bool)] = &[
+            // The gate sits on the candidate itself, whatever kind it has.
+            ("#[cfg(test)]\nuse sqlx::PgPool;", "use_declaration", true),
+            (
+                "#[cfg(test)]\nstruct Harness { pool: PgPool }",
+                "struct_item",
+                true,
+            ),
+            (
+                "fn f() {\n    #[cfg(test)]\n    {\n        probe!();\n    }\n}",
+                "macro_invocation",
+                true,
+            ),
+            // …or on a scope containing it.
+            (
+                "#[cfg(test)]\nmod tests {\n    use sqlx::PgPool;\n}",
+                "use_declaration",
+                true,
+            ),
+            (
+                "mod tests {\n    #![cfg(test)]\n    use sqlx::PgPool;\n}",
+                "use_declaration",
+                true,
+            ),
+            ("#![cfg(test)]\nuse sqlx::PgPool;", "use_declaration", true),
+            // An attribute annotates the node right after it, never the rest of
+            // the scope it sits in.
+            (
+                "fn f() {\n    #[cfg(test)]\n    let _g = 1;\n    probe!();\n}",
+                "macro_invocation",
+                false,
+            ),
+            (
+                "#[cfg(test)]\nmod tests {}\nuse sqlx::PgPool;",
+                "use_declaration",
+                false,
+            ),
+            // A negated predicate keeps the node in the release build.
+            (
+                "#[cfg(not(test))]\nuse sqlx::PgPool;",
+                "use_declaration",
+                false,
+            ),
+            ("use sqlx::PgPool;", "use_declaration", false),
+        ];
+        for (src, kind, expected) in cases {
+            let tree = parse(src);
+            let node = first_node_of_kind(tree.root_node(), kind)
+                .unwrap_or_else(|| panic!("snippet should contain a `{kind}` node"));
+            assert_eq!(
+                cfg_test_gates_compilation(node, src.as_bytes()),
+                *expected,
+                "cfg_test_gates_compilation mismatch for `{src}`"
             );
         }
     }

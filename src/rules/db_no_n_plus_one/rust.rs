@@ -12,9 +12,13 @@
 //! whose callee is a `field_expression` `<receiver>.<method>`. Unambiguous
 //! sqlx driver methods (`fetch_one`/`fetch_all`/`fetch_optional`) flag on the
 //! method name alone. Overloaded generic names (`query`/`execute`/`find`/
-//! `insert`/`update`/`delete`) additionally require the receiver chain to be
-//! anchored on a DB-like binding so a `HashMap::insert` or a GraphQL
-//! `extensions.execute(..)` pipeline is not mistaken for a database query.
+//! `insert`/`update`/`delete`) additionally require two independent signals:
+//! the receiver chain anchored on a DB-like binding, so a `HashMap::insert` or
+//! a GraphQL `extensions.execute(..)` pipeline is not mistaken for a query, and
+//! a database crate reached by the file (`rust_helpers::file_references_db_crate`),
+//! so an HTTP, gRPC or object-storage client sharing one of those binding names
+//! is not read as a database handle. This mirrors the `file_imports_db_library`
+//! gate the TypeScript backend applies to the same overloaded names.
 //!
 //! Inline `#[cfg(test)]` modules are exempt: parametrized tests routinely
 //! create a fresh in-memory datastore per loop iteration and run one query
@@ -23,7 +27,7 @@
 //! `skip_in_test_dir`; this covers tests embedded in production `src/` files.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{file_references_db_crate, is_in_test_context};
 use crate::rules::sql_helpers::contains_word;
 
 /// Method names that are unambiguously sqlx/ORM driver calls — DB-specific by
@@ -33,12 +37,19 @@ const UNAMBIGUOUS_METHODS: &[&str] = &["fetch_one", "fetch_all", "fetch_optional
 /// Method names that are heavily overloaded across the ecosystem (futures
 /// executors, command runners, `HashMap::insert`, GraphQL pipelines, …). A
 /// match on one of these flags only when the receiver chain is anchored on a
-/// DB-like binding (see `DB_RECEIVER_NAMES`).
+/// DB-like binding (see `DB_RECEIVER_NAMES`) *and* the file reaches a database
+/// crate.
 const GENERIC_METHODS: &[&str] = &["query", "execute", "find", "insert", "update", "delete"];
 
-/// Binding/field names that signal a database handle. Matched case-insensitively
+/// Binding/field names a database handle can carry. Matched case-insensitively
 /// against either the receiver-chain root (`conn.execute(..)`) or the field the
 /// method is called on (`self.pool.execute(..)` → `pool`).
+///
+/// These names are shared with non-database handles — `client` alone covers
+/// `reqwest::Client`, `tonic` gRPC channels and S3 clients as much as
+/// `tokio_postgres::Client` — so a match here narrows the candidates but never
+/// establishes that the receiver is a database handle: the crate-provenance
+/// gate in [`is_db_call`] decides that.
 const DB_RECEIVER_NAMES: &[&str] = &[
     "conn",
     "connection",
@@ -62,7 +73,10 @@ const DB_RECEIVER_NAMES: &[&str] = &[
 /// `<receiver>.<method>`. Unambiguous sqlx methods flag on the method name
 /// alone. Generic, overloaded method names additionally require the receiver
 /// chain to be anchored on a DB-like name — either the chain's root identifier
-/// or the immediate receiver field the method is called on.
+/// or the immediate receiver field the method is called on — and the file to
+/// reach a database crate through an import or a qualified path. The binding
+/// name is chosen by the author and says nothing about what the value is; the
+/// crate the file talks to is what makes the call a database query.
 fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut current = node;
     // Peel `?` / `.await` wrappers around the call.
@@ -99,7 +113,15 @@ fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(receiver) = function.child_by_field_name("value") else {
         return false;
     };
-    immediate_receiver_is_db_like(receiver, source) || receiver_root_is_db_like(receiver, source)
+    if !immediate_receiver_is_db_like(receiver, source)
+        && !receiver_root_is_db_like(receiver, source)
+    {
+        return false;
+    }
+
+    // …and a database crate in the file, so the anchor names a database handle
+    // rather than an HTTP/gRPC/object-storage client that shares the name.
+    file_references_db_crate(current, source)
 }
 
 /// True if the receiver the method is called directly on carries a DB-like
@@ -259,13 +281,15 @@ mod tests {
 
     #[test]
     fn flags_query_in_loop() {
-        let src = "async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
+        let src = "use sqlx::PgPool;
+            async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn allows_query_outside_loop() {
-        let src = "async fn f() { db.query(1).await; }";
+        let src = "use sqlx::PgPool;
+            async fn f() { db.query(1).await; }";
         assert!(run_on(src).is_empty());
     }
 
@@ -275,13 +299,15 @@ mod tests {
     #[test]
     fn allows_query_in_loop_inside_cfg_test_module() {
         let src = r#"
+            use surrealdb::Datastore;
+
             #[cfg(test)]
             mod tests {
                 async fn t() {
                     for level in &test_levels {
                         for case in &test_cases {
-                            let ds = Datastore::new("memory").await.unwrap();
-                            ds.execute(&query, &sess, None).await.unwrap();
+                            let db = Datastore::new("memory").await.unwrap();
+                            db.execute(&query, &sess, None).await.unwrap();
                         }
                     }
                 }
@@ -294,7 +320,8 @@ mod tests {
     // Gated run honours the production `applies_to_file` gate.
     #[test]
     fn allows_query_in_loop_in_tests_dir() {
-        let src = "async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
+        let src = "use sqlx::PgPool;
+            async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
         let diags =
             crate::rules::test_helpers::run_rule_gated(&Check, src, "crate/tests/signin.rs");
         assert!(diags.is_empty());
@@ -304,7 +331,8 @@ mod tests {
     // fires — the exemption is test-scoped, the rule still catches real N+1.
     #[test]
     fn flags_query_in_loop_in_production_path() {
-        let src = "async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
+        let src = "use sqlx::PgPool;
+            async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
         let diags =
             crate::rules::test_helpers::run_rule_gated(&Check, src, "crate/src/iam/signin.rs");
         assert_eq!(diags.len(), 1);
@@ -313,10 +341,12 @@ mod tests {
     // Issue #3964: a GraphQL extension pipeline `ctx_field.query_env.extensions
     // .execute(..).await` is a per-field resolver run, not a DB query. The
     // receiver chain (`ctx_field` root, called on `extensions`) is not DB-like,
-    // so the overloaded `execute` name must not anchor.
+    // so the overloaded `execute` name must not anchor — even in a resolver file
+    // that does reach a database crate.
     #[test]
     fn allows_graphql_extension_execute_in_loop() {
-        let src = r#"async fn f() {
+        let src = r#"use sqlx::PgPool;
+        async fn f() {
             for f in fields {
                 let resp = ctx_field
                     .query_env
@@ -329,17 +359,21 @@ mod tests {
     }
 
     // Issue #3263 facet: `HashMap::insert` shares the overloaded `insert` name
-    // but its receiver (`map`) is not DB-like, so it must not flag.
+    // but its receiver (`map`) is not DB-like, so it must not flag — even in a
+    // file that does reach a database crate.
     #[test]
     fn allows_hashmap_insert_in_loop() {
-        let src = "async fn f() { for (k, v) in pairs { map.insert(k, v); } }";
+        let src = "use sqlx::PgPool;
+            async fn f() { for (k, v) in pairs { map.insert(k, v); } }";
         assert!(run_on(src).is_empty());
     }
 
-    // True positive: `conn` is a DB-like root → overloaded `execute` anchors.
+    // True positive: `conn` is a DB-like root in a file that reaches a database
+    // crate → overloaded `execute` anchors.
     #[test]
     fn flags_conn_execute_in_loop() {
-        let src = "async fn f(ids: Vec<i32>) { for id in ids { conn.execute(sql).await; } }";
+        let src = "use diesel_async::AsyncPgConnection;
+            async fn f(ids: Vec<i32>) { for id in ids { conn.execute(sql).await; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -347,8 +381,8 @@ mod tests {
     // name even though the chain root is `self`.
     #[test]
     fn flags_self_pool_query_in_loop() {
-        let src =
-            "async fn f(&self, ids: Vec<i32>) { for id in ids { self.pool.query(id).await; } }";
+        let src = "use sqlx::PgPool;
+            async fn f(&self, ids: Vec<i32>) { for id in ids { self.pool.query(id).await; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -407,8 +441,8 @@ mod tests {
     // with no `LIMIT`, is a genuine N+1 and still fires.
     #[test]
     fn flags_while_let_pop_query_without_limit() {
-        let src =
-            "async fn f(mut ids: Vec<i32>) { while let Some(id) = ids.pop() { db.query(id).await; } }";
+        let src = "use sqlx::PgPool;
+            async fn f(mut ids: Vec<i32>) { while let Some(id) = ids.pop() { db.query(id).await; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -417,6 +451,114 @@ mod tests {
     #[test]
     fn flags_loop_query_without_limit() {
         let src = "async fn f(sql: &str) { loop { db.fetch_all(sql).await; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #6856 (astral-sh/uv `crates/uv-client/src/base_client.rs`): a
+    // `reqwest_middleware` client re-executes a request in a loop to follow
+    // redirects itself. `client` is a name a database handle can carry too, but
+    // the file reaches no database crate, so the receiver is an HTTP client and
+    // the call is not a query.
+    #[test]
+    fn allows_http_client_execute_in_loop() {
+        let src = r#"
+            use reqwest_middleware::ClientWithMiddleware;
+
+            impl BaseClient {
+                async fn execute_with_redirect_handling(
+                    &self,
+                    req: Request,
+                ) -> reqwest_middleware::Result<Response> {
+                    let mut request = req;
+                    loop {
+                        let result = self
+                            .client
+                            .execute(request.try_clone().expect("HTTP request must be cloneable"))
+                            .await;
+                        request = redirect_request(&result)?;
+                    }
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #6856: a `#[cfg(test)]` gate keeps its import out of the release
+    // build, so it says nothing about the production code beside it and the
+    // HTTP loop stays silent — whether the gate sits on a test module or
+    // directly on the import.
+    #[test]
+    fn allows_http_client_execute_in_loop_beside_cfg_test_module_import() {
+        let src = r#"
+            use reqwest_middleware::ClientWithMiddleware;
+
+            impl BaseClient {
+                async fn send_all(&self, requests: Vec<Request>) {
+                    for req in requests {
+                        self.client.execute(req).await;
+                    }
+                }
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use sqlx::PgPool;
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_http_client_execute_in_loop_beside_cfg_test_gated_import() {
+        let src = r#"
+            use reqwest_middleware::ClientWithMiddleware;
+            #[cfg(test)]
+            use sqlx::PgPool;
+
+            impl BaseClient {
+                async fn send_all(&self, requests: Vec<Request>) {
+                    for req in requests {
+                        self.client.execute(req).await;
+                    }
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #6856, negative space: `tokio_postgres` names its own connection
+    // handle `client`, so the identical receiver name in a file that reaches a
+    // database crate is a database handle and the N+1 still fires. The fix is
+    // the crate-provenance gate, not the removal of an ambiguous name.
+    #[test]
+    fn flags_postgres_client_query_in_loop() {
+        let src = r#"
+            use tokio_postgres::Client;
+
+            async fn load(client: &Client, ids: Vec<i32>) {
+                for id in ids {
+                    client.query("SELECT * FROM users WHERE id = $1", &[&id]).await;
+                }
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #6856: a qualified path is provenance on its own — `sqlx::query(..)`
+    // needs no `use` — so the awaited `self.pool.execute(..)` still flags.
+    #[test]
+    fn flags_pool_execute_with_qualified_sqlx_path_in_loop() {
+        let src = r#"
+            impl Store {
+                async fn touch(&self, ids: Vec<i32>) {
+                    for id in ids {
+                        self.pool
+                            .execute(sqlx::query("UPDATE t SET seen = now() WHERE id = $1").bind(id))
+                            .await;
+                    }
+                }
+            }
+        "#;
         assert_eq!(run_on(src).len(), 1);
     }
 }
