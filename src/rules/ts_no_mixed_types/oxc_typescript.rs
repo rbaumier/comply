@@ -9,6 +9,7 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     Expression, PropertyKey, TSMethodSignature, TSMethodSignatureKind, TSSignature,
 };
+use std::borrow::Cow;
 use std::sync::Arc;
 
 pub struct Check;
@@ -74,6 +75,43 @@ fn has_call_signature(sigs: &oxc_allocator::Vec<'_, TSSignature>) -> bool {
     })
 }
 
+/// The static name of a true method signature (`foo(): T`). A literal key
+/// (`"foo"()`, `1()`) names its member as an identifier key does. Get/Set
+/// accessor signatures repeat their counterpart's name without being overloads,
+/// so they carry no name here, and neither do keys computed from an expression
+/// (`[Symbol.iterator]`).
+fn method_name<'a>(sig: &TSSignature<'a>) -> Option<Cow<'a, str>> {
+    let TSSignature::TSMethodSignature(method) = sig else { return None };
+    if method.kind != TSMethodSignatureKind::Method {
+        return None;
+    }
+    method.key.static_name()
+}
+
+/// A member is overloaded when its name carries two or more method signatures.
+/// The property form of an overload set is a nested call-signature literal
+/// (`parse: { (a: string): T; (a: number): T }`) — a different declaration
+/// shape, not a signature-style switch — so an overloaded member leaves the
+/// author no like-for-like all-properties alternative.
+fn has_overloaded_method_signatures(sigs: &oxc_allocator::Vec<'_, TSSignature>) -> bool {
+    sigs.iter().enumerate().any(|(index, sig)| {
+        let Some(name) = method_name(sig) else { return false };
+        sigs[index + 1..].iter().filter_map(method_name).any(|later| later == name)
+    })
+}
+
+/// The property/method mix carries no signal when the method syntax is not a
+/// free stylistic choice: iterator-protocol members and overloaded members
+/// require it, and a call signature marks a hybrid function-object whose mixed
+/// members are an intentional design. Each exemption covers the whole
+/// declaration: `ts-method-signature-style` asks for the reverse rewrite, so
+/// turning the remaining properties into methods is never the way out either.
+fn is_exempt_mix(sigs: &oxc_allocator::Vec<'_, TSSignature>) -> bool {
+    has_iterator_protocol_method(sigs)
+        || has_call_signature(sigs)
+        || has_overloaded_method_signatures(sigs)
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSInterfaceDeclaration, AstType::TSTypeAliasDeclaration]
@@ -92,9 +130,7 @@ impl OxcCheck for Check {
                 if !(has_prop && has_method) {
                     return;
                 }
-                if has_iterator_protocol_method(&iface.body.body)
-                    || has_call_signature(&iface.body.body)
-                {
+                if is_exempt_mix(&iface.body.body) {
                     return;
                 }
                 let name = iface.id.name.as_str();
@@ -121,9 +157,7 @@ impl OxcCheck for Check {
                 if !(has_prop && has_method) {
                     return;
                 }
-                if has_iterator_protocol_method(&lit.members)
-                    || has_call_signature(&lit.members)
-                {
+                if is_exempt_mix(&lit.members) {
                     return;
                 }
                 let name = alias.id.name.as_str();
@@ -321,6 +355,112 @@ interface BaseRequest {
         // not a method signature, so there is no property/method mix to flag.
         let d = run_on("interface OnlyAccessors { data: string; get x(): number; }");
         assert!(d.is_empty());
+    }
+
+    /// Shape of colinhacks/zod `$ZodFunction` (packages/zod/src/v4/core/schemas.ts),
+    /// with `input_signatures` holding either the three `input` overloads or a
+    /// single `input` signature.
+    fn zod_function_interface(input_signatures: &str) -> String {
+        format!(
+            r#"
+export interface $ZodFunction<
+    Args extends $ZodFunctionIn = $ZodFunctionIn,
+    Returns extends $ZodFunctionOut = $ZodFunctionOut,
+> extends $ZodType<any, any, $ZodFunctionInternals<Args, Returns>> {{
+    _def: $ZodFunctionDef<Args, Returns>;
+    _input: $InferInnerFunctionType<Args, Returns>;
+    _output: $InferOuterFunctionType<Args, Returns>;
+
+    implement<F extends $InferInnerFunctionType<Args, Returns>>(func: F): F;
+
+{input_signatures}
+
+    output<NewReturns extends $ZodType>(output: NewReturns): $ZodFunction<Args, NewReturns>;
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn allows_interface_with_overloaded_method() {
+        // Regression rbaumier/comply#6845 (colinhacks/zod) — `input` carries three
+        // overload signatures, whose property form would be a nested call-signature
+        // literal, so the mix with the `_def` / `_input` / `_output` data slots is
+        // forced.
+        let d = run_on(&zod_function_interface(
+            r#"
+    input<const Items extends util.TupleItems, const Rest extends $ZodFunctionOut = $ZodFunctionOut>(
+        args: Items,
+        rest?: Rest
+    ): $ZodFunction<$ZodTuple<Items, Rest>, Returns>;
+    input<NewArgs extends $ZodFunctionIn>(args: NewArgs): $ZodFunction<NewArgs, Returns>;
+    input(...args: any[]): $ZodFunction<any, Returns>;
+"#,
+        ));
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn still_flags_same_interface_without_overloads() {
+        // Non-vacuity control for `allows_interface_with_overloaded_method`: the
+        // same source with `input` collapsed to one signature parses and is
+        // flagged, so the exemption comes from the overload, not from the shape
+        // of the snippet.
+        let d = run_on(&zod_function_interface(
+            "    input<NewArgs extends $ZodFunctionIn>(args: NewArgs): $ZodFunction<NewArgs, Returns>;",
+        ));
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("$ZodFunction"));
+    }
+
+    #[test]
+    fn allows_type_alias_with_overloaded_method() {
+        // Parity with the interface branch: a type literal can carry overloads too.
+        let d = run_on(
+            r#"
+type Parser = {
+    source: string;
+    parse(input: string): Node;
+    parse(input: Buffer, encoding: string): Node;
+};
+"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_interface_with_literal_key_overload() {
+        // A computed literal key (`["parse"]`) names the same member as an
+        // identifier key would, so repeating it is a real overload.
+        let d = run_on(
+            r#"
+interface Codec {
+    data: string;
+    ["parse"](input: string): Node;
+    ["parse"](input: number, radix: number): Node;
+}
+"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn still_flags_mixed_interface_with_get_set_pair() {
+        // A get/set pair repeats a name without being an overload, so it must not
+        // trip the overload exemption: the singleton `refresh` method mixed with
+        // the `data` property is still flagged.
+        let d = run_on(
+            r#"
+interface Store {
+    data: string;
+    get size(): number;
+    set size(v: number);
+    refresh(): void;
+}
+"#,
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Store"));
     }
 
     #[test]
