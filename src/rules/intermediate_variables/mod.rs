@@ -14,7 +14,13 @@
 //!   ops (`==`, `!=`, `<`, `>`, `===`, `!==`, …) and arithmetic ops do
 //!   NOT contribute — they live INSIDE a single condition, not BETWEEN
 //!   conditions.
-//! - Flag when the count is ≥ 2 (three or more chained operands).
+//! - Flag when the count is ≥ 2 (three or more chained operands), and
+//!   at least one operand of the chain is something other than a bare
+//!   identifier. A chain such as `(a || b) && !c` whose operands are
+//!   all names is already decomposed — the remediation asks for names
+//!   and every operand carries one. Parentheses and unary operators
+//!   are transparent; a call, a member/field access or a comparison is
+//!   an unnamed operand.
 //! - Stop the walk at nested callable boundaries (`closure_expression` /
 //!   `function_item` in Rust; `function_declaration` / `function_expression`
 //!   / `arrow_function` / `method_definition` / `generator_function` in

@@ -1,9 +1,11 @@
 //! intermediate-variables Rust backend.
 //!
 //! Flags `if` conditions that chain three or more boolean operands via
-//! `&&` / `||`. The remediation is to extract some of the operands
-//! into named local variables so that the `if` reads as one or two
-//! higher-level checks rather than a flat conjunction of five things.
+//! `&&` / `||` and at least one operand is still an inline expression
+//! — a call, a field access, a comparison. The remediation is to extract
+//! those operands into named local variables so that the `if` reads as
+//! one or two higher-level checks. A chain whose operands are all bare
+//! identifiers carries the names already and is left alone.
 //!
 //! Only the `condition` field of `if_expression` is walked, and the
 //! walk stops at nested callables (`closure_expression`,
@@ -38,10 +40,57 @@ fn count_logical_ops(node: tree_sitter::Node, source: &[u8]) -> usize {
     count
 }
 
+/// Returns the single expression a `parenthesized_expression` or a
+/// `unary_expression` wraps, skipping `line_comment`/`block_comment`
+/// nodes that tree-sitter also reports as named children.
+fn inner_operand(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    (0..node.named_child_count())
+        .filter_map(|i| node.named_child(i))
+        .find(|child| !matches!(child.kind(), "line_comment" | "block_comment"))
+}
+
+/// Reports whether every operand of the `&&` / `||` chain is a bare
+/// identifier.
+///
+/// The walk descends the logical spine plus the two transparent
+/// wrappers a boolean operand can carry — parentheses and a unary
+/// operator (`!`, `*` and `-` are all transparent here; the TS backend
+/// accepts only `!`, since `typeof`/`void` are not names). Every other
+/// node kind is an operand that still holds an unnamed expression: a
+/// call, a field access, a comparison.
+fn every_operand_is_named(node: tree_sitter::Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "identifier" => true,
+        "parenthesized_expression" | "unary_expression" => inner_operand(node)
+            .is_some_and(|operand| every_operand_is_named(operand, source)),
+        "binary_expression" => {
+            let Some(op) = node.child_by_field_name("operator") else {
+                return false;
+            };
+            let Ok(op_text) = op.utf8_text(source) else {
+                return false;
+            };
+            let (Some(left), Some(right)) = (
+                node.child_by_field_name("left"),
+                node.child_by_field_name("right"),
+            ) else {
+                return false;
+            };
+            LOGICAL_OPS.contains(&op_text)
+                && every_operand_is_named(left, source)
+                && every_operand_is_named(right, source)
+        }
+        _ => false,
+    }
+}
+
 crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
     let Some(condition) = node.child_by_field_name("condition") else { return };
     let min_ops = ctx.config.threshold("intermediate-variables", "min_ops", ctx.lang);
     if count_logical_ops(condition, source) < min_ops {
+        return;
+    }
+    if every_operand_is_named(condition, source) {
         return;
     }
     let pos = condition.start_position();
@@ -50,7 +99,7 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "intermediate-variables".into(),
-        message: "`if` condition chains three or more boolean operands \u{2014} extract parts into named local variables.".into(),
+        message: "`if` condition chains three or more boolean operands \u{2014} extract the inline parts into named local variables.".into(),
         severity: Severity::Error,
         span: None,
     });
@@ -82,21 +131,69 @@ mod tests {
 
     #[test]
     fn flags_three_operand_and_chain() {
-        let src = "fn f() { if a && b && c { x(); } }";
+        let src = "fn f() { if a.is_open() && b.len() > 0 && c.ready { x(); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn flags_four_operand_or_chain() {
-        let src = "fn f() { if a || b || c || d { x(); } }";
+        let src = "fn f() { if a.x() || b.y() || c.z() || d.w() { x(); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn flags_mixed_and_or() {
-        let src = "fn f() { if a && b || c { x(); } }";
+        let src = "fn f() { if a.p() && b.q() || c.r() { x(); } }";
         // 1 && + 1 || = 2 logical ops → flag.
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_chain_of_named_operands() {
+        let src = "fn f() { if a && b && c { x(); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// tree-sitter reports comments as named children, so the walk into a
+    /// parenthesized operand must step over them.
+    #[test]
+    fn allows_named_operands_around_a_comment() {
+        let block = "fn f() { if (/* why */ a || b) && !c { x(); } }";
+        assert!(run_on(block).is_empty());
+        let line = "fn f() { if (\n    // why\n    a || b\n) && !c { x(); } }";
+        assert!(run_on(line).is_empty());
+    }
+
+    /// Regression for #6816: clap's `parser.rs` names every operand of
+    /// the chain in a preceding `let`, so the remediation is already
+    /// applied and the diagnostic has nothing to ask for.
+    #[test]
+    fn allows_parenthesized_and_negated_named_operands() {
+        let src = r#"
+fn f() {
+    let low_index_mults = self
+        .cmd
+        .get_positionals()
+        .any(|a| a.get_num_args().expect("built").max_values() > 1 && a.get_index().is_some())
+        && !trailing_values;
+
+    let is_terminated = self
+        .cmd
+        .get_keymap()
+        .get(&pos_counter)
+        .map(|a| a.get_value_terminator().is_some())
+        .unwrap_or_default();
+
+    let missing_pos = self.cmd.is_allow_missing_positional_set()
+        && is_second_to_last
+        && !trailing_values;
+
+    if (low_index_mults || missing_pos) && !is_terminated {
+        go();
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
