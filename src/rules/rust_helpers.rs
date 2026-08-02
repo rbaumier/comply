@@ -7668,6 +7668,237 @@ fn call_is_count_accessor(call: Node, source: &[u8]) -> bool {
         })
 }
 
+/// True when `node` sits in the `consequence` (never the `else`) of an enclosing
+/// `if` whose condition satisfies `is_guard`. Every ancestor `if_expression` is
+/// walked, so a guard several blocks up still counts.
+pub fn is_under_if_guard(
+    node: Node,
+    source: &[u8],
+    is_guard: impl Fn(Node, &[u8]) -> bool,
+) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "if_expression"
+            && parent.child_by_field_name("consequence") == Some(current)
+            && parent
+                .child_by_field_name("condition")
+                .is_some_and(|cond| is_guard(cond, source))
+        {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// True when `node` sits in the `then` branch of an enclosing `if` whose
+/// condition is an environment-variable opt-in check — `env::var(KEY).is_ok()`,
+/// `env::var_os(KEY).is_some()`, or `env::var(KEY).as_deref() ==/!= Ok("…")`,
+/// each with the `std::` prefix optional. The check counts whether it is
+/// written in the `if` itself or read through the local it is bound to
+/// (`let debugging = env::var(KEY).is_ok(); if debugging { … }`), so resolution
+/// follows the scope, not the name the author picked.
+///
+/// Diagnostics under such a gate run only once the consumer sets the variable:
+/// they are an opt-in debug mode the author committed on purpose, not output
+/// every consumer receives.
+pub fn is_under_env_var_gate(node: Node, source: &[u8]) -> bool {
+    is_under_if_guard(node, source, is_env_var_gate_condition)
+}
+
+/// True when `cond` is an environment-variable opt-in check, either written out
+/// or reached through the local `let` binding an identifier resolves to. See
+/// [`is_under_env_var_gate`].
+fn is_env_var_gate_condition(cond: Node, source: &[u8]) -> bool {
+    is_env_var_opt_in_check(cond, source)
+        || (cond.kind() == "identifier" && local_binding_is_env_var_check(cond, source))
+}
+
+/// True when the identifier `ident` resolves to a local `let` whose initializer
+/// is an environment-variable check. Scopes are walked innermost-first and the
+/// nearest preceding binding decides, so a shadowing rebind to something else
+/// (`let dbg_on = env::var(KEY).is_ok(); let dbg_on = other;`) no longer gates.
+///
+/// Resolution stops where the name is re-bound on the way out: at the enclosing
+/// `function_item`, because a nested `fn` captures nothing from its parent, and
+/// at a `closure_expression` or `for_expression` whose binder introduces the
+/// same name. A `static` or a `const` is not a `let`, so it never gates, and a
+/// later assignment to a `mut` binding does not change the verdict.
+///
+/// A `match` arm binder and an `if let` / `while let` binder are not tracked: a
+/// same-named binding there resolves to the enclosing `let` and gates. Both are
+/// conservative — they exempt rather than flag.
+fn local_binding_is_env_var_check(ident: Node, source: &[u8]) -> bool {
+    let Ok(name) = ident.utf8_text(source) else {
+        return false;
+    };
+    let mut current = ident.parent();
+    while let Some(n) = current {
+        if matches!(n.kind(), "block" | "source_file")
+            && let Some(value) = nearest_binding_value_before(n, ident.start_byte(), name, source)
+        {
+            return is_env_var_opt_in_check(value, source);
+        }
+        if n.kind() == "function_item"
+            || (matches!(n.kind(), "closure_expression" | "for_expression")
+                && n.child_by_field_name("parameters")
+                    .or_else(|| n.child_by_field_name("pattern"))
+                    .is_some_and(|binder| pattern_contains_identifier(binder, name, source)))
+        {
+            return false;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// True when `cond` is an environment-variable opt-in check, in either shape:
+///
+/// - presence — `env::var(KEY).is_ok()` / `env::var_os(KEY).is_some()`: a
+///   `.is_ok()` / `.is_some()` method call whose receiver is a call to
+///   `env::var` / `env::var_os`, or
+/// - value-equality — `env::var(KEY).as_deref() == Ok("…")` (or the `!=`
+///   form): an `env::var(...).as_deref()` operand compared against an
+///   `Ok(<string_literal>)`.
+///
+/// Both are `std::`-prefix optional. The value-equality form is a strictly
+/// stronger opt-in — the gated code fires only when the consumer sets the
+/// variable to that specific value — so it is a runtime opt-in like the
+/// presence form.
+fn is_env_var_opt_in_check(cond: Node, source: &[u8]) -> bool {
+    // `env::var(KEY).as_deref() ==/!= Ok("value")`
+    if cond.kind() == "binary_expression" {
+        return is_env_var_value_equality(cond, source);
+    }
+    // `<receiver>.is_ok()` / `<receiver>.is_some()`
+    if cond.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = cond.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    let presence_ok = func
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|m| m == "is_ok" || m == "is_some");
+    if !presence_ok {
+        return false;
+    }
+    // The receiver must be a call to `env::var` / `env::var_os`.
+    func.child_by_field_name("value")
+        .is_some_and(|recv| is_env_var_call(recv, source))
+}
+
+/// True when `cond` is `env::var(KEY).as_deref() == Ok("…")` or the `!=`
+/// form: a `==`/`!=` `binary_expression` with one operand an
+/// `env::var(...).as_deref()` call and the other an `Ok(<string_literal>)`.
+/// The order of the two operands is not constrained.
+fn is_env_var_value_equality(cond: Node, source: &[u8]) -> bool {
+    let is_eq_or_ne = cond
+        .child_by_field_name("operator")
+        .and_then(|op| op.utf8_text(source).ok())
+        .is_some_and(|op| op == "==" || op == "!=");
+    if !is_eq_or_ne {
+        return false;
+    }
+    let (Some(left), Some(right)) = (
+        cond.child_by_field_name("left"),
+        cond.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    (is_env_var_as_deref_call(left, source) && is_ok_string_literal(right, source))
+        || (is_env_var_as_deref_call(right, source) && is_ok_string_literal(left, source))
+}
+
+/// True when `node` is `env::var(KEY).as_deref()` — an `.as_deref()` method
+/// call whose receiver is a call to `env::var` / `env::var_os`.
+fn is_env_var_as_deref_call(node: Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    let is_as_deref = func
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|m| m == "as_deref");
+    if !is_as_deref {
+        return false;
+    }
+    func.child_by_field_name("value")
+        .is_some_and(|recv| is_env_var_call(recv, source))
+}
+
+/// True when `node` is `Ok("<literal>")` — a call to the `Ok` variant (bare
+/// or path-qualified) with a single string-literal argument.
+fn is_ok_string_literal(node: Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let is_ok = node
+        .child_by_field_name("function")
+        .and_then(|f| f.utf8_text(source).ok())
+        .and_then(|name| name.rsplit("::").next())
+        == Some("Ok");
+    if !is_ok {
+        return false;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    args.named_child_count() == 1
+        && args
+            .named_child(0)
+            .is_some_and(|arg| arg.kind() == "string_literal")
+}
+
+/// True when `node` is a call whose callee path ends in `env::var` or
+/// `env::var_os` — i.e. the final segment is `var`/`var_os` and the
+/// segment before it is `env` (matches `std::env::var_os`, `env::var`, …).
+fn is_env_var_call(node: Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "scoped_identifier" {
+        return false;
+    }
+    let Some(name) = func
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    if name != "var" && name != "var_os" {
+        return false;
+    }
+    // The qualifier directly before `var`/`var_os` must be `env`.
+    func.child_by_field_name("path")
+        .is_some_and(|path| trailing_path_segment(path, source) == Some("env"))
+}
+
+/// The final segment of a path: the `name` of a `scoped_identifier`
+/// (`std::env` → `env`) or the text of a bare `identifier` (`env` → `env`).
+pub fn trailing_path_segment<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    match node.kind() {
+        "identifier" => node.utf8_text(source).ok(),
+        "scoped_identifier" => node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7708,6 +7939,86 @@ mod tests {
             }
         }
         None
+    }
+
+    /// Find the first `macro_invocation` node anywhere in the tree.
+    fn first_macro_invocation(node: Node) -> Option<Node> {
+        if node.kind() == "macro_invocation" {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_macro_invocation(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn is_under_env_var_gate_resolves_inline_and_bound_conditions() {
+        let cases = [
+            (r#"fn f() { if std::env::var("K").is_ok() { dbg!(x); } }"#, true),
+            (r#"fn f() { if env::var_os("K").is_some() { dbg!(x); } }"#, true),
+            (
+                r#"fn f() { if env::var("K").as_deref() == Ok("1") { dbg!(x); } }"#,
+                true,
+            ),
+            // The check bound to a local, read by name at the `if`.
+            (
+                r#"fn f() { let d = std::env::var("K").is_ok(); if d { dbg!(x); } }"#,
+                true,
+            ),
+            (
+                r#"fn f() { let mut d = std::env::var("K").is_ok(); if d { dbg!(x); } }"#,
+                true,
+            ),
+            // A closure captures the binding; a closure parameter shadows it.
+            (
+                r#"fn f() { let d = std::env::var("K").is_ok(); go(|| if d { dbg!(x); }); }"#,
+                true,
+            ),
+            (
+                r#"fn f() { let d = std::env::var("K").is_ok(); go(|d: bool| if d { dbg!(x); }); }"#,
+                false,
+            ),
+            // A nested `fn` captures nothing from its parent.
+            (
+                r#"fn f() { let d = std::env::var("K").is_ok(); fn g(d: bool) { if d { dbg!(x); } } }"#,
+                false,
+            ),
+            // A loop body reads the enclosing binding; a `for` binder shadows it.
+            (
+                r#"fn f() { let d = std::env::var("K").is_ok(); for x in xs { if d { dbg!(x); } } }"#,
+                true,
+            ),
+            (
+                r#"fn f() { let d = std::env::var("K").is_ok(); for d in ds { if d { dbg!(x); } } }"#,
+                false,
+            ),
+            // The local carries something else, so the name alone never gates.
+            (r#"fn f() { let d = compute(); if d { dbg!(x); } }"#, false),
+            // The `else` arm runs when the variable is unset.
+            (
+                r#"fn f() { if std::env::var("K").is_ok() { g(); } else { dbg!(x); } }"#,
+                false,
+            ),
+            // A negated gate is not "the variable is set".
+            (
+                r#"fn f() { if !std::env::var("K").is_ok() { dbg!(x); } }"#,
+                false,
+            ),
+        ];
+        for (source, expected) in cases {
+            let tree = parse(source);
+            let macro_node = first_macro_invocation(tree.root_node())
+                .expect("source should contain a macro invocation");
+            assert_eq!(
+                is_under_env_var_gate(macro_node, source.as_bytes()),
+                expected,
+                "source: {source}"
+            );
+        }
     }
 
     /// Find the first `type_cast_expression` node anywhere in the tree.
