@@ -1,6 +1,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{ClassShape, byte_offset_to_line_col, enclosing_class};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 pub struct Check;
@@ -107,10 +109,7 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            let name = match &method_def.key {
-                oxc_ast::ast::PropertyKey::StaticIdentifier(ident) => ident.name.as_str(),
-                _ => "<computed>",
-            };
+            let label = method_label(method_def, ctx.source);
 
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, method_def.span.start as usize);
@@ -120,7 +119,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Method `{name}` does not use `this` — make it `static` \
+                    "Method `{label}` does not use `this` — make it `static` \
                      or extract to a standalone function."
                 ),
                 severity: Severity::Error,
@@ -129,6 +128,26 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+/// Labels the method with the source text of its key, which the reader can
+/// search for. The key span covers every form: `foo`, `#foo` (sigil included),
+/// `'foo bar'`, `42`. A computed key gets its brackets back. A key written over
+/// several lines folds onto one, because the text output holds one diagnostic
+/// per line.
+fn method_label<'a>(method_def: &oxc_ast::ast::MethodDefinition, source: &'a str) -> Cow<'a, str> {
+    let span = method_def.key.span();
+    let key_text = &source[span.start as usize..span.end as usize];
+    let key_text: Cow<'a, str> = if key_text.contains(['\n', '\r']) {
+        Cow::Owned(key_text.split_whitespace().collect::<Vec<_>>().join(" "))
+    } else {
+        Cow::Borrowed(key_text)
+    };
+    if method_def.computed {
+        Cow::Owned(format!("[{key_text}]"))
+    } else {
+        key_text
     }
 }
 
@@ -454,6 +473,74 @@ mod tests {
                    usesImplicitTransactions(): boolean { return true; }\n\
                    }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn names_private_methods_with_their_hash_sigil() {
+        // Issue #6818: `#isJsonContentType` / `#getCurrentTime` are `#private`
+        // methods of `sindresorhus/ky`'s `Ky` class. Both are still candidates
+        // for `static`, but the diagnostic must name them so the reader can find
+        // them without cross-referencing the line number.
+        let src = "class Ky {\n\
+                   #isJsonContentType(contentType: string): boolean {\n\
+                   const mimeType = (contentType.split(';', 1)[0] ?? '').trim().toLowerCase();\n\
+                   return /\\/(?:.*[.+-])?json$/.test(mimeType);\n\
+                   }\n\
+                   #getCurrentTime(): number {\n\
+                   return globalThis.performance?.now() ?? Date.now();\n\
+                   }\n\
+                   }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 2);
+        assert!(diags[0].message.contains("`#isJsonContentType`"));
+        assert!(diags[1].message.contains("`#getCurrentTime`"));
+    }
+
+    #[test]
+    fn allows_private_method_using_this() {
+        // Negative space for #6818: a `#private` method that reads `this` stays
+        // silent.
+        let src = "class Ky { #currentTime(): number { return this.now; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn names_literal_keyed_methods() {
+        // A string or numeric key renders as written.
+        let diags = run_on("class Foo { 'do work'() { return 1; } 42() { return 2; } }");
+        assert_eq!(diags.len(), 2);
+        assert!(diags[0].message.contains("`'do work'`"));
+        assert!(diags[1].message.contains("`42`"));
+    }
+
+    #[test]
+    fn names_computed_method_with_its_brackets() {
+        // A computed key has no name, so the diagnostic shows the expression as
+        // written, brackets included.
+        let diags = run_on("class Foo { [KEY]() { return 1; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`[KEY]`"));
+    }
+
+    #[test]
+    fn names_multiline_computed_method_on_one_line() {
+        // A computed key written across several lines renders on one.
+        let src = "class Foo {\n\
+                   [KEY\n\
+                   .toUpperCase()]() { return 1; }\n\
+                   }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`[KEY .toUpperCase()]`"));
+        assert!(!diags[0].message.contains('\n'));
+    }
+
+    #[test]
+    fn names_line_continuation_string_keyed_method_on_one_line() {
+        // A string key split with a line continuation folds onto one line too.
+        let diags = run_on("class Foo { 'multi\\\nline'() { return 1; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(!diags[0].message.contains('\n'));
     }
 
     #[test]
