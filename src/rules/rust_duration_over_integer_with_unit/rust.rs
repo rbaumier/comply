@@ -49,6 +49,11 @@
 //! impl, so the integer type is not chosen at the flagged site. Inherent-impl
 //! methods, free functions, and struct fields still flag — there the unit-in-name
 //! design is the author's own.
+//! A parameter or field marked intentionally unused — a leading underscore,
+//! `_timeout_ms: u64` — is exempted. The underscore is Rust's marker for a name
+//! the author declares unread. It silences rustc's `unused_variables` for a
+//! parameter and `dead_code` for a field. No computation consumes the value, so
+//! the unit in the name is never applied and `Duration` would type-check nothing.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -132,6 +137,7 @@ impl AstCheck for Check {
             && let Some(type_node) = node.child_by_field_name("type")
             && let Ok(name) = name_node.utf8_text(source_bytes)
             && let Ok(type_text) = type_node.utf8_text(source_bytes)
+            && !is_marked_intentionally_unused(name)
             && has_time_unit_suffix(name)
             && is_integer_type(type_text)
             && !mirrors_atomic_counter(node, name, source_bytes)
@@ -152,12 +158,19 @@ impl AstCheck for Check {
             && let Some(type_node) = node.child_by_field_name("type")
             && let Ok(name) = pattern.utf8_text(source_bytes)
             && let Ok(type_text) = type_node.utf8_text(source_bytes)
+            && !is_marked_intentionally_unused(name)
             && has_time_unit_suffix(name)
             && is_integer_type(type_text)
         {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
         }
     }
+}
+
+/// True when a name carries Rust's leading-underscore marker for a parameter or
+/// field the author declares unread.
+fn is_marked_intentionally_unused(name: &str) -> bool {
+    name.starts_with('_')
 }
 
 fn has_time_unit_suffix(name: &str) -> bool {
@@ -663,11 +676,13 @@ pub(crate) struct RequestData {
     fn allows_trait_impl_method_param() {
         // embedded-hal `DelayNs`: the `u32` is mandated by the trait signature;
         // the implementor cannot change it (and the crate is `no_std`, so
-        // `Duration` is unavailable). Regression for #4718.
+        // `Duration` is unavailable). The binding carries a unit suffix and is
+        // read, so only the trait-impl exemption can silence it. Regression for
+        // #4718.
         let source = "\
-struct NoDelay;
-impl embedded_hal::delay::DelayNs for NoDelay {
-    fn delay_ns(&mut self, _ns: u32) {}
+struct Spin;
+impl embedded_hal::delay::DelayNs for Spin {
+    fn delay_ns(&mut self, wait_ns: u32) { spin(wait_ns); }
 }";
         assert!(run_on(source).is_empty());
     }
@@ -675,9 +690,9 @@ impl embedded_hal::delay::DelayNs for NoDelay {
     #[test]
     fn allows_async_trait_impl_method_param() {
         let source = "\
-struct NoDelay;
-impl embedded_hal_async::delay::DelayNs for NoDelay {
-    async fn delay_ns(&mut self, _ns: u32) {}
+struct Spin;
+impl embedded_hal_async::delay::DelayNs for Spin {
+    async fn delay_ns(&mut self, wait_ns: u32) { spin(wait_ns).await; }
 }";
         assert!(run_on(source).is_empty());
     }
@@ -758,5 +773,45 @@ struct FileId {
             run_on("struct X { a_seconds: i64, b_nanoseconds: i64 }").len(),
             2
         );
+    }
+
+    #[test]
+    fn allows_underscore_prefixed_unused_parameter() {
+        // zellij `query_webserver_with_response`: `_timeout_ms` is never read, so
+        // the unit in its name reaches no computation and a `Duration` would
+        // type-check nothing. Regression for #6817.
+        let source = "\
+pub fn query_webserver_with_response(
+    path: &str,
+    instruction: InstructionForWebServer,
+    _timeout_ms: u64,
+) -> Result<WebServerResponse> {
+    let mut sender = create_webserver_sender(path)?;
+    send_webserver_instruction(&mut sender, instruction)?;
+    receive_webserver_response(sender.into_inner()?)
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_same_parameter_without_the_underscore() {
+        // The same parameter with a read binding: the unit-in-name design is live
+        // and still flags, so the exemption does not neuter the check.
+        assert_eq!(run_on("pub fn f(timeout_ms: u64) -> u64 { timeout_ms }").len(), 1);
+    }
+
+    #[test]
+    fn allows_mut_underscore_prefixed_parameter() {
+        // `mut` is a sibling of the pattern node, not part of it, so the marker
+        // stays the first character of the parameter's name.
+        assert!(run_on("fn f(mut _timeout_ms: u64) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_prefixed_struct_field() {
+        // rustc's `dead_code` reads the underscore on a field exactly as
+        // `unused_variables` reads it on a parameter: the field is never read, so
+        // its type is never observed and a `Duration` would type-check nothing.
+        assert!(run_on("struct S { _timeout_ms: u64 }").is_empty());
     }
 }
