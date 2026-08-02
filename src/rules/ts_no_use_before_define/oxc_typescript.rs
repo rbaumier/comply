@@ -66,13 +66,27 @@
 //! then. The expression stays flagged when it could run during the synchronous
 //! initialization pass that precedes the declaration: an IIFE, or a variable
 //! that is *eagerly* called before the declaration (`const f = () => later;
-//! f(); const later = 1`). A call counts as eager only when its own site runs at
-//! module-evaluation time; a call nested inside another deferred body does not
-//! (`const g = () => f(); const later = 1` stays safe). An anonymous
+//! f(); const later = 1`). A call counts as eager when its own site runs in the
+//! same synchronous pass as the declaration — module evaluation, or the run of
+//! the function body that holds the declaration; a call nested inside another
+//! deferred body does not (`const g = () => f(); const later = 1` stays safe).
+//! The ternary/logical/parenthesis wrappers extend to the type-erased `as` and
+//! `satisfies` assertions, which the runtime never sees. An anonymous
 //! function/arrow expression passed straight to a call
 //! (`someFn((x) => later)`) is not deferred this way — the callee may invoke it
 //! eagerly — so it stays flagged unless a more specific exemption (React hook,
 //! test runner, decorator thunk, ...) applies.
+//!
+//! A function/arrow expression *stored in* an object or array literal bound to a
+//! variable (`const combinators = { [OR]: (a, b) => ... }`) is deferred the same
+//! way, whatever the property spelling — computed key, string key, shorthand
+//! method or accessor. Building a literal never calls what it holds; the stored
+//! expression runs only once something reaches into the literal through the
+//! variable. The trigger is therefore wider than for a directly bound expression:
+//! any *eager read* of the variable before the referenced binding's declaration
+//! line keeps the reference flagged (`const h = { run: () => later }; h.run();
+//! const later = 1`), because a call, a getter read and a setter write all go
+//! through such a read.
 //!
 //! Also skips forward references made from inside a function/arrow *expression*
 //! that lives inside a decorator (`@Decorator(...)`) — the lazy-thunk pattern
@@ -513,21 +527,28 @@ fn is_inside_deferred_definition<'a>(
 /// True when a function/arrow *expression* node runs only on later invocation,
 /// so a binding declared before `decl_start` in an enclosing scope is already
 /// initialized by the time the expression's body runs. An expression is deferred
-/// when it is assigned to a variable that is never *called* before `decl_start`.
+/// when it belongs to a variable whose value cannot have been reached — and so
+/// cannot have run the expression — before `decl_start`.
 ///
 /// It is NOT deferred — and the forward reference stays flagged — when it could
 /// run during the synchronous initialization pass before the declaration:
 /// - an IIFE (`(() => x)()`), which runs immediately;
-/// - an anonymous expression not bound to a variable (e.g. passed straight to a
+/// - an anonymous expression with no owning variable (e.g. passed straight to a
 ///   call as in `someFn((x) => later)`), since the callee may invoke it eagerly;
-/// - a variable whose value is the expression and that is *eagerly* called before
-///   `decl_start` (`const f = () => later; f(); const later = 1`). "Called before"
-///   means the call site itself runs during module evaluation: a call nested in
-///   another deferred function body (`const g = () => f(); const later = 1`) runs
-///   only when that body is later invoked, so it does not make the expression
-///   eager. (Tolerated contrived false negative: a call inside a named function
-///   that is itself eagerly invoked is treated as deferred — see
-///   `call_is_eagerly_reachable`.)
+/// - a variable holding the expression itself and *eagerly* called before
+///   `decl_start` (`const f = () => later; f(); const later = 1`);
+/// - a variable holding a literal that *stores* the expression
+///   (`const handlers = { run: () => later }`) and eagerly read before
+///   `decl_start` (`handlers.run(); const later = 1`): reaching into the literal
+///   is the only way to invoke what it stores, so any eager read may run it.
+///
+/// "Before `decl_start`" counts only sites that share a synchronous pass with
+/// the declaration — module evaluation, or the run of the function body that
+/// holds the declaration. A call or read nested in another deferred function
+/// body (`const g = () => f(); const later = 1`) runs only when that body is
+/// later invoked. (Tolerated contrived false negative: a site inside a named
+/// function that is itself eagerly invoked is treated as deferred — see
+/// `is_eagerly_reachable`.)
 fn is_deferred_function_expression<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     scoping: &Scoping,
@@ -537,31 +558,57 @@ fn is_deferred_function_expression<'a>(
     if crate::oxc_helpers::function_is_immediately_invoked(nodes, func_id) {
         return false;
     }
-    let Some(symbol_id) = function_expression_binding(nodes, func_id) else {
+    let Some((symbol_id, reach)) = function_expression_binding(nodes, func_id) else {
         return false;
     };
-    !binding_called_before(nodes, scoping, symbol_id, decl_start)
+    match reach {
+        BindingReach::IsValue => !binding_called_before(nodes, scoping, symbol_id, decl_start),
+        BindingReach::StoredInValue => !binding_read_before(nodes, scoping, symbol_id, decl_start),
+    }
 }
 
-/// The symbol of the variable a function/arrow expression is ultimately
-/// assigned to (`const App = () => ...`), or `None` when the expression is not
-/// bound to a simple variable (anonymous argument, object-property value,
-/// return value, ...). The expression may reach its `VariableDeclarator`
-/// through transparent *selector* wrappers — a ternary
-/// (`const f = cond ? () => ... : () => ...`), a `&&`/`||`/`??`
-/// (`const f = enabled && (() => ...)`), or parentheses. None of those invokes
-/// the arrow; they only choose which expression becomes the variable's value,
-/// so an arrow reached through them is bound to the variable and runs only when
-/// that variable is later called — exactly like the direct form. A
-/// non-transparent parent (a `CallExpression` making the arrow an IIFE or a
-/// call argument, ...) stops the walk and yields `None`. Only a plain binding
+/// How a function/arrow expression relates to the value of the variable it
+/// belongs to. The distinction decides what makes the expression run early:
+/// calling the variable, or merely reading it.
+enum BindingReach {
+    /// The expression *is* the variable's value (`const f = () => ...`), so only
+    /// calling the variable runs it.
+    IsValue,
+    /// The expression is *stored inside* the variable's value — an object or
+    /// array literal (`const handlers = { run: () => ... }`). Reaching into that
+    /// literal is the only way to trigger the expression, so any read of the
+    /// variable may run it.
+    StoredInValue,
+}
+
+/// The variable a function/arrow expression belongs to (`const App = () => ...`,
+/// `const handlers = { run: () => ... }`) and how it relates to that variable's
+/// value, or `None` when the expression has no owning variable (anonymous call
+/// argument, return value, ...).
+///
+/// The expression may reach its `VariableDeclarator` through two kinds of
+/// transparent wrapper, neither of which invokes it:
+/// - *selectors* — a ternary (`const f = cond ? () => ... : () => ...`), a
+///   `&&`/`||`/`??` (`const f = enabled && (() => ...)`), parentheses, or a
+///   type-erased assertion (`as const`, `satisfies H`). They only choose which
+///   expression becomes the variable's value, so the expression still *is* that
+///   value (`BindingReach::IsValue`).
+/// - *containers* — object and array literals, whatever the property spelling
+///   (computed key, shorthand method, accessor). They store the expression in the
+///   variable's value (`BindingReach::StoredInValue`); building a literal never
+///   calls what it holds, and every way of triggering what it holds — a call, a
+///   getter read, a setter write — goes through a read of the variable.
+///
+/// A non-transparent parent (a `CallExpression` making the expression an IIFE or
+/// a call argument, ...) stops the walk and yields `None`. Only a plain binding
 /// identifier counts; a destructuring pattern has no single owning symbol and
 /// returns `None`.
 fn function_expression_binding<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     func_id: NodeId,
-) -> Option<oxc_semantic::SymbolId> {
+) -> Option<(oxc_semantic::SymbolId, BindingReach)> {
     let mut current = func_id;
+    let mut reach = BindingReach::IsValue;
     loop {
         let parent_id = nodes.parent_id(current);
         match nodes.kind(parent_id) {
@@ -569,11 +616,19 @@ fn function_expression_binding<'a>(
                 let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id else {
                     return None;
                 };
-                return id.symbol_id.get();
+                return id.symbol_id.get().map(|symbol_id| (symbol_id, reach));
             }
             AstKind::ConditionalExpression(_)
             | AstKind::LogicalExpression(_)
-            | AstKind::ParenthesizedExpression(_) => current = parent_id,
+            | AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_) => current = parent_id,
+            AstKind::ObjectProperty(_)
+            | AstKind::ObjectExpression(_)
+            | AstKind::ArrayExpression(_) => {
+                reach = BindingReach::StoredInValue;
+                current = parent_id;
+            }
             _ => return None,
         }
     }
@@ -582,9 +637,11 @@ fn function_expression_binding<'a>(
 /// True when the binding is the callee of an *eager* call expression whose call
 /// site starts before `decl_start` — meaning the function/arrow it holds runs
 /// during the synchronous initialization pass that precedes the declaration. A
-/// call only counts when its own site is reachable during module evaluation: a
-/// call nested inside another deferred function body executes only when that body
-/// is later invoked, not eagerly, so it does not run the bound expression early.
+/// call only counts when its own site shares a synchronous pass with the
+/// declaration — module evaluation, or the run of the function body that holds
+/// the declaration; a call nested inside another deferred function body executes
+/// only when that body is later invoked, not eagerly, so it does not run the
+/// bound expression early.
 fn binding_called_before(
     nodes: &oxc_semantic::AstNodes,
     scoping: &Scoping,
@@ -603,21 +660,56 @@ fn binding_called_before(
         let AstKind::CallExpression(call) = nodes.kind(nodes.parent_id(ref_id)) else {
             return false;
         };
-        call.callee.span() == ref_span && call_is_eagerly_reachable(nodes, ref_id)
+        call.callee.span() == ref_span && is_eagerly_reachable(nodes, ref_id, decl_start)
     })
 }
 
-/// True when the node `call_ref_id` (a call's callee reference) executes during
-/// the synchronous module-evaluation pass — i.e. it is not nested inside a
-/// deferred function body. Walking ancestors to the `Program`, a `Function` /
-/// `ArrowFunctionExpression` boundary defers the call UNLESS that function is
-/// immediately invoked (an IIFE runs eagerly). Conservative on one rare chain:
-/// a call inside a named function that is itself eagerly invoked is treated as
-/// deferred (a tolerated, contrived false negative — see the rule docblock).
-fn call_is_eagerly_reachable(nodes: &oxc_semantic::AstNodes, call_ref_id: NodeId) -> bool {
-    for ancestor_id in nodes.ancestor_ids(call_ref_id) {
+/// True when an *eager* read of `symbol_id` starts before `decl_start`. Applies
+/// to a function/arrow expression stored in an object or array literal: reaching
+/// into that literal through its variable is the only way to trigger the stored
+/// expression, so an eager read is what could run it during the synchronous
+/// initialization pass that precedes the declaration. Reads nested in another
+/// deferred function body run only when that body is later invoked and do not
+/// count. A write-only reference (`handlers = otherLiteral`) replaces the value
+/// instead of reaching into it, so it cannot trigger what the old literal holds.
+fn binding_read_before(
+    nodes: &oxc_semantic::AstNodes,
+    scoping: &Scoping,
+    symbol_id: oxc_semantic::SymbolId,
+    decl_start: u32,
+) -> bool {
+    scoping.get_resolved_references(symbol_id).any(|reference| {
+        reference.is_read()
+            && nodes.kind(reference.node_id()).span().start < decl_start
+            && is_eagerly_reachable(nodes, reference.node_id(), decl_start)
+    })
+}
+
+/// True when `node_id` shares a synchronous pass with the declaration starting
+/// at `decl_start` — the module-evaluation pass, or one execution of the function
+/// body that holds the declaration. Callers must already know `node_id` starts
+/// before `decl_start`, which turns a `true` answer into "runs first".
+///
+/// Walking ancestors to the `Program`, the innermost `Function` /
+/// `ArrowFunctionExpression` boundary decides:
+/// - it holds the declaration too (`decl_start` is inside its span): both run in
+///   one execution of that body, in source order;
+/// - it is immediately invoked: the IIFE runs in the surrounding synchronous
+///   flow, so the walk continues outward;
+/// - otherwise the body runs only on a later invocation, which defers `node_id`.
+///
+/// Conservative on one rare chain: a node inside a named function that is itself
+/// eagerly invoked is treated as deferred (a tolerated, contrived false negative
+/// — see the rule docblock).
+fn is_eagerly_reachable(nodes: &oxc_semantic::AstNodes, node_id: NodeId, decl_start: u32) -> bool {
+    debug_assert!(nodes.kind(node_id).span().start < decl_start);
+    for ancestor_id in nodes.ancestor_ids(node_id) {
         match nodes.kind(ancestor_id) {
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                let func_span = nodes.kind(ancestor_id).span();
+                if func_span.start <= decl_start && decl_start < func_span.end {
+                    return true;
+                }
                 if !crate::oxc_helpers::function_is_immediately_invoked(nodes, ancestor_id) {
                     return false;
                 }
@@ -1961,5 +2053,238 @@ mod tests {
             );
             assert!(d[0].message.contains("`later`"));
         }
+    }
+
+    // Regression for #6824: a module-scoped object literal maps computed keys to
+    // arrow functions that call a helper declared at the bottom of the file. The
+    // literal only stores the arrows; they run when `combineResults` indexes the
+    // map, long after module evaluation initialized the helper.
+    #[test]
+    fn no_fp_arrow_stored_in_object_literal_with_computed_keys_issue_6824() {
+        let source = "const combinators = {\n\
+                      [OR]: (a, b) => {\n\
+                      assignUniqueTerms(a.terms, b.terms);\n\
+                      return a;\n\
+                      },\n\
+                      [AND]: (a, b) => {\n\
+                      assignUniqueTerms(a.terms, b.terms);\n\
+                      return b;\n\
+                      },\n\
+                      };\n\
+                      export const combineResults = (a, b, op) => combinators[op](a, b);\n\
+                      const assignUniqueTerms = (target, source) => target.concat(source);";
+        assert!(
+            run_on(source).is_empty(),
+            "arrows stored in an object literal should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_shorthand_method_in_object_literal_issue_6824() {
+        // A shorthand method is stored the same way a property arrow is.
+        let source = "const handlers = {\n\
+                      run() { return helper(); },\n\
+                      };\n\
+                      export const start = () => handlers.run();\n\
+                      const helper = () => 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "shorthand method in an object literal should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_arrow_stored_in_array_literal_issue_6824() {
+        // An array literal stores its arrows exactly like an object literal.
+        let source = "const steps = [() => helper()];\n\
+                      export const runAll = () => steps.map((s) => s());\n\
+                      const helper = () => 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "arrow stored in an array literal should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_arrow_stored_in_object_literal_read_eagerly_issue_6824() {
+        // Negative space: the literal is indexed at module top level before
+        // `helper` is initialized, so the stored arrow runs inside the TDZ.
+        let d = run_on(
+            "const handlers = { run: () => helper() };\n\
+             export const boot = handlers.run();\n\
+             const helper = () => 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an eagerly-read object literal must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`helper`"));
+    }
+
+    #[test]
+    fn still_flags_object_literal_accessor_triggered_eagerly_issue_6824() {
+        // Negative space: reading `config.value` runs the getter, and assigning
+        // `config.value` runs the setter — both during module evaluation, before
+        // `later` is initialized.
+        let cases = [
+            ("get value() { return later; }", "export const v = config.value;"),
+            ("set value(v) { use(later, v); }", "config.value = 2;"),
+        ];
+        for (accessor, trigger) in cases {
+            let source = format!(
+                "const config = {{ {accessor} }};\n\
+                 {trigger}\n\
+                 const later = 1;"
+            );
+            let d = run_on(&source);
+            assert_eq!(
+                d.len(),
+                1,
+                "an accessor triggered by `{trigger}` must still be flagged: {d:?}"
+            );
+            assert!(d[0].message.contains("`later`"));
+        }
+    }
+
+    #[test]
+    fn no_fp_object_literal_accessor_triggered_only_later_issue_6824() {
+        // The accessor bodies run only when something reaches into `config`, which
+        // here happens inside a deferred arrow — after `later` is initialized.
+        let source = "const config = {\n\
+                      get value() { return later; },\n\
+                      set value(v) { use(later, v); },\n\
+                      };\n\
+                      export const read = () => config.value;\n\
+                      const later = 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "accessors reached only from a deferred body should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_stored_arrow_whose_variable_is_only_reassigned_issue_6824() {
+        // A write-only reference replaces the literal instead of reaching into
+        // it, so it cannot run the arrow the original literal holds.
+        let source = "let handlers = { run: () => helper() };\n\
+                      handlers = { run: () => 0 };\n\
+                      const helper = () => 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "a write-only reference should not count as reaching into the literal: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_arrow_stored_in_object_literal_passed_to_call_issue_6824() {
+        // Negative space: the literal is an argument, not a variable's value, so
+        // the callee may invoke the stored arrow immediately.
+        let d = run_on(
+            "register({ run: () => helper() });\n\
+             const helper = () => 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an object literal passed straight to a call must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`helper`"));
+    }
+
+    #[test]
+    fn still_flags_local_tdz_inside_arrow_stored_in_object_literal_issue_6824() {
+        // Negative space: a binding local to the stored arrow, read before its
+        // own declaration line, is a genuine intra-execution TDZ error.
+        let d = run_on(
+            "const handlers = { run: () => { use(local); const local = 1; } };\n\
+             export const start = () => handlers.run();",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "local TDZ inside a stored arrow must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`local`"));
+    }
+
+    #[test]
+    fn no_fp_arrow_stored_in_object_literal_asserted_as_const_issue_6824() {
+        // `as const` and `satisfies` are erased before the code runs, so they
+        // leave the literal exactly where it was: stored in the variable.
+        for assertion in ["as const", "satisfies Record<string, () => number>"] {
+            let source = format!(
+                "const handlers = {{ run: () => helper() }} {assertion};\n\
+                 export const start = () => handlers.run();\n\
+                 const helper = () => 1;"
+            );
+            assert!(
+                run_on(&source).is_empty(),
+                "`{assertion}` on a stored-arrow literal should not be flagged: {:?}",
+                run_on(&source)
+            );
+        }
+    }
+
+    #[test]
+    fn no_fp_arrow_asserted_as_a_type_reaches_its_declarator_issue_6824() {
+        // The same type-erased assertions on the directly-bound path: the arrow
+        // still *is* the variable's value, so the un-called variable defers it.
+        for assertion in ["as Fn", "satisfies Fn"] {
+            let source = format!(
+                "type Fn = () => number;\n\
+                 const render = (() => helper()) {assertion};\n\
+                 export const start = () => render();\n\
+                 const helper = () => 1;"
+            );
+            assert!(
+                run_on(&source).is_empty(),
+                "`{assertion}` on a bound arrow should not be flagged: {:?}",
+                run_on(&source)
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_stored_arrow_read_in_the_declaring_function_body_issue_6824() {
+        // Negative space: the read and the declaration share one run of `boot`,
+        // so source order applies and the stored arrow enters the TDZ.
+        let d = run_on(
+            "export function boot() {\n\
+             const handlers = { run: () => later };\n\
+             handlers.run();\n\
+             const later = 1;\n\
+             }",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "a stored arrow read earlier in the declaring body must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_arrow_called_in_the_declaring_function_body_issue_6824() {
+        // The directly-bound form of the same shape: `f()` and `const later`
+        // both run in one execution of `boot`, in source order.
+        let d = run_on(
+            "export function boot() {\n\
+             const f = () => later;\n\
+             f();\n\
+             const later = 1;\n\
+             }",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an arrow called earlier in the declaring body must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
     }
 }
