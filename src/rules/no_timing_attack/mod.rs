@@ -1,7 +1,7 @@
 //! no-timing-attack — flag direct `==` / `!=` / `===` / `!==` comparison
 //! of a value whose identifier name ends with a sensitive word
-//! (`password`, `passwd`, `secret`, `apikey`, `auth`, `hmac`,
-//! `credential`, `otp`, `pin`), or with an overloaded word (`token`,
+//! (`password`, `passwd`, `secret`, `apikey`, `auth`, `hmac`, `credential`,
+//! `otp`, `totp`, `hotp`, `pin`), or with an overloaded word (`token`,
 //! `signature`, `hash`, `digest`) when the name also carries the matching
 //! secret / cryptographic qualifier.
 //!
@@ -23,23 +23,31 @@
 //! - Any other kind (string literal, call expression, block, index
 //!   expression, scoped path, …) is ignored.
 //!
-//! A name is sensitive when, after normalization (lowercase + strip `_`
-//! so snake_case / camelCase / UPPER_SNAKE collapse to the same form),
-//! it ends with a secret word. `token` and `signature` also name
-//! non-security concepts (lexer / comment-syntax tokens, LSP
-//! function-call signatures), so a name ending with one of those is only
-//! sensitive when it also contains a secret indicator (`auth`, `access`,
-//! `api`, …): `auth_token` is flagged, `comment_token` is not. `hash` and
-//! `digest` are likewise overloaded — a cryptographic checksum in auth code
-//! (`passwordHash`, `auth_digest`) but a URL fragment (`location.hash`,
-//! `route.hash`) or an OCI / sigstore content hash (`blob_digest`, a struct
-//! field `digest`) elsewhere — so each fires only with a crypto qualifier
-//! (`passwordHash`, `expected_digest`), never on a bare `hash` / `digest`.
+//! A name is sensitive when it ends with a secret word. The name is split
+//! into words (on any non-alphanumeric separator and on camelCase,
+//! PascalCase, SCREAMING_CASE and letter-digit transitions), and a marker
+//! matches only when it spells whole words of the name: `requires_hash` is
+//! `requires` + `hash`, so it carries no `sha` qualifier, and `spin` is not
+//! a `pin`. `token` and `signature` also name non-security concepts (lexer /
+//! comment-syntax tokens, LSP function-call signatures), so a name ending
+//! with one of those is only sensitive when it also carries a secret
+//! indicator word (`auth`, `access`, `api`, …): `auth_token` is flagged,
+//! `comment_token` is not. `hash` and `digest` are likewise overloaded — a
+//! cryptographic checksum in auth code (`passwordHash`, `auth_digest`) but a
+//! URL fragment (`location.hash`, `route.hash`) or an OCI / sigstore content
+//! hash (`blob_digest`, a struct field `digest`) elsewhere — so each fires
+//! only with a crypto qualifier (`passwordHash`, `expected_digest`), never on
+//! a bare `hash` / `digest`.
 //!
 //! A comparison inside the `eq` method of an `impl PartialEq for T` (Rust) is
 //! exempt: `self.hash == other.hash` there is a structural-hash short-circuit
 //! over two fields of the same `&Self`, with no attacker-input vs. stored-secret
 //! asymmetry, so the timing-attack premise does not apply.
+//!
+//! A comparison whose operands are provably scalar integers or `bool` (Rust) is
+//! exempt: one such operand types both sides, and the CPU compares them in a
+//! single constant-time instruction. `password_hash.is_some() == expected_hash`
+//! carries one bit per side, so it has no byte-by-byte channel to measure.
 //!
 //! A comparison where either operand is a JS `Symbol` (TS) is exempt: an inline
 //! `Symbol(...)` / `Symbol.for(...)` call, or an identifier bound to one. A
@@ -56,6 +64,11 @@
 //! flag.
 //!
 //! ## Known gap
+//!
+//! A marker glued into a single lowercase word (`authtoken`) or inflected
+//! (`salted_hash`) spells no word of the name, so it does not match.
+//! Separating those from `unpin` or `keyword` needs a dictionary, so both
+//! forms are accepted false negatives, tracked in #8271.
 //!
 //! No constant propagation. A comparison whose operand is the result
 //! of a call expression is not inspected, so
