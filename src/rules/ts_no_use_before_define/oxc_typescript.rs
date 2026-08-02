@@ -88,6 +88,20 @@
 //! const later = 1`), because a call, a getter read and a setter write all go
 //! through such a read.
 //!
+//! A function/arrow expression *assigned* to a target (`inst.email = (params) =>
+//! later`, the constructor-factory convention `factory("Name", (inst, def) => {
+//! inst.check = ... })`) is deferred when the assignment itself cannot run
+//! before the referenced binding's declaration line. An assignment stores the
+//! expression, it never calls it, so nothing can reach the stored expression
+//! until the assignment has run. The object/array-literal containers are
+//! transparent here too (`inst.formats = { email: () => later }`). An assignment
+//! that does run in the synchronous pass preceding the declaration puts the
+//! expression within reach of a call the analysis cannot see, so it keeps the
+//! reference flagged (`obj.f = () => later; obj.f(); const later = 1`). Whether
+//! the assignment runs in that pass is read lexically, so an assignment placed in
+//! a callback its callee runs synchronously counts as deferred and leaves the
+//! reference unflagged.
+//!
 //! Also skips forward references made from inside a function/arrow *expression*
 //! that lives inside a decorator (`@Decorator(...)`) — the lazy-thunk pattern
 //! used for circular model references in association decorators
@@ -466,9 +480,10 @@ fn call_is_tanstack_route_factory(call: &oxc_ast::ast::CallExpression) -> bool {
 /// - A class method/getter/setter/constructor, or an instance (non-static)
 ///   field initializer: those run on instance/method invocation.
 ///
-/// - A function or arrow *expression* assigned to a variable
-///   (`const App = () => x`): deferred as long as that variable is not called
-///   before `decl_start`. The body runs only when the variable is invoked.
+/// - A function or arrow *expression* stored somewhere — a variable
+///   (`const App = () => x`) or an assignment target (`inst.email = () => x`):
+///   deferred as long as nothing can have reached what stores it before
+///   `decl_start`. Storing a function never invokes it.
 ///
 /// The exemption applies only when the binding is declared in a scope that
 /// contains the definition (`decl_scope_id` is an ancestor of — or equal to —
@@ -480,9 +495,9 @@ fn call_is_tanstack_route_factory(call: &oxc_ast::ast::CallExpression) -> bool {
 /// (during module evaluation), so they are NOT deferred and any forward
 /// reference inside them is a real TDZ hazard. A function/arrow expression is
 /// likewise not deferred when it could run during the synchronous initialization
-/// pass before the declaration: an IIFE, an anonymous expression passed straight
-/// to a call (the callee may invoke it eagerly), or a variable that is called
-/// before `decl_start`.
+/// pass before the declaration: an IIFE, an expression handed straight to a
+/// callee (which may invoke it eagerly), a variable that is called before
+/// `decl_start`, or an assignment that itself runs before `decl_start`.
 fn is_inside_deferred_definition<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     scoping: &Scoping,
@@ -527,27 +542,30 @@ fn is_inside_deferred_definition<'a>(
 /// True when a function/arrow *expression* node runs only on later invocation,
 /// so a binding declared before `decl_start` in an enclosing scope is already
 /// initialized by the time the expression's body runs. An expression is deferred
-/// when it belongs to a variable whose value cannot have been reached — and so
-/// cannot have run the expression — before `decl_start`.
+/// when whatever holds its value cannot have been reached — and so cannot have
+/// run the expression — before `decl_start`.
 ///
 /// It is NOT deferred — and the forward reference stays flagged — when it could
 /// run during the synchronous initialization pass before the declaration:
 /// - an IIFE (`(() => x)()`), which runs immediately;
-/// - an anonymous expression with no owning variable (e.g. passed straight to a
-///   call as in `someFn((x) => later)`), since the callee may invoke it eagerly;
+/// - an expression with no owner, handed straight to a callee as in
+///   `someFn((x) => later)`, since that callee may invoke it eagerly;
 /// - a variable holding the expression itself and *eagerly* called before
 ///   `decl_start` (`const f = () => later; f(); const later = 1`);
 /// - a variable holding a literal that *stores* the expression
 ///   (`const handlers = { run: () => later }`) and eagerly read before
 ///   `decl_start` (`handlers.run(); const later = 1`): reaching into the literal
-///   is the only way to invoke what it stores, so any eager read may run it.
+///   is the only way to invoke what it stores, so any eager read may run it;
+/// - an assignment (`inst.email = (p) => later`) whose own site is eagerly
+///   reachable, which puts the expression within reach of a later call.
 ///
 /// "Before `decl_start`" counts only sites that share a synchronous pass with
 /// the declaration — module evaluation, or the run of the function body that
 /// holds the declaration. A call or read nested in another deferred function
 /// body (`const g = () => f(); const later = 1`) runs only when that body is
-/// later invoked. (Tolerated contrived false negative: a site inside a named
-/// function that is itself eagerly invoked is treated as deferred — see
+/// later invoked. (Tolerated false negative: a site inside a function that is
+/// itself eagerly invoked — a named function called before `decl_start`, or a
+/// callback its callee runs synchronously — is treated as deferred; see
 /// `is_eagerly_reachable`.)
 fn is_deferred_function_expression<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
@@ -558,13 +576,35 @@ fn is_deferred_function_expression<'a>(
     if crate::oxc_helpers::function_is_immediately_invoked(nodes, func_id) {
         return false;
     }
-    let Some((symbol_id, reach)) = function_expression_binding(nodes, func_id) else {
-        return false;
-    };
-    match reach {
-        BindingReach::IsValue => !binding_called_before(nodes, scoping, symbol_id, decl_start),
-        BindingReach::StoredInValue => !binding_read_before(nodes, scoping, symbol_id, decl_start),
+    match function_expression_owner(nodes, func_id) {
+        Some(ExpressionOwner::Variable(symbol_id, BindingReach::IsValue)) => {
+            !binding_called_before(nodes, scoping, symbol_id, decl_start)
+        }
+        Some(ExpressionOwner::Variable(symbol_id, BindingReach::StoredInValue)) => {
+            !binding_read_before(nodes, scoping, symbol_id, decl_start)
+        }
+        Some(ExpressionOwner::Assignment) => !is_eagerly_reachable(nodes, func_id, decl_start),
+        None => false,
     }
+}
+
+/// What holds a function/arrow expression's value at its own site. Storing a
+/// function never invokes it, so the holder is what decides whether the
+/// expression's body could already have run.
+enum ExpressionOwner {
+    /// A variable (`const f = () => ...`, `const h = { run: () => ... }`), with
+    /// how the expression relates to that variable's value. The variable's own
+    /// references say whether it was reached early.
+    Variable(oxc_semantic::SymbolId, BindingReach),
+    /// An assignment (`inst.email = (p) => ...`). The target is not resolved to a
+    /// symbol, so the expression is bounded by the assignment's own site instead:
+    /// nothing can call the stored expression until the assignment has run, and
+    /// the assignment runs where the expression sits. A target that does carry a
+    /// symbol (`x = () => ...`) is bounded the same way — its references are not
+    /// consulted. The selector and container wrappers between the expression and
+    /// the assignment do not move that site, so `BindingReach` is not carried
+    /// here.
+    Assignment,
 }
 
 /// How a function/arrow expression relates to the value of the variable it
@@ -581,32 +621,31 @@ enum BindingReach {
     StoredInValue,
 }
 
-/// The variable a function/arrow expression belongs to (`const App = () => ...`,
-/// `const handlers = { run: () => ... }`) and how it relates to that variable's
-/// value, or `None` when the expression has no owning variable (anonymous call
-/// argument, return value, ...).
+/// What holds a function/arrow expression at its own site (`const App = () => ...`,
+/// `const handlers = { run: () => ... }`, `inst.email = (p) => ...`), or `None`
+/// when nothing stores it — an argument handed to a callee, a returned value, ...
 ///
-/// The expression may reach its `VariableDeclarator` through two kinds of
-/// transparent wrapper, neither of which invokes it:
+/// The expression may reach its holder through two kinds of transparent wrapper,
+/// neither of which invokes it:
 /// - *selectors* — a ternary (`const f = cond ? () => ... : () => ...`), a
 ///   `&&`/`||`/`??` (`const f = enabled && (() => ...)`), parentheses, or a
 ///   type-erased assertion (`as const`, `satisfies H`). They only choose which
-///   expression becomes the variable's value, so the expression still *is* that
+///   expression becomes the holder's value, so the expression still *is* that
 ///   value (`BindingReach::IsValue`).
 /// - *containers* — object and array literals, whatever the property spelling
 ///   (computed key, shorthand method, accessor). They store the expression in the
-///   variable's value (`BindingReach::StoredInValue`); building a literal never
+///   holder's value (`BindingReach::StoredInValue`); building a literal never
 ///   calls what it holds, and every way of triggering what it holds — a call, a
-///   getter read, a setter write — goes through a read of the variable.
+///   getter read, a setter write — goes through a read of the holder.
 ///
 /// A non-transparent parent (a `CallExpression` making the expression an IIFE or
-/// a call argument, ...) stops the walk and yields `None`. Only a plain binding
-/// identifier counts; a destructuring pattern has no single owning symbol and
-/// returns `None`.
-fn function_expression_binding<'a>(
+/// a call argument, ...) stops the walk and yields `None`. For a variable holder,
+/// only a plain binding identifier counts; a destructuring pattern has no single
+/// owning symbol and returns `None`.
+fn function_expression_owner<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     func_id: NodeId,
-) -> Option<(oxc_semantic::SymbolId, BindingReach)> {
+) -> Option<ExpressionOwner> {
     let mut current = func_id;
     let mut reach = BindingReach::IsValue;
     loop {
@@ -616,8 +655,12 @@ fn function_expression_binding<'a>(
                 let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id else {
                     return None;
                 };
-                return id.symbol_id.get().map(|symbol_id| (symbol_id, reach));
+                return id
+                    .symbol_id
+                    .get()
+                    .map(|symbol_id| ExpressionOwner::Variable(symbol_id, reach));
             }
+            AstKind::AssignmentExpression(_) => return Some(ExpressionOwner::Assignment),
             AstKind::ConditionalExpression(_)
             | AstKind::LogicalExpression(_)
             | AstKind::ParenthesizedExpression(_)
@@ -698,9 +741,10 @@ fn binding_read_before(
 ///   flow, so the walk continues outward;
 /// - otherwise the body runs only on a later invocation, which defers `node_id`.
 ///
-/// Conservative on one rare chain: a node inside a named function that is itself
-/// eagerly invoked is treated as deferred (a tolerated, contrived false negative
-/// — see the rule docblock).
+/// Conservative on one chain: a node inside a function that is itself eagerly
+/// invoked — a named function called before `decl_start`, or a callback its
+/// callee runs synchronously — is treated as deferred (a tolerated false
+/// negative — see the rule docblock).
 fn is_eagerly_reachable(nodes: &oxc_semantic::AstNodes, node_id: NodeId, decl_start: u32) -> bool {
     debug_assert!(nodes.kind(node_id).span().start < decl_start);
     for ancestor_id in nodes.ancestor_ids(node_id) {
@@ -2286,5 +2330,134 @@ mod tests {
             "an arrow called earlier in the declaring body must still be flagged: {d:?}"
         );
         assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn no_fp_arrow_assigned_inside_constructor_factory_callback_issue_6846() {
+        // zod's `core.$constructor(name, (inst, def) => { ... })` convention: the
+        // callback assigns method arrows onto `inst`, and those arrows name schema
+        // constructors declared further down the file. The assignments run when
+        // the factory builds an instance, long after module evaluation.
+        let source = "export const ZodString = core.$constructor(\"ZodString\", (inst, def) => {\n\
+                      core.$ZodString.init(inst, def);\n\
+                      inst.email = (params) => inst.check(core._email(ZodEmail, params));\n\
+                      inst.uuid = (params) => inst.check(core._uuid(ZodUUID, params));\n\
+                      });\n\
+                      export const ZodEmail = core.$constructor(\"ZodEmail\", (inst, def) => {\n\
+                      core.$ZodEmail.init(inst, def);\n\
+                      });\n\
+                      export const ZodUUID = core.$constructor(\"ZodUUID\", (inst, def) => {\n\
+                      core.$ZodUUID.init(inst, def);\n\
+                      });";
+        assert!(
+            run_on(source).is_empty(),
+            "arrows assigned inside a constructor-factory callback should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_object_literal_assigned_inside_constructor_factory_callback_issue_6846() {
+        // The literal containers stay transparent on the assignment path.
+        let source = "export const ZodString = core.$constructor(\"ZodString\", (inst) => {\n\
+                      inst.formats = { email: () => ZodEmail };\n\
+                      });\n\
+                      export const ZodEmail = core.$constructor(\"ZodEmail\", () => {});";
+        assert!(
+            run_on(source).is_empty(),
+            "a literal assigned inside a factory callback should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_reference_read_directly_in_the_factory_callback_issue_6846() {
+        // Negative space: the reference is in the callback body itself, not in an
+        // arrow the callback stores. The factory may invoke that callback while
+        // building the module, so the forward reference stays a real hazard.
+        let d = run_on(
+            "export const ZodString = core.$constructor(\"ZodString\", (inst) => {\n\
+             core.register(ZodEmail);\n\
+             });\n\
+             export const ZodEmail = core.$constructor(\"ZodEmail\", () => {});",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "a reference read in the callback body must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`ZodEmail`"));
+    }
+
+    #[test]
+    fn still_flags_arrow_assigned_and_called_at_module_scope_issue_6846() {
+        // Negative space: the assignment runs during module evaluation, so the
+        // arrow is not deferred and the reference stays flagged. `inst.email()`
+        // is what makes the hazard concrete at runtime.
+        let d = run_on(
+            "const inst: any = {};\n\
+             inst.email = () => later;\n\
+             inst.email();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an arrow assigned and called at module scope must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_arrow_assigned_in_the_declaring_function_body_issue_6846() {
+        // Negative space: the assignment and the declaration share one run of
+        // `boot`, so source order applies and the arrow is not deferred.
+        // `inst.email()` is what makes the hazard concrete at runtime.
+        let d = run_on(
+            "export function boot(inst: any) {\n\
+             inst.email = () => later;\n\
+             inst.email();\n\
+             const later = 1;\n\
+             }",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an arrow assigned earlier in the declaring body must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_local_tdz_inside_an_assigned_arrow_issue_6846() {
+        // Negative space: a binding local to the assigned arrow, read before its
+        // own declaration line, is a genuine intra-execution TDZ error.
+        let d = run_on(
+            "export const ZodString = core.$constructor(\"ZodString\", (inst) => {\n\
+             inst.email = () => { use(local); const local = 1; };\n\
+             });",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "local TDZ inside an assigned arrow must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`local`"));
+    }
+
+    #[test]
+    fn tolerated_false_negative_assignment_in_an_eagerly_run_callback_issue_8226() {
+        // Eagerness is read from lexical nesting, so the `forEach` callback counts
+        // as deferred even though it runs during module evaluation. The stored
+        // arrow reaches `later` in the TDZ at runtime and stays unflagged.
+        let source = "const obj: any = {};\n\
+                      [1].forEach(() => { obj.f = () => later; });\n\
+                      obj.f();\n\
+                      const later = 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "the lexical eagerness read leaves this shape unflagged: {:?}",
+            run_on(source)
+        );
     }
 }
