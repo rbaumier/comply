@@ -6,6 +6,14 @@
 //! state should survive reloads and be shareable, so it belongs in the
 //! URL (`useUrlSearchParams`, router query).
 //!
+//! Only a route component is checked (see [`is_route_component`]). The router
+//! instantiates one such component per URL, so that component owns the query
+//! string. A component the page embeds — a widget, a form field, a dialog, a
+//! story — may be mounted several times over a single URL, where filter state
+//! cannot move to the query string without collisions. A story colocated with
+//! the view it demonstrates (`src/views/UserList.story.vue`) sits under a route
+//! root anyway, and is skipped through `ctx.file.path_segments.in_storybook`.
+//!
 //! The detector suppresses itself when the file already references
 //! `useUrlSearchParams`, `useRouteQuery`, or assigns to `route.query` —
 //! those are the blessed patterns.
@@ -19,8 +27,16 @@
 //! - widget named v-model binding: the var is the bound value of a
 //!   `v-model:<arg>="<name>"` directive (widget-scoped two-way state).
 
+use std::path::Path;
+
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::project::ProjectCtx;
 use crate::rules::backend::{CheckCtx, TextCheck};
+
+/// Directory roots a Vue router mounts its components from: `pages/` (the
+/// file-based routing of Nuxt and unplugin-vue-router), `views/` (the Vue CLI
+/// and Vite templates), and `routes/` (the layout Directus-style apps use).
+const ROUTE_ROOT_SEGMENTS: &[&str] = &["pages", "views", "routes"];
 
 /// Identifiers that strongly indicate filter/pagination state.
 const FILTER_NAMES: &[&str] = &[
@@ -56,6 +72,9 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let src = ctx.source;
         if !src.contains("ref(") && !src.contains("reactive(") {
+            return Vec::new();
+        }
+        if ctx.file.path_segments.in_storybook || !is_route_component(ctx.path, ctx.project) {
             return Vec::new();
         }
         // If the file already uses URL-backed state, trust the author.
@@ -99,6 +118,43 @@ impl TextCheck for Check {
         }
         diags
     }
+}
+
+/// True when `path` follows the layout of a component a router mounts for a
+/// URL: under one of [`ROUTE_ROOT_SEGMENTS`], and outside any `components/`
+/// directory — where Vue apps keep the components a page embeds.
+///
+/// Only the segments below the app's own root count. That root is the directory
+/// owning the nearest `package.json`, so a monorepo package reads its own
+/// layout and not the names of its siblings; the scan root answers when no
+/// manifest is in reach. Above it, the directories name the machine the scan
+/// runs on.
+///
+/// This reads the layout, not the route table, so an app that registers its
+/// components in a hand-written `createRouter({ routes })` from arbitrary
+/// directories is out of the rule's reach. Under-claiming that way is
+/// deliberate: the query string belongs to whichever component the router
+/// resolves the URL to, and the layout is the only evidence available here.
+fn is_route_component(path: &Path, project: &ProjectCtx) -> bool {
+    let app_root = project
+        .nearest_package_json_dir(path)
+        .or_else(|| project.project_root.clone());
+    let relative = app_root
+        .as_deref()
+        .and_then(|root| path.strip_prefix(root).ok())
+        .unwrap_or(path);
+    let mut is_under_route_root = false;
+    for segment in relative.components() {
+        let Some(name) = segment.as_os_str().to_str() else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("components") {
+            return false;
+        }
+        is_under_route_root |=
+            ROUTE_ROOT_SEGMENTS.iter().any(|root| name.eq_ignore_ascii_case(root));
+    }
+    is_under_route_root
 }
 
 /// Return the declared identifier from a line of the form
@@ -196,10 +252,15 @@ fn bound_as_named_vmodel(src: &str, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
     use std::path::Path;
 
     fn run(src: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("List.vue"), src))
+        run_at("src/pages/List.vue", src)
+    }
+
+    fn run_at(path: &str, src: &str) -> Vec<Diagnostic> {
+        Check.check(&CheckCtx::for_test(Path::new(path), src))
     }
 
     #[test]
@@ -270,5 +331,106 @@ mod tests {
     #[test]
     fn flags_search_term_without_vmodel() {
         assert_eq!(run("const searchTerm = ref('')").len(), 1);
+    }
+
+    /// The two files reported in issue #6850, from unovue/radix-vue: Histoire
+    /// stories live outside any route root, so the component they render owns
+    /// no query string.
+    #[test]
+    fn allows_filter_refs_in_histoire_story_files() {
+        assert!(
+            run_at("packages/core/src/Combobox/story/_Combobox.vue", "const query = ref('')")
+                .is_empty()
+        );
+        assert!(
+            run_at(
+                "packages/core/src/Listbox/story/ListboxFilter.story.vue",
+                "const searchTerm = ref('')"
+            )
+            .is_empty()
+        );
+    }
+
+    /// A story colocated with the view it demonstrates sits under a route root,
+    /// so the route gate alone lets it through and the story-catalog lever is
+    /// what stops it.
+    #[test]
+    fn allows_filter_refs_in_story_colocated_under_a_route_root() {
+        let path = Path::new("src/views/UserList.story.vue");
+        assert!(is_route_component(path, crate::project::default_static_project_ctx()));
+        let file = FileCtx {
+            path_segments: PathSegments { in_storybook: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        assert!(
+            Check.check(&CheckCtx::for_test_with_file(path, "const page = ref(1)", &file))
+                .is_empty()
+        );
+    }
+
+    /// The directories above the project root name the machine the scan runs
+    /// on: a checkout under `~/dev/components/` must not turn the rule off.
+    #[test]
+    fn reads_no_path_segment_above_the_project_root() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let rooted_at = |root: &Path| {
+            let mut project = ProjectCtx::empty();
+            project.project_root = Some(root.to_path_buf());
+            project
+        };
+
+        let root = dir.path().join("components/app");
+        assert!(is_route_component(&root.join("src/pages/List.vue"), &rooted_at(&root)));
+
+        let root = dir.path().join("views/app");
+        assert!(!is_route_component(&root.join("src/widgets/DataTable.vue"), &rooted_at(&root)));
+    }
+
+    /// The app's root is the directory owning its `package.json`: the editor
+    /// lints one buffer with no scan root, and a monorepo scan has a root that
+    /// sits above the package whose layout is being read.
+    #[test]
+    fn reads_the_layout_from_the_package_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let app = dir.path().join("components/app");
+        std::fs::create_dir_all(app.join("src/pages")).unwrap();
+        std::fs::write(app.join("package.json"), r#"{"name":"app","version":"1.0.0"}"#).unwrap();
+
+        assert!(is_route_component(&app.join("src/pages/List.vue"), &ProjectCtx::empty()));
+
+        let mut monorepo = ProjectCtx::empty();
+        monorepo.project_root = Some(dir.path().to_path_buf());
+        assert!(is_route_component(&app.join("src/pages/List.vue"), &monorepo));
+    }
+
+    /// A widget the page embeds may be mounted several times over one URL, so
+    /// its filter state cannot move to the query string.
+    #[test]
+    fn allows_filter_ref_outside_a_route_root() {
+        assert!(run_at("src/components/DataTable.vue", "const page = ref(1)").is_empty());
+        assert!(
+            run_at("app/src/interfaces/list-m2m/list-m2m.vue", "const limit = ref(5)").is_empty()
+        );
+        // A `components/` directory nested under a route root still holds
+        // embedded components, not the one the route resolves to.
+        assert!(
+            run_at("src/views/private/components/notifications-drawer.vue", "const page = ref(1)")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_filter_ref_under_every_route_root() {
+        assert_eq!(run_at("pages/users/index.vue", "const page = ref(1)").len(), 1);
+        assert_eq!(run_at("src/views/UserList.vue", "const page = ref(1)").len(), 1);
+        assert_eq!(run_at("app/src/modules/x/routes/runs.vue", "const page = ref(1)").len(), 1);
+    }
+
+    /// A directory name is a convention, not an identifier: `Views/` and
+    /// `Components/` carry the same meaning as their lowercase spelling.
+    #[test]
+    fn reads_directory_names_case_insensitively() {
+        assert_eq!(run_at("src/Views/UserList.vue", "const page = ref(1)").len(), 1);
+        assert!(run_at("src/Views/Components/Table.vue", "const page = ref(1)").is_empty());
     }
 }

@@ -49,6 +49,12 @@ pub struct PathSegments {
     /// verify the public API contract.
     pub in_test_internal_dir: bool,
     pub in_node_modules: bool,
+    /// A UI story-catalog file: a `.stories.`/`.story.` infix anywhere in the
+    /// path (Storybook and Histoire, whose stories are `<Name>.story.vue`), or
+    /// a `stories`/`storybook`/`.storybook` segment. [`FileCtx::build`] also ORs
+    /// in a `story/` directory holding a `*.story.*` file; a `PathSegments` from
+    /// [`scan_path`] alone does not carry that clause. A story demonstrates a
+    /// component in isolation, outside any route.
     pub in_storybook: bool,
     pub is_vendored: bool,
     /// `examples/`, `example/`, `demo/`, `demos/`, `benches/`, `fixtures/`,
@@ -141,7 +147,12 @@ impl FileCtx {
 
     pub fn build(path: &Path, source: &str, language: Language, project: &ProjectCtx) -> Self {
         let directives = scan_directives(source);
-        let path_segments = scan_path(path);
+        let mut path_segments = scan_path(path);
+        // `scan_path` is pure path manipulation, and a `story/` segment on its
+        // own means nothing: telling a story catalog from a `story/` domain
+        // directory needs the files sitting next to this one.
+        path_segments.in_storybook =
+            path_segments.in_storybook || project.in_story_catalog_dir(path);
         let rsc_context =
             classify_rsc(project.framework, directives, &path_segments, path, project);
         let is_generated = is_generated_content(source)
@@ -748,7 +759,9 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower == "test.jsx",
         in_test_internal_dir: has_test_internal_dir(&lower),
         in_node_modules: lower.contains("/node_modules/"),
-        in_storybook: lower.contains(".stories.") || has_storybook_segment(&lower),
+        in_storybook: lower.contains(".stories.")
+            || lower.contains(".story.")
+            || has_storybook_segment(&lower),
         is_vendored: has_vendored_segment(&lower),
         is_relaxed_dir: has_relaxed_segment(&lower),
         in_aux_dir: crate::rules::path_utils::is_aux_dir_path(path),
@@ -1458,6 +1471,41 @@ mod tests {
         // directory (issue #4466).
         assert!(scan_path(&PathBuf::from(".storybook/main.ts")).in_storybook);
         assert!(scan_path(&PathBuf::from("packages/foo/.storybook/preview.ts")).in_storybook);
+    }
+
+    #[test]
+    fn storybook_matches_singular_story_filename_infix() {
+        // Histoire names its stories `<Name>.story.vue` (issue #6850).
+        assert!(
+            scan_path(&PathBuf::from(
+                "packages/core/src/Listbox/story/ListboxFilter.story.vue"
+            ))
+            .in_storybook
+        );
+        // Storybook's own singular `.story.` filename convention.
+        assert!(scan_path(&PathBuf::from("src/Button.story.js")).in_storybook);
+        // A bare `story/` segment is not evidence on its own — that needs the
+        // co-located story file `ProjectCtx::in_story_catalog_dir` looks for.
+        assert!(!scan_path(&PathBuf::from("src/story/NewsFeed.vue")).in_storybook);
+    }
+
+    /// The story helpers Histoire renders carry no marker of their own, so only
+    /// the co-located `*.story.*` file `ProjectCtx` looks for classifies them —
+    /// the path alone cannot (issue #6850).
+    #[test]
+    fn build_classifies_marker_less_story_helper_from_its_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let story = dir.path().join("packages/core/src/Combobox/story");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::write(story.join("ComboboxBasic.story.vue"), "").unwrap();
+        let helper = story.join("_Combobox.vue");
+        std::fs::write(&helper, "").unwrap();
+        let project = ProjectCtx::empty();
+
+        assert!(!scan_path(&helper).in_storybook);
+        assert!(
+            FileCtx::build(&helper, "", Language::Vue, &project).path_segments.in_storybook
+        );
     }
 
     #[test]
