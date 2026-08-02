@@ -22,8 +22,9 @@
 //!   crate's derive macro, and a documented part of its public API;
 //! - an umbrella/facade crate re-exporting one of its own Cargo-family sub-crates
 //!   (`pub use salvo_core::*;` in package `salvo`, `pub use poem_core::*;` in `poem`),
-//!   identified by the glob source starting with `<package_name>_` — wholesale
-//!   re-export of the core sub-crate IS the umbrella crate's public API;
+//!   identified by the glob source starting with the package name spelled as a
+//!   Rust crate identifier plus `_` (package `helix-dap` → `helix_dap_types`) —
+//!   wholesale re-export of the core sub-crate IS the umbrella crate's public API;
 //! - a file whose sole top-level item (ignoring comments and attributes) is the
 //!   flagged `pub use ...::*;` itself — a single-statement re-export facade whose
 //!   entire public API is the wholesale re-export (e.g. a thin `errors` crate
@@ -399,6 +400,32 @@ mod tests {
         // `serde::*` does mirror an external dependency -> flagged.
         assert_eq!(
             run_in_crate("salvo", "pub use serde::*;\npub struct Marker;").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn exempts_hyphenated_package_family_subcrate_glob_issue_6840() {
+        // Issue #6840: helix-editor/helix — package `helix-dap` re-exports its
+        // sibling `helix_dap_types`. Cargo spells the package with `-`, Rust
+        // source with `_`, and the family check normalizes before comparing.
+        let src = "pub use helix_dap_types::*;\n\
+                   pub use client::Client;\n\
+                   pub use transport::{Payload, Response, Transport};\n";
+        assert!(
+            run_in_crate("helix-dap", src).is_empty(),
+            "{:?}",
+            run_in_crate("helix-dap", src)
+        );
+    }
+
+    #[test]
+    fn still_flags_other_family_crate_glob_in_hyphenated_package_issue_6840() {
+        // Normalizing `-` to `_` widens nothing beyond the package's own family:
+        // `helix_core` belongs to package `helix-core`, so package `helix-dap`
+        // re-exporting it still mirrors another crate's surface -> flagged.
+        assert_eq!(
+            run_in_crate("helix-dap", "pub use helix_core::*;\npub struct Marker;").len(),
             1
         );
     }
