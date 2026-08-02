@@ -37,9 +37,29 @@
 //! There the `Vec`
 //! materialization is load-bearing: it breaks a borrow so the source's
 //! owner can move into a downstream closure, or yields an owning
-//! `IntoIter` of the right type for the escaping slot. An escaping
-//! chain that immediately re-collects (`…into_iter().collect()`) is
-//! still a genuine round-trip and is flagged.
+//! `IntoIter` of the right type for the escaping slot. A chain that
+//! immediately re-collects (`…into_iter().collect()`) is still a
+//! genuine round-trip and is flagged, here and for the borrow break
+//! below: that `collect` ends the borrow on its own.
+//!
+//! The chain is also left alone when a link downstream of `into_iter()`
+//! names the root place the collected source reads —
+//! `cx.editor.documents.keys().cloned().collect::<Vec<_>>().into_iter()
+//! .filter_map(|id| … cx.editor …)`. The `collect` ends the borrow that
+//! source holds, so the later access is what the materialization buys.
+//!
+//! The signal is coarse, and every way it is coarse widens the exemption
+//! rather than the diagnostic. It compares root places, not projection
+//! paths, so a downstream read of a sibling field answers too. It cannot
+//! see whether either access is mutable, so two shared borrows answer
+//! too. The root is read through the source's own receiver chain, so a
+//! chain passing through an owning conversion (`self.items.clone()`)
+//! still yields one. And the downstream search runs to the end of the
+//! chain, past a `collect` link that has already released the borrow.
+//! It does need a root to name: a source starting from a free-function
+//! call, a path, a literal, a range or a macro keeps flagging, as does a
+//! chain whose downstream never names the root. A path segment spelling
+//! the root does not answer for it — in Rust it can never name a local.
 //!
 //! The chain is also left alone inside a test context (a `#[test]`
 //! function or a `#[cfg(test)]` module): there the concrete
@@ -112,9 +132,15 @@ impl AstCheck for Check {
         if crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
             return;
         }
-        // The owned iterator is load-bearing when it escapes its scope
-        // without being immediately re-collected.
-        if !into_iter_recollected(node, source_bytes) && chain_escapes(node, source_bytes) {
+        // The owned iterator is load-bearing when it escapes its scope, and so
+        // is the `Vec` when a downstream link reaches the place the source
+        // reads: it may compile only because the `collect` ended that borrow
+        // (see module docs). Neither survives an immediate re-collect, which
+        // ends the borrow on its own.
+        let load_bearing = !into_iter_recollected(node, source_bytes)
+            && (chain_escapes(node, source_bytes)
+                || downstream_reaches_source_root(node, receiver, source_bytes));
+        if load_bearing {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -254,11 +280,92 @@ fn receives_more_than_iterator(ident: tree_sitter::Node, source: &[u8]) -> bool 
     NEEDS_MORE_THAN_ITERATOR.contains(&field.utf8_text(source).unwrap_or(""))
 }
 
+/// True when a link downstream of the `into_iter()` call names the root place
+/// the `collect` source reads. The `collect` ends the borrow that source holds,
+/// so the downstream access is what the materialization buys.
+///
+/// Only the chain hanging off `into_iter()` is searched, and only the part of
+/// it that follows the call: an occurrence upstream is the borrow itself.
+/// Matching is by name, so a downstream binding shadowing the root answers for
+/// it — the exemption errs towards leaving the chain alone. A path segment does
+/// not: in Rust it can never name a local, so skipping it cannot withdraw a
+/// legitimate exemption.
+fn downstream_reaches_source_root(
+    into_iter_call: tree_sitter::Node,
+    collect_call: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Some(collect_source) = collect_call
+        .child_by_field_name("function") // `generic_function`: the turbofish
+        .and_then(|turbofished| turbofished.child_by_field_name("function")) // `….collect`
+        .and_then(|field_expr| field_expr.child_by_field_name("value"))
+    else {
+        return false;
+    };
+    let Some(root) =
+        receiver_chain_root(collect_source).and_then(|root| root.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    let downstream_from = into_iter_call.end_byte();
+    any_named_use(chain_outermost(into_iter_call), root, source, |ident| {
+        ident.start_byte() >= downstream_from && !is_path_segment(ident)
+    })
+}
+
+/// True when `ident` is a segment of a path (`crate::cx::helper`), which names
+/// a module or an item rather than a local place.
+fn is_path_segment(ident: tree_sitter::Node) -> bool {
+    ident.parent().is_some_and(|parent| {
+        matches!(
+            parent.kind(),
+            "scoped_identifier" | "scoped_type_identifier"
+        )
+    })
+}
+
+/// The leftmost variable — or `self` — an expression reaches by reading down its
+/// receiver chain: field accesses, method calls, indexing and the wrappers the
+/// chain reads through. Reachability is not borrowing, so a chain through an
+/// owning conversion (`self.items.clone()`) still yields its root. `None` when
+/// the chain bottoms out in something that names no variable: a free-function
+/// call, a path, a literal, a range, a macro.
+fn receiver_chain_root(expr: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = expr;
+    loop {
+        current = match current.kind() {
+            "identifier" | "self" => return Some(current),
+            "field_expression" => current.child_by_field_name("value")?,
+            "call_expression" => {
+                // Only a method call has a receiver to keep reading down;
+                // `f(…)` and `T::f(…)` name no place.
+                let function = current.child_by_field_name("function")?;
+                let function = match function.kind() {
+                    "generic_function" => function.child_by_field_name("function")?,
+                    _ => function,
+                };
+                if function.kind() != "field_expression" {
+                    return None;
+                }
+                function
+            }
+            "reference_expression" => current.child_by_field_name("value")?,
+            "parenthesized_expression"
+            | "unary_expression"
+            | "try_expression"
+            | "await_expression"
+            | "index_expression" => current.named_child(0)?,
+            _ => return None,
+        };
+    }
+}
+
 /// True when the `into_iter()` result is immediately re-collected —
 /// `…collect::<Vec<_>>().into_iter().collect(…)`. That is a genuine
-/// round-trip even when it escapes (e.g. returned), so it must still
-/// flag. The shape: `node`'s parent is a `field_expression` whose
-/// `value` is `node` and whose `field` is `collect`.
+/// round-trip even when it escapes (e.g. returned) or when a later link
+/// reads the source's root place, so it must still flag. The shape:
+/// `node`'s parent is a `field_expression` whose `value` is `node` and
+/// whose `field` is `collect`.
 fn into_iter_recollected(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(parent) = node.parent() else {
         return false;
@@ -435,8 +542,8 @@ fn enclosing_block(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
     None
 }
 
-/// True when some `identifier` named `name` anywhere under `scope` satisfies
-/// `is_match`.
+/// True when some `identifier` or `self` node spelling `name` anywhere under
+/// `scope` satisfies `is_match`.
 fn any_named_use(
     scope: tree_sitter::Node,
     name: &str,
@@ -445,7 +552,8 @@ fn any_named_use(
 ) -> bool {
     let mut stack = vec![scope];
     while let Some(node) = stack.pop() {
-        let names_the_binding = node.kind() == "identifier" && node.utf8_text(source) == Ok(name);
+        let names_the_binding =
+            matches!(node.kind(), "identifier" | "self") && node.utf8_text(source) == Ok(name);
         if names_the_binding && is_match(node) {
             return true;
         }
@@ -863,6 +971,82 @@ mod tests {
         // not a struct field) is still a genuine round-trip — the precise
         // let-escape check must not exempt it.
         let source = "fn f() { let v = xs.iter().map(g).collect::<Vec<_>>().into_iter(); for x in v {} }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_collect_breaking_a_borrow_a_downstream_closure_needs() {
+        // Issue #6841 (helix-editor/helix, commands/typed.rs): `.keys()` borrows
+        // `cx.editor.documents`; the `filter_map` closure reaches `cx.editor`
+        // again. The `collect` ends the borrow, and the chain is consumed
+        // locally, so neither the escape nor the capability check sees it.
+        let source = "fn write_all_impl(cx: &mut Context) { let saves: Vec<_> = cx.editor.documents.keys().cloned().collect::<Vec<_>>().into_iter().filter_map(|id| { let doc = doc!(cx.editor, &id); Some((id, cx.editor.get_synced_view_id(doc.id()))) }).collect(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_when_no_downstream_link_reaches_the_source_root() {
+        // Negative space: the same shape with a closure that never reaches `cx`
+        // again — there is no borrow to break, so the `Vec` is still wasted.
+        let source = "fn write_all_impl(cx: &mut Context) { let saves: Vec<_> = cx.editor.documents.keys().cloned().collect::<Vec<_>>().into_iter().filter_map(|id| Some((id, 0))).collect(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_collect_breaking_a_borrow_rooted_in_self() {
+        // The root place is often `self`: `self.items.keys()` borrows it and the
+        // downstream closure reaches it again.
+        let source = "fn f(&mut self) { let out: Vec<_> = self.items.keys().cloned().collect::<Vec<_>>().into_iter().map(|k| self.take(k)).collect(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_when_the_source_root_is_only_named_upstream() {
+        // Negative space: `xs` is borrowed and never reached again, so the
+        // round-trip buys nothing.
+        let source = "fn f(xs: &[u8]) { let _: Vec<_> = xs.iter().collect::<Vec<_>>().into_iter().map(|x| x + 1).collect(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_when_only_a_path_segment_spells_the_source_root() {
+        // Negative space: the `cx` of `crate::cx::helper` is a module segment,
+        // not an access to the place — it cannot be what the `Vec` buys.
+        let source = "fn f(cx: &mut Context) { let _: Vec<_> = cx.list.iter().collect::<Vec<_>>().into_iter().map(|x| crate::cx::helper(x)).collect(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_recollect_whose_tail_reaches_the_source_root() {
+        // Negative space: the immediate `collect` ends the source's borrow on
+        // its own, so the `cx` behind it is not what the round-trip buys.
+        let source = "fn f(cx: &Ctx) -> String { cx.list.iter().collect::<Vec<_>>().into_iter().collect::<Vec<_>>().join(cx.sep) }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_borrow_break_reached_through_every_receiver_wrapper() {
+        // Each wrapper a receiver chain can hide its root behind: drop one and
+        // the borrow break behind it stops being seen.
+        let chains = [
+            "self.items[0].keys()",
+            "(*self.items).keys()",
+            "(&self.items).keys()",
+            "self.load()?.keys()",
+            "self.load().await.keys()",
+        ];
+        for chain in chains {
+            let source = format!("fn f(&mut self) {{ let out: Vec<_> = {chain}.cloned().collect::<Vec<_>>().into_iter().map(|k| self.take(k)).collect(); }}");
+            assert!(run_on(&source).is_empty(), "`{chain}` must exempt");
+        }
+    }
+
+    #[test]
+    fn flags_when_the_source_is_a_temporary() {
+        // Negative space: `build(cx)` names no place, so the downstream `cx` is
+        // unrelated to this `collect` — including the `cx` in the call's own
+        // arguments, which the root search must not read.
+        let source = "fn f(cx: &mut Context) { let _: Vec<_> = build(cx).iter().collect::<Vec<_>>().into_iter().map(|x| cx.use_it(x)).collect(); }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
