@@ -1274,6 +1274,127 @@ pub fn is_fixed_signature_library_callback<'a>(
     TANSTACK_QUERY_FACTORIES.contains(&callee_name)
 }
 
+/// True when the function expression / arrow function `node` sits in a position
+/// annotated with a NAMED type, so that type — declared elsewhere — dictates the
+/// function's parameter list.
+///
+/// Recognises the positions where TypeScript annotates a function value:
+/// - the initializer of an annotated binding (`const d: MethodDecorator = (…) => …`),
+/// - the value of an annotated class field (`handler: RequestHandler = (…) => …`),
+/// - an `as` / `satisfies` / `<T>` assertion (`((…) => …) satisfies MethodDecorator`),
+/// - the `return` argument of a function whose declared return type is named
+///   (`function Grpc(): MethodDecorator { return (…) => … }`), and the concise body
+///   of such an arrow (`const Grpc = (svc): MethodDecorator => (…) => …`).
+///
+/// Only a type NAME qualifies. An inline function type
+/// (`const f: (a: string, b: string) => void = …`) is written at the same site as the
+/// function, so its parameter list is the author's to change; an `as const` assertion
+/// names no declaration and fixes no parameter list either.
+///
+/// A `ParenthesizedExpression` is a transparent link on the way up; any other
+/// ancestor ends the search, so a function nested in a call argument or an object
+/// literal does not qualify.
+#[must_use]
+pub fn conforms_to_named_function_type(
+    node: &oxc_semantic::AstNode<'_>,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    if !matches!(
+        node.kind(),
+        AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+    ) {
+        return false;
+    }
+
+    let nodes = semantic.nodes();
+    let mut current = node.id();
+    loop {
+        let parent = nodes.parent_id(current);
+        if parent == current {
+            return false;
+        }
+        match nodes.kind(parent) {
+            AstKind::ParenthesizedExpression(_) => current = parent,
+            AstKind::TSAsExpression(expr) => return is_named_type_reference(&expr.type_annotation),
+            AstKind::TSSatisfiesExpression(expr) => {
+                return is_named_type_reference(&expr.type_annotation);
+            }
+            AstKind::TSTypeAssertion(expr) => {
+                return is_named_type_reference(&expr.type_annotation);
+            }
+            AstKind::VariableDeclarator(decl) => {
+                return decl
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| is_named_type_reference(&ann.type_annotation));
+            }
+            AstKind::PropertyDefinition(prop) => {
+                return prop
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| is_named_type_reference(&ann.type_annotation));
+            }
+            // A `return` yields the value of the nearest enclosing function,
+            // whatever statements nest it.
+            AstKind::ReturnStatement(_) => return encloser_returns_named_type(nodes, parent),
+            // A concise arrow body (`(): T => (…) => …`) parses as a one-statement
+            // body, and the arrow returns that statement's value.
+            AstKind::ExpressionStatement(_) if is_concise_arrow_body(nodes, parent) => {
+                return encloser_returns_named_type(nodes, parent);
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// True when the nearest function enclosing `node_id` declares a named return type.
+fn encloser_returns_named_type(
+    nodes: &oxc_semantic::AstNodes,
+    node_id: oxc_semantic::NodeId,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    nodes
+        .ancestor_kinds(node_id)
+        .find_map(|kind| match kind {
+            AstKind::Function(func) => Some(func.return_type.as_deref()),
+            AstKind::ArrowFunctionExpression(arrow) => Some(arrow.return_type.as_deref()),
+            _ => None,
+        })
+        .flatten()
+        .is_some_and(|ann| is_named_type_reference(&ann.type_annotation))
+}
+
+/// True when `stmt_id` is the lone statement of an arrow function's concise body
+/// (`() => expr`), whose value the arrow returns. An expression statement anywhere
+/// else discards its value.
+fn is_concise_arrow_body(nodes: &oxc_semantic::AstNodes, stmt_id: oxc_semantic::NodeId) -> bool {
+    use oxc_ast::AstKind;
+
+    let body_id = nodes.parent_id(stmt_id);
+    if body_id == stmt_id || !matches!(nodes.kind(body_id), AstKind::FunctionBody(_)) {
+        return false;
+    }
+    let arrow_id = nodes.parent_id(body_id);
+    arrow_id != body_id
+        && matches!(nodes.kind(arrow_id), AstKind::ArrowFunctionExpression(arrow) if arrow.expression)
+}
+
+/// True when `ty` names a type declared elsewhere (`MethodDecorator`,
+/// `express.RequestHandler`), as opposed to a structural type written inline. The
+/// `const` of an `as const` assertion is not such a name: it prevents literal-type
+/// widening and declares no signature.
+fn is_named_type_reference(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+
+    let TSType::TSTypeReference(reference) = ty else {
+        return false;
+    };
+    !matches!(&reference.type_name, TSTypeName::IdentifierReference(id) if id.name.as_str() == "const")
+}
+
 /// True when `ident` resolves to a local binding declared with `const` or `let`
 /// whose initializer constructs a fresh local object (`is_fresh_copy_expression`):
 /// an object literal / object-spread (`{ key: val }` / `{ ...other }`) or
