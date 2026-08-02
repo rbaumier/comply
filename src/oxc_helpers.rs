@@ -3102,6 +3102,111 @@ fn is_primitive_literal(expr: &oxc_ast::ast::Expression) -> bool {
     )
 }
 
+/// True when `expr` reads the same value each time it is evaluated.
+///
+/// Accepts literals, identifiers, meta properties, `this`, member access, array
+/// and object literals whose parts are themselves accepted, `await` on an
+/// accepted operand, and the operators over those; every other variant — a call, `new`,
+/// `yield`, `i++`, an assignment, a tagged template, a function or class
+/// expression — answers `false`, because its evaluation runs user code or moves
+/// state forward. The motivating case is `it.next().value && it.next().value`:
+/// the two calls read two different elements even though the source text
+/// matches.
+///
+/// The answer is a syntactic approximation, on both sides:
+///
+/// - A property getter and a `then` reached through `await` are user code this
+///   predicate does not see through. Treating `a.b` and `await p` as
+///   reproducible is deliberate: denying member access would silence the shapes
+///   the guarded rules exist for.
+/// - An array or object literal evaluates to an equal value every time but to a
+///   *fresh object*, so it is reproducible by value and not by reference.
+/// - Array spread (`[...it]`) answers `false`: it drives the iterator protocol,
+///   which is the very state advance this predicate exists to catch. Object
+///   spread copies own properties, so it follows the getter line above.
+///
+/// See [`rust_helpers::expression_is_reproducible`](crate::rules::rust_helpers::expression_is_reproducible)
+/// for why the whitelist direction is the sound one.
+#[must_use]
+pub fn expression_is_reproducible(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::{ArrayExpressionElement, ChainElement, Expression, ObjectPropertyKind};
+
+    match expr {
+        Expression::BigIntLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::Identifier(_)
+        | Expression::MetaProperty(_)
+        | Expression::NullLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::RegExpLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::Super(_)
+        | Expression::ThisExpression(_) => true,
+
+        Expression::TemplateLiteral(tpl) => tpl.expressions.iter().all(expression_is_reproducible),
+        Expression::SequenceExpression(seq) => seq.expressions.iter().all(expression_is_reproducible),
+        Expression::ArrayExpression(array) => array.elements.iter().all(|element| match element {
+            ArrayExpressionElement::SpreadElement(_) => false,
+            ArrayExpressionElement::Elision(_) => true,
+            _ => element.as_expression().is_some_and(expression_is_reproducible),
+        }),
+        Expression::ObjectExpression(object) => {
+            object.properties.iter().all(|property| match property {
+                ObjectPropertyKind::ObjectProperty(entry) => {
+                    property_key_is_reproducible(&entry.key) && expression_is_reproducible(&entry.value)
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => expression_is_reproducible(&spread.argument),
+            })
+        }
+        Expression::ParenthesizedExpression(paren) => expression_is_reproducible(&paren.expression),
+        Expression::AwaitExpression(inner) => expression_is_reproducible(&inner.argument),
+        Expression::UnaryExpression(unary) => expression_is_reproducible(&unary.argument),
+        Expression::BinaryExpression(bin) => {
+            expression_is_reproducible(&bin.left) && expression_is_reproducible(&bin.right)
+        }
+        Expression::LogicalExpression(logical) => {
+            expression_is_reproducible(&logical.left) && expression_is_reproducible(&logical.right)
+        }
+        Expression::ConditionalExpression(cond) => {
+            expression_is_reproducible(&cond.test)
+                && expression_is_reproducible(&cond.consequent)
+                && expression_is_reproducible(&cond.alternate)
+        }
+        Expression::StaticMemberExpression(member) => expression_is_reproducible(&member.object),
+        Expression::PrivateFieldExpression(member) => expression_is_reproducible(&member.object),
+        Expression::ComputedMemberExpression(member) => {
+            expression_is_reproducible(&member.object) && expression_is_reproducible(&member.expression)
+        }
+        Expression::ChainExpression(chain) => match &chain.expression {
+            ChainElement::StaticMemberExpression(member) => expression_is_reproducible(&member.object),
+            ChainElement::PrivateFieldExpression(member) => expression_is_reproducible(&member.object),
+            ChainElement::ComputedMemberExpression(member) => {
+                expression_is_reproducible(&member.object) && expression_is_reproducible(&member.expression)
+            }
+            ChainElement::TSNonNullExpression(inner) => expression_is_reproducible(&inner.expression),
+            ChainElement::CallExpression(_) => false,
+        },
+        Expression::TSAsExpression(cast) => expression_is_reproducible(&cast.expression),
+        Expression::TSSatisfiesExpression(cast) => expression_is_reproducible(&cast.expression),
+        Expression::TSTypeAssertion(cast) => expression_is_reproducible(&cast.expression),
+        Expression::TSNonNullExpression(inner) => expression_is_reproducible(&inner.expression),
+        Expression::TSInstantiationExpression(inst) => expression_is_reproducible(&inst.expression),
+
+        _ => false,
+    }
+}
+
+/// True when reading `key` yields the same name each time: a static name, a
+/// private name, or a computed key that is itself reproducible.
+fn property_key_is_reproducible(key: &oxc_ast::ast::PropertyKey) -> bool {
+    use oxc_ast::ast::PropertyKey;
+
+    match key {
+        PropertyKey::StaticIdentifier(_) | PropertyKey::PrivateIdentifier(_) => true,
+        _ => key.as_expression().is_some_and(expression_is_reproducible),
+    }
+}
+
 /// True when `ident` resolves to the setter slot of a React state hook — the
 /// second element of an array-destructuring binding whose initializer is a
 /// `useState` or `useReducer` call (`const [value, setValue] = useState(...)`).
