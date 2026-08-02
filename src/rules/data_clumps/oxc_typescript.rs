@@ -3,6 +3,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::conforms_to_named_function_type;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use oxc_ast::ast::*;
@@ -176,6 +177,21 @@ fn is_member_property_default(
     )
 }
 
+/// True when something outside the function fixes its parameter list: a framework
+/// or constructor callback slot, a `||`/`??` default filling a dispatch-table slot,
+/// or a named type annotating the function value. The author cannot merge those
+/// parameters into one object parameter, so they are not a refactorable clump and
+/// the function contributes no parameter group.
+fn has_externally_fixed_signature<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    source: &str,
+) -> bool {
+    is_framework_callback(node, semantic, source)
+        || is_member_property_default(node, semantic)
+        || conforms_to_named_function_type(node, semantic)
+}
+
 /// Generate all sorted subsets of size `k` from `items`.
 fn combinations(items: &[String], k: usize) -> Vec<Vec<String>> {
     let mut result = Vec::new();
@@ -228,17 +244,13 @@ impl OxcCheck for Check {
                         // body) contributes to the clump count.
                         continue;
                     }
-                    if is_framework_callback(node, semantic, ctx.source)
-                        || is_member_property_default(node, semantic)
-                    {
+                    if has_externally_fixed_signature(node, semantic, ctx.source) {
                         continue;
                     }
                     Some(&func.params)
                 }
                 AstKind::ArrowFunctionExpression(arrow) => {
-                    if is_framework_callback(node, semantic, ctx.source)
-                        || is_member_property_default(node, semantic)
-                    {
+                    if has_externally_fixed_signature(node, semantic, ctx.source) {
                         continue;
                     }
                     Some(&arrow.params)
@@ -546,6 +558,182 @@ const r2 = obj.handlers.close ?? function (alpha, beta, gamma) { return beta; }
         let src = r#"
 exports.createUser = function (name, email, age) { return name; }
 function updateUser(name, email, age) { return email; }
+"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_on_method_decorator_factory_returns() {
+        // Regression for issue #6858 — nest's message-pattern decorators return the
+        // TypeScript `MethodDecorator` callback from four factories. The declared
+        // `MethodDecorator` return type fixes the returned function's parameter list,
+        // so `(target, key, descriptor)` cannot be merged into an object parameter.
+        let src = r#"
+export const MessagePattern = (metadata?: unknown): MethodDecorator => {
+  return (target: object, key: string | symbol, descriptor: PropertyDescriptor) => {
+    return descriptor;
+  };
+};
+export function GrpcMethod(service?: string): MethodDecorator {
+  return (target: object, key: string | symbol, descriptor: PropertyDescriptor) => {
+    return MessagePattern(service)(target, key, descriptor);
+  };
+}
+export function GrpcStreamMethod(service?: string): MethodDecorator {
+  return (target: object, key: string | symbol, descriptor: PropertyDescriptor) => {
+    descriptor.value = target;
+    return key;
+  };
+}
+export function GrpcStreamCall(service?: string): MethodDecorator {
+  return (target: object, key: string | symbol, descriptor: PropertyDescriptor) => {
+    return MessagePattern(service)(target, key, descriptor);
+  };
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_returned_functions_without_a_declared_return_type() {
+        // Minimal delta from the decorator-factory case: with no declared return
+        // type, nothing fixes the returned functions' parameter list, so the shared
+        // triple is a refactorable clump and must still be flagged.
+        let src = r#"
+export function makeCreate(service: string) {
+  return (target: object, key: string, descriptor: PropertyDescriptor) => descriptor;
+}
+export function makeUpdate(service: string) {
+  return (target: object, key: string, descriptor: PropertyDescriptor) => target;
+}
+"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_on_named_type_annotated_bindings() {
+        // A binding annotated with a named type takes that type's parameter list;
+        // the group belongs to `RenderRule`, declared elsewhere, not to these two
+        // implementations.
+        let src = r#"
+const renderLink: RenderRule = (tokens, idx, options) => tokens[idx];
+const renderImage: RenderRule = (tokens, idx, options) => tokens[options];
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_named_type_annotated_function_expressions() {
+        // The `function (…)` form of an annotated binding takes its parameter list
+        // from `RenderRule` as the arrow form does.
+        let src = r#"
+const open: RenderRule = function (tokens, idx, options) { return tokens[idx]; };
+const close: RenderRule = function (tokens, idx, options) { return tokens[options]; };
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_inline_function_type_annotated_bindings() {
+        // An inline function type is written at the same site as the function, so
+        // its parameter list is the author's to change: the clump stays reportable.
+        let src = r#"
+const createUser: (name: string, email: string, age: number) => void = (name, email, age) => { return; };
+const updateUser: (name: string, email: string, age: number) => void = (name, email, age) => { return; };
+"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_on_as_annotated_functions() {
+        // An `as` assertion pins the named type onto the function value.
+        let src = r#"
+const open = ((tokens, idx, options) => tokens[idx]) as RenderRule;
+const close = ((tokens, idx, options) => tokens[options]) as RenderRule;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_functions_under_a_const_assertion() {
+        // `as const` prevents literal-type widening and declares no signature, so
+        // the parameter group stays the author's to extract.
+        let src = r#"
+const open = ((tokens, idx, options) => tokens[idx]) as const;
+const close = ((tokens, idx, options) => tokens[options]) as const;
+"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_on_satisfies_annotated_functions() {
+        // A `satisfies` assertion pins the named type onto the function value.
+        let src = r#"
+const open = ((tokens, idx, options) => tokens[idx]) satisfies RenderRule;
+const close = ((tokens, idx, options) => tokens[options]) satisfies RenderRule;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_angle_bracket_assertion_annotated_functions() {
+        // `<T>value` is the older spelling of `value as T` and pins the same named
+        // type onto the function value.
+        let src = r#"
+const open = <RenderRule>((tokens, idx, options) => tokens[idx]);
+const close = <RenderRule>((tokens, idx, options) => tokens[options]);
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_functions_inside_an_annotated_object_literal() {
+        // The annotation types the object, not the functions inside it, so these
+        // stay reportable.
+        let src = r#"
+const handlers: RendererRules = {
+  link_open: (tokens, idx, options) => tokens[idx],
+  link_close: (tokens, idx, options) => tokens[options],
+};
+"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_on_annotated_class_field_functions() {
+        // An annotated class field pins the named type onto the function value.
+        let src = r#"
+class Renderer {
+  fence: RenderRule = (tokens, idx, options) => tokens[idx];
+  code: RenderRule = (tokens, idx, options) => tokens[options];
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_curried_decorator_factories() {
+        // The curried form of a decorator factory: the returned function is the
+        // concise body of an arrow declaring `MethodDecorator`. That declared
+        // return type fixes the parameter list, as a `return` statement does.
+        let src = r#"
+export const GrpcMethod = (service: string): MethodDecorator =>
+  (target: object, key: string | symbol, descriptor: PropertyDescriptor) => descriptor;
+export const GrpcStreamCall = (service: string): MethodDecorator =>
+  (target: object, key: string | symbol, descriptor: PropertyDescriptor) => target;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_curried_factories_without_a_declared_return_type() {
+        // Minimal delta from the curried case: with no declared return type the
+        // concise body is an ordinary function whose parameters are refactorable.
+        let src = r#"
+export const makeCreate = (service: string) =>
+  (target: object, key: string, descriptor: PropertyDescriptor) => descriptor;
+export const makeUpdate = (service: string) =>
+  (target: object, key: string, descriptor: PropertyDescriptor) => target;
 "#;
         assert_eq!(run(src).len(), 2);
     }
