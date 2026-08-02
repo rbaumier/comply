@@ -136,16 +136,10 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
                 .as_ref()
                 .is_some_and(|default| default.span() == node_span)
         }
-        // A default value inside a destructured parameter
-        // (`function f({ cb = () => {} }) {}`) is the value bound to that
-        // destructuring slot, not a hoistable nested helper — the same
-        // semantic as a direct default-parameter initializer. Match only when
-        // the arrow is the `right` (default) side of the `AssignmentPattern`
-        // and that pattern sits within a function's parameter list.
-        AstKind::AssignmentPattern(assign) => {
-            let node_span = nodes.kind(node_id).span();
-            assign.right.span() == node_span && is_in_formal_parameter(nodes, parent_id)
-        }
+        // A destructuring default (`{ cb = () => {} }`) is the same binding
+        // fragment as the parameter default above, in any binding position:
+        // parameter list, variable declarator, catch clause, for-of head.
+        AstKind::AssignmentPattern(assign) => assign.right.span() == nodes.kind(node_id).span(),
         // A function that is *returned* is the value its parent produces — a
         // useEffect cleanup (`return () => …`), a factory's closure, etc.
         // Hoisting it to module scope separates the produced value from its
@@ -200,25 +194,6 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
         }
         _ => false,
     }
-}
-
-/// Whether `node_id` (an `AssignmentPattern`) is part of a function's
-/// parameter list rather than a destructuring default elsewhere (e.g. a
-/// variable declarator). Walks up through binding-pattern containers and
-/// stops at a `FormalParameter` (match) or at the enclosing function/program
-/// boundary (no match).
-fn is_in_formal_parameter(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
-    for kind in nodes.ancestor_kinds(node_id) {
-        match kind {
-            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => return true,
-            AstKind::Function(_)
-            | AstKind::ArrowFunctionExpression(_)
-            | AstKind::VariableDeclarator(_)
-            | AstKind::Program(_) => return false,
-            _ => {}
-        }
-    }
-    false
 }
 
 fn references_this_directly(nodes: &oxc_semantic::AstNodes, func_span: Span) -> bool {
@@ -444,16 +419,66 @@ mod tests {
     }
 
     #[test]
-    fn flags_destructured_default_arrow_in_variable_declarator() {
-        // Negative-space guard: a destructuring default in a variable
-        // declarator (not a parameter list) is still a hoistable helper.
+    fn ignores_destructured_default_arrow_in_variable_declarator() {
+        // Regression for rbaumier/comply#6852 — an arrow default in a
+        // destructuring variable declarator is a binding-pattern fragment, the
+        // same idiom as a destructured parameter default (trpc jsonl.ts).
+        let src = r#"
+            export async function jsonlStreamConsumer(opts) {
+                const { deserialize = (v) => v } = opts;
+                return deserialize(opts.head);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_destructured_default_arrow_in_catch_and_for_of() {
+        // The exemption keys on the `AssignmentPattern` right slot, so it holds
+        // in every binding position, not only parameter lists and declarators.
+        let src = r#"
+            function outer(rows, run) {
+                for (const { fmt = (v) => v } of rows) { fmt("x"); }
+                try { run(); } catch ({ report = (e) => e }) { report(1); }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_nested_helper_declared_beside_destructured_default() {
+        // Negative-space guard: the destructuring-default exemption covers only
+        // the default slot. A sibling helper in the same body still flags, so
+        // the exemption cannot silence the rest of the enclosing body.
         let src = r#"
             function outer(opts) {
                 const { cb = () => 1 } = opts;
+                function double(x) { return x * 2; }
+                return double(cb());
+            }
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected only `double` to flag: {diags:?}");
+        assert!(diags[0].message.contains("`double`"), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_helper_declared_inside_destructured_default_body() {
+        // Negative-space guard: the exemption reads the direct parent only, so
+        // it covers the default expression itself and nothing below it. A
+        // helper declared inside that default's body is still hoistable.
+        let src = r#"
+            function outer(opts) {
+                const { cb = () => {
+                    function double(x) { return x * 2; }
+                    return double(1);
+                } } = opts;
                 return cb();
             }
         "#;
-        assert!(!run(src).is_empty());
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected only `double` to flag: {diags:?}");
+        assert!(diags[0].message.contains("`double`"), "{diags:?}");
     }
 
     #[test]
