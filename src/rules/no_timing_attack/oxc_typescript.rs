@@ -483,6 +483,20 @@ mod tests {
         assert!(run_on("if (oldLspSig !== lspSignature) {}").is_empty());
     }
 
+    /// The word matcher is shared with the Rust backend (#6855): `requiresHash`
+    /// spells the `sha` qualifier only across its `require|sha|sh` seam.
+    #[test]
+    fn allows_qualifier_split_across_words() {
+        assert!(run_on("if (requiresHash !== wheelHash) {}").is_empty());
+    }
+
+    /// Over-exemption guard, minimal delta of the case above: making the
+    /// qualifier a whole word of the same operand brings the diagnostic back.
+    #[test]
+    fn flags_qualifier_that_is_a_whole_word() {
+        assert_eq!(run_on("if (argon2Hash !== wheelHash) {}").len(), 1);
+    }
+
     #[test]
     fn allows_string_literal_with_sensitive_word() {
         assert!(run_on(r#"if (node.kind() !== "index_signature") {}"#).is_empty());

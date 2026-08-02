@@ -7,9 +7,9 @@
 //! ignored, so a string like `"index_signature"` is never inspected.
 //!
 //! A comparison is also exempt when it cannot leak a secret through timing:
-//! when it is a scalar-integer comparison (a single constant-time instruction),
-//! or when either operand is a string / char literal (a public compile-time
-//! constant baked into the binary, not a runtime secret).
+//! when it is a scalar-integer or boolean comparison (a single constant-time
+//! instruction), or when either operand is a string / char literal (a public
+//! compile-time constant baked into the binary, not a runtime secret).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -49,6 +49,13 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     // to a count / dimension), the sensitively-named operand is a numeric count
     // (e.g. `pin` = the length of an HMM initial-state vector), not a credential.
     if comparison_is_scalar_integer(left, right, source) {
+        return;
+    }
+    // A boolean comparison holds one bit per side, which the CPU compares in a
+    // single constant-time instruction. When either operand is provably a `bool`,
+    // the sensitively-named operand states a property of the secret
+    // (`password.is_some()`), never the secret itself.
+    if comparison_is_boolean(left, right, source) {
         return;
     }
     // A string / char literal operand is a public compile-time constant baked
@@ -102,6 +109,16 @@ fn operand_is_scalar_integer(node: tree_sitter::Node, source: &[u8]) -> bool {
         }),
         _ => false,
     }
+}
+
+/// True when the comparison is provably between booleans — either operand is
+/// e.g. a `true` / `false` literal, a logical negation, a nested comparison, a
+/// `matches!`, a bool-returning call, or a bool-typed binding; the full shape
+/// list lives in `rust_helpers::operand_is_bool`. Rust is statically typed, so
+/// one provably-boolean operand means both sides are `bool`.
+fn comparison_is_boolean(left: tree_sitter::Node, right: tree_sitter::Node, source: &[u8]) -> bool {
+    crate::rules::rust_helpers::operand_is_bool(left, source)
+        || crate::rules::rust_helpers::operand_is_bool(right, source)
 }
 
 /// True when either operand is a string, raw-string, or char literal — a public
@@ -536,6 +553,90 @@ fn validate(transition: &Mat, observation: &Mat, initial: &Vec) {
     fn does_not_flag_password_against_raw_string_literal() {
         let src = r##"fn f(password: &str) -> bool { password == r"abc" }"##;
         assert!(run_on(src).is_empty());
+    }
+
+    /// The uv lockfile self-consistency check of #6855: the source mandates a
+    /// hash field, and the wheel must carry one. Both operands are `bool`, and
+    /// the words of `requires_hash` hold no cryptographic qualifier.
+    #[test]
+    fn does_not_flag_uv_requires_hash_consistency_check() {
+        let src = r#"
+fn validate(dist: &Dist) -> Result<(), LockError> {
+    if let Some(requires_hash) = dist.id.source.requires_hash() {
+        for wheel in &dist.wheels {
+            if requires_hash != wheel.hash.is_some() {
+                return Err(LockErrorKind::Hash.into());
+            }
+        }
+    }
+    Ok(())
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// The same name outside a boolean comparison is still not a credential:
+    /// the `sha` qualifier only spans the `require|sha|sh` seam.
+    #[test]
+    fn does_not_flag_requires_hash_string_comparison() {
+        let src = "fn f(requires_hash: &str, other: &str) -> bool { requires_hash == other }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A property of a secret is one bit, not the secret: `.is_some()` proves
+    /// both operands are `bool`. The `expected_hash` field is sensitive and
+    /// carries no visible type, so the boolean exemption is what suppresses the
+    /// diagnostic.
+    #[test]
+    fn does_not_flag_boolean_property_of_secret() {
+        let src = "fn f(user: &User) -> bool { user.password_hash.is_some() == user.expected_hash }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A negated boolean predicate is still a `bool`.
+    #[test]
+    fn does_not_flag_negated_boolean_predicate() {
+        let src = "fn f(user: &User, hashes: &[Hash]) -> bool { user.api_key == !hashes.is_empty() }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Over-exemption guard: `*` and `-` are also `unary_expression`, and a
+    /// dereferenced credential is no `bool`, so it must still flag.
+    #[test]
+    fn flags_credential_against_dereferenced_operand() {
+        let src =
+            "fn f(password_hash: &str, expected: &&str) -> bool { password_hash == *expected }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Over-exemption guard: `!` is bitwise NOT on anything that is not a
+    /// `bool`, so a negated bit mask stays a multi-byte value and flags.
+    #[test]
+    fn flags_credential_against_bitwise_negation() {
+        let src = "fn f(password_hash: &str, flags: Flags) -> bool { password_hash == !flags.bits() }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// A parenthesized comparison yields a `bool`.
+    #[test]
+    fn does_not_flag_comparison_against_nested_comparison() {
+        let src = "fn f(user: &User, count: usize) -> bool { user.api_key == (count > 0) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A boolean literal operand pins both sides to `bool`.
+    #[test]
+    fn does_not_flag_secret_flag_against_boolean_literal() {
+        let src = "fn f(user: &User) -> bool { user.api_key == true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Over-exemption guard: without the `.is_some()` the same operands are
+    /// compared byte by byte, which must still flag.
+    #[test]
+    fn flags_credential_hash_comparison_without_boolean_operand() {
+        let src = "fn f(user: &User, expected_hash: &str) -> bool { user.password_hash == expected_hash }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     /// Over-exemption guard: `secret == other_secret` has no literal operand and
