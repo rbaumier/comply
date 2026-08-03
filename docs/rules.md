@@ -1370,7 +1370,7 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
-| `boolean-naming` | Boolean identifiers must start with is/has/should/can/will/did/was. | Rename to convey the predicate: `ready` → `isReady` (TS) or `is_ready` (Rust). Use the positive form only — prefer `!isReady` over `isNotReady`. |
+| `boolean-naming` | Boolean identifiers must start with is/has/should/can/will/did/was. | Rename to convey the predicate: `ready` → `isReady` or `is_ready`. Use the positive form only — prefer `!isReady` over `isNotReady`. |
 | `explicit-units` | Numeric names should include an explicit unit (Ms, Bytes, Kb...). | Add a unit suffix: `delay` → `delayMs`, `size` → `sizeBytes`, `timeout` → `timeoutMs`. Ambiguous units cause real bugs — setTimeout(delay) expects ms. |
 | `no-abbreviated-names` | Identifier contains a banned abbreviation. | Use the full word: `usr` → `user`, `btn` → `button`. Add project-specific bans via `banned = ["mgr:manager"]` in comply.toml. Editors auto-complete; readers don't. |
 | `no-and-in-function-name` | `And` in a function name signals two responsibilities — split it. | A function with `And` in its name does two things. Split into two functions named after each responsibility, then let the caller compose them: `getUserAndUpdateCache` → `getUser()` + `updateCache(user)`. |

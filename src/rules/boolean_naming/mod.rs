@@ -14,8 +14,8 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "boolean-naming",
     description: "Boolean identifiers must start with is/has/should/can/will/did/was.",
-    remediation: "Rename to convey the predicate: `ready` → `isReady` (TS) or \
-                  `is_ready` (Rust). Use the positive form only — prefer \
+    remediation: "Rename to convey the predicate: `ready` → `isReady` or \
+                  `is_ready`. Use the positive form only — prefer \
                   `!isReady` over `isNotReady`.",
     severity: Severity::Error,
     doc_url: None,

@@ -12,26 +12,32 @@ pub struct Check;
 // booleans (`areMutuallyExclusive`, `areEqual`) that read as "the subjects are
 // X", exactly like the singular `is`. `needs` is a necessity/modal verb that
 // forms a predicate just like the allowed `should`/`will`: `needsBarrier`,
-// `needsRefresh` read as "does it need X?". The camelCase-boundary guard in
-// `classify_name` (the prefix must be followed by an uppercase letter) keeps
-// noun names whose first letters happen to be `are`/`needs` — `area`, `arena` —
-// out: they strip to a lowercase remainder and still flag.
+// `needsRefresh` read as "does it need X?". The word-boundary guard in
+// `has_boolean_predicate_prefix` (the prefix must be a whole word) keeps noun
+// names whose first letters happen to be `are`/`needs` — `area`, `arena` — out:
+// their first word is the noun itself and they still flag.
 const VALID_PREFIXES: &[&str] = &[
     "is", "has", "should", "can", "will", "did", "was", "in", "seen", "found", "are", "needs",
 ];
-const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
-/// Predicate verbs that, when appearing as a capitalized mid-name word
-/// (`<subject>Is<Predicate>`, `<subject>Has<Noun>`, …), embed a predicate
+/// Negation words. A boolean whose name carries one of these reads as the
+/// negative of the proposition (`valueIsNotSet`, `is_not_ready`), which forces a
+/// double negative at every use site, so the rule asks for the positive form.
+/// Matched as whole words, so `abortNotified` — `Not` buried inside the past
+/// participle of "notify" — is not a negation.
+const NEGATIVE_WORDS: &[&str] = &["not", "isnt", "cannot", "cant", "shouldnt"];
+
+/// Predicate verbs that, when appearing as a mid-name word
+/// (`<subject>Is<Predicate>`, `<subject>_has_<noun>`, …), embed a predicate
 /// relationship just as a leading prefix does. `nextIsSingle`,
 /// `prevVNodeIsTextNode`, `valueHasOwner` read as "the subject is/has X" — the
-/// infix `Is` serves the exact semantic function of an `is*` prefix while making
-/// the subject explicit, so a redundant leading `is*` would be wrong. `Are` is
+/// infix `is` serves the exact semantic function of an `is*` prefix while making
+/// the subject explicit, so a redundant leading `is*` would be wrong. `are` is
 /// the plural copula: `parentFieldsAreMutuallyExclusive` reads "the parent
-/// fields are mutually exclusive", the plural-subject counterpart of `Is`. This
-/// is the camelCase counterpart of `INFIX_PREDICATES` in the rule's Rust backend
-/// (`<noun>_is_<adjective>`); the verb set is kept in sync.
-const INFIX_PREDICATES: &[&str] = &["Is", "Are", "Has", "Should", "Can", "Will"];
+/// fields are mutually exclusive", the plural-subject counterpart of `is`. The
+/// rule's Rust backend carries the same verbs in its own `INFIX_PREDICATES`,
+/// except the plural copula `are`.
+const INFIX_PREDICATES: &[&str] = &["is", "are", "has", "should", "can", "will"];
 
 /// Standard HTML attributes and React controlled-component props whose names
 /// are dictated by the platform / component library API, plus ECMA-402 Intl
@@ -61,44 +67,80 @@ const DESCRIPTOR_BOOLEAN_KEYS: &[&str] = &["enumerable", "writable", "configurab
 /// variables or non-accessor parameters.
 const MEDIA_API_BOOLEAN_PROPS: &[&str] = &["loop", "mute", "muted", "solo"];
 
+/// Split an identifier into its words. A JavaScript / TypeScript identifier
+/// separates words with either of two conventions — the camelCase transition
+/// (`isUpdatingEffect`) or the snake_case underscore (`is_updating_effect`) —
+/// and both spell the same words. Every word test of this rule reads its words
+/// from here, so the predicate a name carries is recognized under either
+/// convention. Letters that merely open a word are not a word: `island` splits
+/// into the single word `island`, not into `is` + `land`. A separator carries no
+/// word of its own, so repeated, leading and trailing underscores yield no empty
+/// word (`is__ready` reads `is` + `ready`).
+fn split_words(name: &str) -> Vec<&str> {
+    let bytes = name.as_bytes();
+    let mut words = Vec::new();
+    let mut start = 0;
+    for (i, &byte) in bytes.iter().enumerate() {
+        let is_underscore = byte == b'_';
+        if is_underscore || opens_camel_word(bytes, i) {
+            if start < i {
+                words.push(&name[start..i]);
+            }
+            start = if is_underscore { i + 1 } else { i };
+        }
+    }
+    if start < bytes.len() {
+        words.push(&name[start..]);
+    }
+    words
+}
+
+/// True when the byte at `at` opens a camelCase word: an uppercase letter that
+/// closes whatever precedes it. A run of uppercase letters is an acronym and
+/// stays one word until a lowercase word opens — `URLIsValid` reads `URL` +
+/// `Is` + `Valid`. Any other predecessor (a lowercase letter, a digit, a
+/// non-ASCII letter) ends its word right there, so `isReady`, `base64IsValid`
+/// and `日本語IsValid` all expose their verb.
+fn opens_camel_word(bytes: &[u8], at: usize) -> bool {
+    if !bytes[at].is_ascii_uppercase() {
+        return false;
+    }
+    let Some(&previous) = bytes[..at].last() else {
+        return false;
+    };
+    if previous.is_ascii_uppercase() {
+        return bytes.get(at + 1).is_some_and(u8::is_ascii_lowercase);
+    }
+    true
+}
+
 /// True if the name ends in the explicit `flag` suffix as a distinct word
 /// (`useDeltaFlag`, `use_delta_flag`, or bare `flag`). The `flag` suffix is
 /// itself a boolean marker — as clear an intent signal as an `is*`/`has*`
 /// prefix — and is the verbatim naming convention for boolean syntax elements
 /// in ITU-T/ISO codec and protocol specifications. A trailing `flag` mid-word
-/// (`flagged`) does not match: the word boundary (camelCase `Flag` or
-/// snake_case `_flag`) is required, so adjective/state names still need a
-/// prefix.
+/// (`flagged`) does not match: `flag` must be a whole word, so adjective/state
+/// names still need a prefix. The marker is the word, not its capitalization, so
+/// `Flag` and `FLAG` carry it as much as `flag` does.
 fn has_flag_suffix(name: &str) -> bool {
-    name == "flag" || name.ends_with("Flag") || name.ends_with("_flag")
+    split_words(name).last().is_some_and(|word| word.eq_ignore_ascii_case("flag"))
 }
 
-/// True if `name` embeds a predicate verb as a capitalized mid-name word —
+/// True if `name` embeds a predicate verb as a mid-name word —
 /// `<subject>Is<Descriptor>` (`nextIsSingle`, `prevVNodeIsTextNode`),
-/// `<subject>Has<Noun>` (`valueHasOwner`), etc. The verb must be a real infix
-/// word: there is a non-empty subject before it (so a name beginning with the
-/// verb itself, `IsReady`, is not treated as an infix) and the descriptor word
-/// starts with an uppercase letter right after it. The trailing boundary
-/// distinguishes the verb word from a longer word with the same opening letters
-/// (`Issue` after a subject is not `Is`, `nextIssue` does not match), and a
-/// trailing verb (`singleIs`) has no descriptor after it, so it is not an infix.
-/// Mirrors `has_infix_predicate` in the rule's Rust backend.
+/// `<subject>Has<Noun>` (`valueHasOwner`), `<subject>_is_<descriptor>`
+/// (`value_is_present`), etc. The verb must be a real infix word: a subject
+/// precedes it and a descriptor follows it. A word that merely opens with the
+/// verb's letters is a different word (`nextIssue` carries `issue`, not `is`),
+/// and a trailing verb (`singleIs`) has no descriptor after it, so neither is an
+/// infix. Mirrors `has_infix_predicate` in the rule's Rust backend.
 fn has_infix_predicate(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    INFIX_PREDICATES.iter().any(|verb| {
-        let mut search_from = 0;
-        while let Some(rel) = name[search_from..].find(verb) {
-            let start = search_from + rel;
-            let after = start + verb.len();
-            let has_subject_before = start > 0;
-            let descriptor_starts_word =
-                bytes.get(after).is_some_and(|c| c.is_ascii_uppercase());
-            if has_subject_before && descriptor_starts_word {
-                return true;
-            }
-            search_from = start + 1;
-        }
-        false
+    let words = split_words(name);
+    if words.len() < 3 {
+        return false;
+    }
+    words[1..words.len() - 1].iter().any(|word| {
+        INFIX_PREDICATES.iter().any(|verb| word.eq_ignore_ascii_case(verb))
     })
 }
 
@@ -119,47 +161,31 @@ fn is_screaming_case(name: &str) -> bool {
     has_letter
 }
 
-/// True when `name` begins with a boolean-predicate prefix (`is`/`has`/`should`/
-/// `can`/…) at a camelCase word boundary: the prefix is either the whole name or
-/// is immediately followed by an uppercase letter. `isServer` matches; `island`
-/// does not (`is` is followed by the lowercase `l`), so noun names sharing a
-/// prefix's opening letters still lack a predicate.
+/// True when the first word of `name` is a boolean-predicate prefix
+/// (`is`/`has`/`should`/`can`/…), whichever convention separates the words:
+/// `isServer` and `is_server` both match. `island` does not — its first word is
+/// the noun itself — so names sharing a prefix's opening letters still lack a
+/// predicate. The prefix is matched verbatim: a variable opens on a lowercase
+/// word in both conventions, so the PascalCase `IsReady` — the shape of a type
+/// name — is not a predicate variable.
 ///
 /// This is the single definition of the predicate-prefix convention, consumed
 /// both here and by `screaming-snake-for-constants`: a boolean-literal constant
 /// whose name follows this convention would violate `boolean-naming` if renamed
 /// to SCREAMING_SNAKE_CASE, so that rule exempts it.
 pub(crate) fn has_boolean_predicate_prefix(name: &str) -> bool {
-    VALID_PREFIXES.iter().any(|&prefix| {
-        name.strip_prefix(prefix).is_some_and(|rest| {
-            rest.is_empty() || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-        })
-    })
+    split_words(name).first().is_some_and(|first| VALID_PREFIXES.contains(first))
 }
 
-/// True if `name` contains a negation word (`Not`, `Isnt`, `Cannot`, `Cant`,
-/// `Shouldnt`) at a camelCase word boundary. Each entry begins with an uppercase
-/// letter, so it starts a camelCase word; it must also *end* one — the character
-/// right after the match is absent (end of name) or another uppercase letter that
-/// opens the next word. `valueIsNotSet` (the `S` of `Set` follows `Not`) is a
-/// negation; `abortNotified` (`Not` followed by lowercase `i`, the past
-/// participle of "notify") is not. This is the camelCase counterpart of the
-/// `_not_` snake_case word boundary in the rule's Rust backend.
+/// True if one of the words of `name` is a negation word (`not`, `isnt`,
+/// `cannot`, `cant`, `shouldnt`). `valueIsNotSet` and `value_is_not_set` are
+/// negations; `abortNotified` is not — its second word is `Notified`, the past
+/// participle of "notify". Mirrors the `_not_` word boundary of the rule's Rust
+/// backend.
 fn contains_negative_word(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    NEGATIVE_SUBSTRINGS.iter().any(|neg| {
-        let mut search_from = 0;
-        while let Some(rel) = name[search_from..].find(neg) {
-            let start = search_from + rel;
-            let after = start + neg.len();
-            let ends_word = bytes.get(after).is_none_or(|c| c.is_ascii_uppercase());
-            if ends_word {
-                return true;
-            }
-            search_from = start + 1;
-        }
-        false
-    })
+    split_words(name)
+        .iter()
+        .any(|word| NEGATIVE_WORDS.iter().any(|neg| word.eq_ignore_ascii_case(neg)))
 }
 
 /// Return a short problem description if the name doesn't match the rule.
@@ -893,9 +919,8 @@ mod tests {
 
     #[test]
     fn still_flags_negation_at_camelcase_word_boundary() {
-        // Strictness preserved: `Not`/`Cannot` at a camelCase word boundary (the
-        // next character is uppercase or end-of-name) is a genuine negation and
-        // still flags as negatively phrased.
+        // Strictness preserved: `Not`/`Cannot` spelled as a whole word is a
+        // genuine negation and still flags as negatively phrased.
         for src in [
             "let isNotSet = false;",
             "let valueIsNotFound = false;",
@@ -920,11 +945,10 @@ mod tests {
     }
 
     #[test]
-    fn are_prefix_requires_camelcase_boundary() {
+    fn are_prefix_requires_word_boundary() {
         // Strictness preserved: a noun whose name merely begins with the letters
-        // `are` (`area`, `arena`) is not a predicate — the prefix must be
-        // followed by an uppercase letter, so these strip to a lowercase
-        // remainder and still flag.
+        // `are` (`area`, `arena`) is not a predicate — the prefix must be a whole
+        // word, and these open on the noun itself, so they still flag.
         assert_eq!(run("let area: boolean = true;").len(), 1);
         assert_eq!(run("let arena: boolean = false;").len(), 1);
         assert_eq!(run("function f(arenaCount: boolean) {}").len(), 1);
@@ -941,11 +965,10 @@ mod tests {
     }
 
     #[test]
-    fn needs_prefix_requires_camelcase_boundary() {
+    fn needs_prefix_requires_word_boundary() {
         // Strictness preserved: a noun whose name merely begins with the letters
-        // `needs` (`needsful`-style lowercase remainders) is not a predicate —
-        // the prefix must be followed by an uppercase letter, and unprefixed
-        // adjective/state booleans still flag.
+        // `needs` (`needsful`) is not a predicate — the prefix must be a whole
+        // word, and unprefixed adjective/state booleans still flag.
         assert_eq!(run("let needsful: boolean = true;").len(), 1);
         assert_eq!(run("let barrier: boolean = true;").len(), 1);
         assert_eq!(run("function f(barrier: boolean) {}").len(), 1);
@@ -1083,6 +1106,82 @@ mod tests {
         assert!(run("let cert: HTTPSCert = false;").is_empty());
         assert!(run("let x: SomeType = false;").is_empty());
         assert!(run("let y: Listener[\"https\"] = true;").is_empty());
+    }
+
+    #[test]
+    fn infix_predicate_survives_an_acronym_subject() {
+        // An acronym ends its word where the next lowercase word opens, so
+        // `URLIsValid` reads `URL` + `Is` + `Valid` and its infix predicate is
+        // recognized like the one of `urlIsValid`.
+        assert!(run("function f(URLIsValid: boolean) { if (URLIsValid) {} }").is_empty());
+        assert!(run("function f(HTTPHasBody: boolean) { if (HTTPHasBody) {} }").is_empty());
+        // Strictness preserved: an acronym subject carries no predicate on its
+        // own, so a name without a verb still flags.
+        assert_eq!(run("function f(URLValid: boolean) { if (URLValid) {} }").len(), 1);
+    }
+
+    #[test]
+    fn word_opens_after_any_non_uppercase_character() {
+        // A digit or a non-ASCII letter closes the word it belongs to, so the
+        // verb that follows it is a word of its own and the subject keeps its
+        // predicate.
+        assert!(run("function f(base64IsValid: boolean) { if (base64IsValid) {} }").is_empty());
+        assert!(run("function f(value2IsSet: boolean) { if (value2IsSet) {} }").is_empty());
+        assert!(run("function f(日本語IsValid: boolean) { if (日本語IsValid) {} }").is_empty());
+        // Strictness preserved: a non-ASCII subject carries no predicate either.
+        assert_eq!(run("function f(日本語Ready: boolean) { if (日本語Ready) {} }").len(), 1);
+        // The negation check reads the same words, so it sees `Not` here too.
+        let diags = run("let value2NotFound = false;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("negatively phrased"));
+    }
+
+    #[test]
+    fn no_fp_on_snake_case_predicate_prefix() {
+        // A predicate prefix is a word, not a casing convention: JavaScript
+        // written in snake_case spells the very same predicate
+        // (`is_updating_effect` == `isUpdatingEffect`). (Closes #6860)
+        assert!(run("let is_updating_effect = false;").is_empty());
+        assert!(run("export let is_destroying_effect = false;").is_empty());
+        assert!(run("export let should_intro = true;").is_empty());
+        assert!(run("let has_promises: boolean = false;").is_empty());
+        assert!(run("let did_reset = false;").is_empty());
+        assert!(run("function f(can_edit: boolean) {}").is_empty());
+        // The infix predicate reads the same words under either convention.
+        assert!(run("let value_is_present = false;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_snake_case_boolean_without_predicate_prefix() {
+        // Strictness preserved: reading words under both conventions grants no
+        // amnesty to a name that carries no predicate, in either convention.
+        assert_eq!(run("let updating_effect = false;").len(), 1);
+        assert_eq!(run("let flushing_sync: boolean = false;").len(), 1);
+        assert_eq!(run("let disabled_by_default = false;").len(), 1);
+        assert_eq!(run("let updatingEffect = false;").len(), 1);
+        assert_eq!(run("const debug: boolean = true;").len(), 1);
+        // A word merely opening with a prefix's letters is not a predicate.
+        assert_eq!(run("let island_map: boolean = true;").len(), 1);
+        assert_eq!(run("let arena_count = false;").len(), 1);
+    }
+
+    #[test]
+    fn flags_snake_case_negation_as_negatively_phrased() {
+        // Accepting a snake_case prefix leaves no blind spot: the negation check
+        // reads the same words, so `is_not_ready` is reported for its phrasing
+        // rather than silently accepted on its `is` prefix.
+        let diags = run("let is_not_ready = false;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("negatively phrased"));
+    }
+
+    #[test]
+    fn no_fp_on_screaming_snake_boolean_constant_with_predicate_prefix() {
+        // ALL-CAPS names are value labels whatever their words: both the
+        // prefixed and the bare form stay exempt (see
+        // `no_fp_on_screaming_case_boolean_constant`).
+        assert!(run("const IS_UPDATING = false;").is_empty());
+        assert!(run("const UPDATING = false;").is_empty());
     }
 
     #[test]

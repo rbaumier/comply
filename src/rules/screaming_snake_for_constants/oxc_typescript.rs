@@ -95,8 +95,8 @@ impl OxcCheck for Check {
             // A boolean-literal constant whose name uses a predicate prefix
             // (`isServer`, `hasPluginAdapters`, `shouldRetry`) is a boolean
             // sentinel following the JS/TS `is*`/`has*` predicate convention that
-            // comply's own `boolean-naming` rule mandates (camelCase predicate
-            // prefix). Requiring `SCREAMING_SNAKE_CASE` here would contradict
+            // comply's own `boolean-naming` rule mandates (`isServer` or
+            // `is_server`). Requiring `SCREAMING_SNAKE_CASE` here would contradict
             // `boolean-naming`, so such constants are exempt. The predicate prefix
             // (shared with `boolean-naming`) plus a boolean literal is the
             // structural proof — not a name allowlist. Non-boolean inits
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn _issue_7029() {
         // Boolean sentinel constants named with an `is*`/`has*`/`should*`
-        // predicate prefix follow the camelCase convention that `boolean-naming`
+        // predicate prefix follow the convention that `boolean-naming`
         // mandates; requiring SCREAMING_SNAKE_CASE would contradict it, so they
         // are exempt.
         assert!(run_ts("export const isServer = false;").is_empty());
@@ -473,11 +473,21 @@ mod tests {
     }
 
     #[test]
+    fn boolean_predicate_exemption_reads_snake_case_too() {
+        // The exemption follows `boolean-naming`'s predicate convention, which
+        // is about the prefix word and not about the casing convention that
+        // separates the words.
+        assert!(run_ts("export const is_server = false;").is_empty());
+        assert!(run_on("const should_retry = true;").is_empty());
+    }
+
+    #[test]
     fn flags_boolean_literal_without_word_boundary_prefix() {
-        // `island` shares `is`'s opening letters but the prefix is not followed by
-        // an uppercase word boundary, so it is not a predicate name and still
-        // flags — the same CamelCase boundary rule `boolean-naming` uses.
+        // `island` shares `is`'s opening letters but no word boundary follows
+        // them, so it is not a predicate name and still flags — the same word
+        // boundary rule `boolean-naming` uses.
         assert_eq!(run_on("const island = false;").len(), 1);
+        assert_eq!(run_on("const island_map = false;").len(), 1);
     }
 
     #[test]
