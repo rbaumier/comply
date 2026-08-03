@@ -186,12 +186,11 @@ impl OxcCheck for Check {
             return;
         }
 
-        // In a Web Worker script `self` is the `DedicatedWorkerGlobalScope` —
-        // the canonical, idiomatic global of that realm (there is no `window`).
-        // `self.onmessage` / `self.postMessage` are the spec API surface, so
-        // rewriting them to `globalThis` obscures intent rather than improving
-        // portability. `window`/`global` stay flagged even in worker files.
-        if name == "self" && crate::oxc_helpers::is_worker_script(ctx.source) {
+        // In a worker script `self` is the `WorkerGlobalScope` — the canonical
+        // global of that realm, and the object the spec writes its own API
+        // surface on. Rewriting it to `globalThis` obscures intent rather than
+        // improving portability. `window`/`global` stay flagged in worker files.
+        if name == "self" && crate::oxc_helpers::is_worker_script(ctx.source, semantic) {
             return;
         }
 
@@ -345,6 +344,159 @@ mod tests {
         let d = run_ts(src);
         assert_eq!(d.len(), 1, "`window` must stay flagged in a worker file: {d:?}");
         assert!(d[0].message.contains("window"));
+    }
+
+    #[test]
+    fn ignores_self_in_service_worker_with_skip_waiting() {
+        // Regression for #6864 (element-plus `docs/public/sw.js`): in a Service
+        // Worker `self` is the `ServiceWorkerGlobalScope`. `self.skipWaiting()`
+        // and the `activate` listener are the spec's own API surface.
+        let src = "self.addEventListener('activate', (e) => {\n  \
+                   e.waitUntil(caches.keys().then((t) => Promise.all(t.map((n) => caches.delete(n)))))\n\
+                   })\n\
+                   self.skipWaiting()";
+        assert!(
+            run_ts(src).is_empty(),
+            "service worker `self` must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_self_in_service_worker_with_lifecycle_listener_only() {
+        // workbox `Router.ts` shape: the sole Service Worker marker is the
+        // `fetch` listener — no `skipWaiting`, no `clients`, no type reference.
+        let src = "self.addEventListener('fetch', (event) => {\n  \
+                   event.respondWith(caches.match(event.request));\n\
+                   });";
+        assert!(
+            run_ts(src).is_empty(),
+            "`fetch` listener marks a service worker: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_self_in_service_worker_across_line_breaks() {
+        // The listener call carries the marker even when the event name sits on
+        // its own line and uses double quotes: the signal is read from the AST,
+        // so formatting and quote style do not change the answer.
+        let src = "self.addEventListener(\n  \
+                   \"install\",\n  \
+                   (event) => event.waitUntil(Promise.resolve()),\n\
+                   );\n\
+                   const store = self.caches;";
+        assert!(
+            run_ts(src).is_empty(),
+            "a wrapped listener call must still mark a service worker: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_self_in_service_worker_with_clients() {
+        // workbox `test-clientsClaim.mjs` shape: `clients` exists only on
+        // `ServiceWorkerGlobalScope`, so it alone identifies the realm.
+        let src = "self.clients.matchAll().then((all) => all.length);";
+        assert!(
+            run_ts(src).is_empty(),
+            "`self.clients` marks a service worker: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_self_in_service_worker_with_registration() {
+        // workbox `test-isSupported.mjs` shape: `registration` exists only on
+        // `ServiceWorkerGlobalScope`, so it alone identifies the realm.
+        let src = "const supported = Boolean(self.registration.navigationPreload);";
+        assert!(
+            run_ts(src).is_empty(),
+            "`self.registration` marks a service worker: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn flags_unbound_self_when_the_worker_marker_sits_on_a_local_self() {
+        // The realm signals resolve each `self` reference: a marker read off a
+        // shadowed `self` describes a local object, not the execution context,
+        // so the genuine global access in the outer scope keeps firing.
+        let src = "function setup() {\n  \
+                   const self = new EventTarget();\n  \
+                   self.addEventListener('sync', () => {});\n\
+                   }\n\
+                   const id = self.crypto.randomUUID();";
+        let d = run_ts(src);
+        assert_eq!(
+            d.len(),
+            1,
+            "a marker on a local `self` must not exempt the file: {d:?}"
+        );
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn ignores_self_in_service_worker_declared_by_webworker_lib_reference() {
+        // vite-plugin-pwa `vanilla-js-custom-sw/service-worker/sw.js` shape: the
+        // triple-slash directive is TypeScript's own way to type a file against
+        // the worker lib, so it settles the realm on its own.
+        let src = "/// <reference lib=\"webworker\" />\n\
+                   precacheAndRoute(self.__WB_MANIFEST);";
+        assert!(
+            run_ts(src).is_empty(),
+            "the webworker lib reference marks a worker realm: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn flags_self_listener_for_non_service_worker_event() {
+        // Negative-space guard: only service-worker-only events mark the realm.
+        // `resize` is a `Window` event, so this file stays ordinary browser code
+        // and both `self.*` accesses keep firing.
+        let src = "self.addEventListener('resize', () => {});\n\
+                   const w = self.innerWidth;";
+        let d = run_ts(src);
+        assert_eq!(
+            d.len(),
+            2,
+            "a `Window` event listener must not exempt `self.*`: {d:?}"
+        );
+        assert!(d.iter().all(|x| x.message.contains("`self`")), "{d:?}");
+    }
+
+    #[test]
+    fn flags_self_when_add_event_listener_is_passed_rather_than_called() {
+        // `addEventListener` read off the global and handed to another function
+        // registers nothing, so it is no evidence of a realm — the event name
+        // belongs to the wrapper's call, not to a listener registration.
+        let src = "wrapper('fetch', self.addEventListener);\n\
+                   const u = self.location.href;";
+        let d = run_ts(src);
+        assert_eq!(
+            d.len(),
+            2,
+            "passing `self.addEventListener` must not exempt the file: {d:?}"
+        );
+        assert!(d.iter().all(|x| x.message.contains("`self`")), "{d:?}");
+    }
+
+    #[test]
+    fn flags_window_and_global_in_service_worker_file() {
+        // The service worker exemption is `self`-only: `window` and `global`
+        // have no canonical meaning in that realm and keep their diagnostic.
+        let src = "self.skipWaiting();\n\
+                   const u = window.location;\n\
+                   const p = global.process;";
+        let d = run_ts(src);
+        assert_eq!(
+            d.len(),
+            2,
+            "`window`/`global` must stay flagged in a service worker: {d:?}"
+        );
+        assert!(d.iter().any(|x| x.message.contains("window")));
+        assert!(d.iter().any(|x| x.message.contains("global")));
     }
 
     #[test]
