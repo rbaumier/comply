@@ -41,17 +41,15 @@ impl OxcCheck for Check {
         if leads_with_unknown && is_deferral_trick(node, semantic) {
             return;
         }
-        // `<mapped-type> & unknown` is the standard `Prettify`/`Compute`
-        // type-flattening idiom: intersecting a mapped-type literal or object-type
-        // literal with `unknown` forces the checker to eagerly resolve and display
-        // the flattened object shape. The `& unknown` is load-bearing here, not a
-        // no-op. A `never` member genuinely collapses the whole intersection to
-        // `never`, so it still flags.
-        let has_flatten_sibling = intersection
-            .types
-            .iter()
-            .any(|ty| matches!(ty, TSType::TSMappedType(_) | TSType::TSTypeLiteral(_)));
-        if has_unknown && !has_never && has_flatten_sibling {
+        // TypeScript drops `unknown` from an intersection, but the operand still
+        // steers how the checker resolves the siblings. Report the `unknown`
+        // member only when every sibling is a plain written-out type, which the
+        // extra operand cannot change. A `never` member collapses the whole
+        // intersection to `never`, so it still flags.
+        let unknown_is_load_bearing = has_unknown
+            && !has_never
+            && intersection.types.iter().any(unknown_steers_operand);
+        if unknown_is_load_bearing {
             return;
         }
         let (line, column) =
@@ -65,6 +63,45 @@ impl OxcCheck for Check {
             severity: super::META.severity,
             span: None,
         });
+    }
+}
+
+/// True when an `unknown` sibling changes how TypeScript resolves the operand
+/// `ty`, instead of being dropped as the intersection identity:
+///
+/// - object shapes (`{ a: number }`, mapped types): `& unknown` makes the
+///   checker resolve and display the flattened members eagerly, the
+///   `Prettify`/`Compute` idiom;
+/// - types read out of value space (`typeof X`, `InstanceType<typeof X>`): the
+///   shape is inferred from a value declaration instead of written out, and
+///   `& unknown` bounds how deep the checker instantiates that inference at
+///   the declaration site.
+fn unknown_steers_operand(ty: &TSType) -> bool {
+    matches!(ty, TSType::TSMappedType(_) | TSType::TSTypeLiteral(_)) || reads_value_space(ty)
+}
+
+/// True when `ty` is a `typeof` query, or carries one in a position that makes
+/// the whole type inherit the query's shape, through any parentheses:
+///
+/// - a type argument (`InstanceType<typeof Component>`);
+/// - the object side of an element lookup (`(typeof list)[number]`) — the index
+///   side is excluded because `Config[typeof key]` takes its shape from
+///   `Config`, which the author writes out.
+///
+/// The set is closed: every other wrapper (`keyof`, `readonly`, arrays, tuples,
+/// unions) keeps its `& unknown` reported.
+fn reads_value_space(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSTypeQuery(_) => true,
+        TSType::TSParenthesizedType(parenthesized) => {
+            reads_value_space(&parenthesized.type_annotation)
+        }
+        TSType::TSTypeReference(reference) => reference
+            .type_arguments
+            .as_ref()
+            .is_some_and(|arguments| arguments.params.iter().any(reads_value_space)),
+        TSType::TSIndexedAccessType(indexed) => reads_value_space(&indexed.object_type),
+        _ => false,
     }
 }
 
@@ -187,6 +224,62 @@ mod tests {
     #[test]
     fn flags_type_reference_and_unknown() {
         assert_eq!(run_on("type Y = Bar & unknown;").len(), 1);
+    }
+
+    #[test]
+    fn allows_instance_type_of_component_query_and_unknown() {
+        let src = "import type TabBar from './tab-bar.vue';\nexport type TabBarInstance = InstanceType<typeof TabBar> & unknown;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_type_query_and_unknown() {
+        assert!(run_on("type X = typeof tabBarProps & unknown;").is_empty());
+    }
+
+    #[test]
+    fn flags_generic_instantiation_without_type_query_and_unknown() {
+        assert_eq!(run_on("type X = InstanceType<TabBar> & unknown;").len(), 1);
+    }
+
+    #[test]
+    fn allows_nested_generic_type_query_and_unknown() {
+        let src = "type X = Ref<InstanceType<typeof TabBar>> & unknown;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_indexed_access_on_type_query_and_unknown() {
+        let src = "type X = InstanceType<(typeof mod)['default']> & unknown;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_indexed_access_without_type_query_and_unknown() {
+        assert_eq!(
+            run_on("type X = InstanceType<Mod['default']> & unknown;").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_indexed_access_with_type_query_on_index_side_and_unknown() {
+        assert_eq!(run_on("type X = Config[typeof key] & unknown;").len(), 1);
+    }
+
+    #[test]
+    fn flags_array_of_type_query_and_unknown() {
+        assert_eq!(run_on("type X = (typeof handler)[] & unknown;").len(), 1);
+    }
+
+    #[test]
+    fn flags_keyof_type_query_and_unknown() {
+        assert_eq!(run_on("type X = keyof typeof config & unknown;").len(), 1);
+    }
+
+    #[test]
+    fn flags_type_query_and_never() {
+        assert_eq!(run_on("type X = typeof tabBarProps & never;").len(), 1);
     }
 
     #[test]
