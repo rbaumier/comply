@@ -2,8 +2,10 @@
 //! oxc_semantic.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::is_javascript_source;
 use crate::oxc_helpers::{byte_offset_to_line_col, is_custom_element_decorator_name};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
+use crate::rules::jsdoc_helpers;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{Expression, FunctionType, TSTypeName};
 use oxc_semantic::SymbolId;
@@ -381,6 +383,26 @@ fn is_enum_member_used(
     member_uses.contains(&(enum_symbol, member_name.to_string()))
 }
 
+/// True when the module-scope binding `symbol_id` is named by a JSDoc type
+/// expression of the file, collected in `jsdoc_type_names`.
+///
+/// In JavaScript the JSDoc `{...}` expression is the type annotation the
+/// compiler reads, so a binding it names is load-bearing — `Batch` in
+/// `/** @type {Batch} */ (value)` — even with no runtime reference. oxc records
+/// source references only, so the mention escapes the reference count.
+///
+/// The comment scan is file-wide and carries no scope, so the name match holds
+/// only for module-scope declarations, which a type expression anywhere in the
+/// file resolves against. A binding nested in a function stays reportable.
+fn is_named_by_jsdoc_type(
+    symbol_id: SymbolId,
+    jsdoc_type_names: &FxHashSet<String>,
+    scoping: &oxc_semantic::Scoping,
+) -> bool {
+    scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
+        && jsdoc_type_names.contains(scoping.symbol_name(symbol_id))
+}
+
 /// True when `decl_node` is a parameter of a class method whose enclosing class
 /// has an `implements` clause. Such a method's signature is dictated by the
 /// interface contract: a parameter it ignores cannot be dropped or renamed
@@ -545,6 +567,11 @@ impl OxcCheck for Check {
         // member-use set scans every node, so it is only paid for in files that
         // actually declare an enum member that looks unused.
         let mut enum_member_uses: Option<FxHashSet<(SymbolId, String)>> = None;
+        // Memoized on the first binding that reaches the JSDoc guard; parsing
+        // the JSDoc blocks scans the whole source, so a file whose bindings all
+        // stop at an earlier guard pays nothing.
+        let mut jsdoc_type_names: Option<FxHashSet<String>> = None;
+        let is_javascript = is_javascript_source(ctx.path);
 
         for symbol_id in scoping.symbol_ids() {
             let name = scoping.symbol_name(symbol_id);
@@ -634,6 +661,7 @@ impl OxcCheck for Check {
             {
                 continue;
             }
+
             let exported = nodes.ancestor_kinds(decl_node).any(|k| {
                 matches!(
                     k,
@@ -643,6 +671,20 @@ impl OxcCheck for Check {
                 )
             });
             if exported {
+                continue;
+            }
+
+            // Only in JavaScript: TypeScript keeps the annotation in the code,
+            // so a JSDoc type expression is inert there and a binding it alone
+            // names stays reportable.
+            if is_javascript
+                && is_named_by_jsdoc_type(
+                    symbol_id,
+                    jsdoc_type_names
+                        .get_or_insert_with(|| jsdoc_helpers::type_name_references(ctx.source)),
+                    scoping,
+                )
+            {
                 continue;
             }
 
@@ -1727,4 +1769,107 @@ export { componentChild };
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 
+    #[test]
+    fn no_fp_on_import_used_only_in_jsdoc_type_cast() {
+        // `Batch` is imported solely to name a type in a `/** @type {Batch} */`
+        // inline cast — the JavaScript equivalent of `as Batch`. Removing the
+        // import breaks type checking. (Closes #6861)
+        let src = r#"
+import { Batch, current_batch } from './batch.js';
+
+export function increment_pending() {
+    var batch = /** @type {Batch} */ (current_batch);
+    batch.increment();
+}
+"#;
+        for path in ["async.js", "async.mjs", "async.jsx"] {
+            let diags = run_at(src, path);
+            assert!(diags.is_empty(), "{path}: unexpected diagnostics: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn no_fp_on_import_named_in_qualified_generic_or_union_jsdoc_type() {
+        // The type expression is parsed, so the import is found at the head of a
+        // qualified name, inside a generic argument and inside a union.
+        for type_expr in ["Batch.Inner", "Array<Batch>", "Batch | null", "...Batch"] {
+            let src = format!(
+                "import {{ Batch }} from './batch.js';\n\
+                 /** @param {{{type_expr}}} value */\n\
+                 export function run(value) {{ return value; }}\n"
+            );
+            let diags = run_at(&src, "run.js");
+            assert!(diags.is_empty(), "`{type_expr}`: unexpected diagnostics: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn still_flags_import_unmentioned_by_any_jsdoc_type() {
+        // Negative space for #6861 — an import no JSDoc names stays reportable.
+        let src = "import { Batch } from './batch.js';\n/** @type {Other} */\nexport let value;\n";
+        let diags = run_at(src, "run.js");
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Batch`")),
+            "expected unused import `Batch` to still be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_import_named_only_in_comment_prose() {
+        // Negative space for #6861 — a name that appears in prose, or past the
+        // type expression of a tag, is not a type reference.
+        let src = "import { Batch } from './batch.js';\n\
+                   /**\n\
+                    * Commits the Batch of pending effects.\n\
+                    * @param {number} count - the Batch size\n\
+                    */\n\
+                   export function commit(count) { return count; }\n";
+        let diags = run_at(src, "run.js");
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Batch`")),
+            "expected prose-only mention to stay flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_import_reached_only_through_a_dynamic_import_type() {
+        // Negative space for #6861 — `import('./batch.js').Batch` names a member
+        // of the module, not the local binding, so the binding is still unused.
+        let src = "import { Batch } from './batch.js';\n\
+                   /** @type {import('./batch.js').Batch} */\n\
+                   export let value;\n";
+        let diags = run_at(src, "run.js");
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Batch`")),
+            "expected dynamic-import type to leave the binding flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_import_named_only_in_jsdoc_in_typescript() {
+        // In TypeScript the annotation lives in the code, so a JSDoc type
+        // expression is inert and an import it alone names is removable.
+        let src = "import { Batch } from './batch.js';\n\
+                   /** @type {Batch} */\n\
+                   export let value: unknown;\n";
+        let diags = run_at(src, "run.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Batch`")),
+            "expected TypeScript import to stay flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_nested_binding_named_by_a_jsdoc_type() {
+        // Negative space for #6861 — the JSDoc scan is file-wide, so the name
+        // match is only sound for module-scope bindings; a local one stays
+        // reportable.
+        let src = "/** @type {Batch} */\nexport let value;\n\
+                   function run() { const Batch = 1; }\nrun();\n";
+        let diags = run_at(src, "run.js");
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Batch`")),
+            "expected nested local `Batch` to still be flagged: {diags:?}"
+        );
+    }
 }

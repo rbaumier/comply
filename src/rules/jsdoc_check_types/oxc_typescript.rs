@@ -16,32 +16,6 @@ const PREFERENCES: &[(&str, &str)] = &[
     ("Object", "object"),
 ];
 
-/// Extract the first balanced `{...}` group from a tag body.
-fn extract_type_expr(body: &str) -> Option<&str> {
-    let trimmed = body.trim_start();
-    if !trimmed.starts_with('{') {
-        return None;
-    }
-    let mut depth = 0usize;
-    let bytes = trimmed.as_bytes();
-    let mut start = None;
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'{' {
-            if depth == 0 {
-                start = Some(i + 1);
-            }
-            depth += 1;
-        } else if b == b'}' {
-            depth -= 1;
-            if depth == 0 {
-                let s = start?;
-                return Some(&trimmed[s..i]);
-            }
-        }
-    }
-    None
-}
-
 fn contains_identifier(hay: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
@@ -95,7 +69,7 @@ impl OxcCheck for Check {
 
             for block in scan_blocks(text) {
                 for tag in block.tags() {
-                    let Some(type_expr) = extract_type_expr(&tag.body) else {
+                    let Some(type_expr) = tag.type_expr() else {
                         continue;
                     };
                     for (bad, good) in PREFERENCES {

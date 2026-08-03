@@ -186,6 +186,18 @@ impl Language {
     }
 }
 
+/// True when `path` holds JavaScript source rather than TypeScript. Rules use
+/// it when a construct means different things in the two languages, since
+/// [`Language`] alone cannot tell `.jsx` from `.tsx`.
+pub fn is_javascript_source(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    // `.jsx` is JavaScript too; `TSX_EXTENSIONS` claims it only so the parser
+    // picks the JSX-aware grammar.
+    JS_EXTENSIONS.contains(&ext) || ext == "jsx"
+}
+
 /// Discover files to lint based on the resolved scan mode.
 #[must_use = "discovered files must be linted or the scan was wasted"]
 pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
@@ -472,6 +484,23 @@ mod tests {
             assert_eq!(lang_for(ext), Language::JavaScript);
         }
         assert_eq!(lang_for("rs"), Language::Rust);
+    }
+
+    #[test]
+    fn javascript_source_covers_jsx_but_no_typescript_extension() {
+        for ext in ["js", "mjs", "jsx"] {
+            assert!(
+                is_javascript_source(&PathBuf::from(format!("foo.{ext}"))),
+                "{ext} is JavaScript"
+            );
+        }
+        for ext in ["ts", "mts", "tsx"] {
+            assert!(
+                !is_javascript_source(&PathBuf::from(format!("foo.{ext}"))),
+                "{ext} is TypeScript"
+            );
+        }
+        assert!(!is_javascript_source(&PathBuf::from("Makefile")));
     }
 
     #[test]

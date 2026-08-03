@@ -17,6 +17,8 @@
 //! logical entry — consistent with how eslint-plugin-jsdoc treats
 //! them.
 
+use rustc_hash::FxHashSet;
+
 /// A single `/** ... */` block extracted from a source file.
 #[derive(Debug)]
 pub struct JsDocBlock<'a> {
@@ -93,6 +95,197 @@ impl<'a> JsDocBlock<'a> {
         }
         parts.join(" ")
     }
+}
+
+impl JsDocTag {
+    /// The tag's leading `{...}` type expression, braces excluded, or `None`
+    /// when the body does not open with one. The group is matched with brace
+    /// balancing, so a record type (`{{a: number}}`) yields `{a: number}`.
+    pub fn type_expr(&self) -> Option<&str> {
+        let trimmed = self.body.trim_start();
+        if !trimmed.starts_with('{') {
+            return None;
+        }
+        let mut depth = 0usize;
+        let mut start = 0usize;
+        for (i, byte) in trimmed.bytes().enumerate() {
+            match byte {
+                b'{' => {
+                    if depth == 0 {
+                        start = i + 1;
+                    }
+                    depth += 1;
+                }
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&trimmed[start..i]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+/// The JSDoc tags whose body opens with a `{...}` type expression, aliases
+/// included. A tag outside this set carries prose or a code sample, so a brace
+/// group in its body is not a type.
+const TYPE_BEARING_TAGS: &[&str] = &[
+    "arg",
+    "argument",
+    "augments",
+    "const",
+    "constant",
+    "enum",
+    "exception",
+    "extends",
+    "implements",
+    "member",
+    "namespace",
+    "param",
+    "prop",
+    "property",
+    "return",
+    "returns",
+    "satisfies",
+    "template",
+    "this",
+    "throws",
+    "type",
+    "typedef",
+    "var",
+    "yield",
+    "yields",
+];
+
+/// Every identifier that the JSDoc blocks of `source` name in type position.
+///
+/// Only the type expression of a type-bearing tag is read, so a name that
+/// merely appears in a description stays absent from the set. Within the
+/// expression, quoted literals, member names of a qualified type (`B` in
+/// `{A.B}`), record keys (`a` in `{{a: number}}`) and call heads (`import` in
+/// `{import('./m.js').T}`) are skipped: none of them names a type binding. A
+/// template literal type contributes the names of its `${...}` holes only.
+pub fn type_name_references(source: &str) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
+    for block in scan_blocks(source) {
+        for tag in block.tags() {
+            if !TYPE_BEARING_TAGS.contains(&tag.name.as_str()) {
+                continue;
+            }
+            if let Some(expr) = tag.type_expr() {
+                push_type_names(expr, &mut names);
+            }
+        }
+    }
+    names
+}
+
+/// Add to `names` every identifier of the JSDoc type expression `expr` that
+/// sits in type-name position.
+fn push_type_names(expr: &str, names: &mut FxHashSet<String>) {
+    let bytes = expr.as_bytes();
+    let mut i = 0usize;
+    let mut is_after_dot = false;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte == b'\'' || byte == b'"' {
+            i = skip_string_literal(bytes, i);
+            is_after_dot = false;
+        } else if byte == b'`' {
+            let end = skip_string_literal(bytes, i);
+            push_template_hole_names(&expr[i..end], names);
+            i = end;
+            is_after_dot = false;
+        } else if is_identifier_start(byte) {
+            let end = i + identifier_len(&bytes[i..]);
+            if names_a_type(bytes, end, is_after_dot) {
+                names.insert(expr[i..end].to_string());
+            }
+            i = end;
+            is_after_dot = false;
+        } else if byte == b'.' {
+            let dots = leading_dot_count(&bytes[i..]);
+            // A lone dot qualifies the name after it (`A.B`); a run of them
+            // marks a rest type (`...T`), whose name is a type of its own.
+            is_after_dot = dots == 1;
+            i += dots;
+        } else {
+            // Whitespace between a dot and its member keeps the qualification,
+            // so `A . B` reads like `A.B`.
+            if !byte.is_ascii_whitespace() {
+                is_after_dot = false;
+            }
+            i += 1;
+        }
+    }
+}
+
+/// Add to `names` the type names of every `${...}` hole of the template
+/// literal type `literal`. The literal text around the holes is data, not a
+/// type, so it contributes nothing.
+fn push_template_hole_names(literal: &str, names: &mut FxHashSet<String>) {
+    let mut rest = literal;
+    while let Some(open) = rest.find("${") {
+        let after_open = &rest[open + 2..];
+        let Some(close) = after_open.find('}') else {
+            return;
+        };
+        push_type_names(&after_open[..close], names);
+        rest = &after_open[close + 1..];
+    }
+}
+
+/// True when the identifier ending at `end` of `bytes` names a type. It does
+/// not when it is the member half of a qualified name (`B` in `A.B`,
+/// signalled by `is_after_dot`), a record key (`a` in `{a: number}`) or the
+/// head of a call form (`import` in `import('./m.js').T`).
+fn names_a_type(bytes: &[u8], end: usize, is_after_dot: bool) -> bool {
+    let next = bytes[end..].iter().find(|byte| !byte.is_ascii_whitespace());
+    let heads_a_key_or_call = matches!(next, Some(&b':') | Some(&b'('));
+    !is_after_dot && !heads_a_key_or_call
+}
+
+/// Length of the identifier that opens `bytes`.
+fn identifier_len(bytes: &[u8]) -> usize {
+    bytes.iter().take_while(|byte| is_identifier_byte(**byte)).count()
+}
+
+/// Number of consecutive `.` bytes that open `bytes`.
+fn leading_dot_count(bytes: &[u8]) -> usize {
+    bytes.iter().take_while(|byte| **byte == b'.').count()
+}
+
+/// Index of the byte just past the quoted literal that opens at `start`. An
+/// unterminated literal consumes the rest of the expression.
+fn skip_string_literal(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b if b == quote => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// True when `byte` can open a JS identifier. Every non-ASCII byte qualifies,
+/// since JS identifiers accept Unicode. The acceptance is deliberately wide: a
+/// non-ASCII punctuation byte is absorbed into the name, which can only miss an
+/// exemption, never grant one to the wrong binding.
+fn is_identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_' || byte == b'$' || !byte.is_ascii()
+}
+
+/// See [`is_identifier_start`]. Accepting every non-ASCII byte here is what
+/// consumes a multi-byte sequence whole, so an extracted name always ends on a
+/// character boundary.
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$' || !byte.is_ascii()
 }
 
 /// Split `"name rest..."` into `("name", "rest...")`. The name stops
@@ -236,5 +429,64 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         let tags = blocks[0].tags();
         assert_eq!(tags[0].name, "deprecated");
+    }
+
+    fn type_names(src: &str) -> Vec<String> {
+        let mut names: Vec<String> = type_name_references(src).into_iter().collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn reads_inline_type_cast() {
+        assert_eq!(type_names("/** @type {Batch} */ (x)"), ["Batch"]);
+    }
+
+    #[test]
+    fn reads_generic_union_and_qualified_forms() {
+        assert_eq!(
+            type_names("/** @param {Array<Batch>} a */"),
+            ["Array", "Batch"]
+        );
+        assert_eq!(
+            type_names("/** @returns {Batch | Other} */"),
+            ["Batch", "Other"]
+        );
+        // Only the head of a qualified name is a binding; `Inner` is its member.
+        assert_eq!(type_names("/** @type {Batch.Inner} */"), ["Batch"]);
+    }
+
+    #[test]
+    fn reads_rest_template_and_non_ascii_forms() {
+        // `...` marks a rest type; only a lone dot qualifies a name.
+        assert_eq!(type_names("/** @param {...Batch} a */"), ["Batch"]);
+        // A template literal type contributes its `${...}` holes.
+        assert_eq!(
+            type_names("/** @type {`${Prefix}-suffix`} */"),
+            ["Prefix"]
+        );
+        // A Unicode identifier is captured whole, not truncated to its ASCII
+        // prefix.
+        assert_eq!(type_names("/** @type {Café} */"), ["Café"]);
+    }
+
+    #[test]
+    fn skips_string_literal_and_record_key() {
+        // The module specifier is a string, and `Batch` is a property of the
+        // imported module rather than a local binding.
+        assert!(type_names("/** @type {import('./batch.js').Batch} */").is_empty());
+        assert_eq!(type_names("/** @type {{batch: Batch}} */"), ["Batch"]);
+    }
+
+    #[test]
+    fn ignores_prose_and_non_type_tags() {
+        assert!(type_names("/** Uses Batch to commit. */").is_empty());
+        // `Batch` sits in the description, past the type expression.
+        assert_eq!(
+            type_names("/** @param {number} n - the Batch size */"),
+            ["number"]
+        );
+        // `@example` carries a code sample, so its brace group is not a type.
+        assert!(type_names("/** @example {Batch} */").is_empty());
     }
 }
