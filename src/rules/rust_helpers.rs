@@ -1595,6 +1595,92 @@ fn comment_has_panics_heading(text: &str) -> bool {
     })
 }
 
+/// True if a comment documents `node`: a `line_comment` or `block_comment` that
+/// ends on the line directly above `node`, or one that trails `node` on `node`'s
+/// own line. Both comment syntaxes count in both positions, so `// why` and
+/// `/* why */` read as documentation above the construct and after it.
+///
+/// tree-sitter-rust parses comments as `extra` nodes woven into the sibling
+/// stream, never as children of the construct they document. The search
+/// therefore walks outward from `node` through the ancestors that start on
+/// `node`'s line and inspects the immediate comment sibling on each side. It
+/// stops at the first ancestor that starts on an earlier line: a comment
+/// adjacent to that ancestor documents the enclosing construct, not `node`.
+///
+/// A comment that shares its line with other code documents that code, so
+/// `starts_its_line` gates the comment above and `ends_its_line` gates the
+/// comment after.
+///
+/// Rules that require a construct to carry a comment call this: a `//` inside a
+/// string literal (`r"https://…"`) is part of the literal node, so it never
+/// reads as a comment.
+pub fn has_attached_comment(node: Node) -> bool {
+    let row = node.start_position().row;
+    let mut current = node;
+    loop {
+        if has_comment_above(current) || has_trailing_comment(current) {
+            return true;
+        }
+        let Some(parent) = current.parent() else { return false };
+        if parent.start_position().row != row {
+            return false;
+        }
+        current = parent;
+    }
+}
+
+/// True if the named sibling immediately before `node` is a comment that starts
+/// its own line and ends on the line directly above `node`. Consecutive comment
+/// lines stack, so the nearest sibling is the one that touches `node`; an
+/// earlier one can only end higher up.
+fn has_comment_above(node: Node) -> bool {
+    let Some(previous) = node.prev_named_sibling() else { return false };
+    is_comment_node(previous)
+        && last_occupied_row(previous) + 1 == node.start_position().row
+        && starts_its_line(previous)
+}
+
+/// True if the named sibling immediately after `node` is a comment that opens on
+/// `node`'s line and ends it — the trailing `// why` / `/* why */` position.
+fn has_trailing_comment(node: Node) -> bool {
+    let Some(next) = node.next_named_sibling() else { return false };
+    is_comment_node(next)
+        && next.start_position().row == node.start_position().row
+        && ends_its_line(next)
+}
+
+/// True if only whitespace precedes `comment` on its opening line — the sibling
+/// before it, delimiters included, puts its last character on an earlier line.
+/// A comment that shares its line with earlier code trails that code and
+/// documents it, so it cannot document what follows.
+fn starts_its_line(comment: Node) -> bool {
+    comment
+        .prev_sibling()
+        .is_none_or(|before| last_occupied_row(before) < comment.start_position().row)
+}
+
+/// True if no named sibling follows `comment` on the last line it occupies. A
+/// comment with a named node after it on the same line documents that node: the
+/// `/* flag */` in `build(re, /* flag */ true)` annotates `true`, not `re`.
+fn ends_its_line(comment: Node) -> bool {
+    comment
+        .next_named_sibling()
+        .is_none_or(|after| after.start_position().row > last_occupied_row(comment))
+}
+
+/// Last source row on which `node` puts characters. tree-sitter-rust folds the
+/// trailing newline into a `///` / `//!` doc comment, so its `end_position()`
+/// lands on column 0 of the next row, where it occupies nothing.
+fn last_occupied_row(node: Node) -> usize {
+    let end = node.end_position();
+    if end.column == 0 { end.row.saturating_sub(1) } else { end.row }
+}
+
+/// True if `node` is a `//` or `/* */` comment, doc or not.
+fn is_comment_node(node: Node) -> bool {
+    matches!(node.kind(), "line_comment" | "block_comment")
+}
+
 /// True if `node` is preceded by a safety-marker comment on the lines directly
 /// above it — any comment `is_safety_marker` accepts (a leading `SAFETY:` /
 /// `Safety:` / `safety.` token, or a rustdoc `# Safety` heading). Scans upward
