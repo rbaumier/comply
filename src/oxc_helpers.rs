@@ -871,21 +871,146 @@ fn is_react_jsx_source(value: &str) -> bool {
         || value.starts_with("react-dom/")
 }
 
-/// True if the file is a Web Worker script, where `self` resolves to the
-/// `DedicatedWorkerGlobalScope` (the canonical worker global, equivalent to
-/// `globalThis` in that realm) rather than `window`. Detected by the
-/// worker-only API surface: registering a message handler (`self.onmessage`),
-/// posting back to the spawning thread (`self.postMessage(`), the classic
-/// worker importer (`importScripts(`), or a reference to the worker global
-/// scope type. Memoized per file via [`source_contains`].
+/// Events dispatched only to a `ServiceWorkerGlobalScope`. A `Window` and a
+/// dedicated worker never receive them, so listening for one on the global
+/// proves the file runs as a Service Worker.
+const SERVICE_WORKER_GLOBAL_EVENTS: &[&str] = &[
+    "install",
+    "activate",
+    "fetch",
+    "push",
+    "sync",
+    "notificationclick",
+];
+
+/// Properties carried only by `ServiceWorkerGlobalScope`. Neither a `Window` nor
+/// a dedicated worker exposes them, so reading one off the global proves the
+/// file runs as a Service Worker.
+const SERVICE_WORKER_GLOBAL_MEMBERS: &[&str] = &["skipWaiting", "clients", "registration"];
+
+/// True when `object` is the bare `self` global: named `self` and resolving to
+/// no binding in any enclosing scope. A local `self` — the `const self = this`
+/// alias, a receiver parameter, a stubbed test double — shadows the global, so
+/// what is read off it says nothing about the execution realm.
+fn is_unbound_self_global<'a>(
+    object: &oxc_ast::ast::Expression<'a>,
+    semantic: &'a Semantic<'a>,
+) -> bool {
+    let oxc_ast::ast::Expression::Identifier(ident) = object else {
+        return false;
+    };
+    ident.name.as_str() == "self"
+        && ident.reference_id.get().is_some_and(|ref_id| {
+            semantic.scoping().get_reference(ref_id).symbol_id().is_none()
+        })
+}
+
+/// True when the file reads the `ServiceWorkerGlobalScope` API surface off the
+/// bare `self` global: one of [`SERVICE_WORKER_GLOBAL_MEMBERS`], or a listener
+/// for one of [`SERVICE_WORKER_GLOBAL_EVENTS`]. Read from the AST rather than
+/// the source text, so a shadowed `self`, a mention in a comment or a template
+/// string, and the quoting and line breaks inside the call all resolve
+/// correctly.
+fn uses_service_worker_global_scope<'a>(semantic: &'a Semantic<'a>) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Argument, Expression};
+    use oxc_span::GetSpan;
+
+    semantic.nodes().iter().any(|node| {
+        let AstKind::StaticMemberExpression(member) = node.kind() else {
+            return false;
+        };
+        if !is_unbound_self_global(&member.object, semantic) {
+            return false;
+        }
+        let property = member.property.name.as_str();
+        if SERVICE_WORKER_GLOBAL_MEMBERS.contains(&property) {
+            return true;
+        }
+        if property != "addEventListener" {
+            return false;
+        }
+        // The member must be the callee of its parent call, not an argument
+        // passed to one: `wrapper('fetch', self.addEventListener)` registers
+        // nothing. The call's first argument then names the event.
+        semantic
+            .nodes()
+            .parent_kind(node.id())
+            .as_call_expression()
+            .filter(|call| call.callee.span() == member.span)
+            .and_then(|call| call.arguments.first())
+            .and_then(Argument::as_expression)
+            .is_some_and(|arg| {
+                matches!(arg, Expression::StringLiteral(lit)
+                    if SERVICE_WORKER_GLOBAL_EVENTS.contains(&lit.value.as_str()))
+            })
+    })
+}
+
+/// True when the file declares the worker execution context in its own text:
+/// the `/// <reference lib="webworker" />` triple-slash directive (the canonical
+/// TypeScript way to type a worker file) or a reference to the
+/// `ServiceWorkerGlobalScope` / `WorkerGlobalScope` type (`declare const self:
+/// ServiceWorkerGlobalScope`, or a `self as ServiceWorkerGlobalScope` cast).
 #[must_use]
-pub fn is_worker_script(source: &str) -> bool {
+pub fn declares_worker_global_scope<'a>(source: &str, semantic: &'a Semantic<'a>) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::TSTypeName;
+
+    source_has_webworker_reference_directive(source)
+        || semantic.nodes().iter().any(|node| {
+            let AstKind::TSTypeReference(type_ref) = node.kind() else {
+                return false;
+            };
+            matches!(
+                &type_ref.type_name,
+                TSTypeName::IdentifierReference(id)
+                    if matches!(id.name.as_str(), "ServiceWorkerGlobalScope" | "WorkerGlobalScope")
+            )
+        })
+}
+
+/// True when the source carries a `/// <reference lib="webworker" />`
+/// triple-slash directive (case- and quote-style-insensitive on the lib name).
+/// TypeScript only types a module against the WebWorker lib through this
+/// directive, so its presence proves a worker execution context.
+fn source_has_webworker_reference_directive(source: &str) -> bool {
+    source.lines().any(|line| {
+        let Some(rest) = line.trim_start().strip_prefix("///") else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        if !rest.starts_with("<reference") {
+            return false;
+        }
+        let rest = rest.to_ascii_lowercase();
+        rest.contains("lib=") && rest.contains("webworker")
+    })
+}
+
+/// True if the file is a worker script, where `self` resolves to a
+/// `WorkerGlobalScope` (the canonical global of that realm, equivalent to
+/// `globalThis` there) rather than to `window`. Three kinds of evidence:
+///
+/// - the declared realm — see [`declares_worker_global_scope`], or the
+///   `DedicatedWorkerGlobalScope` type named anywhere in the file;
+/// - the dedicated-worker API surface — a message handler (`self.onmessage`), a
+///   post back to the spawning thread (`self.postMessage(`), or the classic
+///   worker importer (`importScripts(`);
+/// - the service-worker API surface — see [`uses_service_worker_global_scope`].
+///
+/// Memoized per file via [`cached_file_bool`], so the AST scans behind the last
+/// signals run at most once per file and only when every text signal misses.
+#[must_use]
+pub fn is_worker_script<'a>(source: &str, semantic: &'a Semantic<'a>) -> bool {
     cached_file_bool(source, SLOT_WORKER_SCRIPT, || {
         source_contains(source, "self.onmessage")
             || source_contains(source, "self.onmessageerror")
             || source_contains(source, "self.postMessage(")
             || source_contains(source, "importScripts(")
             || source_contains(source, "DedicatedWorkerGlobalScope")
+            || declares_worker_global_scope(source, semantic)
+            || uses_service_worker_global_scope(semantic)
     })
 }
 

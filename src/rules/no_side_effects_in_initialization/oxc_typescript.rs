@@ -306,7 +306,7 @@ use crate::rules::path_utils::{
 };
 use oxc_ast::ast::{
     Argument, AssignmentTarget, BindingPattern, Declaration, ExportDefaultDeclarationKind,
-    Expression, ImportDeclarationSpecifier, Program, Statement, TSTypeName,
+    Expression, ImportDeclarationSpecifier, Program, Statement,
 };
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
@@ -2451,51 +2451,6 @@ fn has_pure_annotation(source: &str, span_start: usize) -> bool {
         }
 }
 
-/// A ServiceWorker entry module, proven by an in-file structural signature of
-/// the worker execution context: the `/// <reference lib="webworker" />`
-/// triple-slash directive (the canonical TypeScript way to type a worker file)
-/// or a reference to the `ServiceWorkerGlobalScope` / `WorkerGlobalScope` type
-/// (`declare const self: ServiceWorkerGlobalScope`, or a
-/// `self as ServiceWorkerGlobalScope` cast). Such modules run in a dedicated
-/// worker thread registered through `navigator.serviceWorker.register()`, are
-/// never imported by the application bundle, and never tree-shaken, so their
-/// mandatory top-level registrations (`self.addEventListener`, workbox's
-/// `precacheAndRoute` / `registerRoute`) are the required programming model, not
-/// avoidable initialization side effects.
-fn is_service_worker_module(semantic: &oxc_semantic::Semantic, source: &str) -> bool {
-    use oxc_ast::AstKind;
-
-    source_has_webworker_reference_directive(source)
-        || semantic.nodes().iter().any(|node| {
-            let AstKind::TSTypeReference(type_ref) = node.kind() else {
-                return false;
-            };
-            matches!(
-                &type_ref.type_name,
-                TSTypeName::IdentifierReference(id)
-                    if matches!(id.name.as_str(), "ServiceWorkerGlobalScope" | "WorkerGlobalScope")
-            )
-        })
-}
-
-/// True when the source carries a `/// <reference lib="webworker" />`
-/// triple-slash directive (case- and quote-style-insensitive on the lib name).
-/// TypeScript only types a module against the WebWorker lib through this
-/// directive, so its presence proves a worker execution context.
-fn source_has_webworker_reference_directive(source: &str) -> bool {
-    source.lines().any(|line| {
-        let Some(rest) = line.trim_start().strip_prefix("///") else {
-            return false;
-        };
-        let rest = rest.trim_start();
-        if !rest.starts_with("<reference") {
-            return false;
-        }
-        let rest = rest.to_ascii_lowercase();
-        rest.contains("lib=") && rest.contains("webworker")
-    })
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [crate::rules::backend::AstType] {
         &[]
@@ -2534,7 +2489,7 @@ impl OxcCheck for Check {
             || is_data_generation_script(program)
             || is_entry_barrel_shape(program)
             || is_audio_worklet_module(ctx.path)
-            || is_service_worker_module(semantic, ctx.source)
+            || crate::oxc_helpers::declares_worker_global_scope(ctx.source, semantic)
         {
             return Vec::new();
         }
