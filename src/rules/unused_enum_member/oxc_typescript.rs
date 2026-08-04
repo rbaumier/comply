@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryOperator, Expression};
+use oxc_ast::ast::{BinaryOperator, Expression, TSTypeName, TSTypeQueryExprName};
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
@@ -64,6 +64,18 @@ fn is_whole_enum_value_reference(
         nodes.kind(nodes.parent_id(ref_node_id)),
         AstKind::ComputedMemberExpression(member) if member.object.span() == ref_span
     )
+}
+
+/// Record every member of `enum_name` as used. Called for constructs that reach
+/// the whole enum at once — they expose every member without naming any of them.
+fn mark_all_members_used(
+    enum_name: &str,
+    members: &[(String, u32)],
+    used: &mut FxHashSet<(String, String)>,
+) {
+    for (member_name, _) in members {
+        used.insert((enum_name.to_string(), member_name.clone()));
+    }
 }
 
 impl OxcCheck for Check {
@@ -182,12 +194,7 @@ impl OxcCheck for Check {
                         && let Expression::Identifier(rhs) = &bin.right {
                             let enum_name = rhs.name.as_str();
                             if let Some(members) = enums.get(enum_name) {
-                                for (member_name, _) in members {
-                                    used.insert((
-                                        enum_name.to_string(),
-                                        member_name.clone(),
-                                    ));
-                                }
+                                mark_all_members_used(enum_name, members, &mut used);
                             }
                         }
                 }
@@ -201,11 +208,37 @@ impl OxcCheck for Check {
                     if let Some(members) = enums.get(enum_name)
                         && is_whole_enum_value_reference(id, node.id(), semantic)
                     {
-                        for (member_name, _) in members {
-                            used.insert((enum_name.to_string(), member_name.clone()));
-                        }
+                        mark_all_members_used(enum_name, members, &mut used);
                     }
                 }
+                // `typeof EnumName` projects the enum object into type space. Any
+                // use of that projection can reach every member — `keyof typeof E`,
+                // `(typeof E)[keyof typeof E]`, `Record<keyof typeof E, T>`,
+                // `x: typeof E`. So the whole enum counts as referenced. Only a
+                // qualified query (`typeof E.Member`) narrows to a single member.
+                AstKind::TSTypeQuery(query) => match &query.expr_name {
+                    TSTypeQueryExprName::IdentifierReference(id) => {
+                        let enum_name = id.name.as_str();
+                        if let Some(members) = enums.get(enum_name) {
+                            mark_all_members_used(enum_name, members, &mut used);
+                        }
+                    }
+                    TSTypeQueryExprName::QualifiedName(qualified) => {
+                        if let TSTypeName::IdentifierReference(obj) = &qualified.left {
+                            let obj_name = obj.name.as_str();
+                            if enums.contains_key(obj_name) {
+                                used.insert((
+                                    obj_name.to_string(),
+                                    qualified.right.name.as_str().to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    // `typeof import("…")` and `typeof this.x` cannot name a
+                    // local enum.
+                    TSTypeQueryExprName::TSImportType(_)
+                    | TSTypeQueryExprName::ThisExpression(_) => {}
+                },
                 _ => {}
             }
         }
@@ -460,6 +493,135 @@ enum Food {
 function f(a: Food) {}
 "#;
         assert_eq!(run(annotation).len(), 2);
+    }
+
+    // Regression for #6873 — `keyof typeof E` is the canonical way to extract the
+    // union of an enum's member names. The union *is* the member names, so every
+    // member is referenced even though none is spelled out as `E.Member`.
+    #[test]
+    fn keyof_typeof_marks_all_members_used() {
+        let source = r#"
+const enum PureCssLang {
+    css = 'css',
+}
+const enum PreprocessLang {
+    less = 'less',
+    sass = 'sass',
+    scss = 'scss',
+    styl = 'styl',
+    stylus = 'stylus',
+}
+const enum PostCssDialectLang {
+    sss = 'sugarss',
+}
+type CssLang =
+    | keyof typeof PureCssLang
+    | keyof typeof PreprocessLang
+    | keyof typeof PostCssDialectLang
+export function isCSSRequest(lang: string): lang is CssLang {
+    return lang.length > 0
+}
+"#;
+        assert!(run(source).is_empty());
+    }
+
+    // `typeof E` reaches every member whatever the enclosing type container is,
+    // so the exemption is keyed on the query itself, not on `keyof`.
+    #[test]
+    fn typeof_enum_marks_all_members_used_in_any_container() {
+        let indexed = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+type FoodValue = (typeof Food)[keyof typeof Food];
+export const f: FoodValue = "pizza";
+"#;
+        assert!(run(indexed).is_empty());
+
+        let mapped = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+type Counts = Record<keyof typeof Food, number>;
+export const c: Counts = { Pizza: 0, Taco: 0 };
+"#;
+        assert!(run(mapped).is_empty());
+
+        let annotation = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+declare function register(all: typeof Food): void;
+"#;
+        assert!(run(annotation).is_empty());
+    }
+
+    // A qualified query (`typeof E.Member`) reads a single member, so the other
+    // members stay dead.
+    #[test]
+    fn qualified_typeof_marks_only_the_named_member_used() {
+        let source = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+export type Pizza = typeof Food.Pizza;
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Taco"));
+    }
+
+    // A query that cannot name a local binding (`typeof import("…")`,
+    // `typeof this.x`) exempts nothing.
+    #[test]
+    fn non_identifier_type_query_does_not_exempt() {
+        let import_type = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+export type M = typeof import("./mod");
+"#;
+        assert_eq!(run(import_type).len(), 2);
+
+        let this_type = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+export class Menu {
+    y = 1;
+    z: typeof this.y = 2;
+}
+"#;
+        assert_eq!(run(this_type).len(), 2);
+    }
+
+    // `typeof` on one enum does not exempt an unrelated enum's dead member.
+    #[test]
+    fn typeof_enum_does_not_exempt_unrelated_enum() {
+        let source = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+type FoodName = keyof typeof Food;
+export const n: FoodName = "Pizza";
+const r = Color.Red;
+const g = Color.Green;
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Blue"));
     }
 
     // An ordinary runtime unit test without type assertions still flags a
