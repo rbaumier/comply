@@ -5402,6 +5402,38 @@ pub fn is_react_display_name_assignment(assign: &oxc_ast::ast::AssignmentExpress
     }
 }
 
+/// True when `node` is the left operand of a plain `=` assignment. There the
+/// target is stored and never loaded, because the left operand evaluates to a
+/// reference that the assignment writes through: `event.which = 1` reads nothing,
+/// the `event.which` in `x = event.which` does.
+///
+/// Only `=` qualifies. A compound assignment (`o.p += 1`, `o.p ??= x`) and an
+/// update expression (`o.p++`) load the target before they store it, so both stay
+/// reads.
+///
+/// This answers the `=` question alone. JavaScript also stores without a load in a
+/// destructuring target (`[o.p] = arr`, `({ k: o.p } = src)`), a for-of or for-in
+/// head, and `delete o.p`; a TS assertion on the target (`o.p! = v`) puts the
+/// wrapper between `node` and the assignment. All of those read `false` here. For
+/// the broader "can a value be stored here" question, which also counts `++` and
+/// `+=` as writes, see `is_write_position` in `prefer-at`.
+#[must_use]
+pub fn is_plain_assignment_target(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::AssignmentOperator;
+    use oxc_span::GetSpan;
+
+    let AstKind::AssignmentExpression(assign) = semantic.nodes().parent_kind(node.id()) else {
+        return false;
+    };
+    // The right operand shares this parent. Span identity is what separates the
+    // store from the load in `o.p = o.p`.
+    assign.operator == AssignmentOperator::Assign && assign.left.span() == node.kind().span()
+}
+
 /// True when `name` matches a generic type parameter declared on any enclosing
 /// function, method, class, interface, or type alias of `node`.
 #[must_use]
@@ -7407,8 +7439,9 @@ mod oxc_helpers_tests {
     use super::{
         ClassShape, expression_is_or_resolves_to_literal, file_imports_db_library,
         file_imports_email_template_library, has_ts_expect_error_above, is_as_unknown_double_cast,
-        is_outer_as_unknown_double_cast, node_has_preceding_deprecated_tag, peel_parens,
-        source_imports_db_library, type_annotation_is_type_predicate, with_semantic,
+        is_outer_as_unknown_double_cast, is_plain_assignment_target,
+        node_has_preceding_deprecated_tag, peel_parens, source_imports_db_library,
+        type_annotation_is_type_predicate, with_semantic,
     };
     use oxc_ast::AstKind;
     use oxc_span::SourceType;
@@ -7528,6 +7561,54 @@ mod oxc_helpers_tests {
             let shape = ClassShape::of(find_class(sem));
             assert!(shape.is_decorated && !shape.has_super_class && !shape.has_implements);
         });
+    }
+
+    /// Source text of every member expression in `src` that the helper calls a store.
+    fn plain_assignment_targets(src: &str) -> Vec<String> {
+        with_semantic(src, SourceType::ts(), |sem| {
+            sem.nodes()
+                .iter()
+                .filter(|n| {
+                    matches!(
+                        n.kind(),
+                        AstKind::StaticMemberExpression(_) | AstKind::ComputedMemberExpression(_)
+                    ) && is_plain_assignment_target(n, sem)
+                })
+                .map(|n| {
+                    let span = oxc_span::GetSpan::span(&n.kind());
+                    src[span.start as usize..span.end as usize].to_string()
+                })
+                .collect()
+        })
+    }
+
+    #[test]
+    fn plain_assignment_target_covers_computed_members() {
+        // The helper is span-based, not shape-based, so a computed target counts
+        // as a store just like a static one.
+        assert_eq!(plain_assignment_targets(r#"o["p"] = 1;"#), [r#"o["p"]"#]);
+    }
+
+    #[test]
+    fn plain_assignment_target_rejects_reads_and_non_plain_operators() {
+        // Only the store side of a two-member assignment, then the operators
+        // that read before they store.
+        assert_eq!(plain_assignment_targets("a.p = b.p;"), ["a.p"]);
+        assert!(plain_assignment_targets("x = o.p;").is_empty());
+        assert!(plain_assignment_targets("o.p += 1;").is_empty());
+        assert!(plain_assignment_targets("o.p ??= 1;").is_empty());
+        assert!(plain_assignment_targets("o.p++;").is_empty());
+    }
+
+    #[test]
+    fn plain_assignment_target_rejects_targets_it_does_not_answer_for() {
+        // Documented gaps: each is a store, but `node` is not the direct left
+        // operand, so the helper reports it as a read.
+        assert!(plain_assignment_targets("[o.p] = arr;").is_empty());
+        assert!(plain_assignment_targets("({ k: o.p } = src);").is_empty());
+        assert!(plain_assignment_targets("for (o.p of xs) {}").is_empty());
+        assert!(plain_assignment_targets("delete o.p;").is_empty());
+        assert!(plain_assignment_targets("o.p! = 1;").is_empty());
     }
 
     #[test]
