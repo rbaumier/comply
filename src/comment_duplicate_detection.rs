@@ -934,10 +934,16 @@ fn extract_entries(
 
 /// Declaration node kinds (Rust + TS/JS) that carry a `name` field and can be
 /// the subject of a leading doc-comment. A comment whose next sibling is one of
-/// these documents that named item. Trait-body items (`function_signature_item`,
-/// `associated_type`) count too: parallel sync/async crates (`embedded-hal` vs
-/// `embedded-hal-async`) mirror the same trait method docs, which is the same
-/// same-named-item exemption a freestanding `function_item` earns.
+/// these documents that named item.
+///
+/// A callable is spelled two ways in both grammars — with a body and as a bare
+/// signature — and both spellings declare the same API item, so both count. Rust
+/// pairs `function_item` with `function_signature_item` / `associated_type`; TS
+/// pairs `function_declaration` / `method_definition` with `function_signature`,
+/// `method_signature`, and `abstract_method_signature`. That is what makes the
+/// same-named-item exemption reach a trait method mirrored by parallel sync and
+/// async crates (`embedded-hal` vs `embedded-hal-async`), and an interface
+/// method mirrored by the class that implements it.
 fn is_named_declaration(kind: &str) -> bool {
     matches!(
         kind,
@@ -957,11 +963,14 @@ fn is_named_declaration(kind: &str) -> bool {
             // TS / JS
             | "function_declaration"
             | "generator_function_declaration"
+            | "function_signature"
             | "class_declaration"
             | "interface_declaration"
             | "type_alias_declaration"
             | "enum_declaration"
             | "method_definition"
+            | "method_signature"
+            | "abstract_method_signature"
             | "abstract_class_declaration"
     )
 }
@@ -986,6 +995,10 @@ fn is_doc_comment(raw: &[u8]) -> bool {
 /// parallel documentation, not a copy. Per-member docs are conventionally a
 /// plain `//` (not `///` / `/**`), so unlike top-level declarations these earn
 /// the same-named exemption from any comment — see `documented_decl_name`.
+///
+/// A method-shaped member (`method_signature`, `abstract_method_signature`) is
+/// not here: it is a callable, documented by convention with a JSDoc block, so it
+/// goes through `is_named_declaration` and keeps the doc-comment gate.
 fn is_named_member(kind: &str) -> bool {
     matches!(kind, "pair" | "property_signature" | "field_declaration")
 }
@@ -1063,14 +1076,20 @@ fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<St
     if !is_doc || !is_named_declaration(sibling.kind()) {
         return (None, None);
     }
+    // A computed key (`[expr](): …`, reachable on a `method_signature` or a
+    // `method_definition`) names nothing stable to mirror across files — its text
+    // is the expression, and two unrelated methods both keyed `[key]` would read
+    // as the same name. This is the guard `member_name` applies on the member path.
     let name = sibling
         .child_by_field_name("name")
+        .filter(|n| n.kind() != "computed_property_name")
         .and_then(|n| n.utf8_text(source).ok())
         .map(str::to_owned);
-    // A trait-body item (associated type / method) is owned by its enclosing
-    // `trait`; every top-level declaration transits to an unnamed container and
-    // resolves to `None`, so same-named items in two different traits become a
-    // parallel-owned pair while a top-level copy-paste stays owner-less.
+    // A trait-body item is owned by its enclosing `trait`, and a method signature
+    // by its enclosing `interface` or `type` alias; a top-level declaration
+    // transits to an unnamed container and resolves to `None`, so same-named
+    // members of two owners become a parallel-owned pair while a top-level
+    // copy-paste stays owner-less.
     (name, enclosing_named_type(sibling, source))
 }
 
@@ -2473,6 +2492,292 @@ pub trait ErrorType {
         let b = write(&dir, "filler.rs", "pub fn x() {}\n");
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "duplicate doc on impl associated types has no named owner and still flags");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    // typeorm's `QueryRunner.clearDatabase` contract, carried verbatim by the
+    // interface and by every class that implements it.
+    const CLEAR_DATABASE_DOC: &str = "\
+/**
+ * Removes all tables from the currently connected database.
+ * Be careful with using this method and avoid using it in production or
+ * migrations (because it can clear all your database).
+ */
+";
+
+    #[test]
+    fn ignores_interface_method_jsdoc_mirrored_by_implementing_class_issue_6870() {
+        // Regression (#6870): typeorm states the `clearDatabase` contract on the
+        // `QueryRunner` interface and again on each implementation. The interface
+        // spells the method as a `method_signature`, the class as a
+        // `method_definition`.
+        let dir = tempfile::tempdir().unwrap();
+        let interface_file = write(
+            &dir,
+            "QueryRunner.ts",
+            &format!(
+                "export interface QueryRunner {{\n{CLEAR_DATABASE_DOC}\
+                 clearDatabase(database?: string): Promise<void>\n}}\n"
+            ),
+        );
+        let class_file = write(
+            &dir,
+            "CordovaQueryRunner.ts",
+            &format!(
+                "export class CordovaQueryRunner implements QueryRunner {{\n{CLEAR_DATABASE_DOC}\
+                 async clearDatabase(): Promise<void> {{}}\n}}\n"
+            ),
+        );
+        assert!(
+            run(&[&interface_file, &class_file]).is_empty(),
+            "an interface method's JSDoc mirrored by its implementation must not flag"
+        );
+    }
+
+    #[test]
+    fn ignores_abstract_method_jsdoc_mirrored_by_concrete_subclass() {
+        // The `abstract_method_signature` declares the method and the subclass
+        // `method_definition` implements it.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/**
+ * Flushes every buffered migration statement to the transport and waits until
+ * the remote acknowledges the batch before the next scheduled flush starts.
+ */
+";
+        let base = write(
+            &dir,
+            "BaseLogger.ts",
+            &format!(
+                "export abstract class BaseLogger {{\n{doc}\
+                 abstract flush(): Promise<void>\n}}\n"
+            ),
+        );
+        let concrete = write(
+            &dir,
+            "FileLogger.ts",
+            &format!(
+                "export class FileLogger extends BaseLogger {{\n{doc}\
+                 async flush(): Promise<void> {{}}\n}}\n"
+            ),
+        );
+        assert!(
+            run(&[&base, &concrete]).is_empty(),
+            "an abstract method's JSDoc mirrored by its implementation must not flag"
+        );
+    }
+
+    #[test]
+    fn ignores_overload_signature_jsdoc_mirrored_across_platform_modules() {
+        // A module-level overload signature is a `function_signature`. TypeScript
+        // has no syntax for sharing one JSDoc block across overloads — editors
+        // resolve the doc per selected signature — so the block is repeated per
+        // signature and per platform build of the same export.
+        let dir = tempfile::tempdir().unwrap();
+        let head = "\
+/**
+ * Parses the migration manifest into every pending revision in the exact order
+ * the runner must apply them to reach the requested target schema version.
+ */
+export function parseManifest(raw: string): string[];
+export function parseManifest(raw: string, strict?: boolean): string[] {
+";
+        let node = write(
+            &dir,
+            "manifest.node.ts",
+            &format!("{head}    return readFileSync(raw, 'utf8').split(EOL)\n}}\n"),
+        );
+        let browser =
+            write(&dir, "manifest.browser.ts", &format!("{head}    return raw.split('\\n')\n}}\n"));
+        assert!(
+            run(&[&node, &browser]).is_empty(),
+            "an overload signature's JSDoc mirrored by the other platform module must not flag"
+        );
+    }
+
+    #[test]
+    fn ignores_same_named_method_docs_across_interfaces_in_one_file() {
+        // An interface method inherits its interface as owner, so the owned-member
+        // exemption reaches it. That exemption is file-agnostic on purpose: a member
+        // name is unique inside its owner, so two matching docs can only come from
+        // two different interfaces — the reasoning that already exempts a same-named
+        // `property_signature` under two interfaces and a same-named trait method
+        // under two traits.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "export interface QueryRunner {{\n{CLEAR_DATABASE_DOC}\
+             clearDatabase(database?: string): Promise<void>\n}}\n\
+             export interface SchemaBuilder {{\n{CLEAR_DATABASE_DOC}\
+             clearDatabase(database?: string): Promise<void>\n}}\n"
+        );
+        let a = write(&dir, "contracts.ts", &content);
+        let b = write(&dir, "filler.ts", "export const x = 1;\n");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "same-named method's JSDoc on distinct interfaces must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_same_named_abstract_method_docs_across_classes_in_one_file() {
+        // Boundary of the owner walk: `enclosing_named_type` transits an
+        // `interface_body` but not a `class_body`, so a method declared in a class
+        // inherits no owner and the owned-member exemption cannot reach it. Two
+        // classes in one file therefore still flag where two interfaces do not,
+        // whichever body-less spelling they use. Splitting the same two classes
+        // across files clears them, which is what shows the name is read at all.
+        let dir = tempfile::tempdir().unwrap();
+        let class = |header: &str, name: &str, member: &str| {
+            format!("export {header} {name} {{\n{CLEAR_DATABASE_DOC}{member}\n}}\n")
+        };
+        let filler = write(&dir, "filler.ts", "export const x = 1;\n");
+        let abstract_member = "abstract clearDatabase(database?: string): Promise<void>";
+        let abstract_pair = write(
+            &dir,
+            "runners.ts",
+            &format!(
+                "{}{}",
+                class("abstract class", "BaseRunner", abstract_member),
+                class("abstract class", "BaseBuilder", abstract_member)
+            ),
+        );
+        let diags = run(&[&abstract_pair, &filler]);
+        assert_eq!(diags.len(), 1, "a class body grants no owner, so the copies still flag");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+        // An overload signature needs an implementation signature to be valid
+        // TypeScript. The implementation carries no doc-comment, so it is not a
+        // comment site and does not change the count.
+        let overload_member = "clearDatabase(database?: string): Promise<void>;\n\
+                               clearDatabase(database?: string): Promise<void> {\n\
+                               return Promise.resolve()\n}";
+        let overload_pair = write(
+            &dir,
+            "builders.ts",
+            &format!(
+                "{}{}",
+                class("class", "BaseRunner", overload_member),
+                class("class", "BaseBuilder", overload_member)
+            ),
+        );
+        assert_eq!(
+            run(&[&overload_pair, &filler]).len(),
+            1,
+            "a class overload signature inherits no owner either"
+        );
+        let split_a = write(&dir, "a.ts", &class("class", "BaseRunner", overload_member));
+        let split_b = write(&dir, "b.ts", &class("class", "BaseBuilder", overload_member));
+        assert!(
+            run(&[&split_a, &split_b]).is_empty(),
+            "the same signature is name-attributed; only the owner is missing"
+        );
+    }
+
+    #[test]
+    fn still_flags_same_computed_key_method_docs_across_files() {
+        // A computed key names nothing stable: both methods below spell their key
+        // `[key]`, yet `key` holds a different string in each file. Reading the key
+        // expression as a name would exempt two unrelated methods.
+        let dir = tempfile::tempdir().unwrap();
+        let iface = |key: &str, name: &str| {
+            format!(
+                "const key = '{key}'\nexport interface {name} {{\n{CLEAR_DATABASE_DOC}\
+                 [key](database?: string): Promise<void>\n}}\n"
+            )
+        };
+        let a = write(&dir, "Runner.ts", &iface("run", "Runner"));
+        let b = write(&dir, "Encoder.ts", &iface("encode", "Encoder"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a computed key must not be read as a declaration name");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn overload_run_in_one_owner_clears_only_through_a_cross_file_partner() {
+        // The top-level parallel-declaration exemption is cross-file only, so an
+        // overload run repeating one JSDoc inside a single owner flags on its own
+        // and clears once a same-named partner in another file joins the scan — and
+        // only when that partner sorts earlier, because entries are ordered by
+        // `(path, line)` and the longest-common-prefix search keeps the first of
+        // equal candidates. The verdict depends on what else is in the scan, and on
+        // its name. Filed as #8373.
+        let dir = tempfile::tempdir().unwrap();
+        let iface = write(
+            &dir,
+            "MethodOverloads.ts",
+            &format!(
+                "export interface MethodOverloads {{\n{CLEAR_DATABASE_DOC}\
+                 clearDatabase(a: string): this\n{CLEAR_DATABASE_DOC}\
+                 clearDatabase(a: string, b: string): this\n}}\n"
+            ),
+        );
+        let filler = write(&dir, "filler.ts", "export const x = 1;\n");
+        assert_eq!(
+            run(&[&iface, &filler]).len(),
+            1,
+            "an overload run alone has no cross-file partner and flags"
+        );
+        let implementation = format!(
+            "export class Implementation {{\n{CLEAR_DATABASE_DOC}\
+             clearDatabase(a: string): this {{\n    return this\n}}\n}}\n"
+        );
+        let early = write(&dir, "Early.ts", &implementation);
+        assert!(
+            run(&[&iface, &early]).is_empty(),
+            "the run clears through an earlier-sorting same-named partner"
+        );
+        let late = write(&dir, "ZLate.ts", &implementation);
+        assert_eq!(
+            run(&[&iface, &late]).len(),
+            1,
+            "the same partner, sorting later, never becomes the run's partner"
+        );
+    }
+
+    #[test]
+    fn still_flags_copy_pasted_jsdoc_on_two_methods_of_one_interface() {
+        // Over-exclusion guard: two *differently named* methods of the *same*
+        // interface sharing a doc is real duplication. The shared interface owner
+        // keeps the parallel-member exemption from firing.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "QueryRunner.ts",
+            &format!(
+                "export interface QueryRunner {{\n{CLEAR_DATABASE_DOC}\
+                 clearDatabase(database?: string): Promise<void>\n{CLEAR_DATABASE_DOC}\
+                 dropDatabase(database?: string): Promise<void>\n}}\n"
+            ),
+        );
+        let b = write(&dir, "filler.ts", "export const x = 1;\n");
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "copy-pasted JSDoc on two methods of one interface is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_copy_pasted_jsdoc_across_differently_named_interface_and_class_methods() {
+        // Over-exclusion guard: the exemption stays name-keyed. The same doc pasted
+        // onto an interface method and onto an unrelated class method in another
+        // file describes two different contracts and must still flag.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "QueryRunner.ts",
+            &format!(
+                "export interface QueryRunner {{\n{CLEAR_DATABASE_DOC}\
+                 clearDatabase(database?: string): Promise<void>\n}}\n"
+            ),
+        );
+        let b = write(
+            &dir,
+            "EntityCache.ts",
+            &format!(
+                "export class EntityCache {{\n{CLEAR_DATABASE_DOC}\
+                 purgeEntries(): void {{}}\n}}\n"
+            ),
+        );
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "the same JSDoc on unrelated methods is a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
