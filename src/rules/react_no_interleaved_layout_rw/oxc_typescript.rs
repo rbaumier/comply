@@ -1,7 +1,7 @@
 //! OXC backend for react-no-interleaved-layout-rw.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_plain_assignment_target};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use oxc_span::Span;
@@ -171,28 +171,6 @@ enum Op {
 
 pub struct Check;
 
-/// True when this layout-property member expression is the left-hand target of
-/// a plain `=` assignment (e.g. `El.prototype.getBoundingClientRect = fn`).
-/// Assigning *to* the property slot overrides/mocks it — that is a write to the
-/// slot, not a layout read, so it must not count as a read. Compound
-/// assignments (`+=`, `-=`, …) genuinely read the slot before writing, so this
-/// returns false for them and the read is still recorded.
-fn is_plain_assignment_lhs(parent: AstKind, member_span: Span) -> bool {
-    let AstKind::AssignmentExpression(assign) = parent else {
-        return false;
-    };
-    if assign.operator != oxc_ast::ast::AssignmentOperator::Assign {
-        return false;
-    }
-    // Only the assignment *target* (left) is a write; an identical layout read
-    // on the right-hand side (`a.width = b.offsetWidth`) keeps its own span and
-    // is not suppressed.
-    matches!(
-        &assign.left,
-        oxc_ast::ast::AssignmentTarget::StaticMemberExpression(left) if left.span == member_span
-    )
-}
-
 fn is_interleaved(ops: &[Op]) -> bool {
     if ops.len() < 3 {
         return false;
@@ -237,11 +215,10 @@ impl OxcCheck for Check {
                     analyze.push((arrow.span, arrow.body.span));
                 }
                 AstKind::StaticMemberExpression(member) => {
+                    // Assigning *to* the slot (`El.prototype.getBoundingClientRect = fn`)
+                    // overrides or mocks it. That is a write, not a layout read.
                     if LAYOUT_READ_PROPS.contains(&member.property.name.as_str())
-                        && !is_plain_assignment_lhs(
-                            semantic.nodes().parent_node(n.id()).kind(),
-                            member.span,
-                        )
+                        && !is_plain_assignment_target(n, semantic)
                     {
                         ops.push((member.span, Op::Read));
                     }
@@ -435,8 +412,8 @@ function opaque() {
     fn rhs_layout_read_in_assignment_is_not_suppressed() {
         // The layout read is a bare RHS member (`= b.offsetWidth`) whose parent
         // *is* the assignment; only the LHS target span is suppressed, so the
-        // `left.span == member.span` check must keep this read — the sequence
-        // still interleaves.
+        // span-identity check in `is_plain_assignment_target` must keep this
+        // read — the sequence still interleaves.
         let src = r#"
 function copy() {
   a.style.width = b.offsetWidth;
