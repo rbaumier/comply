@@ -997,6 +997,46 @@ pub fn file_binds_name_to_jwt_crate(node: Node, source: &[u8], local: &str) -> b
     explicit.unwrap_or(has_jwt_glob)
 }
 
+/// True if the file containing `node` binds the local name `local` through a
+/// `use` declaration whose module segments satisfy `module_matches` — the
+/// segments preceding the bound name, so `use axum::routing::get;` offers
+/// `["axum", "routing"]` for `get`.
+///
+/// Resolution goes through the same [`collect_use_leaves`] scanner as the JWT
+/// and async-mutex provenance checks, so grouped (`use axum::{routing::get,
+/// Router}`), glob (`use axum::routing::*`) and aliased (`use axum::Json as J`)
+/// forms all resolve to the leaf's module segments, never to a substring of the
+/// file. An explicit binding of `local` always wins over a glob, so a
+/// `use crate::routing::get;` still answers for `get` beside a
+/// `use axum::routing::*;`. A local item of the same name also shadows a glob,
+/// but this helper reads `use` declarations only: a file that defines its own
+/// `fn get` beside a glob still resolves `get` through the glob. A bare-crate
+/// import (`use axum;`) offers an empty module path: it binds the crate name,
+/// not a symbol inside it. An `as`
+/// rename keeps the module it hangs off and drops the name it renames, so the
+/// caller reads the provenance of the alias, not the symbol behind it.
+pub fn file_binds_name_to_module(
+    node: Node,
+    source: &[u8],
+    local: &str,
+    module_matches: impl Fn(&[String]) -> bool,
+) -> bool {
+    let mut leaves = Vec::new();
+    collect_use_leaves(root_node(node), source, &mut leaves);
+
+    let mut explicit: Option<bool> = None;
+    let mut glob = false;
+    for leaf in &leaves {
+        let matches = module_matches(&leaf.module);
+        if leaf.local == "*" {
+            glob |= matches;
+        } else if leaf.local == local {
+            explicit = Some(explicit.unwrap_or(false) || matches);
+        }
+    }
+    explicit.unwrap_or(glob)
+}
+
 /// The bounded set of database driver / ORM / connection-pool crates. A file
 /// that never reaches one of these does not talk to a database, so a generic
 /// method name it calls (`execute`, `query`, `insert`, …) belongs to some other
@@ -1240,9 +1280,12 @@ fn use_path_child(node: Node) -> Option<Node> {
     })
 }
 
-/// Flatten a `scoped_identifier` / `identifier` path node into its segment
-/// strings, left to right.
-fn rust_path_segments(node: Node, source: &[u8]) -> Vec<String> {
+/// Flatten a path node into its segment strings, left to right. Expression
+/// paths (`scoped_identifier`) and type paths (`scoped_type_identifier`) alike;
+/// a segment the grammar does not spell as an identifier — a turbofish, a
+/// qualified-trait prefix — is dropped, so a path carrying one yields fewer
+/// segments than it has `::`.
+pub fn rust_path_segments(node: Node, source: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     rust_path_segments_into(node, source, &mut out);
     out
@@ -1250,7 +1293,7 @@ fn rust_path_segments(node: Node, source: &[u8]) -> Vec<String> {
 
 fn rust_path_segments_into(node: Node, source: &[u8], out: &mut Vec<String>) {
     match node.kind() {
-        "scoped_identifier" => {
+        "scoped_identifier" | "scoped_type_identifier" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 rust_path_segments_into(child, source, out);
@@ -3197,7 +3240,7 @@ fn base_type_name(text: &str) -> &str {
 }
 
 /// The root node reached by walking up from `node` (the enclosing `source_file`).
-fn root_node(node: Node) -> Node {
+pub fn root_node(node: Node) -> Node {
     let mut current = node;
     while let Some(parent) = current.parent() {
         current = parent;
