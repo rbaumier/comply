@@ -23,6 +23,17 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TSTypeParameter(param) = node.kind() else { return };
+
+        // A `TSTypeParameterDeclaration` holds a generic parameter. A
+        // `TSInferType` holds an `infer T extends C` binding. The rule targets
+        // only the first: an `infer` constraint bounds what the enclosing
+        // conditional type infers. It does not restrict a caller-supplied type
+        // argument.
+        let declaration = semantic.nodes().parent_node(node.id());
+        if !matches!(declaration.kind(), AstKind::TSTypeParameterDeclaration(_)) {
+            return;
+        }
+
         let Some(constraint) = &param.constraint else { return };
         let keyword = match constraint {
             TSType::TSAnyKeyword(_) => "any",
@@ -37,7 +48,7 @@ impl OxcCheck for Check {
         // parameter against a naked-type-parameter conditional, so it is not the
         // no-op the rule otherwise targets.
         let name = param.name.name.as_str();
-        if used_in_conditional_type(node, name, semantic) {
+        if used_in_conditional_type(declaration, name, semantic) {
             return;
         }
 
@@ -57,32 +68,20 @@ impl OxcCheck for Check {
     }
 }
 
-/// The declaration that owns this type parameter — the parent of the
-/// `TSTypeParameterDeclaration` that holds it (function, type alias, interface,
-/// class, method, …). Its span bounds the scope in which the parameter name is
-/// visible. The first ancestor of a `TSTypeParameter` is always its
-/// `TSTypeParameterDeclaration`, so its parent is the owner.
-fn owner_node<'a, 'b>(
-    node: &oxc_semantic::AstNode<'b>,
-    semantic: &'a oxc_semantic::Semantic<'b>,
-) -> Option<&'a oxc_semantic::AstNode<'b>> {
-    let mut ancestors = semantic.nodes().ancestors(node.id());
-    ancestors.next();
-    ancestors.next()
-}
-
 /// Return true when `name` appears as the check or extends type of a conditional
-/// type bound to *this* type parameter. A conditional is considered only when it
-/// lives in the owner's span and is not nested under an inner
-/// `TSTypeParameterDeclaration` that re-declares `name` — that inner binding
-/// shadows the outer one, so its conditional says nothing about our parameter.
+/// type bound to *this* type parameter. `declaration` is the parameter's
+/// `TSTypeParameterDeclaration`; its parent is the owner (function, type alias,
+/// interface, class, method, …) whose span bounds where the parameter name is
+/// visible. A conditional is considered only when it lives in that span and is
+/// not nested under an inner `TSTypeParameterDeclaration` that re-declares
+/// `name` — that inner binding shadows the outer one, so its conditional says
+/// nothing about our parameter.
 fn used_in_conditional_type(
-    node: &oxc_semantic::AstNode,
+    declaration: &oxc_semantic::AstNode,
     name: &str,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let Some(owner) = owner_node(node, semantic) else { return false };
-    let scope = owner.kind().span();
+    let scope = semantic.nodes().parent_node(declaration.id()).kind().span();
     semantic.nodes().iter().any(|n| {
         let AstKind::TSConditionalType(cond) = n.kind() else { return false };
         let span = cond.span;
@@ -270,5 +269,40 @@ mod tests {
         // `T['k'] extends ... ? ...` reaches the param through indexed access.
         let src = "type X<T extends unknown> = T['k'] extends string ? 1 : 0;";
         assert!(run_on(src).is_empty());
+    }
+
+    // #6871: `infer T extends C` is a bounded-inference binding, not a generic
+    // parameter (typebox `src/schema/static/schema.ts`).
+    #[test]
+    fn allows_infer_binding_extends_unknown() {
+        let src =
+            "type ExtractConst<T> = T extends { value: infer Value extends unknown } ? Value : never;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_infer_binding_in_tuple_pattern() {
+        let src = "type ExtractItem<T> = T extends [infer First extends unknown, ...infer Rest extends unknown[]] ? First : never;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_infer_binding_extends_any() {
+        let src = "type Unwrap<T> = T extends Promise<infer U extends any> ? U : T;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_generic_param_beside_infer_binding() {
+        // The `infer` bindings are out of scope, but `U extends unknown` drives
+        // no conditional, so it stays a genuine no-op. The column pins which of
+        // the three `unknown` bounds is reported: the first one, `U`'s. That
+        // also proves the tuple `infer` bounds parsed and were then skipped,
+        // rather than never reaching the rule at all.
+        let src = "type Head<U extends unknown, T> = [U, T extends [infer First extends unknown, ...infer Rest extends unknown[]] ? First : never];";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].line, 1);
+        assert_eq!(d[0].column, src.find("unknown").unwrap() + 1);
     }
 }
