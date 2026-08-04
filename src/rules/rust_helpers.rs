@@ -816,7 +816,10 @@ fn attr_marks_test(text: &str) -> bool {
 /// `is_in_test_context`: crate-root inner attributes (`#![allow(...)]`) plus
 /// outer attributes on an enclosing function / mod / impl / struct / field, or
 /// on an enclosing statement (a statement-level `#[allow(...)] { … }` block or
-/// `#[allow(...)] <stmt>;`). Lets a comply rule that mirrors a clippy lint
+/// `#[allow(...)] <stmt>;`). It also reads the attributes an ancestor owns as
+/// children rather than as siblings — see `ATTRIBUTE_OWNER_KINDS` — so an
+/// `#[allow]` on a match arm or a struct-expression field covers the nodes
+/// inside it. Lets a comply rule that mirrors a clippy lint
 /// honor the author's in-source suppression of it — including a struct-level or
 /// field-level `#[allow]` covering a type written in that struct's field, or a
 /// statement-scoped `#[allow]` covering the node it decorates.
@@ -829,22 +832,19 @@ pub fn is_suppressed_by_clippy_allow(node: Node, lints: &[&str], source: &[u8]) 
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         if child.kind() == "inner_attribute_item"
-            && let Ok(text) = child.utf8_text(source)
-            && attr_allows_clippy_lint(text, lints)
+            && attr_node_allows_clippy_lint(child, lints, source)
         {
             return true;
         }
     }
-    // Outer attributes on an enclosing function / mod / impl / struct / field,
-    // and statement-level attributes on an enclosing statement. In every case
-    // the `#[allow(...)]` parses as a preceding `attribute_item` sibling: of the
-    // decorated item (a field's attribute is a sibling inside the
-    // `field_declaration_list`, not a child), or — for a statement-scoped
-    // `#[allow(...)] { … }` / `#[allow(...)] expr;` — of the statement node
-    // itself. Scanning each ancestor's own preceding siblings covers both.
+    // An `#[allow(...)]` on an enclosing item, field or statement parses as that
+    // node's preceding `attribute_item` sibling. The `ATTRIBUTE_OWNER_KINDS`
+    // shapes hold it as a child instead, so each ancestor is read both ways.
     let mut cur = node;
     loop {
-        if item_has_clippy_allow(cur, lints, source) {
+        if item_has_clippy_allow(cur, lints, source)
+            || any_owned_attribute(cur, |attr| attr_node_allows_clippy_lint(attr, lints, source))
+        {
             return true;
         }
         match cur.parent() {
@@ -863,14 +863,19 @@ fn item_has_clippy_allow(item: Node, lints: &[&str], source: &[u8]) -> bool {
         if s.kind() != "attribute_item" {
             break;
         }
-        if let Ok(text) = s.utf8_text(source)
-            && attr_allows_clippy_lint(text, lints)
-        {
+        if attr_node_allows_clippy_lint(s, lints, source) {
             return true;
         }
         sibling = s.prev_named_sibling();
     }
     false
+}
+
+/// True if the `attribute_item` / `inner_attribute_item` `attr` is an
+/// `#[allow(clippy::X)]` / `#[expect(clippy::X)]` naming one of `lints`.
+fn attr_node_allows_clippy_lint(attr: Node, lints: &[&str], source: &[u8]) -> bool {
+    attr.utf8_text(source)
+        .is_ok_and(|text| attr_allows_clippy_lint(text, lints))
 }
 
 /// True if `text` is an `allow`/`expect` attribute naming `clippy::<lint>` for
@@ -1912,12 +1917,14 @@ pub fn has_outer_attribute_path(item: Node, source: &[u8], attr_paths: &[&str]) 
 /// `attribute_item` siblings (skipping interleaved comment siblings, traversing
 /// past unrelated attributes such as `#[cfg(...)]`) for an `allow`/`expect`
 /// attribute whose argument `token_tree` contains an `identifier` token equal to
-/// `lint`. At a `mod` block, the crate root, or any enclosing `block` (such as
-/// a function body) it also reads the *inner* attributes (`#![allow(...)]`) that
-/// scope that module/file/block, the way the rustc/clippy lint itself resolves a
-/// file-, module-, or function-level allow. The walk stops at the enclosing
-/// `function_item` / `closure_expression` / `source_file` boundary so an
-/// `#[allow]` on a *sibling* item far above does not leak in.
+/// `lint`. It also reads the attributes an ancestor owns as children rather than
+/// as siblings — see `ATTRIBUTE_OWNER_KINDS`. At a `mod` block, the crate
+/// root, or any enclosing `block` (such as a function body) it reads the *inner*
+/// attributes (`#![allow(...)]`) that scope that module/file/block, the way the
+/// rustc/clippy lint itself resolves a file-, module-, or function-level allow.
+/// The walk stops at the enclosing `function_item` / `closure_expression` /
+/// `source_file` boundary so an `#[allow]` on a *sibling* item far above does
+/// not leak in.
 ///
 /// Matching on the AST path child (`allow`/`expect`) and the token-tree
 /// `identifier` — not raw text — means a scope prefix like `clippy::` (which
@@ -1929,7 +1936,9 @@ pub fn has_outer_attribute_path(item: Node, source: &[u8], attr_paths: &[&str]) 
 pub fn has_clippy_allow(node: Node, source: &[u8], lint: &str) -> bool {
     let mut cur = node;
     loop {
-        if attribute_allows_lint_in_siblings(cur, source, lint) {
+        if attribute_allows_lint_in_siblings(cur, source, lint)
+            || any_owned_attribute(cur, |attr| attribute_allows_lint(attr, source, lint))
+        {
             return true;
         }
         // Inner `#![allow(...)]` scope a `mod` block, the whole file, or an
@@ -1976,6 +1985,33 @@ fn inner_attribute_allows_lint(scope: Node, source: &[u8], lint: &str) -> bool {
     body.children(&mut cursor).any(|child| {
         child.kind() == "inner_attribute_item" && attribute_allows_lint(child, source, lint)
     })
+}
+
+/// Node kinds that hold their own outer attributes as *children* instead of
+/// leaving them as preceding siblings.
+///
+/// tree-sitter-rust opens these productions with the attributes, then the one
+/// construct they decorate. Every other production holding `attribute_item`
+/// children is a list, where the attribute decorates the element that follows
+/// it. A list must stay out: it would leak one element's `#[allow]` onto its
+/// neighbours.
+const ATTRIBUTE_OWNER_KINDS: &[&str] = &[
+    "match_arm",
+    "field_initializer",
+    "shorthand_field_initializer",
+];
+
+/// True if any `attribute_item` child of `node` satisfies `matches`.
+///
+/// Reaches the attributes an [`ATTRIBUTE_OWNER_KINDS`] node holds as children,
+/// which a preceding-sibling scan cannot see.
+fn any_owned_attribute<'tree>(node: Node<'tree>, matches: impl Fn(Node<'tree>) -> bool) -> bool {
+    if !ATTRIBUTE_OWNER_KINDS.contains(&node.kind()) {
+        return false;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| child.kind() == "attribute_item" && matches(child))
 }
 
 /// Scan `node`'s preceding `attribute_item` siblings for an `allow`/`expect`
@@ -9165,6 +9201,11 @@ mod tests {
                 "struct S { #[allow(clippy::other_lint)] x: Mutex<bool> }",
                 false,
             ),
+            // A field's `#[allow]` covers that field alone, not the next one.
+            (
+                "struct S { #[allow(clippy::mutex_atomic)] a: bool, x: Mutex<bool> }",
+                false,
+            ),
             // No attribute at all.
             ("struct S { x: Mutex<bool> }", false),
         ];
@@ -9209,6 +9250,114 @@ mod tests {
                 is_suppressed_by_clippy_allow(node, &["disallowed_macros"], src.as_bytes()),
                 expected,
                 "is_suppressed_by_clippy_allow mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_suppressed_by_clippy_allow_honors_match_arm_scope() {
+        let test_cases = [
+            // A match arm holds its `#[allow]` as a child, not as a sibling.
+            (
+                "fn f(x: u8) { match x { \
+                 #[allow(clippy::disallowed_macros)] 0 => eprintln!(\"x\"), _ => {} } }",
+                true,
+            ),
+            // The `#[expect(...)]` form on the arm suppresses too.
+            (
+                "fn f(x: u8) { match x { \
+                 #[expect(clippy::disallowed_macros)] 0 => eprintln!(\"x\"), _ => {} } }",
+                true,
+            ),
+            // The attribute is scoped to its own arm, not the neighbouring one.
+            (
+                "fn f(x: u8) { match x { \
+                 #[allow(clippy::disallowed_macros)] 0 => {}, _ => eprintln!(\"x\") } }",
+                false,
+            ),
+            // A different clippy lint on the arm does not suppress.
+            (
+                "fn f(x: u8) { match x { \
+                 #[allow(clippy::print_stderr)] 0 => eprintln!(\"x\"), _ => {} } }",
+                false,
+            ),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "macro_invocation")
+                .expect("snippet should contain a macro_invocation");
+            assert_eq!(
+                is_suppressed_by_clippy_allow(node, &["disallowed_macros"], src.as_bytes()),
+                expected,
+                "is_suppressed_by_clippy_allow mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_clippy_allow_honors_attributes_owned_by_the_decorated_node() {
+        let test_cases = [
+            // `#[expect]` on a match arm — child of the `match_arm`.
+            (
+                "fn f(x: f64) -> bool { match x { \
+                 #[expect(clippy::float_cmp)] v => v == 1.5, _ => false } }",
+                true,
+            ),
+            // Scoped to its own arm: the neighbouring arm is not covered.
+            (
+                "fn f(x: f64) -> bool { match x { \
+                 #[expect(clippy::float_cmp)] 0.0 => true, _ => x == 1.5 } }",
+                false,
+            ),
+            // A struct-expression field holds its attribute as a child too.
+            (
+                "fn f(x: f64) -> S { S { #[allow(clippy::float_cmp)] flag: x == 1.5 } }",
+                true,
+            ),
+            // …and only covers that field.
+            (
+                "fn f(x: f64) -> S { S { #[allow(clippy::float_cmp)] a: true, b: x == 1.5 } }",
+                false,
+            ),
+            // A list container's attribute belongs to the element it precedes,
+            // so one call argument's `#[allow]` does not cover the next.
+            (
+                "fn f(x: f64) { g(#[allow(clippy::float_cmp)] 1, x == 1.5); }",
+                false,
+            ),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "binary_expression")
+                .expect("snippet should contain a binary_expression");
+            assert_eq!(
+                has_clippy_allow(node, src.as_bytes(), "float_cmp"),
+                expected,
+                "has_clippy_allow mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_clippy_allow_honors_shorthand_struct_field_attribute() {
+        // `shorthand_field_initializer` holds the attribute before the field
+        // identifier. A caller that starts at the identifier finds it as a
+        // preceding sibling. The owner branch is what a caller that starts at
+        // the shorthand node itself needs.
+        let cases = [
+            ("fn f() -> S { S { #[allow(clippy::float_cmp)] flag } }", true),
+            // …and it covers that field alone: the first field, read here, is
+            // not reached by the second field's attribute.
+            ("fn f() -> S { S { a, #[allow(clippy::float_cmp)] b } }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let shorthand = first_of_kind(tree.root_node(), "shorthand_field_initializer")
+                .expect("snippet should contain a shorthand_field_initializer");
+            assert_eq!(
+                has_clippy_allow(shorthand, src.as_bytes(), "float_cmp"),
+                expected,
+                "has_clippy_allow mismatch for `{src}`"
             );
         }
     }

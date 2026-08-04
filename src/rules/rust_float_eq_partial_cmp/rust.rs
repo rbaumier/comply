@@ -17,9 +17,8 @@
 //! `visit_node`.
 //!
 //! Also defers to an author's explicit suppression of clippy's equivalent lint:
-//! an `#[allow(clippy::float_cmp)]` / `#[allow(clippy::float_cmp_const)]` (or the
-//! `#![allow(...)]` inner form on a function body) in scope silences the
-//! diagnostic.
+//! an `#[allow]` / `#[expect]` of `clippy::float_cmp` or
+//! `clippy::float_cmp_const` covering the comparison silences the diagnostic.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -90,9 +89,8 @@ impl AstCheck for Check {
         }
         // Honor the author's explicit suppression of clippy's equivalent lint:
         // `rust-float-eq-partial-cmp` is the comply analog of `clippy::float_cmp`,
-        // so an `#[allow(clippy::float_cmp)]` / `#[allow(clippy::float_cmp_const)]`
-        // (outer on the function, or inner `#![allow(...)]` in its body) in scope
-        // declares the comparison intentional.
+        // so an `#[allow]` / `#[expect]` of `clippy::float_cmp` or
+        // `clippy::float_cmp_const` covering it declares the comparison intentional.
         if has_clippy_allow(node, source, "float_cmp")
             || has_clippy_allow(node, source, "float_cmp_const")
         {
@@ -399,6 +397,18 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
+    /// The source text of every flagged comparison, so a test can assert *which*
+    /// expression fired and not just how many did.
+    fn flagged_sources(source: &str) -> Vec<&str> {
+        run_on(source)
+            .iter()
+            .map(|diagnostic| {
+                let (offset, len) = diagnostic.span.expect("native rule sets a span");
+                &source[offset..offset + len]
+            })
+            .collect()
+    }
+
     #[test]
     fn flags_float_literal_eq() {
         let src = "fn f(x: f64) -> bool { x == 1.0 }";
@@ -584,6 +594,44 @@ mod tests {
     fn allows_clippy_float_cmp_const_allow() {
         let src = "#[allow(clippy::float_cmp_const)] fn f(x: f64) -> bool { x == 1.5 }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_clippy_float_cmp_allow_on_match_arm() {
+        // astral-sh/ruff pylint/rules/magic_value_comparison.rs: the author put
+        // `#[expect(clippy::float_cmp)]` on the arm, which parses as a child of
+        // the `match_arm` rather than a preceding sibling.
+        let src = "fn is_magic(value: &Number) -> bool { match value { \
+                   #[expect(clippy::float_cmp)] \
+                   Number::Float(value) => !(*value == 0.0 || *value == 1.0), \
+                   Number::Int(value) => matches!(*value, Int::ZERO | Int::ONE), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_neighbouring_arm_of_allowed_match_arm() {
+        // The arm attribute is scoped to its own arm: the sibling arm's
+        // comparison still fires, and it is the one reported.
+        let src = "fn f(value: &Number) -> bool { match value { \
+                   #[expect(clippy::float_cmp)] \
+                   Number::Float(value) => *value == 1.5, \
+                   Number::Int(_) => other() == 2.5, } }";
+        assert_eq!(flagged_sources(src), ["other() == 2.5"]);
+    }
+
+    #[test]
+    fn allows_clippy_float_cmp_allow_on_struct_field_initializer() {
+        // A struct-expression field carries its attribute as a child too.
+        let src = "fn f(x: f64) -> S { S { #[allow(clippy::float_cmp)] flag: x == 1.5 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_neighbouring_struct_field_initializer() {
+        // Same scoping for struct-expression fields.
+        let src = "fn f(x: f64) -> S { S { \
+                   #[allow(clippy::float_cmp)] flag: x == 1.5, other: x == 2.5 } }";
+        assert_eq!(flagged_sources(src), ["x == 2.5"]);
     }
 
     #[test]
