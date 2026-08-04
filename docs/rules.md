@@ -438,7 +438,7 @@
 | `no-case-label-in-switch` | Label statement inside switch looks like a case but is a JS label. | Use `case <value>:` instead. A bare `identifier:` inside a switch is a label statement, not a case branch. |
 | `no-collapsible-if` | Nested `if` can be merged with `&&`. | Merge `if (a) { if (b) { ... } }` into `if (a && b) { ... }`. Unnecessary nesting wastes indent levels. |
 | `no-collection-size-mischeck` | `.length >= 0` is always true; `.length < 0` is always false. | Use `.length > 0` to check non-empty, or `.length === 0` to check empty. |
-| `no-common-grab-bag` | Grab-bag filenames magnetize unrelated code. | Rename the file to describe what it actually owns. `common`/`utils`/`helpers`/`shared`/`misc` are magnet names that attract unrelated code over time. |
+| `no-common-grab-bag` | A `common`/`utils`/`helpers`/`shared`/`misc`/`util` module holding a large exported surface names none of what it owns. | Split the module along the concerns it accumulated and name each part after what that part owns. |
 | `no-console-spaces` | Leading/trailing spaces in `console.log` arguments produce misaligned output. | Remove the leading or trailing space from the string argument. Use comma-separated arguments for spacing instead. |
 | `no-constructor-side-effects` | `new X()` without assignment is a side-effect anti-pattern. | Assign the result of `new X()` to a variable, or refactor side effects out of the constructor into a static method. |
 | `no-deprecated-api` | Usage of deprecated Node.js or browser API. | Replace with the modern equivalent: `Buffer.from()` instead of `new Buffer()`, `url.URL` instead of `url.parse()`, etc. |
