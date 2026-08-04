@@ -135,6 +135,12 @@
 //!   macro token tree's direct children — no macro-name allowlist — so a plain
 //!   `let _ = macro!(a, b)` with no `in` binding still fires.
 //!
+//! The four write/send idioms above are matched where the `Err` is born, not
+//! only on the outermost call, so a producer wrapped in a combinator
+//! (`let _ = iter.try_for_each(|x| tx.send(x))`) is exempt too. See
+//! [`has_unhandleable_error_origin`] for the links followed and the false
+//! negatives that search accepts.
+//!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
 //! provably does not return Result/Option. Without --type-aware, there is no
@@ -220,29 +226,10 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Skip the best-effort channel fire-and-forget idiom `let _ = expr.send(..)`:
-    // an `Err` only signals the receiver dropped on a shutdown/cleanup path.
-    if is_channel_send(value, source) {
-        return;
-    }
-
-    // Skip the best-effort standard-stream write `let _ = stderr()/stdout()...`:
-    // the I/O error has nowhere to go in an error-reporting path.
-    if is_std_stream_write(value, source) {
-        return;
-    }
-
-    // Skip the `core::fmt::Write` idiom `let _ = expr.write_str/write_char(..)`:
-    // on an in-memory buffer the `fmt::Result` is always `Ok(())`.
-    if is_fmt_write_method(value, source) {
-        return;
-    }
-
-    // Skip the macro sibling of that idiom `let _ = write!/writeln!(buf, ..)`
-    // where `buf` provably resolves to an in-memory buffer (`String`/
-    // `fmt::Formatter`/`Vec<u8>`): the write is structurally `Ok(())`. A fallible
-    // `io::Write` writer (`File`, socket) or an unresolvable writer still fires.
-    if is_fmt_write_macro_to_buffer(value, source) {
+    // Skip a discard whose `Err` is produced by an operation that cannot act on
+    // it — a channel send, a standard-stream write, a `core::fmt::Write` call,
+    // an in-memory `write!` — wherever in the expression that operation sits.
+    if has_unhandleable_error_origin(value, source) {
         return;
     }
 
@@ -547,6 +534,93 @@ fn has_infallible_turbofish(value: Node, source: &[u8]) -> bool {
         };
         text.rsplit("::").next().unwrap_or(text).trim() == "Infallible"
     })
+}
+
+/// True if some operation reachable from `value` produces an `Err` its caller
+/// cannot act on — a channel send, a standard-stream write, a `core::fmt::Write`
+/// call, or an in-memory `write!` — so `let _ =` discards nothing handleable.
+///
+/// Each producer predicate describes the call that *builds* the error, and that
+/// call is not always the outermost one. Two links are followed here:
+/// - the receiver of a method call, whose error the outer call forwards
+///   (`let _ = tx.send(x).map_err(Box::new)`);
+/// - the result of a closure the call runs, since a combinator that reports its
+///   closure's failure returns that closure's error
+///   (`let _ = iter.try_for_each(|x| tx.send(x))`).
+///
+/// Any closure-taking call qualifies — no combinator name is matched — and a
+/// turbofish call (`collect::<Result<_, _>>()`) is unwrapped to reach its
+/// receiver. Call arguments other than closures are not entered, so
+/// `let _ = wrap(tx.send(x))` still fires: `wrap`'s own `Err` is unknown. An
+/// awaited producer is not reached either, so `let _ = tx.send(x).await` still
+/// fires.
+///
+/// One reachable ignorable producer is enough, so three shapes are accepted
+/// false negatives — separating the `Err` types needs the type information this
+/// rule does not have:
+/// - a chain that also carries a genuinely fallible step
+///   (`let _ = tx.send(x).and_then(|_| fs::write(p, d))`);
+/// - a combinator whose closure feeds the `Ok` side while the discarded `Err` is
+///   the receiver's (`let _ = fs::read(p).map(|d| tx.send(d))`);
+/// - a call that stores or hands off the closure instead of reporting its
+///   failure, so the discarded `Err` is the call's own
+///   (`let _ = pool.execute(move || tx.send(x))`).
+///
+/// A producer predicate's own imprecision travels along these links too: since
+/// `is_channel_send` matches any `.send(..)`, an HTTP client send inside a
+/// closure (`let _ = urls.iter().try_for_each(|u| client.send(u))`) is exempt
+/// like the outermost `let _ = client.send(u)` already is.
+fn has_unhandleable_error_origin(value: Node, source: &[u8]) -> bool {
+    if is_channel_send(value, source)
+        || is_std_stream_write(value, source)
+        || is_fmt_write_method(value, source)
+        || is_fmt_write_macro_to_buffer(value, source)
+    {
+        return true;
+    }
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    // `expr.collect::<Result<_, _>>()` — the turbofish wraps the method access.
+    let callee = value
+        .child_by_field_name("function")
+        .and_then(|function| match function.kind() {
+            "generic_function" => function.child_by_field_name("function"),
+            _ => Some(function),
+        });
+    if let Some(callee) = callee
+        && callee.kind() == "field_expression"
+        && let Some(receiver) = callee.child_by_field_name("value")
+        && has_unhandleable_error_origin(receiver, source)
+    {
+        return true;
+    }
+    let Some(arguments) = value.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = arguments.walk();
+    arguments.named_children(&mut cursor).any(|argument| {
+        argument.kind() == "closure_expression"
+            && closure_tail_expression(argument)
+                .is_some_and(|tail| has_unhandleable_error_origin(tail, source))
+    })
+}
+
+/// The node a closure evaluates to: its body when the body is a single
+/// expression, or the tail expression of a block body. Only that tail is
+/// inspected, so a producer reached through `?`, an explicit `return`, or a
+/// branch tail is not seen and such a discard still fires. Comments are named
+/// nodes in the grammar, so trailing ones are skipped: a comment after the tail
+/// must not hide it.
+fn closure_tail_expression(closure: Node<'_>) -> Option<Node<'_>> {
+    let body = closure.child_by_field_name("body")?;
+    if body.kind() != "block" {
+        return Some(body);
+    }
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor)
+        .filter(|child| !matches!(child.kind(), "line_comment" | "block_comment"))
+        .last()
 }
 
 /// True if `value` is a method call `expr.send(..)` — the best-effort channel
@@ -1163,6 +1237,74 @@ mod tests {
         // call result is still genuinely swallowed.
         let src = "fn f() { let _ = foo.bar(); }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_channel_send_reached_through_the_expression() {
+        // Regression for #6867: starship's directory walker discards the result
+        // of a combinator whose only fallible step is the channel send. The
+        // `Err` is the sender's, so the discard is the same fire-and-forget as
+        // `let _ = tx.send(x)` — wherever the send sits in the expression.
+        let starship = r#"
+            fn walk(base: PathBuf, tx: Sender<DirEntry>) {
+                let dir_iter = fs::read_dir(base).unwrap();
+                let _ = dir_iter
+                    .filter_map(|entry| entry.ok())
+                    .try_for_each(|entry| tx.send(entry).map_err(Box::new));
+            }
+        "#;
+        let forwarded = "fn f() { let _ = tx.send(x).map_err(Box::new); }";
+        let and_then = "fn f() { let _ = ready.and_then(|x| tx.send(x)); }";
+        let collected =
+            "fn f() { let _ = items.iter().map(|x| tx.send(x)).collect::<Result<(), _>>(); }";
+        let block_body =
+            "fn f() { let _ = items.try_for_each(|i| { let v = i.value(); tx.send(v) }); }";
+        // Comments are named nodes, so a trailing one must not hide the value
+        // the block evaluates to.
+        let commented_block_body =
+            "fn f() { let _ = items.try_for_each(|i| { tx.send(*i) // forward it\n }); }";
+        assert!(run_on(starship).is_empty());
+        assert!(run_on(forwarded).is_empty());
+        assert!(run_on(and_then).is_empty());
+        assert!(run_on(collected).is_empty());
+        assert!(run_on(block_body).is_empty());
+        assert!(run_on(commented_block_body).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_write_reached_through_the_expression() {
+        // The standard-stream and `core::fmt::Write` producers travel the same
+        // links as the channel send, so a combinator wrapping one of them is
+        // exempt too.
+        let to_stdout = r#"fn f() { let _ = lines.iter().try_for_each(|l| writeln!(std::io::stdout(), "{l}")); }"#;
+        let to_formatter =
+            "fn f(f: &mut Formatter) { let _ = parts.iter().try_for_each(|p| f.write_str(p)); }";
+        let to_buffer = r#"fn f() { let mut s = String::new(); let _ = parts.iter().try_for_each(|p| write!(s, "{p}")); }"#;
+        assert!(run_on(to_stdout).is_empty());
+        assert!(run_on(to_formatter).is_empty());
+        assert!(run_on(to_buffer).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_fallible_call_reached_through_the_expression() {
+        // Negative space for #6867: the exemption follows the error's producer,
+        // not the combinator. A closure whose result is a genuinely fallible
+        // call still fires, and so does a closure body that returns nothing.
+        let removal = "fn f() { let _ = paths.iter().try_for_each(|p| fs::remove_file(p)); }";
+        let to_file = r#"fn f(file: File) { let _ = lines.iter().try_for_each(|l| writeln!(file, "{l}")); }"#;
+        let statement_body = "fn f() { let _ = items.try_for_each(|i| { persist(i); }); }";
+        let empty_body = "fn f() { let _ = items.iter().try_for_each(|_i| {}); }";
+        let no_closure = "fn f() { let _ = items.iter().try_for_each(persist); }";
+        // The boundary the whole search rests on: only closure arguments are
+        // entered. A producer passed as an ordinary argument says nothing about
+        // the surrounding call's own `Err`.
+        let plain_argument = "fn f() { let _ = wrap(tx.send(x)); }";
+        assert_eq!(run_on(removal).len(), 1);
+        assert_eq!(run_on(to_file).len(), 1);
+        assert_eq!(run_on(statement_body).len(), 1);
+        assert_eq!(run_on(empty_body).len(), 1);
+        assert_eq!(run_on(no_closure).len(), 1);
+        assert_eq!(run_on(plain_argument).len(), 1);
     }
 
     #[test]
