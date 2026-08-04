@@ -205,17 +205,28 @@ fn skip_parens<'r, 'a>(mut ty: &'r TSType<'a>) -> &'r TSType<'a> {
     ty
 }
 
+/// Strip a `readonly` type operator: `T[]` from `readonly T[]`. The operator
+/// wraps the array or tuple type, so the element type sits one level deeper.
+fn skip_readonly<'r, 'a>(ty: &'r TSType<'a>) -> &'r TSType<'a> {
+    match skip_parens(ty) {
+        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
+            skip_parens(&op.type_annotation)
+        }
+        other => other,
+    }
+}
+
 /// The element type of an array type annotation: `E` from `E[]` (a
-/// `TSArrayType`) or from `Array<E>` (a `TSTypeReference` to `Array` with a
-/// single type argument). `None` for any other shape.
+/// `TSArrayType`) or from `Array<E>` / `ReadonlyArray<E>` (a `TSTypeReference`
+/// with a single type argument), `readonly` or not. `None` for any other shape.
 fn array_type_element<'r, 'a>(ty: &'r TSType<'a>) -> Option<&'r TSType<'a>> {
-    match ty {
+    match skip_readonly(ty) {
         TSType::TSArrayType(arr) => Some(skip_parens(&arr.element_type)),
         TSType::TSTypeReference(r) => {
             let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &r.type_name else {
                 return None;
             };
-            if id.name.as_str() != "Array" {
+            if !matches!(id.name.as_str(), "Array" | "ReadonlyArray") {
                 return None;
             }
             r.type_arguments.as_ref()?.params.first().map(skip_parens)
@@ -258,18 +269,26 @@ fn as_expr_yields_obj_keys(
         || as_const_array_of_obj_keys(as_expr, obj_keys)
 }
 
-/// True when `expr` is — or is an identifier resolving (a single hop) to a
-/// `VariableDeclarator` whose initializer is — an `as` expression yielding an
-/// array of known keys of `obj_name` (see `as_expr_yields_obj_keys`). Such an
-/// array's elements are statically known keys, so a value taken out of it by
-/// element access is itself a known key.
-fn array_elem_keys_obj<'a>(
-    expr: &Expression<'a>,
+/// True when `expr` evaluates to an array whose elements are statically known
+/// keys of `obj_name`, so a value taken out of it is itself a known key. An array
+/// or tuple annotation on the expression's binding is that binding's type, so it
+/// decides alone — `const k: readonly string[] = […] as const` holds arbitrary
+/// strings. Otherwise the expression itself is read: an `as` expression yielding
+/// an array of keys (see `as_expr_yields_obj_keys`), inline or through the
+/// initializer of the identifier's binding (a single hop).
+fn expr_yields_obj_key_array<'a>(
+    expr: &'a Expression<'a>,
     obj_name: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
     aliases: &FxHashMap<&str, &str>,
     obj_keys: &FxHashSet<&str>,
 ) -> bool {
+    let expr = peel_parens(expr);
+    if let Some(ty) = binding_declared_type(expr, semantic)
+        && let Some(elements_key_obj) = declared_element_keys_obj(ty, obj_name, aliases)
+    {
+        return elements_key_obj;
+    }
     if as_expr_yields_obj_keys(expr, obj_name, aliases, obj_keys) {
         return true;
     }
@@ -306,12 +325,12 @@ fn init_yields_obj_key<'a>(
             if let Expression::StaticMemberExpression(m) = &call.callee
                 && matches!(m.property.name.as_str(), "find" | "findLast" | "at")
             {
-                return array_elem_keys_obj(&m.object, obj_name, semantic, aliases, obj_keys);
+                return expr_yields_obj_key_array(&m.object, obj_name, semantic, aliases, obj_keys);
             }
             false
         }
         Expression::ComputedMemberExpression(m) => {
-            array_elem_keys_obj(&m.object, obj_name, semantic, aliases, obj_keys)
+            expr_yields_obj_key_array(&m.object, obj_name, semantic, aliases, obj_keys)
         }
         _ => false,
     }
@@ -426,27 +445,28 @@ fn string_literal_type_is_key(ty: &TSType, obj_keys: &FxHashSet<&str>) -> bool {
     obj_keys.contains(s.value.as_str())
 }
 
-/// True when `ty` is `T[]` (a `TSArrayType`) or a tuple `[T, ...T[]]` (a
-/// non-empty `TSTupleType`) whose every element type resolves to `keyof typeof
-/// obj_name` (directly or via alias). Iterating such a value yields known keys.
-fn array_or_tuple_element_keys_obj(
+/// What an array or tuple type states about its element type: `Some(true)` when
+/// every element type resolves to `keyof typeof obj_name` (directly or via
+/// alias), so iterating such a value yields known keys; `Some(false)` when it
+/// states some other element type. `None` when `ty` is neither an array nor a
+/// tuple — a named reference (an alias, an interface) is left unresolved and
+/// states nothing about the elements.
+fn declared_element_keys_obj(
     ty: &TSType,
     obj_name: &str,
     aliases: &FxHashMap<&str, &str>,
-) -> bool {
-    match ty {
-        TSType::TSArrayType(arr) => {
-            type_keys_obj(skip_parens(&arr.element_type), obj_name, aliases)
-        }
-        TSType::TSTupleType(tuple) => {
-            !tuple.element_types.is_empty()
-                && tuple
-                    .element_types
-                    .iter()
-                    .all(|el| tuple_element_keys_obj(el, obj_name, aliases))
-        }
-        _ => false,
+) -> Option<bool> {
+    if let Some(element) = array_type_element(ty) {
+        return Some(type_keys_obj(element, obj_name, aliases));
     }
+    let TSType::TSTupleType(tuple) = skip_readonly(ty) else { return None };
+    Some(
+        !tuple.element_types.is_empty()
+            && tuple
+                .element_types
+                .iter()
+                .all(|el| tuple_element_keys_obj(el, obj_name, aliases)),
+    )
 }
 
 /// True when a single tuple element resolves to `keyof typeof obj_name`. A rest
@@ -459,7 +479,7 @@ fn tuple_element_keys_obj(
 ) -> bool {
     match el {
         TSTupleElement::TSRestType(rest) => {
-            array_or_tuple_element_keys_obj(&rest.type_annotation, obj_name, aliases)
+            declared_element_keys_obj(&rest.type_annotation, obj_name, aliases).unwrap_or(false)
         }
         TSTupleElement::TSOptionalType(opt) => {
             type_keys_obj(skip_parens(&opt.type_annotation), obj_name, aliases)
@@ -584,44 +604,17 @@ fn call_yields_obj_keys<'a>(
     false
 }
 
-/// True when the array-method receiver `object` yields elements that are known
-/// keys of `obj_name`, so the callback's first parameter is inferred as a subtype
-/// of `keyof typeof obj_name`. An explicit type annotation on the receiver's
-/// binding is that binding's type, so it decides alone: it qualifies only as a
-/// `T[]` / `[T, ...T[]]` whose element resolves to `keyof typeof obj_name`.
-/// Otherwise the receiver expression itself is read, and three shapes qualify:
-///   - an `as` expression yielding an array of known keys — a `... as (keyof
-///     typeof obj_name)[]` cast (e.g. `(Object.keys(obj) as (keyof typeof
-///     obj)[]).forEach`) or an `as const` literal of the object's own keys (e.g.
-///     `(['a', 'b'] as const).forEach`);
-///   - an identifier bound to such an `as` expression;
-///   - a call to a generic helper returning `Array<keyof T>` / `(keyof T)[]` whose
-///     `T`-bound argument is `obj_name` itself (e.g. the `keysOf(obj)` helper).
-fn receiver_element_keys_obj<'a>(
-    object: &'a Expression<'a>,
-    obj_name: &str,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-    aliases: &FxHashMap<&str, &str>,
-    obj_keys: &FxHashSet<&str>,
-) -> bool {
-    if let Some(ty) = binding_declared_type(object, semantic) {
-        return array_or_tuple_element_keys_obj(ty, obj_name, aliases);
-    }
-    let object = peel_parens(object);
-    if let Expression::CallExpression(call) = object {
-        return call_yields_obj_keys(call, obj_name, semantic);
-    }
-    array_elem_keys_obj(object, obj_name, semantic, aliases, obj_keys)
-}
-
 /// True when the un-annotated formal parameter at `param_node_id` is the first
 /// parameter of a callback passed as the first argument to
 /// `.map()`/`.forEach()`/`.filter()`/`.some()`/`.every()`, whose array-method
-/// receiver yields elements resolving to `keyof typeof obj_name` (see
-/// `receiver_element_keys_obj`). TypeScript then infers the parameter's type as
-/// `keyof typeof obj_name`, so the lookup is as key-narrow-safe as an explicit
-/// annotation.
-fn param_inferred_from_typed_array_receiver<'a>(
+/// receiver yields elements that are known keys of `obj_name`. TypeScript then
+/// infers the parameter's type as a subtype of `keyof typeof obj_name`, so the
+/// lookup is as key-narrow-safe as an explicit annotation. The receiver qualifies
+/// as a call to a generic helper returning `Array<keyof T>` / `(keyof T)[]` whose
+/// `T`-bound argument is `obj_name` itself (e.g. the `keysOf(obj)` helper), or as
+/// any expression yielding an array of known keys (see
+/// `expr_yields_obj_key_array`).
+fn param_inferred_from_key_array_receiver<'a>(
     param_node_id: oxc_semantic::NodeId,
     obj_name: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -654,7 +647,11 @@ fn param_inferred_from_typed_array_receiver<'a>(
         if call.arguments.first().map(|a| a.span()) != Some(anc.kind().span()) {
             return false;
         }
-        return receiver_element_keys_obj(&m.object, obj_name, semantic, aliases, obj_keys);
+        let receiver = peel_parens(&m.object);
+        if let Expression::CallExpression(call) = receiver {
+            return call_yields_obj_keys(call, obj_name, semantic);
+        }
+        return expr_yields_obj_key_array(receiver, obj_name, semantic, aliases, obj_keys);
     }
     false
 }
@@ -666,11 +663,11 @@ fn param_inferred_from_typed_array_receiver<'a>(
 /// from an array of known keys of `obj_name` (see `init_yields_obj_key`). For an
 /// un-annotated callback parameter, also true when it is the first parameter of
 /// a `.map()`/`.forEach()`/`.filter()`/`.some()`/`.every()` callback whose
-/// receiver yields known keys of `obj_name` (see `receiver_element_keys_obj`).
-/// Also true when the
-/// declared type is a string-literal union (`"a" | "b"`) every member of which
-/// is a key of the object (`obj_keys`) — it ranges only over the object's keys,
-/// so it is as key-narrow as `keyof typeof obj_name`.
+/// receiver yields known keys of `obj_name` (see
+/// `param_inferred_from_key_array_receiver`).
+/// Also true when the declared type is a string-literal union (`"a" | "b"`)
+/// every member of which is a key of the object (`obj_keys`) — it ranges only
+/// over the object's keys, so it is as key-narrow as `keyof typeof obj_name`.
 fn index_ident_keys_obj<'a>(
     id: &IdentifierReference<'a>,
     obj_name: &str,
@@ -689,7 +686,7 @@ fn index_ident_keys_obj<'a>(
                 // No annotation: accept when the parameter's type is inferred
                 // from a typed array receiver of an array-method callback.
                 if param.type_annotation.is_none() {
-                    return param_inferred_from_typed_array_receiver(
+                    return param_inferred_from_key_array_receiver(
                         node_id, obj_name, semantic, aliases, obj_keys,
                     );
                 }
@@ -1203,6 +1200,108 @@ mod tests {
                    const KEYS: readonly string[] = ['a', 'b'] as const;\n\
                    KEYS.forEach((k) => { const v = m[k]; });";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_subscript_of_as_const_key_array_widened_by_an_annotation() {
+        // The annotation decides in the subscript path too, not only under an
+        // array-method callback: `k` is `string`, so the lookup widens.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const KEYS: readonly string[] = ['a', 'b'] as const;\n\
+                   const k = KEYS[0];\n\
+                   const v = m[k];";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_forEach_over_parenthesized_annotated_key_array() {
+        // Parentheses around the receiver must not hide the annotation that
+        // widens its element type.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const KEYS: readonly string[] = ['a', 'b'] as const;\n\
+                   (KEYS).forEach((k) => { const v = m[k]; });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_index_from_as_const_key_array_via_find() {
+        // `.find()` on the same tuple yields `'a' | 'b' | undefined`; the defined
+        // half is a known key.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const KEYS = ['a', 'b'] as const;\n\
+                   const k = KEYS.find((x) => x === 'a');\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_from_array_generic_keyof_cast_via_subscript() {
+        // `Array<keyof typeof m>` states the same element type as `(keyof typeof
+        // m)[]` in the subscript path as well.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const keys = Object.keys(m) as Array<keyof typeof m>;\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_forEach_over_as_const_array_of_a_strict_subset_of_the_keys() {
+        // The literals need only be keys of the object, not all of them: `'a'` is
+        // still a subtype of `keyof typeof m`.
+        let src = "const m = { a: 1, b: 2, c: 3 } as const;\n\
+                   (['a'] as const).forEach((k) => { const v = m[k]; });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_forEach_over_as_const_array_with_a_spread_element() {
+        // A spread hides which literals the tuple holds, so the element type is
+        // not statically known to be a key.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const REST = ['b'] as const;\n\
+                   (['a', ...REST] as const).forEach((k) => { const v = m[k]; });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_forEach_over_readonly_keyof_annotated_array_param() {
+        // `readonly (keyof typeof m)[]` states the same element type as `(keyof
+        // typeof m)[]`; the `readonly` operator does not erase it.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   function f(keys: readonly (keyof typeof m)[]) {\n\
+                   keys.forEach((k) => { const v = m[k]; });\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_over_readonly_array_generic_keyof_annotated_param() {
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   function f(keys: ReadonlyArray<keyof typeof m>) {\n\
+                   return keys.map((k) => m[k]);\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_map_over_readonly_string_array_annotated_param() {
+        // The `readonly` operator is peeled, but `string` is still not a key.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   function f(keys: readonly string[]) { return keys.map((k) => m[k]); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_index_from_key_array_annotated_by_an_unresolvable_alias() {
+        // The alias does not decode into an element type, so it states nothing
+        // and the initializer is read instead.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   type Keys = (keyof typeof m)[];\n\
+                   const keys: Keys = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
     }
 
     #[test]
