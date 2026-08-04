@@ -1,4 +1,8 @@
-//! no-common-grab-bag — reject `common.ts`, `utils.ts`, `helpers.ts` etc.
+//! no-common-grab-bag — reject a `common` / `utils` / `helpers` / `shared` /
+//! `misc` / `util` module that has accreted a large exported surface.
+//!
+//! Configure the bar with `[rules.no-common-grab-bag] min_exports` in
+//! `comply.toml`.
 
 mod text;
 
@@ -10,10 +14,10 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-common-grab-bag",
-    description: "Grab-bag filenames magnetize unrelated code.",
-    remediation: "Rename the file to describe what it actually owns. \
-                  `common`/`utils`/`helpers`/`shared`/`misc` are magnet names \
-                  that attract unrelated code over time.",
+    description: "A `common`/`utils`/`helpers`/`shared`/`misc`/`util` module \
+                  holding a large exported surface names none of what it owns.",
+    remediation: "Split the module along the concerns it accumulated and name \
+                  each part after what that part owns.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["code-quality"],

@@ -184,6 +184,12 @@ max_statement_gap = 2
 threshold_percent = 30
 min_importers = 10
 
+# A `common` / `utils` / `helpers` / `shared` / `misc` / `util` module is
+# reported once it exports at least this many symbols. Under the bar the
+# generic name costs a reader little.
+[rules.no-common-grab-bag]
+min_exports = 25
+
 # Near-duplicate comment detection. Flags prose comments that share a verbatim
 # opening — the signature of a copy-pasted explanation that drifts out of sync.
 # `min_words` keeps short comments (TODOs, directives) out of scope; a comment
