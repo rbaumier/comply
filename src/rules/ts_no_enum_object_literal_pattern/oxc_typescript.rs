@@ -104,17 +104,30 @@ fn is_closed_object_literal(ty: &TSType) -> bool {
     !lit.members.iter().any(|m| matches!(m, TSSignature::TSIndexSignature(_)))
 }
 
-/// Collect `type Alias = <type>` declarations as `alias -> the type it names`,
-/// so an annotation written as an alias can be decoded to that type.
-fn collect_type_aliases<'a>(
+/// The right-hand side of the `type A = <type>` declaration that `ty` names.
+/// The reference is resolved through its own symbol, so a same-named alias
+/// declared in another scope cannot answer for it. `None` when `ty` is not a
+/// bare type reference, when the reference carries type arguments — following
+/// `KeysOf<T>` would leave `T` unbound, so it names nothing this analysis can
+/// read — or when it resolves to anything but a type alias: an interface, an
+/// imported type, a generic parameter.
+fn alias_target<'r, 'a: 'r>(
+    ty: &'r TSType<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
-) -> FxHashMap<&'a str, &'a TSType<'a>> {
-    let mut aliases = FxHashMap::default();
-    for node in semantic.nodes().iter() {
-        let AstKind::TSTypeAliasDeclaration(decl) = node.kind() else { continue };
-        aliases.insert(decl.id.name.as_str(), &decl.type_annotation);
+) -> Option<&'r TSType<'a>> {
+    let TSType::TSTypeReference(r) = ty else { return None };
+    if r.type_arguments.is_some() {
+        return None;
     }
-    aliases
+    let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &r.type_name else { return None };
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(id.reference_id.get()?).symbol_id()?;
+    let AstKind::TSTypeAliasDeclaration(decl) =
+        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
+    else {
+        return None;
+    };
+    Some(&decl.type_annotation)
 }
 
 /// The number of `type A = B` hops followed when decoding an annotation. A
@@ -122,17 +135,16 @@ fn collect_type_aliases<'a>(
 const MAX_ALIAS_HOPS: usize = 8;
 
 /// Follow `type A = B` declarations from `ty` to the type it ultimately names.
-/// Returns `ty` unchanged when it is not a bare type reference, or when the
-/// reference names no alias in this file — an interface or an imported type is
-/// left unresolved.
-fn resolve_alias<'r, 'a>(
+/// Returns `ty` unchanged when the chain ends (see `alias_target`), and the
+/// partially-resolved type once the hop bound is spent — still a type
+/// reference, so the annotation reads as one this analysis cannot decide on and
+/// the initializer answers instead.
+fn resolve_alias<'r, 'a: 'r>(
     mut ty: &'r TSType<'a>,
-    aliases: &FxHashMap<&str, &'r TSType<'a>>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> &'r TSType<'a> {
     for _ in 0..MAX_ALIAS_HOPS {
-        let Some(target) = type_ref_name(ty).and_then(|name| aliases.get(name)) else {
-            return ty;
-        };
+        let Some(target) = alias_target(ty, semantic) else { return ty };
         ty = target;
     }
     ty
@@ -164,8 +176,12 @@ fn keyof_type_param_target<'a>(ty: &'a TSType<'a>) -> Option<&'a str> {
 
 /// True when `ty` is `keyof typeof obj_name`, either directly or through a
 /// type alias that resolves to it.
-fn type_keys_obj(ty: &TSType, obj_name: &str, aliases: &FxHashMap<&str, &TSType>) -> bool {
-    keyof_typeof_target(resolve_alias(ty, aliases)) == Some(obj_name)
+fn type_keys_obj<'a>(
+    ty: &TSType<'a>,
+    obj_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    keyof_typeof_target(resolve_alias(ty, semantic)) == Some(obj_name)
 }
 
 /// If `ty` is a bare type reference to an identifier, return its name.
@@ -185,7 +201,6 @@ fn type_param_constraint_keys_obj<'a>(
     decl_node_id: oxc_semantic::NodeId,
     obj_name: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    aliases: &FxHashMap<&str, &TSType>,
 ) -> bool {
     let nodes = semantic.nodes();
     for kind in nodes.ancestor_kinds(decl_node_id) {
@@ -202,7 +217,7 @@ fn type_param_constraint_keys_obj<'a>(
         return tp
             .constraint
             .as_ref()
-            .is_some_and(|c| type_keys_obj(c, obj_name, aliases));
+            .is_some_and(|c| type_keys_obj(c, obj_name, semantic));
     }
     false
 }
@@ -264,67 +279,154 @@ fn as_const_array_of_obj_keys(as_expr: &TSAsExpression, obj_keys: &FxHashSet<&st
         })
 }
 
-/// True when `expr` is an `as` expression yielding an array whose elements are
-/// statically known keys of `obj_name`. Two shapes qualify: a cast to an array
-/// type whose element resolves to `keyof typeof obj_name` (`… as (keyof typeof
-/// m)[]`, `… as Array<keyof typeof m>`), and an `as const` array literal of the
-/// object's own keys (see `as_const_array_of_obj_keys`).
-fn as_expr_yields_obj_keys(
-    expr: &Expression,
+/// True when `expr` is a cast that states an array element type resolving to
+/// `keyof typeof obj_name` (`… as (keyof typeof m)[]`, `… as Array<keyof typeof
+/// m>`). The cast names the element type outright, which is what makes it
+/// evidence an annotation cannot silently take back.
+fn as_expr_states_key_elements<'a>(
+    expr: &Expression<'a>,
     obj_name: &str,
-    aliases: &FxHashMap<&str, &TSType>,
-    obj_keys: &FxHashSet<&str>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let Expression::TSAsExpression(as_expr) = expr else { return false };
     array_type_element(&as_expr.type_annotation)
-        .is_some_and(|el| type_keys_obj(el, obj_name, aliases))
+        .is_some_and(|el| type_keys_obj(el, obj_name, semantic))
+}
+
+/// True when `expr` is an `as` expression yielding an array whose elements are
+/// statically known keys of `obj_name`. Two shapes qualify: a cast stating the
+/// element type (see `as_expr_states_key_elements`), and an `as const` array
+/// literal of the object's own keys (see `as_const_array_of_obj_keys`).
+fn as_expr_yields_obj_keys<'a>(
+    expr: &Expression<'a>,
+    obj_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    obj_keys: &FxHashSet<&str>,
+) -> bool {
+    let Expression::TSAsExpression(as_expr) = expr else { return false };
+    as_expr_states_key_elements(expr, obj_name, semantic)
         || as_const_array_of_obj_keys(as_expr, obj_keys)
 }
 
-/// True when `expr` evaluates to an array whose elements are statically known
-/// keys of `obj_name`, so a value taken out of it is itself a known key. An
-/// explicit annotation on the expression's binding is that binding's type, so it
-/// decides alone (see `declared_element_keys_obj`) — `const k: readonly string[]
-/// = […] as const` holds arbitrary strings. Without an annotation the expression
-/// itself is read: an `as` expression yielding an array of keys (see
-/// `as_expr_yields_obj_keys`), inline or through the initializer of the
-/// identifier's binding (a single hop).
-fn expr_yields_obj_key_array<'a>(
-    expr: &'a Expression<'a>,
-    obj_name: &str,
+/// The initializer of `expr`'s binding, when `expr` is an identifier resolving
+/// to a variable declarator that has one. `None` when it resolves to a formal
+/// parameter: a parameter's value comes from the call site, never from a
+/// declarator further out, so the walk stops there rather than reading an
+/// enclosing binding's initializer as the parameter's. `binding_declared_type`
+/// stops at the same node, so the two walks over this chain agree on which node
+/// declares the binding.
+fn binding_initializer<'a>(
+    expr: &Expression<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    aliases: &FxHashMap<&str, &TSType>,
-    obj_keys: &FxHashSet<&str>,
-) -> bool {
-    let expr = peel_parens(expr);
-    if let Some(ty) = binding_declared_type(expr, semantic) {
-        return declared_element_keys_obj(ty, obj_name, aliases);
-    }
-    if as_expr_yields_obj_keys(expr, obj_name, aliases, obj_keys) {
-        return true;
-    }
-    let Expression::Identifier(id) = expr else { return false };
-    let Some(ref_id) = id.reference_id.get() else { return false };
+) -> Option<&'a Expression<'a>> {
+    let Expression::Identifier(id) = expr else { return None };
     let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let sym_id = scoping.get_reference(id.reference_id.get()?).symbol_id()?;
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
     for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         match kind {
-            AstKind::VariableDeclarator(d) => {
-                return d.init.as_ref().is_some_and(|init| {
-                    as_expr_yields_obj_keys(init, obj_name, aliases, obj_keys)
-                });
-            }
-            // A parameter's type comes from its own annotation or from inference
-            // at the call site, never from a declarator further out. Stop here so
-            // an enclosing binding's initializer is not read as the parameter's.
-            AstKind::FormalParameter(_) => return false,
+            AstKind::VariableDeclarator(d) => return d.init.as_ref(),
+            AstKind::FormalParameter(_) => return None,
             _ => continue,
         }
     }
-    false
+    None
+}
+
+/// True when `ty` names a type the decider can rule on: a keyword (`string`,
+/// `any`, …) or `keyof typeof X` — the one operator `keyof_typeof_target`
+/// reads. Deliberately nothing else. The decider is `type_keys_obj`, which
+/// answers `None` for a union, for another operator, for a string literal, and
+/// for a name this analysis could not resolve; reading any of those as "not a
+/// key" would be a verdict it cannot stand behind. `'a'` in particular may well
+/// be a key of the indexed object.
+///
+/// This gate must stay in lockstep with the decider: when #8352 teaches
+/// `declared_element_keys_obj` to read literal unions, widen this in the same
+/// change, or those element types stay behind a gate that no longer matches.
+fn is_decidable_type(ty: &TSType) -> bool {
+    let ty = skip_parens(ty);
+    keyof_typeof_target(ty).is_some() || ty.is_keyword()
+}
+
+/// True when `ty` decides on its own what a value of that type holds. That
+/// holds for an array whose element type is decidable (see `is_decidable_type`),
+/// for a tuple whose every element type is, and for a decidable type that is
+/// neither — `string`, `any`: it is plainly not an array of keys. It does not
+/// hold for a name this analysis could not resolve, nor for an array or tuple
+/// built on one: those state nothing it can act on.
+fn annotation_decides_elements<'a>(
+    ty: &TSType<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let ty = resolve_alias(ty, semantic);
+    if let Some(element) = array_type_element(ty) {
+        return is_decidable_type(resolve_alias(element, semantic));
+    }
+    match skip_readonly(ty) {
+        TSType::TSTupleType(tuple) => tuple
+            .element_types
+            .iter()
+            .all(|el| tuple_element_decidable(el, semantic)),
+        other => is_decidable_type(other),
+    }
+}
+
+/// True when a single tuple element states a type the decider can rule on. A
+/// rest element (`...T[]`) carries an array type, so it recurses; a plain or
+/// optional element carries the element type directly. Mirrors
+/// `tuple_element_keys_obj`, which reads what these elements say.
+fn tuple_element_decidable<'a>(
+    el: &TSTupleElement<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    match el {
+        TSTupleElement::TSRestType(rest) => {
+            annotation_decides_elements(&rest.type_annotation, semantic)
+        }
+        TSTupleElement::TSOptionalType(opt) => {
+            is_decidable_type(resolve_alias(&opt.type_annotation, semantic))
+        }
+        other => other
+            .as_ts_type()
+            .is_some_and(|inner| is_decidable_type(resolve_alias(inner, semantic))),
+    }
+}
+
+/// True when `expr` evaluates to an array whose elements are statically known
+/// keys of `obj_name`, so a value taken out of it is itself a known key.
+///
+/// An `as` expression yielding an array of keys qualifies (see
+/// `as_expr_yields_obj_keys`), inline or through the initializer of the
+/// identifier's binding — a single hop.
+///
+/// An explicit annotation on that binding is the binding's type, so whenever it
+/// decides what the elements are (see `annotation_decides_elements`), it decides
+/// alone: `const k: readonly string[] = […] as const` holds arbitrary strings.
+/// When it does not, the binding can still hold an array whose element type a
+/// cast named outright, and that cast is the rule's own remediation — flagging
+/// code that applied it would be unactionable. A bare `as const` literal is not
+/// evidence there: it asserts only that its elements are literals, which is what
+/// an annotation overrides.
+fn expr_yields_obj_key_array<'a>(
+    expr: &'a Expression<'a>,
+    obj_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    obj_keys: &FxHashSet<&str>,
+) -> bool {
+    let expr = peel_parens(expr);
+    if let Some(ty) = binding_declared_type(expr, semantic) {
+        if annotation_decides_elements(ty, semantic) {
+            return declared_element_keys_obj(ty, obj_name, semantic);
+        }
+        return binding_initializer(expr, semantic)
+            .is_some_and(|init| as_expr_states_key_elements(init, obj_name, semantic));
+    }
+    as_expr_yields_obj_keys(expr, obj_name, semantic, obj_keys)
+        || binding_initializer(expr, semantic)
+            .is_some_and(|init| as_expr_yields_obj_keys(init, obj_name, semantic, obj_keys))
 }
 
 /// True when `init` extracts an element from an array of known keys of `obj_name`
@@ -334,7 +436,6 @@ fn init_yields_obj_key<'a>(
     init: &Expression<'a>,
     obj_name: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    aliases: &FxHashMap<&str, &TSType>,
     obj_keys: &FxHashSet<&str>,
 ) -> bool {
     match init {
@@ -342,12 +443,12 @@ fn init_yields_obj_key<'a>(
             if let Expression::StaticMemberExpression(m) = &call.callee
                 && matches!(m.property.name.as_str(), "find" | "findLast" | "at")
             {
-                return expr_yields_obj_key_array(&m.object, obj_name, semantic, aliases, obj_keys);
+                return expr_yields_obj_key_array(&m.object, obj_name, semantic, obj_keys);
             }
             false
         }
         Expression::ComputedMemberExpression(m) => {
-            expr_yields_obj_key_array(&m.object, obj_name, semantic, aliases, obj_keys)
+            expr_yields_obj_key_array(&m.object, obj_name, semantic, obj_keys)
         }
         _ => false,
     }
@@ -467,44 +568,42 @@ fn string_literal_type_is_key(ty: &TSType, obj_keys: &FxHashSet<&str>) -> bool {
 /// tuple `[T, ...T[]]` whose every element does. Iterating such a value yields
 /// known keys. Aliases are followed first, so `type Keys = (keyof typeof Obj)[]`
 /// states what it names. Anything else — `string[]`, an interface, `any`, an
-/// imported type — does not state key elements and so does not qualify: the
-/// annotation is the binding's type, and a lookup it cannot show to be narrow
-/// stays flagged.
-fn declared_element_keys_obj(
-    ty: &TSType,
+/// imported type — does not state key elements and so does not qualify.
+fn declared_element_keys_obj<'a>(
+    ty: &TSType<'a>,
     obj_name: &str,
-    aliases: &FxHashMap<&str, &TSType>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
-    let ty = resolve_alias(ty, aliases);
+    let ty = resolve_alias(ty, semantic);
     if let Some(element) = array_type_element(ty) {
-        return type_keys_obj(element, obj_name, aliases);
+        return type_keys_obj(element, obj_name, semantic);
     }
     let TSType::TSTupleType(tuple) = skip_readonly(ty) else { return false };
     !tuple.element_types.is_empty()
         && tuple
             .element_types
             .iter()
-            .all(|el| tuple_element_keys_obj(el, obj_name, aliases))
+            .all(|el| tuple_element_keys_obj(el, obj_name, semantic))
 }
 
 /// True when a single tuple element resolves to `keyof typeof obj_name`. A rest
 /// element (`...T[]`) carries an array type, so it recurses; a plain or optional
 /// element carries the key type directly.
-fn tuple_element_keys_obj(
-    el: &TSTupleElement,
+fn tuple_element_keys_obj<'a>(
+    el: &TSTupleElement<'a>,
     obj_name: &str,
-    aliases: &FxHashMap<&str, &TSType>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     match el {
         TSTupleElement::TSRestType(rest) => {
-            declared_element_keys_obj(&rest.type_annotation, obj_name, aliases)
+            declared_element_keys_obj(&rest.type_annotation, obj_name, semantic)
         }
         TSTupleElement::TSOptionalType(opt) => {
-            type_keys_obj(skip_parens(&opt.type_annotation), obj_name, aliases)
+            type_keys_obj(skip_parens(&opt.type_annotation), obj_name, semantic)
         }
         other => other
             .as_ts_type()
-            .is_some_and(|inner| type_keys_obj(skip_parens(inner), obj_name, aliases)),
+            .is_some_and(|inner| type_keys_obj(skip_parens(inner), obj_name, semantic)),
     }
 }
 
@@ -636,7 +735,6 @@ fn param_inferred_from_key_array_receiver<'a>(
     param_node_id: oxc_semantic::NodeId,
     obj_name: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    aliases: &FxHashMap<&str, &TSType>,
     obj_keys: &FxHashSet<&str>,
 ) -> bool {
     let nodes = semantic.nodes();
@@ -669,7 +767,7 @@ fn param_inferred_from_key_array_receiver<'a>(
         if let Expression::CallExpression(call) = receiver {
             return call_yields_obj_keys(call, obj_name, semantic);
         }
-        return expr_yields_obj_key_array(receiver, obj_name, semantic, aliases, obj_keys);
+        return expr_yields_obj_key_array(receiver, obj_name, semantic, obj_keys);
     }
     false
 }
@@ -690,7 +788,6 @@ fn index_ident_keys_obj<'a>(
     id: &IdentifierReference<'a>,
     obj_name: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    aliases: &FxHashMap<&str, &TSType>,
     obj_keys: &FxHashSet<&str>,
 ) -> bool {
     let Some(ref_id) = id.reference_id.get() else { return false };
@@ -705,7 +802,7 @@ fn index_ident_keys_obj<'a>(
                 // from an array-method receiver that yields known keys.
                 if param.type_annotation.is_none() {
                     return param_inferred_from_key_array_receiver(
-                        node_id, obj_name, semantic, aliases, obj_keys,
+                        node_id, obj_name, semantic, obj_keys,
                     );
                 }
                 let Some(ty) = param_binding_type(param, id.name.as_str()) else {
@@ -718,14 +815,14 @@ fn index_ident_keys_obj<'a>(
                 // from an array of known keys of the object.
                 let Some(ann) = decl.type_annotation.as_ref() else {
                     return decl.init.as_ref().is_some_and(|init| {
-                        init_yields_obj_key(init, obj_name, semantic, aliases, obj_keys)
+                        init_yields_obj_key(init, obj_name, semantic, obj_keys)
                     });
                 };
                 &ann.type_annotation
             }
             _ => continue,
         };
-        if type_keys_obj(ty, obj_name, aliases) {
+        if type_keys_obj(ty, obj_name, semantic) {
             return true;
         }
         // A key whose declared type is a string-literal union drawn entirely from
@@ -736,7 +833,7 @@ fn index_ident_keys_obj<'a>(
         // `code: TCode` where `<TCode extends keyof typeof Obj>` is as safe as a
         // direct `keyof typeof Obj` annotation — resolve the constraint.
         return type_ref_name(ty).is_some_and(|name| {
-            type_param_constraint_keys_obj(name, decl_node_id, obj_name, semantic, aliases)
+            type_param_constraint_keys_obj(name, decl_node_id, obj_name, semantic)
         });
     }
     false
@@ -823,11 +920,10 @@ impl OxcCheck for Check {
         // A variable typed `keyof typeof Obj` (directly or via a type alias)
         // makes the lookup statically key-narrow — the canonical, correct way
         // to read an `as const` map. Not the widening enum-replacement pattern.
-        if let Expression::Identifier(idx_id) = &member.expression {
-            let aliases = collect_type_aliases(semantic);
-            if index_ident_keys_obj(idx_id, obj_name, semantic, &aliases, obj_keys) {
-                return;
-            }
+        if let Expression::Identifier(idx_id) = &member.expression
+            && index_ident_keys_obj(idx_id, obj_name, semantic, obj_keys)
+        {
+            return;
         }
 
         let (line, column) =
@@ -1386,6 +1482,156 @@ mod tests {
                    const k = keys[0];\n\
                    return m[k];\n\
                    }) as (keyof typeof m)[];";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_index_from_keyof_cast_annotated_by_an_unresolvable_type() {
+        // The annotation names an interface, which states no element type, but the
+        // initializer's cast names it — and that cast is what the rule asks for.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   interface Bag { length: number }\n\
+                   const keys: Bag = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_from_keyof_cast_annotated_by_a_generic_alias() {
+        // A `KeysOf<T>` helper alias is followed nowhere — its parameter would be
+        // unbound — so the initializer's cast decides.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   type KeysOf<T> = (keyof T)[];\n\
+                   const keys: KeysOf<typeof m> = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_forEach_over_keyof_cast_annotated_by_an_indexed_access_element() {
+        // `(typeof KEYS)[number][]` is an array whose element type this analysis
+        // does not evaluate; the cast on the initializer states it instead.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const KEYS = ['a', 'b'] as const;\n\
+                   const keys: (typeof KEYS)[number][] = Object.keys(m) as (keyof typeof m)[];\n\
+                   keys.forEach((k) => { const v = m[k]; });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index_from_as_const_array_annotated_by_an_unresolvable_type() {
+        // An `as const` literal asserts only that its elements are literals, so it
+        // is not evidence against an annotation that states something else.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   interface Bag { length: number }\n\
+                   const keys: Bag = ['a', 'b'] as const;\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_index_from_keyof_cast_annotated_by_a_union_element_array() {
+        // `keyof_typeof_target` answers nothing for a union, so the annotation
+        // cannot rule the elements out; the cast names them instead.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const keys: (keyof typeof m | 'a')[] = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_from_keyof_cast_annotated_by_a_tuple_of_unresolvable_types() {
+        // The tuple arm is gated like the array arm: an element the analysis
+        // cannot read leaves the tuple unable to decide.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   interface Bag { length: number }\n\
+                   const keys: [Bag, Bag] = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_from_keyof_cast_annotated_by_a_widening_union_element() {
+        // The accepted cost of gate/decider parity: `string | number` really
+        // does widen, but `type_keys_obj` cannot read a union, so the gate must
+        // not let it veto. The cast then answers. Reaching this needs an
+        // annotation that both widens and is unreadable *and* a `keyof` cast
+        // beside it. Closing it means teaching the decider to read unions —
+        // #8352 — and widening `is_decidable_type` in the same change.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const keys: (string | number)[] = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_from_keyof_cast_annotated_by_a_string_literal_element() {
+        // Same parity, literal arm: `'a'` is a key of `m`, so vetoing on it
+        // would be exactly the over-claim the union arm was removed for.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const keys: 'a'[] = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index_from_keyof_cast_annotated_any() {
+        // `any` is decidable and is plainly not an array of keys, so it decides
+        // and vetoes rather than deferring to the cast.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const keys: any = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_forEach_over_keyof_cast_widened_by_a_readable_annotation() {
+        // `readonly string[]` states an element type the decoder reads, and it
+        // says `string`. The annotation is the binding's type, so it wins over
+        // the cast in the initializer.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const keys: readonly string[] = Object.keys(m) as (keyof typeof m)[];\n\
+                   keys.forEach((k) => { const v = m[k]; });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index_from_keyof_cast_widened_by_a_readable_annotation() {
+        // The same on the subscript path, so the two paths agree.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   const keys: string[] = Object.keys(m) as (keyof typeof m)[];\n\
+                   const k = keys[0];\n\
+                   const v = m[k];";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_key_param_typed_by_an_alias_shadowed_in_an_unrelated_scope() {
+        // `K` in `f` is the module-scope alias. A same-named alias declared inside
+        // `g` is a different symbol and must not answer for it.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   type K = keyof typeof m;\n\
+                   function f(k: K) { return m[k]; }\n\
+                   function g() { type K = string; const z: K = 'q'; return z; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_key_param_typed_by_a_widening_alias_shadowed_in_an_unrelated_scope() {
+        // The mirror direction: `K` in `h` is the module-scope `string`, and the
+        // narrow alias inside `i` does not reach it.
+        let src = "const m = { a: 1, b: 2 } as const;\n\
+                   type K = string;\n\
+                   function h(k: K) { return m[k]; }\n\
+                   function i() { type K = keyof typeof m; const z: K = 'a'; return z; }";
         assert_eq!(run(src).len(), 1);
     }
 
