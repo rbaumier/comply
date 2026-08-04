@@ -6613,11 +6613,11 @@ pub fn is_inside_type_predicate_fn(
     false
 }
 
-/// True when `kind` is a type-only binding context — a node whose name lives
-/// purely in the type namespace and is erased at runtime (function/constructor
+/// True when `kind` is a type-only binding context — a node whose bindings are
+/// erased at emit and never become runtime bindings (function/constructor
 /// types, call/construct/method/index signatures, mapped types, `infer`, plus
-/// `type` aliases and interfaces). A value binding sharing such a name shadows
-/// nothing observable.
+/// `type` aliases and interfaces). A binding declared inside such a context
+/// shadows nothing observable.
 #[must_use]
 pub fn is_type_only_binding_context(kind: oxc_ast::AstKind<'_>) -> bool {
     use oxc_ast::AstKind;
@@ -6636,23 +6636,69 @@ pub fn is_type_only_binding_context(kind: oxc_ast::AstKind<'_>) -> bool {
     )
 }
 
-/// True when `decl_node` declares a binding from a type-only import — either a
-/// whole `import type ...` declaration or an individual `import { type X }`
-/// specifier. These exist only in the type namespace and are erased at runtime,
-/// so a value binding of the same name does not shadow them.
+/// True when two bindings share at least one TypeScript declaration space, so a
+/// reference to their common name can resolve to either one.
+///
+/// TypeScript looks a name up in the *value* space in value position, and in the
+/// *type* space in type position. A variable, a function or a parameter binds
+/// only in the value space. A generic type parameter, a `type` alias, an
+/// interface or an `import type` binds only in the type space and is erased at
+/// emit. A class, an enum or a namespace that holds values binds in both; a
+/// namespace that holds types alone binds in the type space alone.
+///
+/// Two bindings in disjoint spaces never resolve to each other: the inner one
+/// hides nothing the outer one provides.
 #[must_use]
-pub fn is_type_only_import_binding(
-    nodes: &oxc_semantic::AstNodes<'_>,
-    decl_node: oxc_semantic::NodeId,
+pub fn declaration_spaces_overlap(
+    semantic: &oxc_semantic::Semantic<'_>,
+    one: oxc_semantic::SymbolId,
+    other: oxc_semantic::SymbolId,
 ) -> bool {
-    use oxc_ast::AstKind;
-    std::iter::once(nodes.kind(decl_node))
-        .chain(nodes.ancestor_kinds(decl_node))
-        .any(|kind| match kind {
-            AstKind::ImportDeclaration(import) => import.import_kind.is_type(),
-            AstKind::ImportSpecifier(spec) => spec.import_kind.is_type(),
-            _ => false,
-        })
+    (binds_in_value_space(semantic, one) && binds_in_value_space(semantic, other))
+        || (binds_in_type_space(semantic, one) && binds_in_type_space(semantic, other))
+}
+
+/// True when `symbol` binds a name TypeScript resolves in value position. See
+/// [`declaration_spaces_overlap`].
+///
+/// A plain `import` counts unconditionally. Only its type-space claim is earned
+/// from references ([`binds_in_type_space`]): an import the file never uses in
+/// type position would otherwise sit in no space at all and shadow nothing.
+fn binds_in_value_space(
+    semantic: &oxc_semantic::Semantic<'_>,
+    symbol: oxc_semantic::SymbolId,
+) -> bool {
+    use oxc_semantic::SymbolFlags;
+
+    const VALUE_SPACE: SymbolFlags = SymbolFlags::Value.union(SymbolFlags::Import);
+
+    semantic.scoping().symbol_flags(symbol).intersects(VALUE_SPACE)
+}
+
+/// True when `symbol` binds a name TypeScript resolves in type position. See
+/// [`declaration_spaces_overlap`].
+///
+/// A plain `import` names whatever the source module exports under that name,
+/// which this file cannot see. Its type-space membership is read off the
+/// references instead: it holds a type name only where the file references it
+/// from a type context. An `import type` needs no such evidence — it is
+/// type-only by syntax.
+fn binds_in_type_space(
+    semantic: &oxc_semantic::Semantic<'_>,
+    symbol: oxc_semantic::SymbolId,
+) -> bool {
+    use oxc_semantic::SymbolFlags;
+
+    const TYPE_SPACE: SymbolFlags = SymbolFlags::Type
+        .union(SymbolFlags::TypeImport)
+        .union(SymbolFlags::Namespace);
+
+    let flags = semantic.scoping().symbol_flags(symbol);
+    flags.intersects(TYPE_SPACE)
+        || (flags.contains(SymbolFlags::Import)
+            && semantic
+                .symbol_references(symbol)
+                .any(oxc_semantic::Reference::is_type))
 }
 
 /// Known database / ORM / query-builder packages. A file that imports none of
