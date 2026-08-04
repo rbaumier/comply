@@ -2366,6 +2366,37 @@ pub fn is_in_trait_impl(node: Node) -> bool {
     false
 }
 
+/// The `impl Trait for Type` block whose trait mandates the signature that
+/// `node` sits in, when `node` lies inside the declared return type of one of
+/// that impl's methods.
+///
+/// A trait impl can only define methods the trait declares, so such a method's
+/// return type is the trait's own signature with the impl's associated types
+/// substituted in — the implementor transcribes it rather than designs it.
+/// Rules use this to tell a type the author chose from one the trait imposed,
+/// and to read the associated types the impl declares.
+///
+/// The function must be a direct member of the impl body, so a nested `fn`
+/// declared inside a method body yields `None` — nothing mandates its
+/// signature. `node` must lie inside the `return_type` field, so a parameter
+/// type and a body binding yield `None` too. An inherent `impl Type { … }`, a
+/// free function, and a method in a trait definition — with or without a default
+/// body, since it declares the contract rather than satisfying it — all yield
+/// `None`.
+pub fn trait_impl_mandating_return_type(node: Node) -> Option<Node> {
+    let func = enclosing_fn(node)?;
+    let return_type = func.child_by_field_name("return_type")?;
+    if node.start_byte() < return_type.start_byte() || node.end_byte() > return_type.end_byte() {
+        return None;
+    }
+    func.parent()
+        .filter(|body| body.kind() == "declaration_list")?
+        .parent()
+        .filter(|impl_block| {
+            impl_block.kind() == "impl_item" && impl_block.child_by_field_name("trait").is_some()
+        })
+}
+
 /// True if `node` sits inside a method of an `impl Index for …` or
 /// `impl IndexMut for …` block.
 ///
@@ -8800,6 +8831,34 @@ mod tests {
                 is_in_trait_impl(func),
                 expected,
                 "is_in_trait_impl mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn trait_impl_mandating_return_type_accepts_only_trait_impl_method_returns() {
+        // Anchor on the `Result<…>` return type (`generic_type`), the position
+        // rules ask about.
+        let cases = [
+            ("impl Tr for T { fn m() -> Result<u8, ()> { todo!() } }", true),
+            ("impl T { fn m() -> Result<u8, ()> { todo!() } }", false),
+            ("fn m() -> Result<u8, ()> { todo!() }", false),
+            ("trait Tr { fn m() -> Result<u8, ()>; }", false),
+            // Parameter type, not return type.
+            ("impl Tr for T { fn m(x: Result<u8, ()>) -> u8 { 0 } }", false),
+            // Body binding, not signature.
+            ("impl Tr for T { fn m() -> u8 { let x: Result<u8, ()> = e; 0 } }", false),
+            // Nested helper `fn`: the trait declares no such method.
+            ("impl Tr for T { fn m() -> u8 { fn n() -> Result<u8, ()> {} 0 } }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let result_type = first_of_kind(tree.root_node(), "generic_type")
+                .expect("snippet should contain a generic_type");
+            assert_eq!(
+                trait_impl_mandating_return_type(result_type).is_some(),
+                expected,
+                "trait_impl_mandating_return_type mismatch for `{src}`"
             );
         }
     }
