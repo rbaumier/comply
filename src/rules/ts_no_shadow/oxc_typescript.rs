@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_type_only_binding_context, is_type_only_import_binding,
+    byte_offset_to_line_col, declaration_spaces_overlap, is_type_only_binding_context,
 };
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
@@ -50,17 +50,16 @@ impl OxcCheck for Check {
             }
             let ident = oxc_str::Ident::from(name);
             if let Some(outer_symbol) = scoping.find_binding(parent_scope, ident) {
-                // A type-only outer binding lives in the type namespace and is
-                // erased at compile time: a `type` alias, an interface, or a
-                // type-only import (`import type ...` / `import { type X }`).
-                // None create a runtime binding, so a value declaration of the
-                // same name shadows nothing observable.
-                let outer_decl = scoping.symbol_declaration(outer_symbol);
-                if is_type_only_binding_context(nodes.kind(outer_decl))
-                    || is_type_only_import_binding(nodes, outer_decl)
-                {
+                // A parameter named after an outer `type` alias creates a
+                // runtime binding the alias never had, and a `<State>` type
+                // parameter is erased at emit, so `State` in value position
+                // still finds the outer `State()` function. Same intent as
+                // `@typescript-eslint/no-shadow`'s `ignoreTypeValueShadow`
+                // default.
+                if !declaration_spaces_overlap(semantic, symbol_id, outer_symbol) {
                     continue;
                 }
+                let outer_decl = scoping.symbol_declaration(outer_symbol);
                 // `@typescript-eslint/no-shadow` default `hoist: "functions"`: a
                 // `let`/`const`/`var` (or `class`) outer binding declared
                 // lexically AFTER the inner one is not visible where the inner
@@ -660,6 +659,113 @@ mod tests {
              }",
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_function_type_param_shadowing_outer_function() {
+        // Issue #6872 reproduction (sinclairzx81/typebox): a generic type
+        // parameter is erased at emit, so `State` in value position still
+        // resolves to the outer `State()` function.
+        let d = run_on(
+            "export function State<A extends string[], B extends string[]>(a: A, b: B) {\n\
+             return { a, b }\n\
+             }\n\
+             export function Process<State extends object>(state: State): { state: State } {\n\
+             return { state }\n\
+             }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_class_type_param_shadowing_outer_function() {
+        // The exemption follows the declaration space, not the kind of node the
+        // type parameter hangs off: a class generic is as erased as a function
+        // generic, so it shadows an outer value binding no more than one.
+        let d = run_on("function State() {}\nclass Box<State> { value?: State }");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_type_param_shadowing_import_used_only_as_value() {
+        // Issue #6872, typebox `ref/instantiate.ts`: a plain `import` names
+        // whatever the source module exports, so only its references say whether
+        // it holds a type. Used as a value alone, it has no type name for a type
+        // parameter to hide.
+        let d = run_on(
+            "import { State } from './state';\n\
+             export const initial = State();\n\
+             export function Process<State extends object>(state: State): State { return state; }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_shadowing_import_used_as_type() {
+        // Same import, now referenced in type position: it does hold a type
+        // name, which the type parameter hides.
+        let d = run_on(
+            "import { State } from './state';\n\
+             export let initial: State;\n\
+             export function Process<State extends object>(state: State): State { return state; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_shadowing_outer_class() {
+        // A class binds its name in the type space too, so a type parameter of
+        // the same name does hide it in type position — a genuine shadow.
+        let d = run_on(
+            "class State {}\n\
+             export function Process<State extends object>(state: State) { return state; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_shadowing_outer_type_alias() {
+        // Both names live in the type space, so the type parameter does hide the
+        // alias in type position. zod `packages/zod/src/v3/types.ts:3658`.
+        let d = run_on(
+            "export type KeySchema = string;\n\
+             export function pick<KeySchema extends string>(key: KeySchema) { return key; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_shadowing_outer_interface() {
+        // An interface binds only in the type space, which is the space the type
+        // parameter takes over. The value-parameter counterpart is
+        // `allows_param_shadowing_interface`.
+        let d = run_on(
+            "interface Options { id: number }\n\
+             export function build<Options extends object>(options: Options) { return options; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_shadowing_type_only_import() {
+        // An `import type` is type-only by syntax, which is the space the type
+        // parameter takes over.
+        let d = run_on(
+            "import type { Argv } from 'yargs';\n\
+             export function builder<Argv extends object>(argv: Argv) { return argv; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_param_shadowing_type_only_namespace_declaration() {
+        // A namespace holding types alone is erased at emit, so it has no value
+        // binding for the parameter to hide.
+        let d = run_on(
+            "declare namespace Meta { type Id = string }\n\
+             export function read(Meta: number) { return Meta; }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
     }
 
     #[test]
