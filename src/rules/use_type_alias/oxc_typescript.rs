@@ -2,7 +2,8 @@
 //! annotations via oxc AST.
 //!
 //! Two-pass via `run_on_semantic`: iterate all nodes collecting union/intersection
-//! type text, then report duplicates.
+//! type spans, then report every occurrence of a type that repeats, anchored on
+//! that occurrence's span.
 
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSType;
-use oxc_span::GetSpan;
+use oxc_span::{GetSpan, Span};
 
 pub struct Check;
 
@@ -105,7 +106,7 @@ impl OxcCheck for Check {
             return vec![];
         }
 
-        let mut annotation_lines: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+        let mut annotation_spans: FxHashMap<String, Vec<Span>> = FxHashMap::default();
 
         for node in semantic.nodes().iter() {
             let (span, members, sep) = match node.kind() {
@@ -202,34 +203,39 @@ impl OxcCheck for Check {
             // reorderings of one type — `number | string` vs `string | number`
             // — aggregate into a single group and count, rather than splitting
             // into two redundant alias suggestions for the same concept.
-            let (line, _) = byte_offset_to_line_col(ctx.source, span.start as usize);
-            annotation_lines
+            annotation_spans
                 .entry(canonical_key(members, ctx.source, sep))
                 .or_default()
-                .push(line);
+                .push(span);
         }
 
         let mut diagnostics = Vec::new();
-        for (annotation, lines) in &annotation_lines {
-            if lines.len() >= 2 {
-                for &line_num in lines {
-                    diagnostics.push(Diagnostic {
-                        path: Arc::clone(&ctx.path_arc),
-                        line: line_num,
-                        column: 1,
-                        rule_id: "use-type-alias".into(),
-                        message: format!(
-                            "Inline type `{}` appears {} times \u{2014} extract a type alias.",
-                            annotation,
-                            lines.len()
-                        ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
-                }
+        for (annotation, spans) in &annotation_spans {
+            if spans.len() < 2 {
+                continue;
+            }
+            // One diagnostic per occurrence, anchored on that occurrence's own
+            // span. Every site has to be rewritten to use the alias, and two
+            // occurrences sharing a line — the two parameters of one signature
+            // — are distinct edits at distinct columns.
+            for &span in spans {
+                let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
+                diagnostics.push(Diagnostic {
+                    path: Arc::clone(&ctx.path_arc),
+                    line,
+                    column,
+                    rule_id: "use-type-alias".into(),
+                    message: format!(
+                        "Inline type `{}` appears {} times \u{2014} extract a type alias.",
+                        annotation,
+                        spans.len()
+                    ),
+                    severity: Severity::Error,
+                    span: Some((span.start as usize, span.size() as usize)),
+                });
             }
         }
-        diagnostics.sort_by_key(|d| d.line);
+        diagnostics.sort_by_key(|d| (d.line, d.column));
         diagnostics
     }
 }
@@ -761,5 +767,39 @@ mod tests {
             function c(x: string[] | undefined) {}
         "#;
         assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn same_line_occurrences_are_anchored_apart() {
+        // Regression #6875 (vitejs/vite, plugins/worker.ts) — both parameters of
+        // one signature carry the same union, so the two occurrences share a
+        // line. Each is a separate site to rewrite, so each diagnostic carries
+        // that occurrence's own column and byte span; identical anchors would
+        // make the two reports indistinguishable.
+        let src = "function isSameContent(a: string | Uint8Array, b: string | Uint8Array) {}\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 2);
+        assert!(diags.iter().all(|d| d.line == 1));
+        assert!(diags.iter().all(|d| d.message.contains("appears 2 times")));
+        assert_eq!(diags.iter().map(|d| d.column).collect::<Vec<_>>(), vec![27, 51]);
+        assert_eq!(
+            diags.iter().map(|d| d.span).collect::<Vec<_>>(),
+            vec![Some((26, 19)), Some((50, 19))],
+            "each span covers its own `string | Uint8Array` annotation"
+        );
+    }
+
+    #[test]
+    fn distinct_lines_report_the_annotation_column() {
+        // The anchoring is positional, not line-based: an annotation starting
+        // mid-line reports at its own column, not at column 1, and the column
+        // is relative to its line rather than to the start of the file.
+        let src = "function a(x: { a: number } | { b: string }) {}\nfunction b(x: { a: number } | { b: string }) {}\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 2);
+        assert_eq!(
+            diags.iter().map(|d| (d.line, d.column)).collect::<Vec<_>>(),
+            vec![(1, 15), (2, 15)]
+        );
     }
 }
