@@ -2258,6 +2258,11 @@ pub struct CargoManifest {
     /// `[package].rust-version` (MSRV). `WorkspaceInherited` until resolved
     /// against the workspace root by [`ProjectCtx::nearest_cargo_manifest`].
     rust_version: RustVersion,
+    /// Crate names declared in `[dependencies]` and in any
+    /// `[target.<cfg>.dependencies]` table — the crates linked into the crate's
+    /// own library/binary targets. Dev- and build-dependencies are excluded:
+    /// they are absent from what the crate ships.
+    runtime_dependencies: FxHashSet<String>,
 }
 
 /// Split a relative path into its normalized segments, treating `\` as a
@@ -2381,6 +2386,8 @@ impl CargoManifest {
 
         let rust_version = parse_package_rust_version(&value);
 
+        let runtime_dependencies = collect_runtime_dependencies(&value);
+
         Some(CargoManifest {
             manifest_dir,
             name,
@@ -2397,6 +2404,7 @@ impl CargoManifest {
             fuzz_crate,
             links_native_library,
             rust_version,
+            runtime_dependencies,
         })
     }
 
@@ -2471,6 +2479,22 @@ impl CargoManifest {
     /// True when the crate depends on an async runtime.
     pub fn has_async_runtime(&self) -> bool {
         self.async_runtime
+    }
+
+    /// True when `crate_name` is declared in `[dependencies]` or in a
+    /// `[target.<cfg>.dependencies]` table — the crate is linked into this
+    /// crate's own library/binary targets. Dev- and build-dependencies do not
+    /// count: a crate present only for tests or for `build.rs` is absent from
+    /// what the crate ships.
+    ///
+    /// The provenance check a rule keyed on one ecosystem asks for, replacing
+    /// guesses drawn from module names or source text.
+    ///
+    /// `crate_name` matches the manifest key exactly: a key must spell the
+    /// published crate name, so no `-`/`_` normalization is needed.
+    #[must_use]
+    pub fn depends_on(&self, crate_name: &str) -> bool {
+        self.runtime_dependencies.contains(crate_name)
     }
 
     /// True when the crate declares `[lib] proc-macro = true`. By Rust's
@@ -2772,6 +2796,34 @@ const ERROR_DERIVE_CRATE_NAMES: &[&str] = &[
 fn is_error_derive_crate_name(name: &str) -> bool {
     let normalized = name.replace('_', "-");
     ERROR_DERIVE_CRATE_NAMES.contains(&normalized.as_str())
+}
+
+/// Crate names linked into the manifest's own library/binary targets: the keys
+/// of `[dependencies]` plus those of every `[target.<cfg>.dependencies]` table.
+///
+/// A renamed dependency (`web = { package = "axum" }`) resolves to the crate it
+/// names in `package`, not to the alias the author chose — the alias is a local
+/// label, the `package` value is the published crate.
+fn collect_runtime_dependencies(manifest: &toml::Value) -> FxHashSet<String> {
+    let direct = manifest.get("dependencies").into_iter();
+    let per_target = manifest
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(toml::map::Map::values)
+        .filter_map(|cfg| cfg.get("dependencies"));
+
+    direct
+        .chain(per_target)
+        .filter_map(toml::Value::as_table)
+        .flatten()
+        .map(|(key, spec)| {
+            spec.get("package")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(key)
+                .to_owned()
+        })
+        .collect()
 }
 
 /// Parsed Tailwind theme. Populated statically from `@theme` CSS blocks (v4)
@@ -9004,6 +9056,60 @@ path = "tools/tool.rs"
             !no_crate_type.is_ffi_bridge_crate(),
             "no [lib] crate-type => not an FFI bridge crate"
         );
+    }
+
+    #[test]
+    fn cargo_manifest_depends_on_reads_linked_dependencies() {
+        let manifest = CargoManifest::parse(
+            r#"
+[package]
+name = "service"
+version = "0.1.0"
+
+[dependencies]
+axum = "0.8"
+axum-extra.workspace = true
+web = { package = "tower-http", version = "0.6" }
+
+[target.'cfg(unix)'.dependencies]
+nix = "0.29"
+
+[dev-dependencies]
+reqwest = "0.12"
+
+[build-dependencies]
+prost-build = "0.13"
+"#,
+            PathBuf::from("/crate"),
+        )
+        .unwrap();
+
+        assert!(manifest.depends_on("axum"), "plain [dependencies] entry");
+        assert!(
+            manifest.depends_on("axum-extra"),
+            "a workspace-inherited dependency is linked in the same way"
+        );
+        assert!(
+            manifest.depends_on("nix"),
+            "[target.<cfg>.dependencies] is linked in too"
+        );
+        assert!(
+            manifest.depends_on("tower-http"),
+            "a renamed dependency answers to the crate it names in `package`"
+        );
+        assert!(
+            !manifest.depends_on("web"),
+            "the local alias of a renamed dependency is not a crate name"
+        );
+        assert!(
+            !manifest.depends_on("reqwest"),
+            "a dev-dependency is absent from what the crate ships"
+        );
+        assert!(
+            !manifest.depends_on("prost-build"),
+            "a build-dependency is absent from what the crate ships"
+        );
+        assert!(!manifest.depends_on("serde"), "undeclared crate");
     }
 
     #[test]
