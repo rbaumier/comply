@@ -11,6 +11,11 @@
 //! distinct method names are an extension-seam (template-method) — each is a
 //! separate override point a subclass can specialise without touching the
 //! others. Inlining or removing one would collapse that override granularity.
+//!
+//! Methods that expose fewer parameters than a same-class target on the same
+//! side (static or instance) accepts are exempt: the wrapper fixes a strictly
+//! narrower contract than the method it forwards to, so inlining it would widen
+//! what callers can pass.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, node_has_preceding_deprecated_tag};
@@ -99,6 +104,46 @@ fn class_has_sibling_passthrough_to<'a>(
         }
         passthrough_target_name(other) == Some(target)
     })
+}
+
+/// The number of arguments a formal-parameter list accepts. A rest element
+/// (`...args`) accepts an unbounded count, reported as [`usize::MAX`].
+fn accepted_argument_count(params: &FormalParameters) -> usize {
+    if params.rest.is_some() { usize::MAX } else { params.items.len() }
+}
+
+/// True when `class` declares `target` on the same side as `method` — static or
+/// instance, the two sides `this` can reach — with a callable signature that
+/// accepts more arguments than `method` exposes. `method` then narrows the
+/// contract: it hides parameters the target accepts — typically an `@internal`
+/// optimisation argument — so its callers cannot reach them. Of an overload set
+/// only the bodyless signatures are callable; the bodied implementation covers
+/// their union and no caller resolves against it.
+fn class_declares_wider_target(
+    class: &oxc_ast::ast::Class,
+    method: &oxc_ast::ast::MethodDefinition,
+    target: &str,
+) -> bool {
+    let exposed = accepted_argument_count(&method.value.params);
+    let mut widest_overload_signature: Option<usize> = None;
+    let mut widest_implementation: Option<usize> = None;
+    for element in &class.body.body {
+        let oxc_ast::ast::ClassElement::MethodDefinition(member) = element else {
+            continue;
+        };
+        if member.r#static != method.r#static || method_key_name(member) != Some(target) {
+            continue;
+        }
+        let accepted = accepted_argument_count(&member.value.params);
+        if member.value.body.is_none() {
+            widest_overload_signature = widest_overload_signature.max(Some(accepted));
+        } else {
+            widest_implementation = widest_implementation.max(Some(accepted));
+        }
+    }
+    widest_overload_signature
+        .or(widest_implementation)
+        .is_some_and(|accepted| accepted > exposed)
 }
 
 fn argument_names<'a>(args: &'a oxc_allocator::Vec<'a, oxc_ast::ast::Argument<'a>>) -> Option<Vec<&'a str>> {
@@ -192,6 +237,18 @@ impl OxcCheck for Check {
         // indirection and keeps flagging.
         if let Some(class) = enclosing_class
             && class_has_sibling_passthrough_to(class, method, target)
+        {
+            return;
+        }
+
+        // Narrowing facade: the target accepts more arguments than the wrapper
+        // exposes (e.g. vite's `ensureEntryFromUrl` forwards to an `@internal`
+        // `_ensureEntryFromUrl` that takes an extra optimisation argument). The
+        // wrapper fixes a strictly narrower contract, so inlining it would let
+        // callers pass what it deliberately hides. A wrapper whose target
+        // accepts exactly the same arguments adds nothing and keeps flagging.
+        if let Some(class) = enclosing_class
+            && class_declares_wider_target(class, method, target)
         {
             return;
         }
@@ -376,6 +433,102 @@ mod tests {
             other(x) { return this.somethingElse(x); }
         }";
         assert_eq!(run(src).len(), 2, "expected two diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_narrowing_facade_over_internal_target() {
+        // Regression for #6874: vite's `EnvironmentModuleGraph.ensureEntryFromUrl`
+        // exposes two parameters and forwards to the `@internal`
+        // `_ensureEntryFromUrl`, which takes a third optimisation argument. The
+        // wrapper fixes a strictly narrower public contract — inlining it would
+        // let callers pass the internal argument it hides.
+        let src = "class EnvironmentModuleGraph {
+            async ensureEntryFromUrl(rawUrl: string, setIsSelfAccepting = true): Promise<EnvironmentModuleNode> {
+                return this._ensureEntryFromUrl(rawUrl, setIsSelfAccepting)
+            }
+            /** @internal */
+            async _ensureEntryFromUrl(rawUrl: string, setIsSelfAccepting = true, resolved?: PartialResolvedId): Promise<EnvironmentModuleNode> {
+                const mod = resolved ?? (await this.resolveId(rawUrl))
+                mod.isSelfAccepting = setIsSelfAccepting
+                return mod
+            }
+        }";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_narrowing_facade_over_variadic_target() {
+        // A target with a rest element accepts unboundedly many arguments, so a
+        // wrapper exposing a fixed list still narrows the contract.
+        let src = "class Logger { warn(message) { return this.write(message); } write(message, ...details) { return message; } }";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_passthrough_when_declared_target_takes_the_same_arguments() {
+        // The target is declared in the same class and accepts exactly the
+        // arguments the wrapper exposes, so the wrapper narrows nothing and is
+        // still a deletable indirection. Bounds the narrowing-facade exemption.
+        let src = "class NestFactoryStatic {
+            createNestInstance(instance) { return this.createProxy(instance); }
+            createProxy(target) { return new Proxy(target, {}); }
+        }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_narrowing_facade_over_wider_overload_signature() {
+        // A bodyless signature of `load` accepts an argument `read` does not
+        // expose, so the target's callers can reach what the wrapper hides.
+        let src = "class Loader {
+            read(path) { return this.load(path); }
+            load(path: string): string;
+            load(path: string, encoding: string): string;
+            load(path: string, encoding?: string): string { return encoding ?? path; }
+        }";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_passthrough_when_only_the_overload_implementation_is_wider() {
+        // Callers of an overloaded target resolve against its bodyless
+        // signatures; the bodied implementation covers their union and none can
+        // reach it. `bar`'s only callable shape takes exactly what `foo`
+        // exposes, so `foo` narrows nothing.
+        let src = "class A {
+            foo(a) { return this.bar(a); }
+            bar(a: string): void;
+            bar(a: string | number, b?: unknown): void {}
+        }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_passthrough_whose_wider_homonym_lives_in_another_class() {
+        // The lookup is scoped to the enclosing class body: a wider `load`
+        // declared by a different class is not what `this.load` resolves to, so
+        // it narrows nothing.
+        let src = "class Reader {
+            read(path) { return this.load(path); }
+            load(path) { return path; }
+        }
+        class Other {
+            load(path, encoding) { return encoding ?? path; }
+        }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_static_passthrough_whose_wider_homonym_is_an_instance_method() {
+        // `this` inside a static method reaches the static side only, so the
+        // instance `read` is not the target and its extra parameter narrows
+        // nothing. The static `read` accepts exactly what `lookup` exposes.
+        let src = "class Cache {
+            static lookup(key) { return this.read(key); }
+            static read(key) { return key; }
+            read(key, fallback) { return fallback; }
+        }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
     }
 
     #[test]
