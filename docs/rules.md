@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2028 rules across 147 categories.
+2027 rules across 146 categories.
 
 ## Categories
 
@@ -86,7 +86,6 @@
 - [performance > code-quality](#performance-code-quality) (3 rules)
 - [performance > imports](#performance-imports) (2 rules)
 - [performance > testing](#performance-testing) (1 rules)
-- [postgresql](#postgresql) (1 rules)
 - [prisma](#prisma) (3 rules)
 - [prisma > performance](#prisma-performance) (4 rules)
 - [prisma > safety](#prisma-safety) (3 rules)
@@ -1550,12 +1549,6 @@
 | Rule | Description | Remediation |
 |------|-------------|-------------|
 | `no-large-snapshots` | Inline snapshots exceeding `max_lines` are noisy and signal over-broad assertions. | Narrow the assertion to the field under test, or split into smaller snapshots. |
-
-## postgresql
-
-| Rule | Description | Remediation |
-|------|-------------|-------------|
-| `pg-require-limit` | SQL `SELECT` statements without a `LIMIT` clause can return unbounded rows. | Add a `LIMIT n` clause, a `COUNT(..)` / aggregate, or a unique `WHERE` predicate (e.g. `WHERE id = ...`) so the query is bounded. |
 
 ## prisma
 
