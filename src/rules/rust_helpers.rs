@@ -1725,7 +1725,11 @@ fn last_occupied_row(node: Node) -> usize {
 }
 
 /// True if `node` is a `//` or `/* */` comment, doc or not.
-fn is_comment_node(node: Node) -> bool {
+///
+/// tree-sitter-rust makes a comment a *named* child, so any rule reading an
+/// argument list or a block through `named_children` must filter with this or
+/// a stray comment shifts every position it reads.
+pub fn is_comment_node(node: Node) -> bool {
     matches!(node.kind(), "line_comment" | "block_comment")
 }
 
@@ -8276,6 +8280,26 @@ fn is_ok_string_literal(node: Node, source: &[u8]) -> bool {
         && args
             .named_child(0)
             .is_some_and(|arg| arg.kind() == "string_literal")
+}
+
+/// True if any call in the subtree rooted at `node` reads the environment
+/// (`env::var`, `env::var_os`).
+///
+/// A rule that reports a value written into the source needs this to tell a
+/// fixed choice from the fallback of an environment lookup: the literal a
+/// branch reaches only when the lookup fails is already configurable.
+pub fn subtree_reads_env_var(node: Node, source: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if is_env_var_call(current, source) {
+            return true;
+        }
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
 }
 
 /// True when `node` is a call whose callee path ends in `env::var` or

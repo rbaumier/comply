@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2028 rules across 147 categories.
+2029 rules across 147 categories.
 
 ## Categories
 
@@ -14,7 +14,7 @@
 - [architecture](#architecture) (2 rules)
 - [async](#async) (4 rules)
 - [axum > correctness](#axum-correctness) (1 rules)
-- [axum > deployment](#axum-deployment) (2 rules)
+- [axum > deployment](#axum-deployment) (3 rules)
 - [axum > security](#axum-security) (14 rules)
 - [better-auth](#better-auth) (9 rules)
 - [better-auth > imports](#better-auth-imports) (1 rules)
@@ -270,6 +270,7 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
+| `axum-hardcoded-bind-port` | An axum service binds every interface on a port written into the source — a platform that injects the port through the environment cannot publish this service. | Read the port from the environment (`std::env::var("PORT")`) and bind that, keeping the literal only as the fallback the local run needs. |
 | `axum-no-health-route` | A `Router` served via `axum::serve` registers no `/health` route — load balancers and orchestrators have no liveness signal. | Register a health-check route (e.g. `.route("/health", get(\|\| async { "ok" }))`) on the `Router` before serving it so platforms can probe liveness. |
 | `axum-serve-no-graceful-shutdown` | `axum::serve(...)` without `.with_graceful_shutdown(...)` — in-flight requests are dropped on SIGTERM/SIGINT. | Chain `.with_graceful_shutdown(shutdown_signal())` onto `axum::serve(listener, app)` so open connections drain before the process exits. |
 
