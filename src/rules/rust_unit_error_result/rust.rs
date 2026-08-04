@@ -18,17 +18,18 @@
 //!
 //! Axum/tower exception: in that ecosystem `()` deliberately implements
 //! `IntoResponse` (an empty `200 OK`), so `Result<_, ()>` is idiomatic for
-//! handlers and extractors. We exempt the structurally-detectable cases:
-//! an `impl IntoResponse` ok-type, a `#[debug_handler]` handler, and a
-//! `FromRequest`/`FromRequestParts` extractor whose `type Rejection = ()`.
+//! handlers. We exempt the two structurally-detectable cases: an
+//! `impl IntoResponse` ok-type and a `#[debug_handler]` handler. An extractor
+//! whose `type Rejection = ()` falls under the impl-declared-unit-error
+//! exception below.
 //!
 //! Trait-contract exception: `Result<(), ()>` (BOTH params `()`) in a trait
 //! method signature — a trait definition or a trait impl — is a deliberate
 //! binary success/failure signal in transport abstractions (e.g. gRPC, where
 //! the error detail travels out-of-band via Status trailers). It is an API
-//! contract every impl must conform to, not a discarded error. `Result<Value,
-//! ()>` (a real value alongside a discarded error) stays flagged everywhere,
-//! and `Result<(), ()>` in a free or inherent function stays flagged too.
+//! contract every impl must conform to, not a discarded error. This guard needs
+//! BOTH params `()`: a `Result<Value, ()>` is left to the other exceptions, and
+//! `Result<(), ()>` in a free or inherent function stays flagged.
 //!
 //! Borrowed-narrowing-accessor exception: a `Result<&T, ()>` that is the return
 //! type of a `to_`/`as_`/`try_` function is a type-narrowing accessor — it
@@ -60,14 +61,24 @@
 //! type must be a mutable reference whose referent is itself a reference/slice; a
 //! shared `&[u8]` (not `&mut &…`) or a non-cursor first parameter stays flagged.
 //!
-//! FromStr-trait exception: a `Result<T, ()>` that is the return type of a
-//! function inside an `impl <…::>FromStr for T` block is mandated by the std
-//! `FromStr` trait, whose signature is `fn from_str(&str) -> Result<Self,
-//! Self::Err>`. The trait fixes the `Result` return — `Option` is not an
-//! available alternative — and when parsing is binary `type Err = ()` is the
-//! idiomatic no-detail error type. The enclosing impl's trait must name
-//! `FromStr` exactly or via a `::FromStr` path suffix (`std::str::FromStr`,
-//! `core::str::FromStr`); a user trait such as `MyFromStr` is not matched.
+//! Impl-declared-unit-error exception: a `Result<_, ()>` in the return type of a
+//! method of an `impl Trait for Type` block whose body declares an associated
+//! type as `()` (`type Error = ();`, `type Err = ();`, `type Rejection = ();`).
+//! A trait impl can only define methods the trait declares, so the method's
+//! return type is the trait's signature with the impl's associated types
+//! substituted in — the implementor transcribes it, and `Option<T>` cannot
+//! satisfy the contract. The unit associated type is what separates that from a
+//! hand-written `Result<_, ()>`: the impl states its no-detail error once, on
+//! the `type … = ();` line. Which associated type the `()` came from is not
+//! proven, since the trait declaration lives outside the file. The signal is
+//! pure shape, no trait name is read, so every such contract qualifies
+//! (`TryFrom`/`TryInto`, `FromStr`, an axum extractor, a user trait).
+//!
+//! A trait impl that declares no `()` associated type still flags a
+//! `Result<Value, ()>`, and so do an inherent impl, a body binding, and a trait
+//! *definition* — the definition is where a hardcoded `Result<_, ()>` signature
+//! is actually chosen. `Result<(), ()>` is settled earlier, by the
+//! trait-contract guard.
 //!
 //! Local-`Result`-alias exception: when the file declares its own
 //! `type Result<…> = …` alias (e.g. `type Result<'a, T> =
@@ -92,7 +103,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
     enclosing_fn, file_has_local_result_alias, is_expression_turbofish, is_in_test_context,
     is_in_trait_definition, is_in_trait_impl, is_suppressed_by_clippy_allow, result_error_type,
-    result_ok_type,
+    result_ok_type, trait_impl_mandating_return_type,
 };
 use tree_sitter::Node;
 
@@ -147,7 +158,7 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if is_parser_combinator_cursor(node) {
         return;
     }
-    if is_in_fromstr_impl(node, source) {
+    if is_impl_declared_unit_error(node) {
         return;
     }
     let pos = node.start_position();
@@ -373,53 +384,51 @@ fn type_is_mut_ref_to_ref(ty: Node) -> bool {
         .is_some_and(|referent| referent.kind() == "reference_type")
 }
 
-/// True when this `Result<T, ()>` is the return type of a function inside an
-/// `impl <…::>FromStr for T` block — the std `FromStr` trait, whose `from_str`
-/// signature is `fn(&str) -> Result<Self, Self::Err>`.
+/// True when this `Result<_, ()>` is the return type of a trait-impl method and
+/// that impl declares an associated type as `()`.
 ///
-/// `FromStr` mandates a `Result` return, so `Option<T>` is not an available
-/// alternative; when parsing is binary, `type Err = ()` is the idiomatic
-/// no-detail error type. The `Result` must sit in the enclosing function's
-/// `return_type` — a `Result<_, ()>` in the body (a let binding, a closure)
-/// stays flagged. The enclosing impl's `trait` field must name `FromStr`
-/// exactly or via a `::FromStr` path suffix (`std::str::FromStr`,
-/// `core::str::FromStr`) — a user trait like `MyFromStr` is not matched.
-fn is_in_fromstr_impl(node: Node, source: &[u8]) -> bool {
-    // The Result must be the function's RETURN TYPE, not a body let binding.
-    let Some(func) = enclosing_fn(node) else {
+/// A trait impl can only define methods the trait declares, so the method's
+/// return type is the trait's signature with the impl's associated types
+/// substituted in — the implementor transcribes it rather than designs it, and
+/// `Option<T>` cannot satisfy the contract. The unit associated type is what
+/// separates that from a hand-written `Result<_, ()>`: the impl states its
+/// no-detail error once, on the `type … = ();` line. The link between that
+/// declaration and the `()` in the error position is not proven — the trait
+/// declaration lives outside the file — so an impl that declares an unrelated
+/// associated type as `()` is exempted too.
+///
+/// No identifier text is read: an associated `type_item` whose type is a
+/// `unit_type` is the whole signal, so `TryFrom`/`TryInto` with
+/// `type Error = ()`, `FromStr` with `type Err = ()`, an axum extractor with
+/// `type Rejection = ()` and a user trait with its own unit error all qualify on
+/// one shape. A trait impl declaring no `()` associated type stays flagged for a
+/// `Result<Value, ()>`, as do an inherent impl, a body binding, a parameter, and
+/// a nested helper `fn`.
+fn is_impl_declared_unit_error(node: Node) -> bool {
+    let Some(impl_item) = trait_impl_mandating_return_type(node) else {
         return false;
     };
-    let Some(ret) = func.child_by_field_name("return_type") else {
+    let Some(body) = impl_item.child_by_field_name("body") else {
         return false;
     };
-    if node.start_byte() < ret.start_byte() || node.end_byte() > ret.end_byte() {
-        return false;
-    }
-    let Some(impl_item) = nearest_ancestor(node, "impl_item") else {
-        return false;
-    };
-    let Some(trait_node) = impl_item.child_by_field_name("trait") else {
-        return false;
-    };
-    let Ok(trait_text) = trait_node.utf8_text(source) else {
-        return false;
-    };
-    trait_text == "FromStr" || trait_text.ends_with("::FromStr")
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor).any(|item| {
+        item.kind() == "type_item"
+            && item
+                .child_by_field_name("type")
+                .is_some_and(|assoc| assoc.kind() == "unit_type")
+    })
 }
 
 /// True when this `Result<_, ()>` is an idiomatic axum/tower use of the unit
 /// error, where `()` is a valid `IntoResponse` rather than a discarded error.
 ///
 /// `node` is the `Result<Ok, ()>` `generic_type` already confirmed to have a
-/// `unit_type` error. We exempt three structural markers:
+/// `unit_type` error. We exempt two structural markers:
 /// - the ok-type is `impl IntoResponse` (the `()` is a valid response body);
-/// - the enclosing function carries `#[debug_handler]` (an axum handler);
-/// - the enclosing `impl FromRequest`/`FromRequestParts` declares
-///   `type Rejection = ()` (an extractor with a trivial rejection).
+/// - the enclosing function carries `#[debug_handler]` (an axum handler).
 fn is_axum_unit_response(node: Node, source: &[u8]) -> bool {
-    ok_type_is_into_response(node, source)
-        || fn_has_debug_handler_attr(node, source)
-        || in_from_request_impl_with_unit_rejection(node, source)
+    ok_type_is_into_response(node, source) || fn_has_debug_handler_attr(node, source)
 }
 
 /// True when the ok-type (first positional arg) of `Result<Ok, ()>` is
@@ -463,38 +472,6 @@ fn fn_has_debug_handler_attr(node: Node, source: &[u8]) -> bool {
         sibling = s.prev_named_sibling();
     }
     false
-}
-
-/// True when `node` sits in an `impl FromRequest`/`FromRequestParts` block that
-/// declares `type Rejection = ();` — an axum extractor whose rejection is the
-/// trivial unit response.
-fn in_from_request_impl_with_unit_rejection(node: Node, source: &[u8]) -> bool {
-    let Some(impl_item) = nearest_ancestor(node, "impl_item") else {
-        return false;
-    };
-    let Some(trait_node) = impl_item.child_by_field_name("trait") else {
-        return false;
-    };
-    let Ok(trait_text) = trait_node.utf8_text(source) else {
-        return false;
-    };
-    if !(trait_text.contains("FromRequestParts") || trait_text.contains("FromRequest")) {
-        return false;
-    }
-    let Some(body) = impl_item.child_by_field_name("body") else {
-        return false;
-    };
-    let mut cursor = body.walk();
-    body.named_children(&mut cursor).any(|item| {
-        item.kind() == "type_item"
-            && item
-                .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source).ok())
-                == Some("Rejection")
-            && item
-                .child_by_field_name("type")
-                .is_some_and(|t| t.kind() == "unit_type")
-    })
 }
 
 /// Nearest ancestor of `node` whose kind matches `kind`, or `None`.
@@ -588,25 +565,9 @@ mod tests {
     }
 
     #[test]
-    fn allows_from_request_extractor_with_unit_rejection() {
-        // Extractor whose `type Rejection = ()` — `Result<Self, ()>` is the
-        // idiomatic "never rejects" shape.
-        assert!(
-            run_on(
-                "impl<S> FromRequestParts<S> for A {\n\
-                 \x20   type Rejection = ();\n\
-                 \x20   async fn from_request_parts(_p: &mut Parts, _s: &S) \
-                 -> Result<Self, ()> { unimplemented!() }\n\
-                 }"
-            )
-            .is_empty()
-        );
-    }
-
-    #[test]
     fn flags_plain_unit_error_without_axum_markers() {
-        // Negative space: a plain parser with no axum/IntoResponse/Rejection
-        // marker is still flagged.
+        // Negative space: a plain parser with no axum/IntoResponse marker is
+        // still flagged.
         assert_eq!(run_on("fn parse() -> Result<Foo, ()> { Ok(Foo) }").len(), 1);
     }
 
@@ -653,23 +614,6 @@ mod tests {
         // Load-bearing guard: a production fn in a `src/` file with no
         // `#[test]`/`#[cfg(test)]` still fires.
         assert_eq!(run_on_src("fn f() -> Result<(), ()> { Ok(()) }").len(), 1);
-    }
-
-    #[test]
-    fn flags_unit_error_in_from_request_impl_with_non_unit_rejection() {
-        // The extractor exemption is scoped to a *unit* rejection; a method
-        // returning `Result<_, ()>` next to `type Rejection = String` is still
-        // a discarded error.
-        assert_eq!(
-            run_on(
-                "impl<S> FromRequestParts<S> for A {\n\
-                 \x20   type Rejection = String;\n\
-                 \x20   fn helper() -> Result<u8, ()> { Ok(0) }\n\
-                 }"
-            )
-            .len(),
-            1
-        );
     }
 
     // --- clippy-allow: author formally dismissed `result_unit_err` (#3735) ---
@@ -1069,7 +1013,46 @@ mod tests {
         );
     }
 
-    // --- FromStr trait: `type Err = ()` is idiomatic, Option inapplicable (#6389) ---
+    // --- impl-declared unit error: the impl declares `type … = ()`, the
+    // signature restates it (#6389, #6876) ---
+
+    #[test]
+    fn allows_unit_error_in_tryfrom_impl() {
+        // The ruff repro: `impl TryFrom<QuoteStyle> for Quote` declares
+        // `type Error = ()`, and `try_from`'s `Result<Quote, ()>` return type is
+        // that declaration expanded — the trait mandates the signature.
+        assert!(
+            run_on_src(
+                "impl TryFrom<QuoteStyle> for Quote {\n\
+                 \x20   type Error = ();\n\
+                 \x20   fn try_from(style: QuoteStyle) -> Result<Quote, ()> {\n\
+                 \x20       match style {\n\
+                 \x20           QuoteStyle::Single => Ok(Quote::Single),\n\
+                 \x20           QuoteStyle::Double => Ok(Quote::Double),\n\
+                 \x20           QuoteStyle::Preserve => Err(()),\n\
+                 \x20       }\n\
+                 \x20   }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_error_in_user_trait_impl_declaring_unit_error() {
+        // The property is the declared `()` associated type, not the trait's
+        // name: a project-local trait imposes its signature on the impl exactly
+        // as a std trait does.
+        assert!(
+            run_on_src(
+                "impl Decode for Frame {\n\
+                 \x20   type Error = ();\n\
+                 \x20   fn decode(buf: &[u8]) -> Result<Frame, ()> { Err(()) }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
 
     #[test]
     fn allows_unit_error_in_fromstr_impl() {
@@ -1107,9 +1090,43 @@ mod tests {
     }
 
     #[test]
+    fn allows_from_request_extractor_with_unit_rejection() {
+        // #1262: an axum extractor whose `type Rejection = ()` — `Result<Self,
+        // ()>` is the idiomatic "never rejects" shape, declared once on the
+        // rejection line.
+        assert!(
+            run_on(
+                "impl<S> FromRequestParts<S> for A {\n\
+                 \x20   type Rejection = ();\n\
+                 \x20   async fn from_request_parts(_p: &mut Parts, _s: &S) \
+                 -> Result<Self, ()> { unimplemented!() }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_from_request_impl_with_non_unit_rejection() {
+        // Load-bearing negative: every associated type the impl declares is a
+        // real type, so no unit declaration stands behind the `()` and it stays
+        // flagged.
+        assert_eq!(
+            run_on(
+                "impl<S> FromRequestParts<S> for A {\n\
+                 \x20   type Rejection = String;\n\
+                 \x20   fn helper() -> Result<u8, ()> { Ok(0) }\n\
+                 }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
     fn flags_unit_error_in_free_parse_fn() {
-        // Load-bearing negative: a free function returning `Result<u32, ()>` is
-        // not a `FromStr` impl, so it stays flagged.
+        // Load-bearing negative: a free function's return type is the author's
+        // own design, so it stays flagged.
         assert_eq!(
             run_on_src("fn parse(s: &str) -> Result<u32, ()> { Err(()) }").len(),
             1
@@ -1117,14 +1134,50 @@ mod tests {
     }
 
     #[test]
-    fn flags_unit_error_in_non_fromstr_trait_impl() {
-        // Load-bearing negative: a method inside a non-`FromStr` trait impl
-        // returning `Result<u32, ()>` stays flagged — the exemption is scoped to
-        // the `FromStr` contract.
+    fn flags_unit_error_in_trait_impl_without_unit_associated_type() {
+        // Load-bearing negative: the impl declares no `()` associated type, so
+        // the `()` is hardcoded in the signature rather than propagated from a
+        // declaration, and it stays flagged.
         assert_eq!(
             run_on_src(
                 "impl SomeOtherTrait for T {\n\
                  \x20   fn from_str(s: &str) -> Result<u32, ()> { Err(()) }\n\
+                 }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_inherent_impl_conversion_method() {
+        // Load-bearing negative: an inherent impl mandates no signature, so a
+        // hand-rolled conversion method returning `Result<Quote, ()>` is the
+        // author's own design and stays flagged.
+        assert_eq!(
+            run_on_src(
+                "impl Quote {\n\
+                 \x20   fn from_style(style: QuoteStyle) -> Result<Quote, ()> { Err(()) }\n\
+                 }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_in_nested_fn_inside_trait_impl_method() {
+        // Load-bearing negative: a helper `fn` nested in a trait-impl method is
+        // not declared by the trait, so its `Result<u32, ()>` return type is the
+        // author's own choice and stays flagged — only `try_from`'s is exempt.
+        assert_eq!(
+            run_on_src(
+                "impl TryFrom<A> for B {\n\
+                 \x20   type Error = ();\n\
+                 \x20   fn try_from(a: A) -> Result<B, ()> {\n\
+                 \x20       fn step(s: &str) -> Result<u32, ()> { Err(()) }\n\
+                 \x20       step(a.0).map(B)\n\
+                 \x20   }\n\
                  }"
             )
             .len(),
@@ -1145,22 +1198,6 @@ mod tests {
                  \x20       let n: Result<u32, ()> = inner(s);\n\
                  \x20       n.map(T)\n\
                  \x20   }\n\
-                 }"
-            )
-            .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn flags_unit_error_in_user_fromstr_named_trait_impl() {
-        // Load-bearing negative: a user trait `MyFromStr` ends in `FromStr` but
-        // is not the std trait; the path-segment boundary excludes it, so it
-        // stays flagged.
-        assert_eq!(
-            run_on_src(
-                "impl MyFromStr for T {\n\
-                 \x20   fn from_str(s: &str) -> Result<u32, ()> { Err(()) }\n\
                  }"
             )
             .len(),
