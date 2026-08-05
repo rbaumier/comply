@@ -10,6 +10,26 @@
 //! builds where the cfg predicate holds, so it is not treated as an
 //! unconditional `PartialEq` and does not trigger the rule.
 //!
+//! The subject is a type that is *effectively public* — reachable from
+//! outside the crate. Effective visibility is the product of the item's
+//! own `pub` modifier, every enclosing module's, and the `mod` statement
+//! that pulls the file in; [`is_effectively_pub`] computes all three, so
+//! a `pub(crate)` / `pub(super)` / `pub(in …)` type and a bare-`pub` type
+//! confined to a private module are both out of scope, as is every type
+//! in a crate with no external consumer at all
+//! ([`crate_has_external_consumers`]). On a type no downstream crate can
+//! name, a missing `Eq` is unobservable: whoever needs it adds it in
+//! place, and the compiler *requires* that — the trait bound is checked,
+//! not suggested. Across the crate boundary the orphan rule makes the
+//! same fix impossible for the consumer: `impl Eq for upstream::T` is
+//! illegal, and `#[derive(Eq)]` on a newtype wrapper still needs
+//! `upstream::T: Eq`, so the consumer's only escape is to hand-write
+//! `impl Eq` and assert a reflexivity the upstream author declined to
+//! document. That asymmetry is what the rule reports, and why it runs at
+//! `Severity::Error`. The clippy lint it mirrors is allow-by-default and
+//! covers every type whatever its visibility; this rule covers only the
+//! subset a consumer cannot fix.
+//!
 //! Types in a test context (`#[cfg(test)]` module, `#[test]` fn) are
 //! skipped: they are throwaway fixtures deriving `PartialEq` only for
 //! `assert_eq!`, so a missing `Eq` is not a defect.
@@ -50,7 +70,9 @@ use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{has_clippy_allow, is_in_test_context};
+use crate::rules::rust_helpers::{
+    crate_has_external_consumers, has_clippy_allow, is_effectively_pub, is_in_test_context,
+};
 
 const KINDS: &[&str] = &["struct_item", "enum_item"];
 
@@ -115,20 +137,35 @@ impl AstCheck for Check {
         if traits.partial_eq_is_manual {
             return;
         }
-        if traits.has_partial_eq && !traits.has_eq {
-            diagnostics.push(Diagnostic::at_node(
-                std::sync::Arc::clone(&ctx.path_arc),
-                &name_node,
-                "rust-partial-eq-without-eq",
-                format!(
-                    "`{type_name}` implements `PartialEq` but not `Eq`. \
-                     Add `Eq` (derive or manual impl) — `Eq` documents that \
-                     equality is reflexive and unlocks `HashSet` / `BTreeSet` \
-                     usage."
-                ),
-                Severity::Error,
-            ));
+        if !traits.has_partial_eq || traits.has_eq {
+            return;
         }
+        // A binary-only or proc-macro crate has no consumer that could hold the
+        // type, so the orphan-rule argument has no subject. This is a memoized
+        // manifest lookup, so it runs before the module walk below.
+        if !crate_has_external_consumers(ctx.project, ctx.path) {
+            return;
+        }
+        // Only a type a downstream crate can name is in scope. On a
+        // crate-private type the orphan rule does not apply, so whoever needs
+        // `Eq` adds it in place and the compiler makes them; the omission is
+        // unobservable. The check reads the parent module files from disk, so
+        // it runs last, on the few types the guards above leave.
+        if !is_effectively_pub(node, source_bytes, ctx.path) {
+            return;
+        }
+        diagnostics.push(Diagnostic::at_node(
+            std::sync::Arc::clone(&ctx.path_arc),
+            &name_node,
+            "rust-partial-eq-without-eq",
+            format!(
+                "`{type_name}` implements `PartialEq` but not `Eq`. \
+                 Add `Eq` (derive or manual impl) — `Eq` documents that \
+                 equality is reflexive and unlocks `HashSet` / `BTreeSet` \
+                 usage."
+            ),
+            Severity::Error,
+        ));
     }
 }
 
@@ -604,21 +641,58 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_helpers::{
+        BINARY_ONLY_CARGO_TOML, LIB_CARGO_TOML, PROC_MACRO_CARGO_TOML,
+    };
 
+    /// Run on an absolute path with no `Cargo.toml` and no parent module file on
+    /// disk, so neither the manifest guard nor the module-chain walk resolves
+    /// against comply's own (binary-only) crate.
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+        crate::rules::test_helpers::run_rule(&Check, source, "/nonexistent_cargo_project/src/t.rs")
+    }
+
+    /// Run on `dir/src/x.rs` beside the given manifest, so
+    /// `nearest_cargo_manifest` resolves the temp crate rather than comply's.
+    fn run_on_with_cargo(cargo_toml: &str, source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_in_crate(&Check, cargo_toml, source)
     }
 
     #[test]
     fn flags_struct_with_partial_eq_only() {
-        let source = "#[derive(PartialEq)]\nstruct A { x: i32 }";
+        let source = "#[derive(PartialEq)]\npub struct A { x: i32 }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
+    fn allows_pub_type_in_binary_only_crate() {
+        // No `[lib]` target and no `src/lib.rs`: nothing outside the crate can
+        // hold the type, so the orphan-rule argument has no subject.
+        let source = "#[derive(PartialEq)]\npub struct Session { id: u32 }";
+        assert!(run_on_with_cargo(BINARY_ONLY_CARGO_TOML, source).is_empty());
+    }
+
+    #[test]
+    fn allows_pub_type_in_proc_macro_crate() {
+        // A `proc-macro = true` crate exports macros only; a consumer can never
+        // name this type.
+        let source = "#[derive(PartialEq)]\npub struct Field { name: String }";
+        assert!(run_on_with_cargo(PROC_MACRO_CARGO_TOML, source).is_empty());
+    }
+
+    #[test]
+    fn flags_pub_type_in_library_crate() {
+        // Negative control: a normal library crate does have consumers, so the
+        // manifest guard must not suppress there.
+        let source = "#[derive(PartialEq)]\npub struct Api { name: String }";
+        assert_eq!(run_on_with_cargo(LIB_CARGO_TOML, source).len(), 1);
+    }
+
+    #[test]
     fn allows_struct_in_cfg_test_module() {
-        // Issue #3839: a `#[cfg(test)]`-gated fixture derives `PartialEq` only
-        // so `assert_eq!` works; it never ships, so demanding `Eq` is ceremony.
+        // Issue #3839, verbatim: a `#[cfg(test)]`-gated fixture derives
+        // `PartialEq` only so `assert_eq!` works; it never ships, so demanding
+        // `Eq` is ceremony.
         let source = "\
 #[cfg(test)]
 mod tests {
@@ -629,44 +703,59 @@ mod tests {
     }
 
     #[test]
+    fn allows_pub_fixture_in_public_cfg_test_module() {
+        // The same shape written `pub` throughout, so neither the visibility of
+        // the module nor that of the fixture decides it. `is_in_test_context`,
+        // the first guard in `visit_node`, is what suppresses both this and
+        // `allows_struct_in_cfg_test_module`.
+        let source = "\
+#[cfg(test)]
+pub mod tests {
+    #[derive(PartialEq, Debug)]
+    pub struct Fixture { x: i32 }
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
     fn allows_struct_with_both() {
-        let source = "#[derive(PartialEq, Eq)]\nstruct A { x: i32 }";
+        let source = "#[derive(PartialEq, Eq)]\npub struct A { x: i32 }";
         assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn allows_struct_with_float_field() {
-        let source = "#[derive(PartialEq)]\nstruct A { x: f64 }";
+        let source = "#[derive(PartialEq)]\npub struct A { x: f64 }";
         assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn flags_enum_with_partial_eq_only() {
-        let source = "#[derive(PartialEq)]\nenum E { A, B }";
+        let source = "#[derive(PartialEq)]\npub enum E { A, B }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
     fn allows_struct_with_no_eq_at_all() {
-        let source = "struct A { x: i32 }";
+        let source = "pub struct A { x: i32 }";
         assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn allows_tuple_struct_with_float() {
-        let source = "#[derive(PartialEq)]\nstruct A(f64);";
+        let source = "#[derive(PartialEq)]\npub struct A(f64);";
         assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn allows_struct_with_float_array_field() {
-        let source = "#[derive(PartialEq)]\nstruct A { v: [f32; 3] }";
+        let source = "#[derive(PartialEq)]\npub struct A { v: [f32; 3] }";
         assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn allows_struct_with_float_tuple_field() {
-        let source = "#[derive(PartialEq)]\nstruct A { p: (f64, f64) }";
+        let source = "#[derive(PartialEq)]\npub struct A { p: (f64, f64) }";
         assert!(run_on(source).is_empty());
     }
 
@@ -677,21 +766,22 @@ mod tests {
         let source = "\
 struct Inner(f64);
 #[derive(PartialEq)]
-struct A(Inner);";
+pub struct A(Inner);";
         assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn does_not_skip_on_identifier_containing_f64_substring() {
         // `config64` is not a float — the type must still be flagged.
-        let source = "#[derive(PartialEq)]\nstruct A { config64: i32 }";
+        let source = "#[derive(PartialEq)]\npub struct A { config64: i32 }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
     fn does_not_skip_on_f64_only_in_comment() {
         // A `f64` mention in a doc comment must not silence the rule.
-        let source = "#[derive(PartialEq)]\nstruct A {\n    /// holds an f64-ish count\n    n: i32,\n}";
+        let source =
+            "#[derive(PartialEq)]\npub struct A {\n    /// holds an f64-ish count\n    n: i32,\n}";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -702,7 +792,7 @@ struct A(Inner);";
         // would lie about reflexivity.
         let source = "\
 #[derive(Debug)]
-enum Error {
+pub enum Error {
     A(i32),
     NotFound,
     Other,
@@ -722,7 +812,7 @@ impl PartialEq for Error {
     #[test]
     fn allows_struct_with_manual_partial_eq_impl() {
         let source = "\
-struct S {
+pub struct S {
     x: i32,
 }
 impl PartialEq for S {
@@ -740,7 +830,7 @@ impl PartialEq for S {
         // on `ConnectionError` would be a hard compile error (E0277).
         let source = "\
 #[derive(Debug)]
-enum Error {
+pub enum Error {
     A(i32),
     NotFound,
 }
@@ -750,7 +840,7 @@ impl PartialEq for Error {
     }
 }
 #[derive(Debug, PartialEq)]
-enum ConnectionError {
+pub enum ConnectionError {
     BadConnection(String),
     CouldntSetupConfiguration(Error),
 }";
@@ -764,11 +854,11 @@ enum ConnectionError {
         // which the rule still flags directly.
         let source = "\
 #[derive(PartialEq)]
-struct Inner {
+pub struct Inner {
     x: i32,
 }
 #[derive(PartialEq)]
-struct Outer {
+pub struct Outer {
     inner: Inner,
 }";
         // Only `Inner` (the directly-fixable derived-PartialEq type) is flagged.
@@ -782,7 +872,7 @@ struct Outer {
         // Issue #3718: `Rewrites` is defined in another file (`use crate::Rewrites`)
         // and transitively holds an `Option<f32>`, so `Outcome` cannot be `Eq`.
         // The field type is unknown to the current file → not provably `Eq`.
-        let source = "#[derive(PartialEq)]\nstruct Outcome { options: Rewrites, n: usize }";
+        let source = "#[derive(PartialEq)]\npub struct Outcome { options: Rewrites, n: usize }";
         assert!(run_on(source).is_empty());
     }
 
@@ -791,15 +881,14 @@ struct Outer {
         // Issue #3718 sibling: `DiffLineStats` is cross-file and `T` is an
         // unbounded generic param — `#[derive(Eq)]` would add a `T: Eq` bound
         // the author omitted, and require `DiffLineStats: Eq` it cannot prove.
-        let source =
-            "#[derive(PartialEq)]\nstruct Source<'a, T> { diff: Option<DiffLineStats>, change: &'a T }";
+        let source = "#[derive(PartialEq)]\npub struct Source<'a, T> { diff: Option<DiffLineStats>, change: &'a T }";
         assert!(run_on(source).is_empty());
     }
 
     #[test]
     fn allows_struct_with_bare_generic_param_field() {
         // A field that is just a generic type parameter is never provably `Eq`.
-        let source = "#[derive(PartialEq)]\nstruct W<T> { inner: T }";
+        let source = "#[derive(PartialEq)]\npub struct W<T> { inner: T }";
         assert!(run_on(source).is_empty());
     }
 
@@ -807,7 +896,8 @@ struct Outer {
     fn flags_struct_with_stdlib_eq_fields() {
         // `String`, `Vec<u32>` and `bool` are all provably `Eq`, so `Eq` is
         // safely addable and the type must be flagged.
-        let source = "#[derive(PartialEq)]\nstruct A { name: String, ids: Vec<u32>, flag: bool }";
+        let source =
+            "#[derive(PartialEq)]\npub struct A { name: String, ids: Vec<u32>, flag: bool }";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -815,7 +905,7 @@ struct Outer {
     fn flags_struct_with_local_eq_field() {
         // `Inner` is a local type not in the Eq-incapable memo (its only field
         // is `i32`), so it is provably `Eq` and `Outer` must be flagged.
-        let source = "struct Inner { x: i32 }\n#[derive(PartialEq)]\nstruct Outer { i: Inner }";
+        let source = "struct Inner { x: i32 }\n#[derive(PartialEq)]\npub struct Outer { i: Inner }";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -823,14 +913,14 @@ struct Outer {
     fn flags_struct_with_int_array_field() {
         // `[u8; 4]` is provably `Eq` (element `u8` is `Eq`; the length
         // expression is not a type), so the type must be flagged.
-        let source = "#[derive(PartialEq)]\nstruct A { v: [u8; 4] }";
+        let source = "#[derive(PartialEq)]\npub struct A { v: [u8; 4] }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
     fn flags_struct_with_eq_tuple_field() {
         // `(u32, bool)` is provably `Eq`, so the type must be flagged.
-        let source = "#[derive(PartialEq)]\nstruct A { p: (u32, bool) }";
+        let source = "#[derive(PartialEq)]\npub struct A { p: (u32, bool) }";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -838,11 +928,32 @@ struct Outer {
     fn allows_fixture_in_cargo_integration_test_dir() {
         // Issue #5420: a `#[derive(PartialEq)]` fixture in a Cargo integration
         // test file (`tests/into.rs`) carries no `#[cfg(test)]` — it is compiled
-        // only by Cargo's test harness. It is not API surface, so the central
-        // test-dir gate (`skip_in_test_dir`) must suppress the rule here.
-        let source = "#[derive(Debug, PartialEq)]\nstruct Unit;";
-        let diags = crate::rules::test_helpers::run_rule_gated(&Check, source, "tests/into.rs");
+        // only by Cargo's test harness. It is not API surface, so the rule must
+        // stay silent. Two gates now agree here: the central test-dir one
+        // (`skip_in_test_dir`, exercised on its own by `run_rule_gated`'s tests)
+        // and `is_effectively_pub`'s non-library-target check.
+        let source = "#[derive(Debug, PartialEq)]\npub struct Unit;";
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            source,
+            "/nonexistent_cargo_project/tests/into.rs",
+        );
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_fixture_in_a_test_module_directory_inside_src() {
+        // `src/tests/` is an ordinary module directory, not a Cargo target, so
+        // `is_effectively_pub` leaves the type in scope. Only this rule's
+        // `skip_in_test_dir` suppresses it, which is what makes this the case
+        // that pins that flag.
+        let source = "#[derive(Debug, PartialEq)]\npub struct Unit;";
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            source,
+            "/nonexistent_cargo_project/src/tests/fixture.rs",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
@@ -856,20 +967,20 @@ struct Outer {
 #[derive(PartialEq, Debug)]
 /// This doc comment sits between the derive and the type definition.
 /// Normally doc comments precede the derive, but this placement is valid Rust.
-enum GlobPattern {
+pub enum GlobPattern {
     Complex(glob::Pattern, Style),
     Simple(HashMap<String, Style>),
 }
 #[derive(PartialEq, Debug, Default)]
-struct ExtensionMappings {
+pub struct ExtensionMappings {
     mappings: Vec<GlobPattern>,
 }";
         let diags = run_on(source);
-        // Only `GlobPattern` itself is unflaggable (external field types are not
-        // provably `Eq`); `ExtensionMappings` must not be flagged.
+        // Neither type is provably `Eq`-capable: `GlobPattern` holds external
+        // field types, and `ExtensionMappings` holds `Vec<GlobPattern>`.
         assert!(
-            diags.iter().all(|d| !d.message.contains("`ExtensionMappings`")),
-            "FP: `ExtensionMappings` flagged despite holding Eq-incapable `Vec<GlobPattern>`"
+            diags.is_empty(),
+            "FP: `ExtensionMappings` flagged despite holding Eq-incapable `Vec<GlobPattern>`: {diags:?}"
         );
     }
 
@@ -882,17 +993,19 @@ struct ExtensionMappings {
         let source = "\
 #[derive(PartialEq)]
 /** block doc between derive and def */
-struct Inner {
+pub struct Inner {
     pat: glob::Pattern,
 }
 #[derive(PartialEq)]
-struct Outer {
+pub struct Outer {
     inner: Vec<Inner>,
 }";
         let diags = run_on(source);
+        // Neither type is provably `Eq`-capable: `Inner` holds an external
+        // `glob::Pattern`, and `Outer` holds `Vec<Inner>`.
         assert!(
-            diags.iter().all(|d| !d.message.contains("`Outer`")),
-            "FP: `Outer` flagged despite holding Eq-incapable `Vec<Inner>`"
+            diags.is_empty(),
+            "FP: `Outer` flagged despite holding Eq-incapable `Vec<Inner>`: {diags:?}"
         );
     }
 
@@ -904,7 +1017,7 @@ struct Outer {
         let source = "\
 #[derive(PartialEq)]
 /// interleaved doc comment
-struct A {
+pub struct A {
     x: i32,
 }";
         assert_eq!(run_on(source).len(), 1);
@@ -914,8 +1027,12 @@ struct A {
     fn flags_fixture_in_src_dir() {
         // The same shape in the project's own `src/` is real API surface and
         // must still be flagged through the production gate.
-        let source = "#[derive(Debug, PartialEq)]\nstruct Unit;";
-        let diags = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/api.rs");
+        let source = "#[derive(Debug, PartialEq)]\npub struct Unit;";
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            source,
+            "/nonexistent_cargo_project/src/api.rs",
+        );
         assert_eq!(diags.len(), 1);
     }
 
@@ -940,7 +1057,7 @@ pub enum InvokeResponseBody {
         // `PartialEq` is unconditional while `Eq` exists only in test builds, so
         // production code has `PartialEq` without `Eq` — still a defect. The
         // `cfg_attr` derive must not satisfy the `Eq` requirement.
-        let source = "#[derive(PartialEq)]\n#[cfg_attr(test, derive(Eq))]\nstruct C;";
+        let source = "#[derive(PartialEq)]\n#[cfg_attr(test, derive(Eq))]\npub struct C;";
         assert_eq!(run_on(source).len(), 1);
     }
 
@@ -948,14 +1065,14 @@ pub enum InvokeResponseBody {
     fn flags_unconditional_partial_eq_unit_struct() {
         // A field-less type with an unconditional `#[derive(PartialEq)]` is still
         // flagged: it is vacuously Eq-capable.
-        let source = "#[derive(PartialEq)]\nstruct A;";
+        let source = "#[derive(PartialEq)]\npub struct A;";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
     fn allows_unit_struct_with_unconditional_partial_eq_and_eq() {
         // `#[derive(PartialEq, Eq)]` provides both unconditionally — not flagged.
-        let source = "#[derive(PartialEq, Eq)]\nstruct B;";
+        let source = "#[derive(PartialEq, Eq)]\npub struct B;";
         assert!(run_on(source).is_empty());
     }
 
@@ -995,5 +1112,230 @@ pub struct Size {
         // allow of `derive_partial_eq_without_eq` (this rule's mirror lint) does.
         let source = "#[allow(dead_code)]\n#[derive(PartialEq)]\npub struct S;";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_crate_private_type_compared_in_production_code() {
+        // Issue #8363 case B (starship `src/modules/dotnet.rs:338`): `FileType`
+        // is compared with `==` in shipping code, but no downstream crate can
+        // name it. If the crate ever needed `Eq` the compiler would demand it,
+        // and any author can add it in place — so the omission is unobservable.
+        let source = "\
+#[derive(PartialEq)]
+enum FileType {
+    ProjectFile,
+    GlobalJson,
+}
+
+pub fn pick(kinds: &[FileType]) -> bool {
+    kinds.iter().any(|k| *k == FileType::GlobalJson)
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_crate_private_type_whose_equality_only_tests_exercise() {
+        // Issue #8363 (starship `src/modules/fossil_metrics.rs:56`, verbatim):
+        // a production-scope but crate-private struct whose `PartialEq` exists
+        // only for `assert_eq!` in the file's inline `#[cfg(test)]` module. The
+        // test-context guard does not reach it — the type is declared outside
+        // the test module — but the visibility gate does.
+        let source = "\
+/// Represents the parsed output from a Fossil diff with the -i --numstat option enabled.
+#[derive(Debug, PartialEq)]
+struct FossilDiff<'a> {
+    added: &'a str,
+    deleted: &'a str,
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_only_the_public_type_in_issue_repro() {
+        // Issue #8363 repro `r247/src/lib.rs`: three `PartialEq`-without-`Eq`
+        // types, one public. Only `PublicKey` (line 3) is reported.
+        let source = "\
+/// A — public type: the rule's real subject.
+#[derive(Debug, PartialEq)]
+pub struct PublicKey {
+    pub id: String,
+}
+
+/// B — crate-private type, equality used in production code.
+#[derive(PartialEq)]
+enum FileType {
+    ProjectFile,
+    GlobalJson,
+}
+
+pub fn pick(kinds: &[FileType]) -> bool {
+    kinds.iter().any(|k| *k == FileType::GlobalJson)
+}
+
+/// C — crate-private type whose `PartialEq` exists only for `assert_eq!`.
+#[derive(Debug, PartialEq)]
+struct FossilDiff<'a> {
+    added: &'a str,
+    deleted: &'a str,
+}
+";
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            source,
+            "/nonexistent_cargo_project/src/lib.rs",
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].line, 3);
+        assert!(diags[0].message.contains("`PublicKey`"), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_public_type_whose_equality_is_only_asserted_in_tests() {
+        // Load-bearing negative: on a type a downstream crate CAN name, "who
+        // compares it in-crate" is not the question. The orphan rule stops the
+        // consumer adding `Eq`, so a test-only in-crate `==` must not suppress.
+        let source = "\
+#[derive(Debug, PartialEq)]
+pub struct Parsed {
+    pub n: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trips() {
+        assert_eq!(Parsed { n: 1 }, Parsed { n: 1 });
+    }
+}";
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("`Parsed`"), "{diags:?}");
+    }
+
+    #[test]
+    fn allows_restricted_visibility_types() {
+        // `pub(crate)`, `pub(super)` and `pub(in path)` never escape the crate,
+        // so each is out of scope exactly like a bare private type.
+        for source in [
+            "#[derive(PartialEq)]\npub(crate) struct S { x: i32 }",
+            "#[derive(PartialEq)]\npub(super) struct S { x: i32 }",
+            "#[derive(PartialEq)]\npub(in crate::a) struct S { x: i32 }",
+        ] {
+            assert!(run_on(source).is_empty(), "restricted visibility flagged: {source}");
+        }
+    }
+
+    #[test]
+    fn allows_pub_type_in_private_inline_module() {
+        // Effective visibility is the product of the item's modifier and every
+        // enclosing module's: a `pub` type inside a non-`pub` `mod` is unreachable.
+        let source = "mod inner {\n    #[derive(PartialEq)]\n    pub struct S { x: i32 }\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_pub_type_in_public_inline_module() {
+        // Load-bearing negative: a fully-public module chain leaves the type on
+        // the crate's public surface, so the gate must not suppress it.
+        let source = "pub mod inner {\n    #[derive(PartialEq)]\n    pub struct S { x: i32 }\n}";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_pub_type_in_file_declared_by_private_mod() {
+        // The enclosing module can be another file: `mod inner;` (non-`pub`) in
+        // the crate root confines every `pub` item of `src/inner.rs` to the crate.
+        let diags = crate::rules::test_helpers::run_rule_in_split_module(
+            &Check,
+            ("src/lib.rs", "mod inner;\n"),
+            ("src/inner.rs", "#[derive(PartialEq)]\npub struct S { x: i32 }\n"),
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_pub_type_in_file_declared_by_public_mod() {
+        // Load-bearing negative for the same wiring: `pub mod inner;` keeps the
+        // type reachable, so the identical source must still be flagged.
+        let diags = crate::rules::test_helpers::run_rule_in_split_module(
+            &Check,
+            ("src/lib.rs", "pub mod inner;\n"),
+            ("src/inner.rs", "#[derive(PartialEq)]\npub struct S { x: i32 }\n"),
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_pub_type_reexported_out_of_a_private_module_file() {
+        // Load-bearing negative, mdBook `CmdPreprocessor`
+        // (`crates/mdbook-driver/src/builtin_preprocessors/cmd.rs:14`): the
+        // facade shape declares `mod cmd;` privately and re-exports the type
+        // with `pub use`, so it IS public API and must still be flagged.
+        let diags = crate::rules::test_helpers::run_rule_in_split_module(
+            &Check,
+            (
+                "src/lib.rs",
+                "pub use self::cmd::CmdPreprocessor;\nmod cmd;\n",
+            ),
+            (
+                "src/cmd.rs",
+                "#[derive(Debug, Clone, PartialEq)]\npub struct CmdPreprocessor { name: String }\n",
+            ),
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_pub_type_reexported_out_of_a_private_inline_module() {
+        // Load-bearing negative: the facade shape written inline. `mod inner` is
+        // private, but `pub use inner::FacadeType;` beside it puts the type on
+        // the crate's surface, so a consumer can name it and cannot add `Eq`.
+        let source = "\
+mod inner {
+    #[derive(PartialEq)]
+    pub struct FacadeType { pub x: i32 }
+}
+pub use inner::FacadeType;
+";
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn allows_pub_type_in_a_binary_target_of_a_library_crate() {
+        // A `src/bin/*.rs` target is its own crate root that nothing links
+        // against, so its `pub` types are unreachable even though the package
+        // also ships a library.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/bin")).unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), LIB_CARGO_TOML).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        let tool = dir.path().join("src/bin/tool.rs");
+        let source = "#[derive(PartialEq)]\npub struct Args { n: u32 }\n";
+        std::fs::write(&tool, source).unwrap();
+
+        let diags = crate::rules::test_helpers::run_rule(&Check, source, &tool);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn allows_pub_type_under_a_pub_mod_below_a_private_one() {
+        // starship declares `mod modules;` privately in `src/lib.rs` and
+        // `pub mod custom;` inside `src/modules/mod.rs`. The inner `pub mod`
+        // does not settle reachability — the private `mod modules;` above it
+        // does, so the type stays crate-internal.
+        let dir = tempfile::TempDir::new().unwrap();
+        let modules = dir.path().join("src/modules");
+        std::fs::create_dir_all(&modules).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "mod modules;\n").unwrap();
+        std::fs::write(modules.join("mod.rs"), "pub mod custom;\n").unwrap();
+        let custom = modules.join("custom.rs");
+        let source = "#[derive(PartialEq)]\npub struct Custom { id: u32 }\n";
+        std::fs::write(&custom, source).unwrap();
+
+        let diags = crate::rules::test_helpers::run_rule(&Check, source, &custom);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 }

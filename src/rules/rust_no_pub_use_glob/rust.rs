@@ -281,27 +281,11 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
-    /// Write `parent_rel` and `child_rel` into a temp crate, then run the rule
-    /// on the child so `rust_module_declared_private_in_parent` can read the
-    /// parent's `mod` declaration off disk.
-    fn run_split_module(
-        parent_rel: &str,
-        parent_src: &str,
-        child_rel: &str,
-        child_src: &str,
-    ) -> Vec<Diagnostic> {
-        use std::fs;
-        use tempfile::TempDir;
-        let dir = TempDir::new().unwrap();
-        for rel in [parent_rel, child_rel] {
-            if let Some(parent) = std::path::Path::new(rel).parent() {
-                fs::create_dir_all(dir.path().join(parent)).unwrap();
-            }
-        }
-        fs::write(dir.path().join(parent_rel), parent_src).unwrap();
-        let child_path = dir.path().join(child_rel);
-        fs::write(&child_path, child_src).unwrap();
-        crate::rules::test_helpers::run_rule(&Check, child_src, &child_path)
+    /// Run the rule on the child file of a two-file crate, so
+    /// `rust_module_declared_private_in_parent` can read the parent's `mod`
+    /// declaration off disk. Each argument is a `(relative path, source)` pair.
+    fn run_split_module(parent: (&str, &str), child: (&str, &str)) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_in_split_module(&Check, parent, child)
     }
 
     /// Build a crate on disk so `nearest_cargo_manifest` resolves the package
@@ -607,10 +591,11 @@ mod tests {
         // module privately (`mod platform_impl;`), so the glob never reaches the
         // crate's public API even though it sits in a standalone file.
         let diags = run_split_module(
-            "src/lib.rs",
-            "mod platform_impl;\n",
-            "src/platform_impl/mod.rs",
-            "#[allow(unused_imports)]\npub use self::platform::*;\n",
+            ("src/lib.rs", "mod platform_impl;\n"),
+            (
+                "src/platform_impl/mod.rs",
+                "#[allow(unused_imports)]\npub use self::platform::*;\n",
+            ),
         );
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -620,10 +605,8 @@ mod tests {
         // The `<name>.rs` form: parent declares `mod platform;` privately, child
         // is the sibling file `src/platform.rs`.
         let diags = run_split_module(
-            "src/lib.rs",
-            "mod platform;\n",
-            "src/platform.rs",
-            "pub use foo::*;\n",
+            ("src/lib.rs", "mod platform;\n"),
+            ("src/platform.rs", "pub use foo::*;\n"),
         );
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -633,10 +616,8 @@ mod tests {
         // Rust-2018 flat layout: the parent module of `src/platform_impl/x.rs`
         // is `src/platform_impl.rs`, a sibling of the directory it owns.
         let diags = run_split_module(
-            "src/platform_impl.rs",
-            "mod platform;\n",
-            "src/platform_impl/platform.rs",
-            "pub use foo::*;\n",
+            ("src/platform_impl.rs", "mod platform;\n"),
+            ("src/platform_impl/platform.rs", "pub use foo::*;\n"),
         );
         assert!(diags.is_empty(), "{diags:?}");
     }
@@ -646,10 +627,11 @@ mod tests {
         // A `pub mod platform_impl;` parent keeps the module public, so the glob
         // reaches the crate's API -> still flagged.
         let diags = run_split_module(
-            "src/lib.rs",
-            "pub mod platform_impl;\n",
-            "src/platform_impl/mod.rs",
-            "pub use self::platform::*;\npub struct Marker;\n",
+            ("src/lib.rs", "pub mod platform_impl;\n"),
+            (
+                "src/platform_impl/mod.rs",
+                "pub use self::platform::*;\npub struct Marker;\n",
+            ),
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
@@ -659,10 +641,11 @@ mod tests {
         // No parent file declares the module — privacy cannot be proven, so the
         // rule conservatively keeps flagging.
         let diags = run_split_module(
-            "src/unrelated.rs",
-            "// no mod declaration here\n",
-            "src/platform_impl/mod.rs",
-            "pub use self::platform::*;\npub struct Marker;\n",
+            ("src/unrelated.rs", "// no mod declaration here\n"),
+            (
+                "src/platform_impl/mod.rs",
+                "pub use self::platform::*;\npub struct Marker;\n",
+            ),
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
@@ -672,10 +655,8 @@ mod tests {
         // A crate root (`lib.rs`) has no parent module, so a `pub use *` there is
         // always part of the public API -> still flagged.
         let diags = run_split_module(
-            "src/other.rs",
-            "// sibling file, irrelevant\n",
-            "src/lib.rs",
-            "pub use self::platform::*;\npub struct Marker;\n",
+            ("src/other.rs", "// sibling file, irrelevant\n"),
+            ("src/lib.rs", "pub use self::platform::*;\npub struct Marker;\n"),
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
     }

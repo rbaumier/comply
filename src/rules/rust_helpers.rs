@@ -8,6 +8,10 @@ use std::path::{Component, Path, PathBuf};
 
 use tree_sitter::Node;
 
+use crate::project::{
+    RUST_MODULE_CHAIN_MAX_DEPTH, ProjectCtx, parse_rust_source, rust_module_parent_candidates,
+};
+
 /// True if `node` is inside an `async fn`. Walks up parents looking
 /// for the nearest `function_item` and inspects its `function_modifiers`
 /// child for the `async` keyword. tree-sitter-rust groups `async`,
@@ -1152,6 +1156,10 @@ fn path_root_segment<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
 struct UsePathLeaf {
     module: Vec<String>,
     local: String,
+    /// The name as written upstream when an `as` clause renamed it. `None` when
+    /// `local` is the upstream name. [`reexported_names`] matches a re-export
+    /// against this name, so `pub use x::A as B;` exposes `A`.
+    source_name: Option<String>,
 }
 
 /// The crate a `use` leaf hangs off: the first module segment, or the bound name
@@ -1187,13 +1195,7 @@ fn use_graph_binds_async_mutex(root: Node, source: &[u8], local: &str) -> bool {
 /// file (nested-module `use`s included).
 fn collect_use_leaves(node: Node, source: &[u8], out: &mut Vec<UsePathLeaf>) {
     if node.kind() == "use_declaration" {
-        let mut cursor = node.walk();
-        if let Some(body) = node
-            .named_children(&mut cursor)
-            .find(|c| c.kind() != "visibility_modifier")
-        {
-            scan_use_tree(body, source, &[], out);
-        }
+        out.extend(use_declaration_leaves(node, source));
         // A `use` declaration cannot nest another one; no need to descend.
         return;
     }
@@ -1201,6 +1203,22 @@ fn collect_use_leaves(node: Node, source: &[u8], out: &mut Vec<UsePathLeaf>) {
     for child in node.named_children(&mut cursor) {
         collect_use_leaves(child, source, out);
     }
+}
+
+/// The leaves one `use_declaration` binds. The declaration's own
+/// `visibility_modifier` is not part of the path, so the scan starts at the first
+/// child after it.
+fn use_declaration_leaves(decl: Node, source: &[u8]) -> Vec<UsePathLeaf> {
+    let mut cursor = decl.walk();
+    let Some(body) = decl
+        .named_children(&mut cursor)
+        .find(|c| c.kind() != "visibility_modifier")
+    else {
+        return Vec::new();
+    };
+    let mut leaves = Vec::new();
+    scan_use_tree(body, source, &[], &mut leaves);
+    leaves
 }
 
 /// Walk a `use` tree, accumulating `prefix` module segments down through
@@ -1214,12 +1232,13 @@ fn scan_use_tree(node: Node, source: &[u8], prefix: &[String], out: &mut Vec<Use
             };
             let mut module = prefix.to_vec();
             module.extend_from_slice(module_tail);
-            out.push(UsePathLeaf { module, local: local.clone() });
+            out.push(UsePathLeaf { module, local: local.clone(), source_name: None });
         }
         "identifier" | "type_identifier" => {
             out.push(UsePathLeaf {
                 module: prefix.to_vec(),
                 local: node.utf8_text(source).unwrap_or_default().to_string(),
+                source_name: None,
             });
         }
         "scoped_use_list" => {
@@ -1249,7 +1268,7 @@ fn scan_use_tree(node: Node, source: &[u8], prefix: &[String], out: &mut Vec<Use
             if let Some(path) = use_path_child(node) {
                 inner.extend(rust_path_segments(path, source));
             }
-            out.push(UsePathLeaf { module: inner, local: "*".to_string() });
+            out.push(UsePathLeaf { module: inner, local: "*".to_string(), source_name: None });
         }
         "use_as_clause" => {
             let mut cursor = node.walk();
@@ -1260,7 +1279,10 @@ fn scan_use_tree(node: Node, source: &[u8], prefix: &[String], out: &mut Vec<Use
                 let mut tmp = Vec::new();
                 scan_use_tree(path, source, prefix, &mut tmp);
                 if let Some(mut leaf) = tmp.pop() {
-                    leaf.local = alias.utf8_text(source).unwrap_or_default().to_string();
+                    leaf.source_name = Some(std::mem::replace(
+                        &mut leaf.local,
+                        alias.utf8_text(source).unwrap_or_default().to_string(),
+                    ));
                     out.push(leaf);
                 }
             }
@@ -2594,89 +2616,159 @@ pub fn is_inside_non_public_module(node: Node, source: &[u8]) -> bool {
 }
 
 /// True if `item` is effectively reachable from outside the crate: it carries a
-/// bare `pub` modifier itself, no enclosing module restricts it, AND the file it
-/// lives in is not itself pulled in by a non-`pub` `mod` declaration.
+/// bare `pub` modifier itself, no enclosing module confines it without
+/// re-exporting it, and it is not compiled into a non-library target.
 ///
 /// Effective visibility is the product of the item's own modifier and every
 /// enclosing module's, so a bare-`pub` item buried in a non-public module is not
 /// part of the crate's public API. That non-public module can be lexical (an
-/// enclosing `mod imp { pub fn … }` in the same file — covered by
-/// [`is_inside_non_public_module`]) or cross-file: the whole file is brought in
-/// by a bare `mod imp;` in the parent module, so its top-level `pub` items are
-/// equally unreachable. [`file_is_privately_declared_module`] resolves that
-/// cross-file case from `path`.
+/// enclosing `mod imp { pub fn … }` in the same file) or cross-file (the whole
+/// file is brought in by a bare `mod imp;` in the parent module). Either way a
+/// `pub use` beside the module puts the item back on the surface — the facade
+/// shape — so both walks follow re-exports: [`lexical_module_names`] for the
+/// in-file one and [`module_chain_confines`] for the chain from `path` up to the
+/// crate root.
+///
+/// A file compiled into a non-library target — a build script, a `src/bin/*.rs`
+/// binary, anything under `examples/`, `benches/` or `tests/` outside `src/`, or
+/// a `main.rs` beside a sibling `lib.rs` — is its own crate root that nothing
+/// links against, so its `pub` items are never reachable. See
+/// [`file_is_non_library_target`] for the exact shapes.
 ///
 /// Rules whose rationale is "this is part of the crate's public surface" gate on
-/// this rather than bare [`is_pub`].
+/// this rather than bare [`is_pub`], and pair it with
+/// [`crate_has_external_consumers`]: this one asks whether the item is
+/// reachable, that one whether anything outside the crate can reach it at all.
 pub fn is_effectively_pub(item: Node, source: &[u8], path: &Path) -> bool {
-    is_pub(item, source)
-        && !is_inside_non_public_module(item, source)
-        && !file_is_privately_declared_module(path)
+    if !is_pub(item, source) || file_is_non_library_target(path) {
+        return false;
+    }
+    let Some(item_name) = item
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+    else {
+        // Nothing to track up the chain; keep the item in scope.
+        return true;
+    };
+    let Some(names) = lexical_module_names(item, source, item_name) else {
+        return false;
+    };
+    !module_chain_confines(path, &names, 0)
 }
 
-/// True when the file at `path` is brought into its parent module by a
-/// non-`pub` `mod` declaration — making a bare-`pub`, top-level item in it
-/// unreachable from outside the crate even though it carries `pub`.
+/// The names the item answers to at the top level of its own file, or `None`
+/// when an enclosing non-`pub` `mod` block holds it and no `pub use` beside that
+/// block carries it out.
 ///
-/// Resolution is purely structural: it locates the parent module file from the
-/// path layout (`dir/foo.rs` is declared in `dir`'s module file; `dir/mod.rs`
-/// is declared in the grandparent's; `lib.rs`/`main.rs` are crate roots with no
-/// declarer), parses each candidate parent file with tree-sitter, and looks for
-/// the external `mod` statement that pulls in THIS file — matched either by the
-/// module-name stem (`mod foo;` for `foo.rs`) or by a `#[path = "…"]` /
-/// `#[cfg_attr(…, path = "…")]` attribute whose resolved target is this file
-/// (the platform-rename shape: `#[cfg_attr(unix, path = "unix.rs")] mod
-/// platform;`).
-///
-/// Soundness: returns true ONLY when a declaring statement is positively
-/// matched AND it is not bare-`pub`. A matched bare-`pub mod` returns false, and
-/// any failure to resolve or match the parent file falls back to false — the
-/// rule keeps flagging rather than suppress on a guess.
-fn file_is_privately_declared_module(path: &Path) -> bool {
-    let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
-        return false;
-    };
-
-    // The module stem to look for, and the directory whose module file carries
-    // the declaring `mod` statement.
-    let (decl_dir, stem): (PathBuf, String) = if file_name == "mod.rs" {
-        // `dir/mod.rs` IS module `dir`; it is declared in dir's PARENT module.
-        let Some(module_dir) = path.parent() else {
-            return false;
-        };
-        let Some(stem) = module_dir.file_name().and_then(|n| n.to_str()) else {
-            return false;
-        };
-        let Some(decl_dir) = module_dir.parent() else {
-            return false;
-        };
-        (decl_dir.to_path_buf(), stem.to_string())
-    } else if file_name == "lib.rs" || file_name == "main.rs" {
-        // A crate root has no declaring `mod` statement.
-        return false;
-    } else {
-        // `dir/foo.rs` IS module `foo`; it is declared in dir's module file.
-        let Some(decl_dir) = path.parent() else {
-            return false;
-        };
-        let Some(stem) = path.file_stem().and_then(|n| n.to_str()) else {
-            return false;
-        };
-        (decl_dir.to_path_buf(), stem.to_string())
-    };
-
-    // Candidate files that may carry the declaration: the directory's
-    // `mod.rs`/`lib.rs`/`main.rs`, plus the Rust-2018 sibling `<decl_dir>.rs`.
-    let mut candidates = vec![
-        decl_dir.join("mod.rs"),
-        decl_dir.join("lib.rs"),
-        decl_dir.join("main.rs"),
-    ];
-    if let (Some(parent), Some(name)) =
-        (decl_dir.parent(), decl_dir.file_name().and_then(|n| n.to_str()))
-    {
-        candidates.push(parent.join(format!("{name}.rs")));
+/// This is the facade shape written inline: `mod inner { pub struct T }` beside
+/// `pub use inner::T;` puts `T` on the file's surface even though `inner` is
+/// private. The walk goes outward one `mod_item` at a time, asking the block
+/// that encloses each level whether it re-exports one of the tracked names.
+fn lexical_module_names(item: Node, source: &[u8], item_name: &str) -> Option<Vec<String>> {
+    let mut names = vec![item_name.to_string()];
+    let mut cur = item;
+    while let Some(parent) = cur.parent() {
+        cur = parent;
+        if parent.kind() != "mod_item" {
+            continue;
+        }
+        let mod_name = parent
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())?;
+        match classify_mod_declaration(parent, source, mod_name, &names) {
+            ModExposure::Confined => return None,
+            ModExposure::Reachable(rebound) => names = rebound,
+        }
     }
+    Some(names)
+}
+
+/// True when `path` is compiled into a target no consumer links against: a build
+/// script, a `src/bin/*.rs` binary, anything under `examples/`, `benches/` or
+/// `tests/`, or a `main.rs` beside a sibling `lib.rs`. Each is its own crate
+/// root, so its `pub` items are unreachable whatever the package exports.
+///
+/// A `main.rs` with no sibling `lib.rs` is the root of a binary-only crate;
+/// [`crate_has_external_consumers`] answers for that whole package.
+fn file_is_non_library_target(path: &Path) -> bool {
+    use crate::rules::path_utils::{
+        is_cargo_bin_target_path, is_cargo_non_library_target_dir_path, is_rust_build_script,
+    };
+    if is_rust_build_script(path)
+        || is_cargo_bin_target_path(path)
+        || is_cargo_non_library_target_dir_path(path)
+    {
+        return true;
+    }
+    path.file_name().and_then(|n| n.to_str()) == Some("main.rs")
+        && path.with_file_name("lib.rs").is_file()
+}
+
+/// True when a consumer outside this crate can name its `pub` items at all.
+///
+/// A binary-only crate (no `[lib]` target, no `src/lib.rs`) exports nothing, and
+/// a `proc-macro` crate exports only macros, so no consumer can ever hold one of
+/// its types. A rule whose rationale is "an outside consumer cannot fix this"
+/// has no subject there, and pairs this with [`is_effectively_pub`]: one asks
+/// whether the item is reachable, the other whether anything can reach it.
+///
+/// An absent or unparseable manifest answers `true`, so the rule keeps flagging
+/// rather than suppress on a guess.
+pub fn crate_has_external_consumers(project: &ProjectCtx, path: &Path) -> bool {
+    project
+        .nearest_cargo_manifest(path)
+        .is_none_or(|manifest| !manifest.is_binary_only() && !manifest.is_proc_macro())
+}
+
+/// True when the `mod` chain from `path` up to the crate root keeps the file's
+/// top-level `pub` items inside the crate — making a bare-`pub` item in it
+/// unreachable from outside even though it carries `pub`.
+///
+/// `names` are the names the item answers to in the module `path` defines: the
+/// item's own name at the first step, then whatever each `pub use` rebinds it to
+/// and the module names it becomes reachable through.
+///
+/// Resolution is purely structural. [`rust_module_parent_candidates`] gives the
+/// module name and the files that may declare it, from the path layout alone.
+/// Each candidate is parsed with tree-sitter and searched for the external `mod`
+/// statement that pulls in THIS file — matched either by the module name
+/// (`mod foo;` for `foo.rs`) or by a `#[path = "…"]` / `#[cfg_attr(…, path =
+/// "…")]` attribute whose resolved target is this file (the platform-rename
+/// shape: `#[cfg_attr(unix, path = "unix.rs")] mod platform;`). The first
+/// candidate that carries such a statement answers for the level: a package
+/// where both `lib.rs` and `main.rs` declare the module gets the library's
+/// answer, which is the one that decides external reach.
+///
+/// Only a non-`pub` `mod` with no matching re-export settles the question on the
+/// spot. Both other outcomes hand it to the declaring file, which is asked the
+/// same question one level up: a `pub mod m;` leaves the item reachable as
+/// `m::<name>` within that file, and a `pub use` beside a private `mod` rebinds
+/// it there directly. So `tempfile`'s `mod platform;` + `pub use
+/// self::platform::*;` stays confined once the walk reaches the private
+/// `mod imp;` above it, while mdBook's `mod cmd;` +
+/// `pub use self::cmd::CmdPreprocessor;` escapes through
+/// `pub mod builtin_preprocessors;` in the crate root.
+///
+/// Soundness: returns true ONLY when some level positively matches a declaring
+/// non-`pub` `mod` that re-exports none of `names`. A crate root, an unresolvable
+/// or unreadable parent, no matching `mod`, and an exhausted depth budget all
+/// return false — the rule keeps flagging rather than suppress on a guess.
+///
+/// Three shapes still under-report, all pre-existing: a `pub use` nested inside
+/// an inline `pub mod` of the declaring file is not seen (only top-level
+/// declarations are read), a `pub(crate) mod` re-exported from higher up reads
+/// as confined, and a `pub use` that names the item from a file OTHER than the
+/// one declaring its module is not searched for.
+///
+/// `depth` counts the `mod` levels already walked; callers start at 0.
+fn module_chain_confines(path: &Path, names: &[String], depth: usize) -> bool {
+    if depth >= RUST_MODULE_CHAIN_MAX_DEPTH {
+        return false;
+    }
+    // No candidates means a crate root, which has no declaring `mod` statement.
+    let Some((stem, candidates)) = rust_module_parent_candidates(path) else {
+        return false;
+    };
 
     for candidate in candidates {
         if candidate == path {
@@ -2685,30 +2777,69 @@ fn file_is_privately_declared_module(path: &Path) -> bool {
         let Ok(content) = std::fs::read_to_string(&candidate) else {
             continue;
         };
-        if let Some(declaration_is_pub) = declaring_mod_is_pub(&content, &candidate, &stem, path) {
-            return !declaration_is_pub;
+        match declaring_mod_exposure(&content, &candidate, &stem, path, names) {
+            Some(ModExposure::Confined) => return true,
+            // The item is reachable inside the declaring file's module, under
+            // `rebound`; ask the same question there.
+            Some(ModExposure::Reachable(rebound)) => {
+                return module_chain_confines(&candidate, &rebound, depth + 1);
+            }
+            None => continue,
         }
     }
     false
 }
 
-/// Parse `content` (the parent module file at `candidate`) and return the
-/// visibility of the external `mod` statement that declares `target`, or `None`
-/// if no such statement is found.
+/// What a `mod` declaration does to the `pub` items of the module it declares.
+enum ModExposure {
+    /// A non-`pub` `mod` that re-exports none of the tracked names. Nothing
+    /// outside it can reach the items.
+    Confined,
+    /// The items are reachable in the scope that holds the declaration, under
+    /// the carried names.
+    Reachable(Vec<String>),
+}
+
+/// Parse `content` (the parent module file at `candidate`) and return what the
+/// external `mod` statement that declares `target` does to that file's top-level
+/// `pub` items, or `None` if no such statement is found.
 ///
-/// `Some(true)` => declared by a bare-`pub mod`; `Some(false)` => declared by a
-/// non-`pub` `mod`. Only top-level external declarations (`mod name;`, no body)
-/// are considered. A `#[path]`/`#[cfg_attr(…, path)]` attribute overrides the
-/// module-name stem, so a path-attributed `mod` matches only when one of its
-/// resolved targets is `target`.
-fn declaring_mod_is_pub(content: &str, candidate: &Path, stem: &str, target: &Path) -> Option<bool> {
-    let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
-    let tree = parser.parse(content, None)?;
+/// Only top-level external declarations (`mod name;`, no body) are considered. A
+/// `#[path]`/`#[cfg_attr(…, path)]` attribute overrides the module-name stem, so
+/// a path-attributed `mod` matches only when one of its resolved targets is
+/// `target`.
+fn declaring_mod_exposure(
+    content: &str,
+    candidate: &Path,
+    stem: &str,
+    target: &Path,
+    names: &[String],
+) -> Option<ModExposure> {
+    let tree = parse_rust_source(content)?;
     let decl_dir = candidate.parent()?;
     let source = content.as_bytes();
 
     let root = tree.root_node();
+    let (declaring_mod, mod_name) = find_declaring_mod(root, source, decl_dir, stem, target)?;
+    Some(classify_mod_declaration(declaring_mod, source, mod_name, names))
+}
+
+/// The top-level external `mod` statement in the file rooted at `root` that
+/// declares `target`, with the name it declares, matched either by the
+/// module-name stem (`mod foo;` for `foo.rs`) or by a `#[path = "…"]` /
+/// `#[cfg_attr(…, path = "…")]` attribute whose resolved target is `target` (the
+/// platform-rename shape: `#[cfg_attr(unix, path = "unix.rs")] mod platform;`).
+///
+/// The declared name is not always the file stem — a `#[path]` rename divorces
+/// the two — and a re-export names the module as declared, so the caller needs
+/// the name this returns rather than `stem`.
+fn find_declaring_mod<'tree, 'src>(
+    root: Node<'tree>,
+    source: &'src [u8],
+    decl_dir: &Path,
+    stem: &str,
+    target: &Path,
+) -> Option<(Node<'tree>, &'src str)> {
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         if child.kind() != "mod_item" {
@@ -2718,26 +2849,108 @@ fn declaring_mod_is_pub(content: &str, candidate: &Path, stem: &str, target: &Pa
         if child.child_by_field_name("body").is_some() {
             continue;
         }
-
+        let Some(mod_name) = child
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+        else {
+            continue;
+        };
         let path_targets = mod_path_attr_targets(child, source, decl_dir);
         if !path_targets.is_empty() {
             // A `#[path]` rename overrides the stem: this `mod` declares the
             // attribute's target(s), not a `<stem>.rs` sibling.
             if path_targets.iter().any(|t| paths_lexically_equal(t, target)) {
-                return Some(is_pub(child, source));
+                return Some((child, mod_name));
             }
             continue;
         }
-
-        if child
-            .child_by_field_name("name")
-            .and_then(|n| n.utf8_text(source).ok())
-            == Some(stem)
-        {
-            return Some(is_pub(child, source));
+        if mod_name == stem {
+            return Some((child, mod_name));
         }
     }
     None
+}
+
+/// Classify one `mod_item` against the names the item answers to.
+///
+/// A bare-`pub mod m;` leaves the items reachable as `m::<name>` in the scope
+/// holding the declaration, so the module's own name joins the tracked set:
+/// whatever sits above can re-export either the module or a name inside it. A
+/// non-`pub` `mod` puts the items out of reach unless a `pub use` in that same
+/// scope — the file root for an external `mod name;`, the enclosing
+/// `declaration_list` for an inline block — rebinds one of the names.
+fn classify_mod_declaration(
+    mod_item: Node,
+    source: &[u8],
+    mod_name: &str,
+    names: &[String],
+) -> ModExposure {
+    if is_pub(mod_item, source) {
+        let mut reachable = names.to_vec();
+        reachable.push(mod_name.to_string());
+        return ModExposure::Reachable(reachable);
+    }
+    // A parsed `mod_item` always sits in a scope. Without one there is nothing
+    // to read a re-export from, so the item keeps the names it answers to and
+    // the caller decides one level up.
+    let Some(scope) = mod_item.parent() else {
+        return ModExposure::Reachable(names.to_vec());
+    };
+    match reexported_names(scope, source, mod_name, names) {
+        Some(rebound) => ModExposure::Reachable(rebound),
+        None => ModExposure::Confined,
+    }
+}
+
+/// The names the item answers to in `scope`, when a bare-`pub use` declared
+/// directly in `scope` carries it out of the module `mod_name`. `None` when no
+/// such re-export exists, which is what tells the caller the module confines it.
+///
+/// This is the facade shape: `mod cmd;` keeps the module itself private while
+/// `pub use self::cmd::CmdPreprocessor;` beside it puts that one item back on the
+/// crate's public surface. Matching is structural — either the re-export's module
+/// segments contain `mod_name` and it binds one of `names` (a glob binds all of
+/// them), or it binds `mod_name` itself, which re-exports the whole module. So a
+/// `pub use` of a sibling module carries nothing. An `as` rename matches on the
+/// name it renames and contributes the alias, which keeps a chain of renaming
+/// re-exports trackable.
+///
+/// The result keeps `names` as well as the aliases, because a re-exported module
+/// still holds the item under its own name. Tracking a superset only makes a
+/// later level more likely to find the item reachable, the direction that keeps
+/// the caller flagging.
+fn reexported_names(
+    scope: Node,
+    source: &[u8],
+    mod_name: &str,
+    names: &[String],
+) -> Option<Vec<String>> {
+    let mut rebound = Vec::new();
+    let mut cursor = scope.walk();
+    for child in scope.named_children(&mut cursor) {
+        if child.kind() != "use_declaration" || !is_pub(child, source) {
+            continue;
+        }
+        for leaf in use_declaration_leaves(child, source) {
+            let upstream = leaf.source_name.as_ref().unwrap_or(&leaf.local);
+            let carries = if leaf.module.iter().any(|segment| segment == mod_name) {
+                leaf.local == "*" || names.contains(upstream)
+            } else {
+                upstream == mod_name
+            };
+            if carries {
+                rebound.push(leaf.local);
+            }
+        }
+    }
+    if rebound.is_empty() {
+        return None;
+    }
+    rebound.extend_from_slice(names);
+    rebound.retain(|name| name != "*");
+    rebound.sort_unstable();
+    rebound.dedup();
+    Some(rebound)
 }
 
 /// Resolve every `#[path = "…"]` / `#[cfg_attr(…, path = "…")]` target carried
@@ -8911,6 +9124,209 @@ mod tests {
                 is_effectively_pub(func, src.as_bytes(), path),
                 expected,
                 "is_effectively_pub mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_effectively_pub_follows_pub_use_reexports_out_of_private_modules() {
+        // mdBook `crates/mdbook-driver/src/builtin_preprocessors/`: `mod cmd;`
+        // is private, but `pub use self::cmd::CmdPreprocessor;` beside it puts
+        // that one item back on the crate's public surface. A `pub use` through
+        // a different module re-exports that module's items, not this one's, so
+        // it leaves the item confined.
+        let cases = [
+            ("pub use self::cmd::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", true),
+            ("pub use cmd::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", true),
+            ("pub use self::cmd::*;\nmod cmd;\n", "CmdPreprocessor", true),
+            // An `as` rename still exposes the item it renames.
+            ("pub use self::cmd::CmdPreprocessor as Cmd;\nmod cmd;\n", "CmdPreprocessor", true),
+            // Re-exported, but not this item.
+            ("pub use self::cmd::Other;\nmod cmd;\n", "CmdPreprocessor", false),
+            ("pub use self::cmd::Other as Cmd;\nmod cmd;\n", "CmdPreprocessor", false),
+            // Re-export of a sibling module does not expose `cmd`.
+            ("pub use self::index::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", false),
+            // A non-`pub` `use` re-exports nothing.
+            ("use self::cmd::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", false),
+            // A restricted re-export never escapes the crate.
+            ("pub(crate) use self::cmd::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", false),
+            // No re-export at all: the private `mod cmd;` confines the item.
+            ("mod cmd;\n", "CmdPreprocessor", false),
+        ];
+        for (parent_src, item_name, expected) in cases {
+            let dir = tempfile::TempDir::new().unwrap();
+            let src_dir = dir.path().join("src");
+            std::fs::create_dir_all(&src_dir).unwrap();
+            std::fs::write(src_dir.join("lib.rs"), parent_src).unwrap();
+            let child_path = src_dir.join("cmd.rs");
+            let child_src = format!("pub struct {item_name};\n");
+            std::fs::write(&child_path, &child_src).unwrap();
+
+            let tree = parse(&child_src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                is_effectively_pub(item, child_src.as_bytes(), &child_path),
+                expected,
+                "is_effectively_pub mismatch for parent `{parent_src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_effectively_pub_follows_a_reexport_chain_to_the_crate_root() {
+        // A `pub use` lifts the item into the declaring module, so reachability
+        // is decided there: mdBook's `pub mod builtin_preprocessors;` exposes it,
+        // tempfile's private `mod imp;` (holding the same `pub use …::*` facade)
+        // still confines it.
+        for (root_decl, expected) in [("pub mod outer;\n", true), ("mod outer;\n", false)] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let outer = dir.path().join("src/outer");
+            std::fs::create_dir_all(&outer).unwrap();
+            std::fs::write(dir.path().join("src/lib.rs"), root_decl).unwrap();
+            std::fs::write(outer.join("mod.rs"), "mod inner;\npub use inner::*;\n").unwrap();
+            let inner_path = outer.join("inner.rs");
+            let inner_src = "pub struct S;\n";
+            std::fs::write(&inner_path, inner_src).unwrap();
+
+            let tree = parse(inner_src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                is_effectively_pub(item, inner_src.as_bytes(), &inner_path),
+                expected,
+                "is_effectively_pub mismatch for crate root `{root_decl}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_effectively_pub_climbs_past_a_pub_mod_to_the_private_one_above() {
+        // starship: `src/lib.rs` declares `mod modules;` privately, and
+        // `src/modules/mod.rs` declares `pub mod utils;`. The `pub mod` does not
+        // settle reachability — the private `mod modules;` above it does.
+        for (root_decl, expected) in [("pub mod modules;\n", true), ("mod modules;\n", false)] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let modules = dir.path().join("src/modules");
+            std::fs::create_dir_all(&modules).unwrap();
+            std::fs::write(dir.path().join("src/lib.rs"), root_decl).unwrap();
+            std::fs::write(modules.join("mod.rs"), "pub mod custom;\n").unwrap();
+            let custom_path = modules.join("custom.rs");
+            let custom_src = "pub struct Custom;\n";
+            std::fs::write(&custom_path, custom_src).unwrap();
+
+            let tree = parse(custom_src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                is_effectively_pub(item, custom_src.as_bytes(), &custom_path),
+                expected,
+                "is_effectively_pub mismatch for crate root `{root_decl}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_effectively_pub_follows_an_in_file_pub_use_facade() {
+        // The facade shape written inline: a private `mod` block beside a
+        // `pub use` that lifts one item out of it. The item IS public API.
+        let cases = [
+            ("mod inner { pub struct T; }\npub use inner::T;", true),
+            ("mod inner { pub struct T; }\npub use inner::*;", true),
+            ("mod inner { pub struct T; }\npub use inner::T as U;", true),
+            // Re-exported, but not this item.
+            ("mod inner { pub struct T; }\npub use inner::Other;", false),
+            // No re-export, a non-`pub` one, and a restricted one all confine.
+            ("mod inner { pub struct T; }", false),
+            ("mod inner { pub struct T; }\nuse inner::T;", false),
+            ("mod inner { pub struct T; }\npub(crate) use inner::T;", false),
+            // A restricted `mod` is not re-exported by a bare `pub use` of a
+            // sibling module.
+            ("mod inner { pub struct T; }\npub use other::T;", false),
+            // Nested: the outer private `mod` still confines the item.
+            ("mod outer { mod inner { pub struct T; } pub use inner::T; }", false),
+        ];
+        // No parent module file on disk, so only the in-file logic applies.
+        let path = Path::new("/nonexistent_comply_test/src/t.rs");
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                is_effectively_pub(item, src.as_bytes(), path),
+                expected,
+                "is_effectively_pub mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_effectively_pub_is_false_in_a_non_library_target() {
+        // A build script, a `src/bin` target, an example, a bench, an
+        // integration test and a `main.rs` beside a `lib.rs` are each their own
+        // crate root. Nothing links against them, so their `pub` items are not
+        // API whatever the package exports.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/bin")).unwrap();
+        std::fs::create_dir_all(dir.path().join("examples")).unwrap();
+        std::fs::create_dir_all(dir.path().join("benches")).unwrap();
+        std::fs::create_dir_all(dir.path().join("tests/common")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src/tests")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src/examples")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+
+        let src = "pub struct T;";
+        let tree = parse(src);
+        let item = first_of_kind(tree.root_node(), "struct_item")
+            .expect("snippet should contain a struct_item");
+        for (rel, expected) in [
+            ("build.rs", false),
+            ("src/bin/tool.rs", false),
+            ("examples/demo.rs", false),
+            ("benches/speed.rs", false),
+            ("tests/it.rs", false),
+            // A helper module of an integration-test crate is no more linkable
+            // than the target file beside it.
+            ("tests/common/mod.rs", false),
+            ("src/main.rs", false),
+            // The control: the library root itself is API.
+            ("src/lib.rs", true),
+            // `tests` and `examples` INSIDE `src` are ordinary modules, not
+            // Cargo targets, so their items stay reachable.
+            ("src/tests/helper.rs", true),
+            ("src/examples/mod.rs", true),
+        ] {
+            let path = dir.path().join(rel);
+            assert_eq!(
+                is_effectively_pub(item, src.as_bytes(), &path),
+                expected,
+                "is_effectively_pub mismatch for `{rel}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_effectively_pub_follows_a_module_reexported_by_name() {
+        // `pub use self::engine;` re-exports the whole module, so every `pub`
+        // item inside it stays reachable even though `mod engine;` is private.
+        for (root_decl, expected) in
+            [("mod engine;\npub use self::engine;\n", true), ("mod engine;\n", false)]
+        {
+            let dir = tempfile::TempDir::new().unwrap();
+            let src_dir = dir.path().join("src");
+            std::fs::create_dir_all(&src_dir).unwrap();
+            std::fs::write(src_dir.join("lib.rs"), root_decl).unwrap();
+            let engine_path = src_dir.join("engine.rs");
+            let engine_src = "pub struct Engine;\n";
+            std::fs::write(&engine_path, engine_src).unwrap();
+
+            let tree = parse(engine_src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                is_effectively_pub(item, engine_src.as_bytes(), &engine_path),
+                expected,
+                "is_effectively_pub mismatch for crate root `{root_decl}`"
             );
         }
     }

@@ -8,6 +8,10 @@
 //!
 //! - [`run_rule`] — default project + file context, language from path
 //! - [`run_rule_with_ctx`] — explicit project + file context
+//! - [`run_rule_in_split_module`] — two real files on disk, for a rule that
+//!   resolves the Rust module graph
+//! - [`run_rule_in_crate`] — one file beside a real `Cargo.toml`, for a rule
+//!   that reads the manifest
 //! - [`run_rule_gated`] — applies the production `applies_to_file` gate
 //! - [`run_rule_by_id`] — look up rule by string ID (for integration tests)
 
@@ -96,6 +100,57 @@ pub fn run_rule(check: &dyn RunRule, src: &str, path: impl AsRef<Path>) -> Vec<D
         crate::project::default_static_project_ctx(),
         crate::rules::file_ctx::default_static_file_ctx(),
     )
+}
+
+/// Write both files into a temporary crate, then run `check` on the child file.
+/// A rule that resolves the module graph off disk — the visibility gate reads
+/// the `mod` statement that declares the child — needs a real two-file layout,
+/// which a single in-memory source cannot express. Each argument is a
+/// `(path relative to the crate root, source)` pair.
+#[must_use]
+pub fn run_rule_in_split_module(
+    check: &dyn RunRule,
+    parent: (&str, &str),
+    child: (&str, &str),
+) -> Vec<Diagnostic> {
+    let (parent_rel, parent_src) = parent;
+    let (child_rel, child_src) = child;
+    let dir = tempfile::TempDir::new().unwrap();
+    for rel in [parent_rel, child_rel] {
+        if let Some(dir_rel) = Path::new(rel).parent() {
+            std::fs::create_dir_all(dir.path().join(dir_rel)).unwrap();
+        }
+    }
+    std::fs::write(dir.path().join(parent_rel), parent_src).unwrap();
+    let child_path = dir.path().join(child_rel);
+    std::fs::write(&child_path, child_src).unwrap();
+    run_rule(check, child_src, &child_path)
+}
+
+/// Manifest of a crate that exports procedural macros only.
+pub const PROC_MACRO_CARGO_TOML: &str = "[package]\nname = \"derive-like\"\nversion = \"0.1.0\"\n\
+    edition = \"2021\"\n\n[lib]\nproc-macro = true\n";
+
+/// Manifest of a crate with no `[lib]` target, and no `src/lib.rs` beside it.
+pub const BINARY_ONLY_CARGO_TOML: &str =
+    "[package]\nname = \"cli\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+
+/// Manifest of an ordinary library crate, the negative control for the two above.
+pub const LIB_CARGO_TOML: &str = "[package]\nname = \"normal-lib\"\nversion = \"0.1.0\"\n\
+    edition = \"2021\"\n\n[lib]\nname = \"normal_lib\"\n";
+
+/// Write `source` to `src/x.rs` of a temporary crate carrying `cargo_toml`, then
+/// run `check` on it. A rule that reads the manifest — the `proc-macro` and
+/// binary-only exemptions do — resolves comply's own manifest instead when the
+/// file under test has no crate of its own.
+#[must_use]
+pub fn run_rule_in_crate(check: &dyn RunRule, cargo_toml: &str, source: &str) -> Vec<Diagnostic> {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    let src_path = dir.path().join("src/x.rs");
+    std::fs::write(&src_path, source).unwrap();
+    run_rule(check, source, &src_path)
 }
 
 /// Run a rule with explicit project and file context.
