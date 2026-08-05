@@ -52,10 +52,16 @@ const BANNED: &[&str] = &[
     "crucially",
 ];
 
-/// Return the first banned word found in `text` at a word boundary,
-/// case-insensitive. Used by both the TS and Rust AST backends; the Vue
-/// `text.rs` backend has its own line-scanning logic.
-pub(crate) fn find_banned_word(text: &str) -> Option<&'static str> {
+/// Return the earliest banned word in list order that `text` holds at a word
+/// boundary, case-insensitive, with the byte offset it starts at. Used by both
+/// the TS and Rust AST backends, which anchor their diagnostic on that offset;
+/// the Vue `text.rs` backend has its own line-scanning logic.
+///
+/// The offset indexes `text` directly: ASCII lowercasing rewrites ASCII bytes
+/// in place and leaves every other byte alone, so positions in the lowercased
+/// copy are positions in `text`. It also lands on a `char` boundary, since a
+/// match starts on an ASCII letter and no UTF-8 continuation byte is ASCII.
+pub(crate) fn find_banned_word(text: &str) -> Option<(&'static str, usize)> {
     let lower = text.to_ascii_lowercase();
     let bytes = lower.as_bytes();
     for &word in BANNED {
@@ -74,7 +80,7 @@ pub(crate) fn find_banned_word(text: &str) -> Option<&'static str> {
                         i += 1;
                         continue;
                     }
-                    return Some(word);
+                    return Some((word, i));
                 }
             }
             i += 1;
@@ -112,8 +118,19 @@ mod tests {
 
     #[test]
     fn flags_unnegated_banned_word_still() {
-        assert_eq!(find_banned_word("this simply works"), Some("simply"));
-        assert_eq!(find_banned_word("just call foo"), Some("just"));
+        assert_eq!(find_banned_word("this simply works"), Some(("simply", 5)));
+        assert_eq!(find_banned_word("just call foo"), Some(("just", 0)));
+    }
+
+    #[test]
+    fn reports_the_offset_of_a_match_on_a_later_line() {
+        // The offset locates the word inside the comment, which is what the AST
+        // backends anchor on. A word on the third line of a block comment sits
+        // past both newlines.
+        assert_eq!(
+            find_banned_word("/* first line\nsecond line\nthird is just wrong */"),
+            Some(("just", 35))
+        );
     }
 
     #[test]
@@ -126,13 +143,13 @@ mod tests {
     fn still_flags_dismissive_word_after_negated_one() {
         // "simply" is negated and skipped, but the un-negated "just" later in
         // the same comment is still caught.
-        assert_eq!(find_banned_word("not simply, just do it"), Some("just"));
+        assert_eq!(find_banned_word("not simply, just do it"), Some(("just", 12)));
     }
 
     #[test]
     fn does_not_exempt_words_ending_in_not() {
         // Token-exact: `knot` must not count as the negation "not".
-        assert_eq!(find_banned_word("a knot simply tied"), Some("simply"));
+        assert_eq!(find_banned_word("a knot simply tied"), Some(("simply", 7)));
     }
 }
 
