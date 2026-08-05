@@ -8,15 +8,19 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "rust-partial-eq-without-eq",
-    description: "Type derives `PartialEq` but not `Eq`.",
+    description: "Publicly reachable type derives `PartialEq` but not `Eq`.",
     remediation: "When every field type is provably `Eq` (non-float primitives, \
                   known-`Eq` stdlib types, or local Eq-capable types) the type \
                   should also derive `Eq`. `Eq` is a marker trait signalling \
                   reflexivity (`x == x`), and many APIs (`HashSet`, `BTreeMap` \
-                  keys via wrapping) require it. A field whose `Eq`-ness cannot \
-                  be proven — a float (`f32`/`f64`), an imported/unknown type, or \
-                  a generic type parameter — leaves the type exempt, since adding \
-                  `Eq` would not compile.",
+                  keys via wrapping) require it. The rule reports only a type \
+                  reachable from outside the crate. On a crate-private type, \
+                  whoever needs `Eq` adds it in place; across the crate \
+                  boundary the orphan rule stops a consumer from doing the \
+                  same, which is why this runs at error severity. A \
+                  field whose `Eq`-ness cannot be proven — a float (`f32`/`f64`), \
+                  an imported/unknown type, or a generic type parameter — leaves \
+                  the type exempt, since adding `Eq` would not compile.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["rust"],

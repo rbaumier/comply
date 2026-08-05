@@ -397,11 +397,14 @@ mod tests {
         // Regression for #6534 (tempfile): `pub fn create(dir: &Path)` lives in
         // `src/file/imp/unix.rs`, which is pulled in by a bare (non-`pub`)
         // `mod platform;` carrying a `#[cfg_attr(…, path = "unix.rs")]` rename in
-        // the parent `mod.rs`. The function is therefore unreachable outside the
-        // crate, so the `impl AsRef<Path>` suggestion buys nothing.
+        // the parent `mod.rs`. `pub use self::platform::*;` lifts it into `imp`,
+        // but `mod imp;` in `src/file/mod.rs` is private too, so the function is
+        // unreachable outside the crate and the `impl AsRef<Path>` suggestion
+        // buys nothing.
         let dir = tempfile::TempDir::new().unwrap();
         let imp = dir.path().join("src/file/imp");
         std::fs::create_dir_all(&imp).unwrap();
+        std::fs::write(dir.path().join("src/file/mod.rs"), "mod imp;\n").unwrap();
         std::fs::write(
             imp.join("mod.rs"),
             "#[cfg_attr(any(unix, target_os = \"wasi\"), path = \"unix.rs\")]\n\
@@ -421,12 +424,12 @@ mod tests {
     #[test]
     fn allows_pub_fs_function_in_bare_mod_declared_file() {
         // The stem-matched multi-file case: `mod helper;` (bare, no `#[path]`) in
-        // the parent `mod.rs` declares `helper.rs` as a private module, so its
-        // top-level `pub fn` is crate-internal.
+        // the parent `mod.rs` declares `helper.rs` as a private module and does
+        // not re-export through it, so its top-level `pub fn` is crate-internal.
         let dir = tempfile::TempDir::new().unwrap();
         let util = dir.path().join("src/util");
         std::fs::create_dir_all(&util).unwrap();
-        std::fs::write(util.join("mod.rs"), "mod helper;\npub use helper::*;\n").unwrap();
+        std::fs::write(util.join("mod.rs"), "mod helper;\n").unwrap();
         let helper = util.join("helper.rs");
         let source = "pub fn load(p: &Path) -> Vec<u8> { fs::read(p).unwrap() }";
         std::fs::write(&helper, source).unwrap();

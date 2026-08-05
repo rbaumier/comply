@@ -6139,7 +6139,7 @@ pub(crate) fn source_declares_no_std(src: &str) -> bool {
 /// respectively) and is written either inside that directory
 /// (`<d>/{mod,lib,main}.rs`) or, in the Rust-2018 flat form, as the directory's
 /// sibling file `<d>.rs`.
-fn rust_module_parent_candidates(path: &Path) -> Option<(String, Vec<PathBuf>)> {
+pub(crate) fn rust_module_parent_candidates(path: &Path) -> Option<(String, Vec<PathBuf>)> {
     let file_name = path.file_name()?.to_str()?;
     let dir = path.parent()?;
 
@@ -6170,7 +6170,7 @@ fn rust_module_parent_candidates(path: &Path) -> Option<(String, Vec<PathBuf>)> 
 /// a directory level or lands on the current directory's own module file, from
 /// which the next link must move up, so the walk terminates on its own; the
 /// bound only caps the disk reads a pathologically deep layout would cost.
-const RUST_MODULE_CHAIN_MAX_DEPTH: usize = 32;
+pub(crate) const RUST_MODULE_CHAIN_MAX_DEPTH: usize = 32;
 
 /// True when some link in the chain of `mod` declarations reaching `path` from
 /// the crate root is gated on `cfg(test)`. Walks child → parent, reading each
@@ -6235,7 +6235,7 @@ fn source_gates_module_on_cfg_test(parent_src: &str, name: &str) -> Option<bool>
 
 /// Parse `src` with the Rust grammar, or `None` when the grammar cannot be
 /// loaded or the parse is aborted.
-fn parse_rust_source(src: &str) -> Option<tree_sitter::Tree> {
+pub(crate) fn parse_rust_source(src: &str) -> Option<tree_sitter::Tree> {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
     parser.parse(src, None)

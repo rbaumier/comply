@@ -7,7 +7,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    has_doc_hidden, has_test_attribute, is_in_test_context, is_under_tests_dir,
+    crate_has_external_consumers, has_doc_hidden, has_test_attribute, is_in_test_context,
+    is_under_tests_dir,
 };
 use std::path::{Path, PathBuf};
 
@@ -91,25 +92,11 @@ impl AstCheck for Check {
         if crate::rules::path_utils::has_vendored_source_banner(ctx.source) {
             return;
         }
-        // Binary-only crate (no `[lib]` target): no external consumers, so
-        // adding a variant is never a SemVer break.
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_binary_only())
-        {
-            return;
-        }
-        // Proc-macro crate (`[lib] proc-macro = true`): Rust only lets such a
-        // crate export procedural macros, so downstream crates cannot import an
-        // ordinary `pub` type from it. The enum is reachable only inside the
-        // crate, making `#[non_exhaustive]` (a cross-crate API attribute)
-        // pointless.
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_proc_macro())
-        {
+        // A binary-only crate (no `[lib]` target) has no external consumers, and
+        // a `proc-macro` crate can export only macros, so no downstream crate
+        // can import the enum. Adding a variant is never a SemVer break there,
+        // and `#[non_exhaustive]` (a cross-crate API attribute) is pointless.
+        if !crate_has_external_consumers(ctx.project, ctx.path) {
             return;
         }
         if is_internal_crate(ctx.path) {

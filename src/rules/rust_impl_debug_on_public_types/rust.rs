@@ -64,8 +64,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    has_clippy_allow, has_doc_hidden, has_test_attribute, is_effectively_pub, is_in_test_context,
-    macro_body, split_top_level_args,
+    crate_has_external_consumers, has_clippy_allow, has_doc_hidden, has_test_attribute,
+    is_effectively_pub, is_in_test_context, macro_body, split_top_level_args,
 };
 
 /// Outer attributes that are language/std built-ins or a well-known derive-helper
@@ -139,16 +139,6 @@ impl AstCheck for Check {
     ) {
         let source_bytes = ctx.source.as_bytes();
         let kind = node.kind();
-        // Effective visibility is the product of the item's own `pub` modifier
-        // and every enclosing module's. A bare-`pub` item confined to a
-        // non-public module is unreachable by external consumers, so the rule's
-        // "consumers can't log it" rationale does not apply. `is_effectively_pub`
-        // walks ancestor `mod_item` nodes for the inline form
-        // (`mod priv { pub struct … }`) AND, via `path`, resolves the cross-file
-        // form where the file is pulled in by a non-`pub` `mod foo;` in its parent.
-        if !is_effectively_pub(node, source_bytes, ctx.path) {
-            return;
-        }
         if ctx.path.components().any(|c| {
             c.as_os_str() == "tests" || c.as_os_str() == "benches"
         }) {
@@ -160,23 +150,23 @@ impl AstCheck for Check {
         {
             return;
         }
-        // A `proc-macro = true` crate can export only procedural macros; its
-        // `pub` types are unreachable by any consumer, so "consumers can't
-        // debug it" is structurally inapplicable.
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_proc_macro())
-        {
+        // A binary-only crate (no `[lib]` target, no `src/lib.rs`) and a
+        // `proc-macro` crate (whose only exports are macros) have no consumer
+        // that could hold the type, so "consumers can't debug it" is
+        // structurally inapplicable.
+        if !crate_has_external_consumers(ctx.project, ctx.path) {
             return;
         }
-        // A binary-only crate (no `[lib]` target, no `src/lib.rs`) has no external
-        // consumers, so "consumers can't debug it" is structurally inapplicable.
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_binary_only())
-        {
+        // Effective visibility is the product of the item's own `pub` modifier
+        // and every enclosing module's. A bare-`pub` item confined to a
+        // non-public module is unreachable by external consumers, so the rule's
+        // "consumers can't log it" rationale does not apply. `is_effectively_pub`
+        // walks ancestor `mod_item` nodes for the inline form
+        // (`mod priv { pub struct … }`) AND, via `path`, resolves the cross-file
+        // form where the file is pulled in by a non-`pub` `mod foo;` in its
+        // parent. It reads those parent files from disk, so it runs after the
+        // cheap guards above.
+        if !is_effectively_pub(node, source_bytes, ctx.path) {
             return;
         }
         if has_doc_hidden(node, source_bytes) {
@@ -1040,6 +1030,9 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_helpers::{
+        BINARY_ONLY_CARGO_TOML, LIB_CARGO_TOML, PROC_MACRO_CARGO_TOML,
+    };
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         // Use an absolute path with no Cargo.toml ancestor so the binary-only and
@@ -1056,37 +1049,7 @@ mod tests {
     /// `nearest_cargo_manifest` resolves the temp crate's manifest (e.g. for
     /// the `proc-macro = true` exemption).
     fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
-        use std::fs;
-        use tempfile::TempDir;
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
-        fs::create_dir_all(dir.path().join("src")).unwrap();
-        let src_path = dir.path().join("src/x.rs");
-        fs::write(&src_path, source).unwrap();
-        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
-    }
-
-    /// Write `parent_rel` and `child_rel` into a temp crate, then run the rule on
-    /// the child so `is_effectively_pub` can read the parent's `mod` declaration
-    /// off disk (the split-file private-module case).
-    fn run_split_module(
-        parent_rel: &str,
-        parent_src: &str,
-        child_rel: &str,
-        child_src: &str,
-    ) -> Vec<Diagnostic> {
-        use std::fs;
-        use tempfile::TempDir;
-        let dir = TempDir::new().unwrap();
-        for rel in [parent_rel, child_rel] {
-            if let Some(parent) = std::path::Path::new(rel).parent() {
-                fs::create_dir_all(dir.path().join(parent)).unwrap();
-            }
-        }
-        fs::write(dir.path().join(parent_rel), parent_src).unwrap();
-        let child_path = dir.path().join(child_rel);
-        fs::write(&child_path, child_src).unwrap();
-        crate::rules::test_helpers::run_rule(&Check, child_src, &child_path)
+        crate::rules::test_helpers::run_rule_in_crate(&Check, cargo_toml_contents, source)
     }
 
     #[test]
@@ -1367,33 +1330,6 @@ mod tests {
             "a file-level allow of an unrelated lint must not suppress missing-debug"
         );
     }
-
-    const PROC_MACRO_CARGO_TOML: &str = r#"
-[package]
-name = "prost-derive-like"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-proc-macro = true
-"#;
-
-    const LIB_CARGO_TOML: &str = r#"
-[package]
-name = "normal-lib"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name = "normal_lib"
-"#;
-
-    const BINARY_ONLY_CARGO_TOML: &str = r#"
-[package]
-name = "c"
-version = "0.1.0"
-edition = "2021"
-"#;
 
     /// Closes #3960: a `pub` type in a `proc-macro = true` crate is unreachable
     /// by any consumer (prost-derive `field/scalar.rs:585` etc.), so it must
@@ -1853,11 +1789,10 @@ name = "anyhow_like"
     /// the parent `mod` declaration from the path and must suppress it.
     #[test]
     fn suppresses_pub_struct_in_split_file_private_module() {
-        let diags = run_split_module(
-            "src/lib.rs",
-            "mod var;\n",
-            "src/var.rs",
-            "pub struct Var<'a, T: ?Sized>(pub &'a T);\n",
+        let diags = crate::rules::test_helpers::run_rule_in_split_module(
+            &Check,
+            ("src/lib.rs", "mod var;\n"),
+            ("src/var.rs", "pub struct Var<'a, T: ?Sized>(pub &'a T);\n"),
         );
         assert!(
             diags.is_empty(),
@@ -1870,11 +1805,10 @@ name = "anyhow_like"
     /// suppression triggers only on a proven non-public parent declaration.
     #[test]
     fn still_flags_pub_struct_in_split_file_public_module() {
-        let diags = run_split_module(
-            "src/lib.rs",
-            "pub mod var;\n",
-            "src/var.rs",
-            "pub struct Var<'a, T: ?Sized>(pub &'a T);\n",
+        let diags = crate::rules::test_helpers::run_rule_in_split_module(
+            &Check,
+            ("src/lib.rs", "pub mod var;\n"),
+            ("src/var.rs", "pub struct Var<'a, T: ?Sized>(pub &'a T);\n"),
         );
         assert_eq!(
             diags.len(),

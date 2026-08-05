@@ -341,6 +341,35 @@ fn is_examples_segment(seg: &str) -> bool {
     seg == "examples" || seg.starts_with("examples_") || seg.ends_with("_examples")
 }
 
+/// True when `path` sits outside a package's `src/`, under an `examples/` (or a
+/// disabled variant, see [`is_examples_segment`]), `benches/` or `tests/`
+/// directory. Cargo compiles each file there into a crate of its own, and a
+/// parked `examples_disabled/` is compiled into nothing at all, so no consumer
+/// that links the package can name their `pub` items. The whole subtree counts,
+/// not just the target file: `tests/common/mod.rs` is a module of an
+/// integration-test crate.
+///
+/// A directory of the same name inside `src/` is an ordinary module —
+/// `src/tests/helper.rs`, `src/examples/mod.rs` — whose items are as reachable
+/// as any other, so a `src` segment before the match disqualifies the path.
+pub fn is_cargo_non_library_target_dir_path(path: &Path) -> bool {
+    for component in path.components() {
+        let std::path::Component::Normal(segment) = component else {
+            continue;
+        };
+        let Some(segment) = segment.to_str() else {
+            continue;
+        };
+        if segment == "src" {
+            return false;
+        }
+        if segment == "benches" || segment == "tests" || is_examples_segment(segment) {
+            return true;
+        }
+    }
+    false
+}
+
 /// True when `path` is a Cargo binary target file: a file sitting directly in a
 /// `src/bin/` directory (the immediate parent is `bin` and the directory above
 /// it is `src`, e.g. `src/bin/stdio-fixture.rs` or a workspace member's
