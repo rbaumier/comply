@@ -3349,14 +3349,37 @@ fn find_binding_type_before(node: Node, limit: usize, name: &str, source: &[u8])
     None
 }
 
+/// Whether `pattern` binds the name `name` anywhere inside it.
+///
+/// A binding is spelled either as an `identifier` or, for a struct field written
+/// in shorthand (`bar` in `Foo { bar }`), as a `shorthand_field_identifier`. The
+/// shorthand names the binding and the field at once, so it counts as both.
+///
+/// The path a pattern matches against names a type, not a binding, so it is cut:
+/// the `type` field of a tuple-struct or struct pattern (`Out` in `Out(x)`) and
+/// every segment of a `scoped_identifier` (`io::ErrorKind::NotFound`). A bare path
+/// that names a unit struct, a unit variant or a const is spelled exactly like a
+/// binding in pattern position and is read as one.
+///
+/// `no_all_duplicated_branches::pattern_bound_names` reads the same binder kinds
+/// and makes the same two cuts, collecting the names instead of testing for one;
+/// a binder kind added to one belongs in the other. It walks `named_children`
+/// where this walks `children`, which changes nothing: no anonymous token is a
+/// binder kind or holds one.
 pub(crate) fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool {
-    if pattern.kind() == "identifier" {
-        return pattern.utf8_text(source).is_ok_and(|text| text == name);
+    match pattern.kind() {
+        "identifier" | "shorthand_field_identifier" => {
+            return pattern.utf8_text(source).is_ok_and(|text| text == name);
+        }
+        "scoped_identifier" => return false,
+        _ => {}
     }
 
+    let constructor_path_id = pattern.child_by_field_name("type").map(|node| node.id());
     let mut cursor = pattern.walk();
     pattern
         .children(&mut cursor)
+        .filter(|child| Some(child.id()) != constructor_path_id)
         .any(|child| pattern_contains_identifier(child, name, source))
 }
 
@@ -4638,18 +4661,22 @@ pub fn cast_operand_is_for_range_bounded(cast: Node, source: &[u8]) -> bool {
 }
 
 /// True if ascending from `child` into `parent` crosses a *pattern* binding of
-/// `name` that shadows an outer loop variable: a `match_arm` whose pattern binds
-/// `name` and whose `value` body contains the cast, or an `if`/`while` expression
-/// reached through its guarded body whose condition is (or contains) a
-/// `let_condition` binding `name` (`if let Some(n) = …`). Such a binding rebinds
-/// `name` to an unrelated value, so a `for`-range exemption above it is unsound.
+/// `name`, which rebinds it to an unrelated value: a `match_arm` whose `value`
+/// body contains `child` and whose pattern or `if let` guard binds `name` (see
+/// [`match_arm_pattern_binds`]), or an `if`/`while` expression reached through its
+/// guarded body whose condition is (or contains) a `let_condition` binding `name`
+/// (`if let Some(n) = …`). Callers use it to stop at the scope that owns the name:
+/// a `for`-range exemption above such a binding is unsound, and so is resolving a
+/// binding's value past one.
 fn intervening_pattern_binds_name(parent: Node, child: Node, name: &str, source: &[u8]) -> bool {
     match parent.kind() {
         "match_arm" => {
             parent.child_by_field_name("value") == Some(child)
                 && parent
                     .child_by_field_name("pattern")
-                    .is_some_and(|p| pattern_contains_identifier(p, name, source))
+                    .is_some_and(|match_pattern| {
+                        match_arm_pattern_binds(match_pattern, name, source)
+                    })
         }
         "if_expression" | "while_expression" => {
             let entered_body = parent.child_by_field_name("consequence") == Some(child)
@@ -4663,13 +4690,29 @@ fn intervening_pattern_binds_name(parent: Node, child: Node, name: &str, source:
     }
 }
 
-/// True if an `if`/`while` condition `c` is — or, in a `let_chain` of `&&`-joined
-/// conditions, directly contains — a `let_condition` (`let <pattern> = <expr>`)
-/// whose pattern binds `name`. Only the top-level condition and direct `let_chain`
-/// members are inspected: a `let` binding is in scope in the guarded body only at
-/// those positions, so a `let_condition` nested inside a sub-expression (e.g. a
-/// bool-valued inner `if let`) is correctly ignored — its binding does not reach
-/// the body.
+/// True if a `match_arm`'s `match_pattern` binds `name` for the arm's body: in the
+/// pattern itself, or in an `if let` guard, whose binding reaches the body too.
+///
+/// The pattern is the wrapper's first child by the grammar's `seq`, taken with
+/// `child` rather than `named_child` because the wildcard `_` is an anonymous
+/// token and skipping it would land on the guard. A guard that only *reads* a name
+/// binds nothing, so `_ if w.is_empty()` leaves `w` denoting the binding outside.
+fn match_arm_pattern_binds(match_pattern: Node, name: &str, source: &[u8]) -> bool {
+    match_pattern
+        .child(0)
+        .is_some_and(|pattern| pattern_contains_identifier(pattern, name, source))
+        || match_pattern
+            .child_by_field_name("condition")
+            .is_some_and(|guard| condition_let_binds_name(guard, name, source))
+}
+
+/// True if a condition `c` — an `if`/`while` condition or a `match` arm's guard —
+/// is, or in a `let_chain` of `&&`-joined conditions directly contains, a
+/// `let_condition` (`let <pattern> = <expr>`) whose pattern binds `name`. Only the
+/// top-level condition and direct `let_chain` members are inspected: a `let`
+/// binding is in scope in the guarded body only at those positions, so a
+/// `let_condition` nested inside a sub-expression (e.g. a bool-valued inner
+/// `if let`) is correctly ignored — its binding does not reach the body.
 fn condition_let_binds_name(c: Node, name: &str, source: &[u8]) -> bool {
     let binds = |lc: Node| {
         lc.child_by_field_name("pattern")
@@ -8082,13 +8125,16 @@ fn let_binds_vec(let_node: Node, var: &str, source: &[u8]) -> bool {
     {
         return true;
     }
-    if let Some(value) = let_node.child_by_field_name("value") {
-        let text = value.utf8_text(source).unwrap_or("");
-        if text.starts_with("Vec::") || text.starts_with("vec!") {
-            return true;
-        }
-    }
-    false
+    let_node
+        .child_by_field_name("value")
+        .is_some_and(|value| expression_yields_vec(value, source))
+}
+
+/// Whether `expr` evaluates to a `Vec` — a `Vec::…` constructor call or a
+/// `vec![…]` literal.
+fn expression_yields_vec(expr: Node, source: &[u8]) -> bool {
+    let text = expr.utf8_text(source).unwrap_or("");
+    text.starts_with("Vec::") || text.starts_with("vec!")
 }
 
 /// True if a local `let` binding named `var`, declared before `node` in an
@@ -8160,6 +8206,256 @@ pub fn local_let_binds_buffer(node: Node, var: &str, source: &[u8]) -> bool {
     false
 }
 
+/// The expression a local binding for `var`, visible at `node`, takes its value
+/// from — `None` when no binding for `var` is reachable in the file.
+///
+/// The search runs over the enclosing scopes of the current file, innermost
+/// first, and follows the two forms that give a binding its value:
+/// - a `let` declaration that lexically precedes `node`: its initializer;
+/// - a closure parameter seeded by the call the closure is an argument of (see
+///   [`fold_seed_for_closure_parameter`]).
+///
+/// Every binding of `var` shadows the ones outside it — a `let`, a closure
+/// parameter, or a `for`/`if let`/`while let`/`match` pattern alike — so the
+/// search reports what the innermost one holds, or nothing when that binding's
+/// value is not resolvable. Reporting an outer binding there would describe a
+/// value the code no longer names.
+///
+/// A rebinding that just renames or reborrows (`let out = &mut out;`) is followed
+/// to what it renames, so the chain reports the value rather than the alias.
+///
+/// The walk stops at an enclosing `function_item`: a nested `fn` captures nothing
+/// from the fn around it, so a same-named local out there denotes something else.
+///
+/// Callers classify the returned expression themselves (see
+/// [`expression_yields_buffer`]), which keeps one answer to "where does this
+/// binding's value come from" serving every classification.
+pub fn local_binding_init_expression<'tree>(
+    node: Node<'tree>,
+    var: &str,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    let mut origin = nearest_binding_init_expression(node, var, source)?;
+    for _ in 0..MAX_REBINDING_HOPS {
+        let Some(alias) = rebound_identifier(origin, source) else {
+            break;
+        };
+        let Some(next) = nearest_binding_init_expression(origin, alias, source) else {
+            break;
+        };
+        origin = next;
+    }
+    Some(origin)
+}
+
+/// How many renaming rebindings [`local_binding_init_expression`] follows. Each
+/// hop resolves from the initializer's own position, which lies strictly before
+/// the one it came from, so a chain ends on its own; the bound keeps the walk
+/// linear on a file that stacks hundreds of renames, at the price of leaving a
+/// deeper chain unresolved.
+const MAX_REBINDING_HOPS: usize = 8;
+
+/// The name a rebinding initializer renames, when the initializer is a bare
+/// identifier (`let out = out;`) or a borrow of one (`let out = &mut out;`). Both
+/// forms carry the value of another binding without changing it.
+fn rebound_identifier<'a>(expr: Node, source: &'a [u8]) -> Option<&'a str> {
+    let named = match expr.kind() {
+        "identifier" => expr,
+        "reference_expression" => expr.child_by_field_name("value")?,
+        _ => return None,
+    };
+    if named.kind() != "identifier" {
+        return None;
+    }
+    named.utf8_text(source).ok()
+}
+
+/// The innermost binding's initializer, without following a rebinding chain (see
+/// [`local_binding_init_expression`], the only caller, for the full contract).
+fn nearest_binding_init_expression<'tree>(
+    node: Node<'tree>,
+    var: &str,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        if child.kind() == "function_item" {
+            return None;
+        }
+        match binding_site_at(parent, child, var, source) {
+            Some(BindingSite::Value(value)) => return Some(value),
+            Some(BindingSite::Opaque) => return None,
+            None => child = parent,
+        }
+    }
+    None
+}
+
+/// What a scope contributes to the walk in [`nearest_binding_init_expression`].
+enum BindingSite<'tree> {
+    /// A binding whose value the walk can follow.
+    Value(Node<'tree>),
+    /// A binding that hides the outer ones without resolving to a value.
+    Opaque,
+}
+
+/// The binding of `var` that `parent` declares over `child`: a `let` that
+/// precedes `child`, a closure parameter, or a `for`/`if let`/`while let`/`match`
+/// pattern.
+///
+/// A pattern that destructures (`let Some(w) = … else`, `let (a, w) = …`, a
+/// closure parameter outside a seeded fold) binds a part of a value this walk
+/// does not follow, so it reports [`BindingSite::Opaque`]. Answering with an
+/// outer binding there would describe a value the code no longer names.
+fn binding_site_at<'tree>(
+    parent: Node<'tree>,
+    child: Node<'tree>,
+    var: &str,
+    source: &[u8],
+) -> Option<BindingSite<'tree>> {
+    if let Some(site) = preceding_let_binding(parent, child, var, source) {
+        return Some(site);
+    }
+    match parent.kind() {
+        "closure_expression" if closure_parameters_bind(parent, var, source) => Some(
+            fold_seed_for_closure_parameter(parent, var, source)
+                .map_or(BindingSite::Opaque, BindingSite::Value),
+        ),
+        // `for w in ws` — the loop pattern rebinds the name over the loop.
+        "for_expression"
+            if parent
+                .child_by_field_name("pattern")
+                .is_some_and(|pattern| pattern_contains_identifier(pattern, var, source)) =>
+        {
+            Some(BindingSite::Opaque)
+        }
+        // `if let Some(w) = o`, `while let`, `match … { w => … }` — the same
+        // rebinding, reached through the body the pattern guards.
+        _ if intervening_pattern_binds_name(parent, child, var, source) => {
+            Some(BindingSite::Opaque)
+        }
+        _ => None,
+    }
+}
+
+/// The last `let` among `parent`'s children before `child` whose pattern names
+/// `var`: [`BindingSite::Value`] when a plain `w` / `mut w` pattern has an
+/// initializer, [`BindingSite::Opaque`] otherwise — a destructuring pattern, or a
+/// deferred `let mut w;` — since neither gives the walk a value to follow.
+fn preceding_let_binding<'tree>(
+    parent: Node<'tree>,
+    child: Node<'tree>,
+    var: &str,
+    source: &[u8],
+) -> Option<BindingSite<'tree>> {
+    let mut cursor = parent.walk();
+    let mut site = None;
+    for sib in parent.children(&mut cursor) {
+        if sib.id() == child.id() {
+            break;
+        }
+        if sib.kind() == "let_declaration"
+            && let Some(pattern) = sib.child_by_field_name("pattern")
+            && pattern_contains_identifier(pattern, var, source)
+        {
+            site = Some(match sib.child_by_field_name("value") {
+                Some(value) if let_pattern_binds(pattern, var, source) => BindingSite::Value(value),
+                _ => BindingSite::Opaque,
+            });
+        }
+    }
+    site
+}
+
+/// Whether any parameter of `closure` binds the name `var`. Such a parameter
+/// shadows an outer binding of that name for the whole closure body.
+fn closure_parameters_bind(closure: Node, var: &str, source: &[u8]) -> bool {
+    let Some(parameters) = closure.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = parameters.walk();
+    parameters
+        .named_children(&mut cursor)
+        .filter_map(closure_parameter_pattern)
+        .any(|pattern| pattern_contains_identifier(pattern, var, source))
+}
+
+/// The pattern a closure parameter binds. An annotated parameter (`|mut acc:
+/// String, x|`) wraps its pattern in a `parameter` node; an un-annotated one is
+/// the pattern itself. Comments are named nodes and bind nothing.
+fn closure_parameter_pattern(parameter: Node<'_>) -> Option<Node<'_>> {
+    if is_comment_node(parameter) {
+        return None;
+    }
+    match parameter.kind() {
+        "parameter" => parameter.child_by_field_name("pattern"),
+        _ => Some(parameter),
+    }
+}
+
+/// The seed expression bound to `closure`'s accumulator parameter when `closure`
+/// is the folding argument of a seeded fold and that parameter is named `var`.
+///
+/// `Iterator::fold(init, f)`, `try_fold(init, f)` and `scan(init, f)` all declare
+/// `f`'s first parameter from the first argument — the accumulator itself for
+/// `fold`/`try_fold`, a `&mut` to it for `scan` — so the accumulator's value
+/// originates at that argument: `.fold(String::new(), |acc, x| …)` gives `acc` a
+/// `String`. The method name selects that signature: the argument shape alone
+/// does not, since `map_or(default, f)`/`unwrap_or_else` place a value and a
+/// closure the same way while binding the closure's parameter to something else
+/// entirely. An inherent method that borrows one of those three names for another
+/// signature therefore resolves to the wrong seed; the cost is a missed
+/// diagnostic, the direction callers of this module already accept.
+///
+/// Requires `var` to name the closure's *first* parameter and the closure to be
+/// the *second of exactly two* arguments, the shape those three signatures have.
+/// The second parameter is the iterator item, about which the seed says nothing,
+/// and a destructuring parameter binds a part of the seed rather than the seed, so
+/// neither resolves here. An annotated parameter (`|acc: String, x|`) states its
+/// own type, which is both stronger than the seed and able to contradict it, so it
+/// resolves to nothing here and leaves the annotation to speak.
+fn fold_seed_for_closure_parameter<'tree>(
+    closure: Node<'tree>,
+    var: &str,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    let parameters = closure.child_by_field_name("parameters")?;
+    let mut param_cursor = parameters.walk();
+    let accumulator = parameters
+        .named_children(&mut param_cursor)
+        .find(|parameter| !is_comment_node(*parameter))?;
+    // The raw parameter, not its pattern: an annotated one (`|acc: File, x|`) is
+    // a `parameter` node, which `let_pattern_binds` rejects, so the seed never
+    // speaks over the type the parameter states itself.
+    if !let_pattern_binds(accumulator, var, source) {
+        return None;
+    }
+
+    let arguments = closure.parent().filter(|p| p.kind() == "arguments")?;
+    let call = arguments
+        .parent()
+        .filter(|p| p.kind() == "call_expression")?;
+    let method = call
+        .child_by_field_name("function")
+        .filter(|function| function.kind() == "field_expression")?
+        .child_by_field_name("field")?;
+    if !matches!(method.utf8_text(source), Ok("fold" | "try_fold" | "scan")) {
+        return None;
+    }
+
+    // Comments are named nodes, so they are filtered out to keep the argument
+    // positions the ones the signature talks about.
+    let mut arg_cursor = arguments.walk();
+    let mut args = arguments
+        .named_children(&mut arg_cursor)
+        .filter(|arg| !is_comment_node(*arg));
+    let seed = args.next()?;
+    if args.next()?.id() != closure.id() || args.next().is_some() {
+        return None;
+    }
+    Some(seed)
+}
+
 /// Whether `let_node` declares `var` with a `String`-shaped initializer
 /// (`String::new()`/`String::with_capacity(..)`/`String::from(..)`, `format!(..)`,
 /// or an `<expr>.to_string()` call — all of which yield a `String`) or an explicit
@@ -8176,19 +8472,24 @@ fn let_binds_string(let_node: Node, var: &str, source: &[u8]) -> bool {
     {
         return true;
     }
-    if let Some(value) = let_node.child_by_field_name("value") {
-        let text = value.utf8_text(source).unwrap_or("");
-        if text.starts_with("String::") || text.starts_with("format!") {
-            return true;
-        }
-        // `let buf = <expr>.to_string();` binds a `String`: `ToString::to_string`
-        // (via `Display`) always yields a `String`, so the binding is a `String`
-        // buffer regardless of the receiver expression.
-        if is_to_string_call(value, source) {
-            return true;
-        }
-    }
-    false
+    let_node
+        .child_by_field_name("value")
+        .is_some_and(|value| expression_yields_string(value, source))
+}
+
+/// Whether `expr` evaluates to a `String` — a `String::…` constructor call, a
+/// `format!(…)` invocation, or an `<expr>.to_string()` call (`ToString::to_string`
+/// always yields a `String`, whatever the receiver).
+fn expression_yields_string(expr: Node, source: &[u8]) -> bool {
+    let text = expr.utf8_text(source).unwrap_or("");
+    text.starts_with("String::") || text.starts_with("format!") || is_to_string_call(expr, source)
+}
+
+/// Whether `expr` evaluates to an in-memory buffer — a `String` or a `Vec`.
+/// Writing to either through `fmt::Write`/`io::Write` cannot fail, so a caller
+/// that resolves a writer to such an expression knows its `Result` is `Ok(())`.
+pub fn expression_yields_buffer(expr: Node, source: &[u8]) -> bool {
+    expression_yields_string(expr, source) || expression_yields_vec(expr, source)
 }
 
 /// Whether `node` is an `<expr>.to_string()` method call — a `call_expression`
@@ -11095,6 +11396,117 @@ mod tests {
                 local_let_binds_vec(for_node, var, src.as_bytes()),
                 expected,
                 "local_let_binds_vec mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn local_binding_init_expression_reports_the_innermost_binding_value() {
+        // Anchor on the `probe!()` invocation, mirroring how a caller resolves an
+        // identifier from where it is used. `None` is "the innermost binding of
+        // this name holds something unresolvable", never "an outer one holds".
+        let cases = [
+            ("fn f() { let w = S::new(); probe!(w); }", "w", Some("S::new()")),
+            // The last `let` preceding the use wins over an earlier one.
+            (
+                "fn f() { let w = S::new(); let w = File::create(p); probe!(w); }",
+                "w",
+                Some("File::create(p)"),
+            ),
+            // A `let` that follows the use binds nothing at the use site.
+            ("fn f() { probe!(w); let w = S::new(); }", "w", None),
+            // A destructuring `let` binds a part of its initializer, so it hides
+            // an outer binding without resolving to one.
+            (
+                "fn f() { let w = S::new(); let Some(w) = o else { return }; probe!(w); }",
+                "w",
+                None,
+            ),
+            ("fn f() { let w = S::new(); let (a, w) = t; probe!(w); }", "w", None),
+            // A struct field in shorthand (`T { w }`) is the binding itself.
+            ("fn f() { let w = S::new(); let T { w } = t; probe!(w); }", "w", None),
+            // A `let` with no initializer resolves to nothing, and still shadows.
+            ("fn f() { let w = S::new(); let mut w; probe!(w); }", "w", None),
+            // A path names the type matched against, not a binding — as the
+            // tuple-struct `type` field, and as a bare scoped path.
+            (
+                "fn f() { let w = S::new(); let w::T(n) = y; probe!(w); }",
+                "w",
+                Some("S::new()"),
+            ),
+            (
+                "fn f() { let w = S::new(); match k { w::Kind::A => { probe!(w); } } }",
+                "w",
+                Some("S::new()"),
+            ),
+            // A guarded arm, with a named pattern and with the wildcard.
+            (
+                "fn f() { let w = S::new(); match n { x if w.is_empty() => { probe!(w); } } }",
+                "w",
+                Some("S::new()"),
+            ),
+            (
+                "fn f() { let w = S::new(); match n { _ if w.is_empty() => { probe!(w); } } }",
+                "w",
+                Some("S::new()"),
+            ),
+            // An `if let` guard, which does bind.
+            (
+                "fn f() { let w = S::new(); match n { _ if let Some(w) = o => { probe!(w); } } }",
+                "w",
+                None,
+            ),
+            // A rebinding that renames reports the value, not the alias.
+            (
+                "fn f() { let w = S::new(); let w = &mut w; probe!(w); }",
+                "w",
+                Some("S::new()"),
+            ),
+            // A nested `fn` captures nothing from the fn around it.
+            ("fn o() { let w = S::new(); fn i() { probe!(w); } }", "w", None),
+            // A seeded fold binds its closure's first parameter to its first
+            // argument — but only that parameter, and only for that signature.
+            (
+                "fn f() { xs.fold(S::new(), |w, x| { probe!(w); }); }",
+                "w",
+                Some("S::new()"),
+            ),
+            ("fn f() { xs.fold(S::new(), |a, w| { probe!(w); }); }", "w", None),
+            ("fn f() { x.map_or(S::new(), |w| { probe!(w); }); }", "w", None),
+            // An annotated parameter states its own type; the seed says nothing
+            // stronger, so the annotation is left to speak.
+            (
+                "fn f() { xs.fold(S::new(), |w: File, x| { probe!(w); }); }",
+                "w",
+                None,
+            ),
+            // A pattern binding shadows an outer `let` of the same name only.
+            ("fn f() { let w = S::new(); for w in ws { probe!(w); } }", "w", None),
+            (
+                "fn f() { let w = S::new(); if let Some(w) = o { probe!(w); } }",
+                "w",
+                None,
+            ),
+            (
+                "fn f() { let w = S::new(); match o { w => { probe!(w); } } }",
+                "w",
+                None,
+            ),
+            (
+                "fn f() { let w = S::new(); for x in ws { probe!(w); } }",
+                "w",
+                Some("S::new()"),
+            ),
+        ];
+        for (src, var, expected) in cases {
+            let tree = parse(src);
+            let probe = first_of_kind(tree.root_node(), "macro_invocation")
+                .expect("snippet should contain a macro invocation");
+            let origin = local_binding_init_expression(probe, var, src.as_bytes())
+                .map(|node| node.utf8_text(src.as_bytes()).expect("valid utf8"));
+            assert_eq!(
+                origin, expected,
+                "local_binding_init_expression mismatch for `{src}`"
             );
         }
     }

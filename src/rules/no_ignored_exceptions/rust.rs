@@ -43,12 +43,14 @@
 //!   a best-effort write to a standard stream. These run in error-reporting
 //!   paths (panic/signal handlers, `Drop`, fallback loggers) where an I/O error
 //!   has nowhere to be propagated or reported, so `let _ =` intentionally drops
-//!   it. Scoped to receiver chains rooted at `stderr()`/`stdout()` so a plain
+//!   it. Scoped to receiver chains rooted at `stderr()`/`stdout()`, seen through
+//!   any intermediate call (`.lock()`) and through the bindings that name the
+//!   handle (`let out = io::stdout(); let mut lock = out.lock();`), so a plain
 //!   `let _ = file.write_all(..)` still fires. The macro spellings of the same
 //!   idiom are also exempt: `print!`/`println!`/`eprint!`/`eprintln!` target a
-//!   standard stream by definition, and `write!`/`writeln!` only when their
-//!   first argument (the writer) roots at `stderr()`/`stdout()` — so a plain
-//!   `let _ = writeln!(file, ..)` to an ordinary writer still fires.
+//!   standard stream by definition, and `write!`/`writeln!` when their first
+//!   argument (the writer) roots at `stderr()`/`stdout()` the same way — so a
+//!   plain `let _ = writeln!(file, ..)` to an ordinary writer still fires.
 //! - `let _ = expr.write_str(..)` / `let _ = expr.write_char(..)`: the
 //!   `core::fmt::Write` trait methods. Writing to an in-memory buffer (`String`,
 //!   `fmt::Formatter`, a `Vec<u8>` wrapper) yields a `fmt::Result` that is
@@ -62,11 +64,11 @@
 //!   exemption. An in-memory write yields a `Result` that is structurally
 //!   `Ok(())`, so `let _ =` drops an always-Ok unit, not an error. The writer is
 //!   the first macro argument; it is exempt only when it provably resolves (from
-//!   the AST) to a `String`/`fmt::Formatter`/`Vec<u8>`: a local `let` initialized
-//!   with `String::…`/`format!(…)` (or annotated `String`/`Vec<…>`), or a
-//!   parameter/`let` annotated `String`/`&mut String`/`fmt::Formatter`/`Vec<u8>`.
-//!   A fallible `io::Write` writer (`File`, `BufWriter`, socket) or an
-//!   unresolvable writer still fires.
+//!   the AST) to a `String`/`fmt::Formatter`/`Vec<u8>`: a parameter/`let`
+//!   annotated `String`/`&mut String`/`fmt::Formatter`/`Vec<u8>`, or a binding
+//!   whose value comes from a `String::…`/`format!(…)`/`<expr>.to_string()`/
+//!   `Vec::…`/`vec![…]` expression. A fallible `io::Write` writer (`File`,
+//!   `BufWriter`, socket) or an unresolvable writer still fires.
 //! - `let _ = expr.ok()` / `let _ = expr.err()`: the terminal method is the
 //!   `Result::ok`/`Result::err` combinator, which converts a `Result<T, E>` into
 //!   an `Option<T>`/`Option<E>`, structurally discarding the opposite arm. Its
@@ -135,6 +137,18 @@
 //!   macro token tree's direct children — no macro-name allowlist — so a plain
 //!   `let _ = macro!(a, b)` with no `in` binding still fires.
 //!
+//! A named writer is resolved once, for the buffer exemption and the std-stream
+//! exemption alike, and in the macro spelling and the method spelling alike:
+//! `rust_helpers::local_binding_init_expression` answers which expression the
+//! binding takes its value from — the initializer of the `let` that binds it, or
+//! the seed a `fold`/`try_fold`/`scan` passes alongside the closure whose
+//! parameter it is (that function's doc holds the reason those three signatures
+//! resolve and other calls of the same shape do not). So
+//! `.fold(String::new(), |mut out, x| { let _ = writeln!(out, ..); out })` reads
+//! as the `String` it is, and `let mut err = io::stderr()` reads as the handle an
+//! inline `io::stderr()` already did. Each exemption then classifies that one
+//! expression, so a binding form either can reach is one both reach.
+//!
 //! The four write/send idioms above are matched where the `Err` is born, not
 //! only on the outermost call, so a producer wrapped in a combinator
 //! (`let _ = iter.try_for_each(|x| tx.send(x))`) is exempt too. See
@@ -148,8 +162,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    find_identifier_type, is_in_kani_proof, is_in_never_fn, is_in_test_context,
-    is_under_tests_dir, local_let_binds_buffer, trait_base_name,
+    expression_yields_buffer, find_identifier_type, is_in_kani_proof, is_in_never_fn,
+    is_in_test_context, is_under_tests_dir, local_binding_init_expression, trait_base_name,
 };
 use tree_sitter::Node;
 
@@ -462,11 +476,7 @@ fn macro_uses_output_param_binding(value: Node, source: &[u8]) -> bool {
     if value.kind() != "macro_invocation" {
         return false;
     }
-    let mut cursor = value.walk();
-    let Some(token_tree) = value
-        .children(&mut cursor)
-        .find(|child| child.kind() == "token_tree")
-    else {
+    let Some(token_tree) = macro_token_tree(value) else {
         return false;
     };
     // Skip the `(`/`[`/`{` … `)`/`]`/`}` delimiters; the binding's output
@@ -758,58 +768,66 @@ fn is_result_to_option_combinator(value: Node, source: &[u8]) -> bool {
 /// `write_str`/`write_char` method exemption.
 ///
 /// The writer is the first comma-delimited macro argument; it is resolved only
-/// when it is a bare identifier, from the enclosing scope: a parameter/`let`
-/// whose annotation is a buffer type (via [`find_identifier_type`]), or a local
-/// `let` whose initializer is `String::…`/`format!(…)`/`Vec::…`/`vec![…]` (via
-/// [`local_let_binds_buffer`]). A fallible `io::Write` writer (`File`,
-/// `BufWriter`, socket), a non-identifier writer (`self.buf`), or an
+/// when it is a bare identifier, from the enclosing scope: an annotation naming a
+/// buffer type (via [`find_identifier_type`]), or the expression the writer's
+/// binding takes its value from (via
+/// [`local_binding_init_expression`][crate::rules::rust_helpers::local_binding_init_expression])
+/// when that expression yields a `String`/`Vec`. A fallible `io::Write` writer
+/// (`File`, `BufWriter`, socket), a non-identifier writer (`self.buf`), or an
 /// unresolvable writer is not matched, so `let _ = writeln!(file, ..)` still
 /// fires.
 fn is_fmt_write_macro_to_buffer(value: Node, source: &[u8]) -> bool {
-    if value.kind() != "macro_invocation" {
+    if value.kind() != "macro_invocation"
+        || !matches!(
+            macro_last_name_segment(value, source),
+            Some("write" | "writeln")
+        )
+    {
         return false;
     }
-    let Some(macro_name_node) = value.child_by_field_name("macro") else {
+    let Some(writer) = macro_token_tree(value).and_then(macro_first_arg_identifier) else {
         return false;
     };
-    let Ok(macro_name) = macro_name_node.utf8_text(source) else {
+    let Ok(name) = writer.utf8_text(source) else {
         return false;
     };
-    let name = macro_name.rsplit("::").next().unwrap_or(macro_name);
-    if !matches!(name, "write" | "writeln") {
-        return false;
-    }
-    // The token tree is an unnamed child (no `token_tree` field exists).
-    let mut cursor = value.walk();
-    let Some(token_tree) = value
-        .children(&mut cursor)
-        .find(|child| child.kind() == "token_tree")
-    else {
-        return false;
-    };
-    let Some(writer) = macro_first_arg_identifier(token_tree, source) else {
-        return false;
-    };
-    // A parameter/`let` annotation resolves the type directly; an un-annotated
-    // local `let` is confirmed via its buffer-shaped initializer.
-    if let Some(ty) = find_identifier_type(value, writer, source)
+    // An annotation resolves the type directly; otherwise the expression the
+    // writer's binding takes its value from settles what the writer holds.
+    if let Some(ty) = find_identifier_type(writer, name, source)
         && is_in_memory_writer_type(&ty)
     {
         return true;
     }
-    local_let_binds_buffer(value, writer, source)
+    local_binding_init_expression(writer, name, source)
+        .is_some_and(|origin| expression_yields_buffer(origin, source))
+}
+
+/// The last segment of a macro invocation's name — `writeln` for both `writeln!`
+/// and a qualified `std::writeln!`.
+fn macro_last_name_segment<'a>(value: Node, source: &'a [u8]) -> Option<&'a str> {
+    let name = value.child_by_field_name("macro")?.utf8_text(source).ok()?;
+    Some(name.rsplit("::").next().unwrap_or(name))
+}
+
+/// A macro invocation's token tree — an unnamed child, so no field name reaches
+/// it.
+fn macro_token_tree(value: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = value.walk();
+    value
+        .children(&mut cursor)
+        .find(|child| child.kind() == "token_tree")
 }
 
 /// The writer of a `write!`/`writeln!` `token_tree` when it is a single bare
 /// identifier. tree-sitter parses the macro body as an opaque token stream, so
-/// the writer appears as the tokens up to the first top-level `,`. Returns the
-/// identifier text only when that segment is exactly one `identifier` token — a
+/// the writer appears as the tokens up to the first top-level `,`. Returns that
+/// identifier node only when the segment is exactly one `identifier` token — a
 /// `self.buf`/`x.y` writer spans several tokens and is deliberately not resolved
 /// here (it stays flagged). Only the token tree's direct children are read, so a
 /// comma nested in a deeper `token_tree` does not end the writer segment early.
-fn macro_first_arg_identifier<'a>(token_tree: Node, source: &'a [u8]) -> Option<&'a str> {
+fn macro_first_arg_identifier(token_tree: Node<'_>) -> Option<Node<'_>> {
     let mut cursor = token_tree.walk();
-    let mut writer: Option<&str> = None;
+    let mut writer: Option<Node<'_>> = None;
     let mut token_count = 0usize;
     for child in token_tree.children(&mut cursor) {
         match child.kind() {
@@ -817,7 +835,7 @@ fn macro_first_arg_identifier<'a>(token_tree: Node, source: &'a [u8]) -> Option<
             "," => break,
             "identifier" => {
                 token_count += 1;
-                writer = child.utf8_text(source).ok();
+                writer = Some(child);
             }
             _ => token_count += 1,
         }
@@ -953,29 +971,21 @@ fn is_std_stream_write_method(value: Node, source: &[u8]) -> bool {
 
 /// Macro form: `print!`/`println!`/`eprint!`/`eprintln!` are unconditionally a
 /// std-stream write; `write!`/`writeln!` only when their first token-tree
-/// argument (the writer) heads at a `stderr()`/`stdout()` call.
+/// argument (the writer) roots at a `stderr()`/`stdout()` call. The writer is
+/// either spelled inline, and the token stream heads at the call, or it is a bare
+/// identifier, which [`receiver_roots_at_std_stream`] resolves the same way it
+/// resolves a method call's receiver.
 fn is_std_stream_write_macro(value: Node, source: &[u8]) -> bool {
-    let Some(macro_name_node) = value.child_by_field_name("macro") else {
+    let Some(name) = macro_last_name_segment(value, source) else {
         return false;
     };
-    let Ok(macro_name) = macro_name_node.utf8_text(source) else {
-        return false;
-    };
-    // Last segment for a qualified `std::writeln!` style invocation.
-    let name = macro_name.rsplit("::").next().unwrap_or(macro_name);
     match name {
         "print" | "println" | "eprint" | "eprintln" => true,
-        "write" | "writeln" => {
-            // The token tree is an unnamed child (no `token_tree` field exists).
-            let mut cursor = value.walk();
-            let Some(token_tree) = value
-                .children(&mut cursor)
-                .find(|child| child.kind() == "token_tree")
-            else {
-                return false;
-            };
+        "write" | "writeln" => macro_token_tree(value).is_some_and(|token_tree| {
             macro_first_arg_heads_at_std_stream(token_tree, source)
-        }
+                || macro_first_arg_identifier(token_tree)
+                    .is_some_and(|writer| receiver_roots_at_std_stream(writer, source))
+        }),
         _ => false,
     }
 }
@@ -1014,10 +1024,26 @@ fn macro_first_arg_heads_at_std_stream(token_tree: Node, source: &[u8]) -> bool 
 }
 
 /// True if the receiver chain bottoms out at a `stderr()`/`stdout()` call,
-/// walking through any intermediate method calls (e.g. `stderr().lock()`).
+/// walking through any intermediate method calls (`stderr().lock()`) and through
+/// the bindings that name the handle (`let out = io::stdout(); let mut lock =
+/// out.lock();`). Resolving a named handle is what keeps the two spellings of one
+/// write in agreement: `writeln!(lock, ..)` and `lock.write_all(..)` reach the
+/// same root. What the binding is called says nothing — only the function the
+/// chain bottoms out in does, read as the callee's last path segment, so a
+/// re-export of the same handle (`anstream::stdout()`) roots it too.
 fn receiver_roots_at_std_stream(mut node: Node, source: &[u8]) -> bool {
-    loop {
+    for _ in 0..MAX_RECEIVER_HOPS {
         match node.kind() {
+            // A named handle — continue from the expression its binding holds.
+            "identifier" => {
+                let Ok(name) = node.utf8_text(source) else {
+                    return false;
+                };
+                let Some(origin) = local_binding_init_expression(node, name, source) else {
+                    return false;
+                };
+                node = origin;
+            }
             "call_expression" => {
                 let Some(function) = node.child_by_field_name("function") else {
                     return false;
@@ -1044,7 +1070,16 @@ fn receiver_roots_at_std_stream(mut node: Node, source: &[u8]) -> bool {
             _ => return false,
         }
     }
+    false
 }
+
+/// How many links [`receiver_roots_at_std_stream`] follows. A named handle costs
+/// two: one to resolve the name, one to descend into the receiver of the call it
+/// holds. Each link moves to a strictly smaller receiver or to a binding declared
+/// strictly earlier, so a chain ends on its own; the bound keeps the walk linear
+/// on a file that stacks hundreds of links, at the price of leaving a deeper
+/// chain unresolved.
+const MAX_RECEIVER_HOPS: usize = 8;
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -1396,6 +1431,14 @@ mod tests {
             }
         "#;
         let string_param = r#"fn append(msg: &mut String) { let _ = writeln!(msg, "r"); }"#;
+        let annotated_closure_param = r#"
+            fn f(items: &[&str]) -> String {
+                items.iter().fold(String::new(), |mut output: String, b| {
+                    let _ = writeln!(output, "{b}");
+                    output
+                })
+            }
+        "#;
         assert!(run_on(format_init).is_empty());
         assert!(run_on(string_new).is_empty());
         assert!(run_on(with_capacity).is_empty());
@@ -1404,6 +1447,7 @@ mod tests {
         assert!(run_on(string_annot).is_empty());
         assert!(run_on(formatter_param).is_empty());
         assert!(run_on(string_param).is_empty());
+        assert!(run_on(annotated_closure_param).is_empty());
     }
 
     #[test]
@@ -1416,9 +1460,465 @@ mod tests {
             r#"fn f() { let mut file = File::create("p").unwrap(); let _ = writeln!(file, "s"); }"#;
         let file_param = r#"fn f(mut file: File) { let _ = writeln!(file, "s"); }"#;
         let unresolved = r#"fn f() { let _ = writeln!(some_unknown_writer, "t"); }"#;
+        // A writer that is not a bare identifier spans several macro tokens and
+        // names no binding, so nothing resolves it.
+        let field_writer = r#"struct S { buf: File } impl S { fn f(&mut self) { let _ = writeln!(self.buf, "s"); } }"#;
         assert_eq!(run_on(file_init).len(), 1);
         assert_eq!(run_on(file_param).len(), 1);
         assert_eq!(run_on(unresolved).len(), 1);
+        assert_eq!(run_on(field_writer).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_write_macro_to_fold_seeded_accumulator() {
+        // Regression for #8364: a seeded fold gives its accumulator the seed's
+        // value (see `rust_helpers::fold_seed_for_closure_parameter`), so this is
+        // the #7200 premise reached through a closure parameter instead of a
+        // `let`. starship's `print.rs:552` shape.
+        let fold = r#"
+            fn preset_list(items: &[&str]) -> String {
+                items.iter().fold(String::new(), |mut output, b| {
+                    let _ = writeln!(output, "{b}");
+                    output
+                })
+            }
+        "#;
+        let try_fold = r#"
+            fn f(items: &[&str]) {
+                let _r = items.iter().try_fold(String::new(), |mut out, b| {
+                    let _ = writeln!(out, "{b}");
+                    Ok(out)
+                });
+            }
+        "#;
+        let scan = r#"
+            fn f(items: &[&str]) {
+                let _v: Vec<_> = items.iter().scan(String::new(), |state, b| {
+                    let _ = write!(state, "{b}");
+                    Some(1)
+                }).collect();
+            }
+        "#;
+        assert!(run_on(fold).is_empty());
+        assert!(run_on(try_fold).is_empty());
+        assert!(run_on(scan).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_write_macro_to_fallible_fold_seed() {
+        // Negative space for #8364: the seed settles what the accumulator holds,
+        // so a fallible seed keeps the write flagged. Nor does the seed reach the
+        // closure's second parameter (the iterator item), a shadowing `let` inside
+        // the closure, or a call whose shape is not one of the three signatures
+        // `rust_helpers::fold_seed_for_closure_parameter` documents.
+        let file_seed = r#"
+            fn f(items: &[&str], p: &str) {
+                let _r = items.iter().fold(File::create(p).unwrap(), |mut w, b| {
+                    let _ = writeln!(w, "{b}");
+                    w
+                });
+            }
+        "#;
+        let item_param = r#"
+            fn f(items: &[File]) -> String {
+                items.iter().fold(String::new(), |out, w| {
+                    let _ = writeln!(w, "x");
+                    out
+                })
+            }
+        "#;
+        let shadowed_in_closure = r#"
+            fn f(items: &[&str], p: &str) -> String {
+                items.iter().fold(String::new(), |output, b| {
+                    let mut output = File::create(p).unwrap();
+                    let _ = writeln!(output, "{b}");
+                    output
+                })
+            }
+        "#;
+        let map_or = r#"
+            fn f(x: Option<File>) {
+                let _r = x.map_or(String::new(), |mut w| {
+                    let _ = writeln!(w, "y");
+                    String::new()
+                });
+            }
+        "#;
+        // An annotation that contradicts the seed is the stronger statement about
+        // the parameter, so the seed does not exempt it.
+        let contradicting_annotation = r#"
+            fn f(items: &[&str], p: &str) {
+                let _r = items.iter().fold(String::new(), |mut w: File, b| {
+                    let _ = writeln!(w, "{b}");
+                    String::new()
+                });
+            }
+        "#;
+        // Three arguments is no signature the seed rule speaks about.
+        let extra_argument = r#"
+            fn f(xs: &[u8], extra: u8) {
+                let _r = xs.scan(String::new(), |o, x| {
+                    let _ = write!(o, "{x}");
+                    Some(1)
+                }, extra);
+            }
+        "#;
+        assert_eq!(run_on(file_seed).len(), 1);
+        assert_eq!(run_on(item_param).len(), 1);
+        assert_eq!(run_on(shadowed_in_closure).len(), 1);
+        assert_eq!(run_on(map_or).len(), 1);
+        assert_eq!(run_on(contradicting_annotation).len(), 1);
+        assert_eq!(run_on(extra_argument).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_write_macro_to_let_bound_std_stream() {
+        // Regression for #8364: a `stderr()`/`stdout()` handle held in a binding
+        // is the same expression the inline spelling names, so the best-effort
+        // std-stream write stays exempt. starship's `main.rs:200` shape.
+        let stderr_binding = r#"
+            fn note(args: &[String]) {
+                let mut stderr = std::io::stderr();
+                let _ = writeln!(stderr, "\nNOTE: {args:?}");
+            }
+        "#;
+        let stdout_lock = r#"
+            fn f() {
+                let mut out = io::stdout().lock();
+                let _ = writeln!(out, "x");
+            }
+        "#;
+        // The canonical two-step lock: the handle and its guard each get a
+        // binding, so the chain crosses two of them.
+        let two_step_lock = r#"
+            fn f() {
+                let stdout = io::stdout();
+                let mut lock = stdout.lock();
+                let _ = writeln!(lock, "x");
+            }
+        "#;
+        assert!(run_on(stderr_binding).is_empty());
+        assert!(run_on(stdout_lock).is_empty());
+        assert!(run_on(two_step_lock).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_std_stream_write_method_on_let_bound_handle() {
+        // Regression for #8364: the method spelling reads the same binding as the
+        // macro spelling, so one handle cannot get opposite verdicts depending on
+        // how the write is written.
+        let write_all = r#"
+            fn f() {
+                let mut err = io::stderr();
+                let _ = err.write_all(b"x");
+            }
+        "#;
+        let flush = r#"
+            fn f() {
+                let mut out = io::stdout();
+                let _ = out.flush();
+            }
+        "#;
+        let two_step_lock = r#"
+            fn f() {
+                let stdout = io::stdout();
+                let mut lock = stdout.lock();
+                let _ = lock.write_all(b"x");
+            }
+        "#;
+        assert!(run_on(write_all).is_empty());
+        assert!(run_on(flush).is_empty());
+        assert!(run_on(two_step_lock).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_std_stream_write_method_on_let_bound_file() {
+        // Negative space for #8364: resolving a method call's receiver through its
+        // binding must not exempt an ordinary writer.
+        let file_binding = r#"
+            fn f(p: &str) {
+                let mut w = File::create(p).unwrap();
+                let _ = w.write_all(b"x");
+            }
+        "#;
+        assert_eq!(run_on(file_binding).len(), 1);
+    }
+
+    #[test]
+    fn flags_let_underscore_write_macro_to_let_bound_file() {
+        // Negative space for #8364: resolving the writer through its binding must
+        // not turn every named writer into a std stream. A `File` handle, and a
+        // binding declared in an enclosing `fn` that a nested `fn` cannot see,
+        // both stay flagged.
+        let file_binding = r#"
+            fn f(p: &str) {
+                let mut w = File::create(p).unwrap();
+                let _ = writeln!(w, "x");
+            }
+        "#;
+        let outer_fn_binding = r#"
+            fn outer() {
+                let mut w = String::new();
+                fn inner(w: &mut File) {
+                    let _ = writeln!(w, "x");
+                }
+            }
+        "#;
+        // The last binding before the write is the one that answers for it.
+        let rebound_to_file = r#"
+            fn f(p: &str) {
+                let mut w = String::new();
+                let mut w = File::create(p).unwrap();
+                let _ = writeln!(w, "x");
+            }
+        "#;
+        // A destructuring `let` binds a part of its initializer, which this walk
+        // does not follow, so it hides the outer handle rather than answering
+        // with it.
+        let let_else_destructure = r#"
+            fn f(p: &str) {
+                let out = io::stdout();
+                let Some(mut out) = File::create(p).ok() else { return };
+                let _ = writeln!(out, "x");
+            }
+        "#;
+        let tuple_destructure = r#"
+            fn f(t: (u8, File)) {
+                let out = io::stdout();
+                let (n, mut out) = t;
+                let _ = out.write_all(b"x");
+            }
+        "#;
+        // A struct field written in shorthand names the binding, so it hides the
+        // outer handle like any other destructuring pattern.
+        let struct_shorthand = r#"
+            fn f(s: S) {
+                let out = io::stdout();
+                let S { out } = s;
+                let _ = writeln!(out, "x");
+            }
+        "#;
+        assert_eq!(run_on(file_binding).len(), 1);
+        assert_eq!(run_on(outer_fn_binding).len(), 1);
+        assert_eq!(run_on(rebound_to_file).len(), 1);
+        assert_eq!(run_on(let_else_destructure).len(), 1);
+        assert_eq!(run_on(tuple_destructure).len(), 1);
+        assert_eq!(run_on(struct_shorthand).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_write_macro_to_reborrowed_buffer() {
+        // Regression for #8364: a rebinding that renames or reborrows carries the
+        // same value, so the writer is still the `String` the first binding
+        // created.
+        let reborrow = r#"
+            fn f() {
+                let mut out = String::new();
+                let out = &mut out;
+                let _ = writeln!(out, "x");
+            }
+        "#;
+        let moved_into_inner_scope = r#"
+            fn f() {
+                let mut buf = String::new();
+                {
+                    let mut buf = buf;
+                    let _ = writeln!(buf, "x");
+                }
+            }
+        "#;
+        assert!(run_on(reborrow).is_empty());
+        assert!(run_on(moved_into_inner_scope).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_write_macro_to_reborrowed_file() {
+        // Negative space for #8364: renaming chains report the value they end at,
+        // so a `File` reached through an alias stays flagged. A chain that names
+        // itself resolves to nothing rather than looping.
+        let file_reborrow = r#"
+            fn f(p: &str) {
+                let mut w = File::create(p).unwrap();
+                let w = &mut w;
+                let _ = writeln!(w, "x");
+            }
+        "#;
+        let self_naming_chain = r#"
+            fn f() {
+                let p = q;
+                let q = p;
+                let _ = writeln!(q, "x");
+            }
+        "#;
+        assert_eq!(run_on(file_reborrow).len(), 1);
+        assert_eq!(run_on(self_naming_chain).len(), 1);
+    }
+
+    #[test]
+    fn flags_let_underscore_write_past_the_resolution_bound() {
+        // Both walks follow a bounded number of links, so a chain longer than the
+        // bound leaves the writer unresolved and the write flagged. The shapes a
+        // program actually writes are one or two links and stay exempt, as the
+        // `reborrowed_buffer` and `let_bound_std_stream` cases show.
+        let long_rename_chain = r#"
+            fn f() {
+                let w0 = String::new();
+                let w1 = &mut w0;
+                let w2 = &mut w1;
+                let w3 = &mut w2;
+                let w4 = &mut w3;
+                let w5 = &mut w4;
+                let w6 = &mut w5;
+                let w7 = &mut w6;
+                let w8 = &mut w7;
+                let w9 = &mut w8;
+                let _ = writeln!(w9, "x");
+            }
+        "#;
+        // A named handle costs two links: one to resolve the name, one to descend
+        // into the receiver of the call it holds.
+        let deep_handle_chain = r#"
+            fn f() {
+                let a = io::stdout();
+                let b = a.lock();
+                let c = b.lock();
+                let d = c.lock();
+                let e = d.lock();
+                let _ = e.write_all(b"x");
+            }
+        "#;
+        assert_eq!(run_on(long_rename_chain).len(), 1);
+        assert_eq!(run_on(deep_handle_chain).len(), 1);
+    }
+
+    #[test]
+    fn flags_let_underscore_write_macro_to_shadowing_pattern_binding() {
+        // Regression for #8364: a closure parameter, a `for` pattern and an `if
+        // let` pattern each shadow an outer binding of the same name, so an outer
+        // buffer says nothing about a writer they hand over. Only a seeded fold
+        // supplies such a parameter's value.
+        let closure_param = r#"
+            fn f(files: &[File]) {
+                let mut w = String::new();
+                files.iter().for_each(|mut w| {
+                    let _ = writeln!(w, "x");
+                });
+            }
+        "#;
+        let for_pattern = r#"
+            fn f(files: Vec<File>) {
+                let mut w = String::new();
+                for mut w in files {
+                    let _ = writeln!(w, "x");
+                }
+            }
+        "#;
+        let if_let_pattern = r#"
+            fn f(file: Option<File>) {
+                let mut w = String::new();
+                if let Some(mut w) = file {
+                    let _ = writeln!(w, "x");
+                }
+            }
+        "#;
+        let while_let_pattern = r#"
+            fn f(files: &mut Files) {
+                let mut w = String::new();
+                while let Some(mut w) = files.next() {
+                    let _ = writeln!(w, "x");
+                }
+            }
+        "#;
+        let match_pattern = r#"
+            fn f(file: File) {
+                let mut w = String::new();
+                match file {
+                    w => { let _ = writeln!(w, "x"); }
+                }
+            }
+        "#;
+        // An `if let` guard binds for the arm's body, so it shadows too.
+        let match_guard_let_pattern = r#"
+            fn f(file: Option<File>) {
+                let mut w = String::new();
+                match file {
+                    _ if let Some(mut w) = file => { let _ = writeln!(w, "x"); }
+                    _ => {}
+                }
+            }
+        "#;
+        // A struct field written in shorthand names the binding it introduces.
+        let struct_shorthand_pattern = r#"
+            fn f(entries: Vec<Entry>) {
+                let mut w = String::new();
+                for Entry { w } in entries {
+                    let _ = writeln!(w, "x");
+                }
+            }
+        "#;
+        assert_eq!(run_on(closure_param).len(), 1);
+        assert_eq!(run_on(for_pattern).len(), 1);
+        assert_eq!(run_on(if_let_pattern).len(), 1);
+        assert_eq!(run_on(while_let_pattern).len(), 1);
+        assert_eq!(run_on(match_pattern).len(), 1);
+        assert_eq!(run_on(match_guard_let_pattern).len(), 1);
+        assert_eq!(run_on(struct_shorthand_pattern).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_write_macro_to_buffer_across_an_unrelated_scope() {
+        // Negative space for the shadowing above: only a pattern that binds the
+        // writer's own name hides an outer binding, so a `for` loop or an `if let`
+        // over another name leaves the buffer resolvable.
+        let for_loop = r#"
+            fn f(files: Vec<File>) {
+                let mut w = String::new();
+                for file in files {
+                    let _ = write!(w, "{file:?}");
+                }
+            }
+        "#;
+        let if_let = r#"
+            fn f(file: Option<File>) {
+                let mut w = String::new();
+                if let Some(f) = file {
+                    let _ = write!(w, "{f:?}");
+                }
+            }
+        "#;
+        // A guarded arm, with a named pattern and with the wildcard.
+        let match_guard = r#"
+            fn f(items: &[u8]) {
+                let mut w = String::new();
+                match items.len() {
+                    n if w.is_empty() => { let _ = writeln!(w, "{n}"); }
+                    _ => {}
+                }
+            }
+        "#;
+        let wildcard_match_guard = r#"
+            fn f(items: &[u8]) {
+                let mut w = String::new();
+                match items.len() {
+                    _ if w.is_empty() => { let _ = writeln!(w, "x"); }
+                    _ => {}
+                }
+            }
+        "#;
+        // A pattern's path names the type it matches against, so a module or
+        // variant sharing the writer's name binds nothing.
+        let module_path = r#"
+            fn f(y: w::T) {
+                let mut w = String::new();
+                let w::T(n) = y;
+                let _ = write!(w, "{n}");
+            }
+        "#;
+        assert!(run_on(for_loop).is_empty());
+        assert!(run_on(if_let).is_empty());
+        assert!(run_on(match_guard).is_empty());
+        assert!(run_on(wildcard_match_guard).is_empty());
+        assert!(run_on(module_path).is_empty());
     }
 
     #[test]
