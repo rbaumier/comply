@@ -20,10 +20,14 @@ impl OxcCheck for Check {
             let Some(text) = ctx.source.get(start..end) else {
                 continue;
             };
-            let Some(word) = super::find_banned_word(text) else {
+            let Some((word, offset)) = super::find_banned_word(text) else {
                 continue;
             };
-            let (line, column) = byte_offset_to_line_col(ctx.source, start);
+            // Anchor on the word, not on the comment: a `/* … */` block runs
+            // over as many lines as the author wrote, and the opening line
+            // often holds none of what the message is about.
+            let word_start = start + offset;
+            let (line, column) = byte_offset_to_line_col(ctx.source, word_start);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line,
@@ -35,7 +39,7 @@ impl OxcCheck for Check {
                      line is genuinely self-explanatory."
                 ),
                 severity: Severity::Error,
-                span: None,
+                span: Some((word_start, word.len())),
             });
         }
         diagnostics
@@ -132,6 +136,24 @@ mod tests {
         // `actually` is excluded: in code it commonly contrasts expectation
         // with reality (`actually computed lazily`) — too many false positives.
         assert!(run("// the value is actually computed lazily").is_empty());
+    }
+
+    #[test]
+    fn anchors_block_comment_on_the_word_not_the_opening_line() {
+        // Same anchoring the Rust backend applies: the block opens on line 1 and
+        // the word sits on line 3, which is the line the message is about.
+        let src = "/* opening line, all clear here\n   second line\n   and here it is just wrong */\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 3);
+        let word = "just";
+        let (offset, len) = diags[0].span.expect("anchored on the word's byte range");
+        assert_eq!(&src[offset..offset + len], word);
+        let line = src.lines().nth(diags[0].line - 1).unwrap();
+        assert_eq!(
+            &line[diags[0].column - 1..diags[0].column - 1 + word.len()],
+            word
+        );
     }
 
     #[test]
