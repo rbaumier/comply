@@ -5,6 +5,12 @@
 //! opposite of what production code should do. Prefer `?` + proper error
 //! types, or `unwrap_or_else` with a meaningful fallback.
 //!
+//! The diagnostic is anchored on the `unwrap` / `expect` method-name node.
+//! A tree-sitter `call_expression` spans from the head of the receiver chain.
+//! That head is not the method the message names. Once rustfmt has broken the
+//! chain over several lines it is not even on the method's line. And it is the
+//! same position for every matching call in the chain.
+//!
 //! Tests are exempted — `.unwrap()` in a unit test is idiomatic because
 //! a panic cleanly fails the test. We skip any call whose enclosing
 //! function has `#[test]` or whose enclosing module has `#[cfg(test)]`.
@@ -266,20 +272,17 @@ impl AstCheck for Check {
         {
             return;
         }
-        let pos = node.start_position();
-        diagnostics.push(Diagnostic {
-            path: std::sync::Arc::clone(&ctx.path_arc),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            rule_id: "rust-no-unwrap".into(),
-            message: format!(
+        diagnostics.push(Diagnostic::at_node(
+            std::sync::Arc::clone(&ctx.path_arc),
+            &field,
+            "rust-no-unwrap",
+            format!(
                 "`.{field_text}()` turns a runtime condition into a panic. \
                  Use `?` with a proper error type, or `unwrap_or_else` with \
                  a meaningful fallback. Tests are exempted."
             ),
-            severity: Severity::Error,
-            span: None,
-        });
+            Severity::Error,
+        ));
     }
 }
 
@@ -1299,5 +1302,74 @@ proc-macro = true
         assert!(proc_macro.is_proc_macro());
         let normal = CargoManifest::parse(LIB_CARGO_TOML, PathBuf::from("/c")).unwrap();
         assert!(!normal.is_proc_macro());
+    }
+
+    /// Issue #8360 repro, reduced from starship's `src/modules/nodejs.rs:119`:
+    /// two `.unwrap()` in one chain rustfmt broke over several lines. Each must
+    /// land on the line and column of its own `unwrap`. The chain head (`re`,
+    /// line 2) is a single position for both calls, and names no `unwrap`.
+    const MULTILINE_CHAIN: &str = r#"fn f(re: &Regex, nodejs_version: &str) -> &str {
+    re
+        .captures(nodejs_version)
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .as_str()
+}
+"#;
+
+    #[test]
+    fn anchors_each_chained_call_on_its_own_method_name() {
+        let diagnostics = run_on(MULTILINE_CHAIN);
+        let mut positions: Vec<(usize, usize)> =
+            diagnostics.iter().map(|d| (d.line, d.column)).collect();
+        positions.sort_unstable();
+        assert_eq!(positions, vec![(4, 10), (6, 10)]);
+    }
+
+    /// The row alone separates the two calls in `MULTILINE_CHAIN`. On one line
+    /// only the column can, so pin that half too.
+    #[test]
+    fn anchors_two_calls_on_one_line_at_distinct_columns() {
+        let source = "fn f() { let _ = a.unwrap().b.unwrap(); }\n";
+        let mut positions: Vec<(usize, usize)> =
+            run_on(source).iter().map(|d| (d.line, d.column)).collect();
+        positions.sort_unstable();
+        assert_eq!(positions, vec![(1, 20), (1, 31)]);
+    }
+
+    #[test]
+    fn spans_the_method_name_not_the_receiver_chain() {
+        let diagnostics = run_on(MULTILINE_CHAIN);
+        assert_eq!(diagnostics.len(), 2);
+        for diagnostic in diagnostics {
+            let (offset, len) = diagnostic.span.expect("native rules carry a span");
+            assert_eq!(
+                &MULTILINE_CHAIN[offset..offset + len],
+                "unwrap",
+                "diagnostic at {}:{} spans the wrong bytes",
+                diagnostic.line,
+                diagnostic.column
+            );
+        }
+    }
+
+    /// `.expect("…")` anchors on `expect`, the method its message names, not on
+    /// the chain head — the `expect` arm of the rule takes the same anchor as
+    /// the `unwrap` arm.
+    #[test]
+    fn anchors_expect_on_its_method_name() {
+        let source = r#"fn f() -> Result<(), ()> {
+    cfg
+        .get("k")
+        .expect("missing key");
+    Ok(())
+}
+"#;
+        let diagnostics = run_on(source);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!((diagnostics[0].line, diagnostics[0].column), (4, 10));
+        let (offset, len) = diagnostics[0].span.expect("native rules carry a span");
+        assert_eq!(&source[offset..offset + len], "expect");
     }
 }
