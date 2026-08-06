@@ -508,37 +508,39 @@ fn is_co_occurrence_exempt(export_name: &str, export_names: &FxHashSet<&str>) ->
     })
 }
 
-/// Names exported by `exporting_file` that an ng-packagr public-API entry barrel
-/// re-exports — i.e. the file's contribution to a library's published surface.
-/// ng-packagr libraries publish through the build output's `package.json`, so
-/// the entry barrel's `export { X } from './m'` is the only consumer of `m`'s
-/// `X` and no source file imports it; such a symbol is live.
+/// Names exported by `exporting_file` that a published entry barrel re-exports —
+/// i.e. the file's contribution to the package's public surface. A library
+/// publishes through its entry point, so the barrel's `export { X } from './m'`
+/// is the only consumer of `m`'s `X` and no source file imports it; such a
+/// symbol is live.
 ///
-/// Walks each indexed file that is an ng-package entry file and, for every
-/// re-export whose origin resolves to `exporting_file`, records the origin name
-/// (the `local` side of `export { local as exported } from …`, else the
-/// exported name). Returns the empty set when the project ships no ng-packagr
-/// entry, so a project without one pays only the entry-file probe.
-fn collect_ng_package_reexported_names(
+/// Scans each indexed file for re-exports of `exporting_file`, keeps the files
+/// that are published entry files ([`is_public_entry_file`]), and records each
+/// origin name (the `local` side of `export { local as exported } from …`, else
+/// the exported name). The entry-file probe — the only step that touches the
+/// filesystem — runs solely for a file that re-exports from `exporting_file`,
+/// so it costs a walk-up per barrel rather than per indexed file.
+///
+/// Named re-exports only. A barrel's `export * from './m'` names no symbol, so
+/// the symbols it forwards are not collected here.
+fn collect_entry_reexported_names(
     index: &crate::project::import_index::ImportIndex,
     project: &crate::project::ProjectCtx,
     exporting_file: &Path,
 ) -> FxHashSet<String> {
     let mut out = FxHashSet::default();
     for barrel in index.indexed_paths() {
-        if !project.is_ng_package_entry_file(barrel) {
+        let origins: Vec<String> = index
+            .get_exports(barrel)
+            .iter()
+            .filter(|exp| matches!(exp.kind, ExportKind::ReExport))
+            .filter(|exp| index.reexport_target(barrel, &exp.name) == Some(exporting_file))
+            .map(|exp| exp.local_name.clone().unwrap_or_else(|| exp.name.clone()))
+            .collect();
+        if origins.is_empty() || !is_public_entry_file(project, barrel) {
             continue;
         }
-        for exp in index.get_exports(barrel) {
-            if !matches!(exp.kind, ExportKind::ReExport) {
-                continue;
-            }
-            if index.reexport_target(barrel, &exp.name) != Some(exporting_file) {
-                continue;
-            }
-            let origin_name = exp.local_name.clone().unwrap_or_else(|| exp.name.clone());
-            out.insert(origin_name);
-        }
+        out.extend(origins);
     }
     out
 }
@@ -566,9 +568,6 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if is_config_file(ctx.path) {
-            return Vec::new();
-        }
-        if is_entry_point(ctx.path, ctx.project.project_root.as_deref()) {
             return Vec::new();
         }
         if is_in_ui_library(ctx.path) {
@@ -632,11 +631,11 @@ impl TextCheck for Check {
         if is_framework_specific_entry_point(&canon, ctx.project) {
             return Vec::new();
         }
-        // ng-packagr public-API entry file (`lib.entryFile` of an
-        // `ng-package.json`) — a library's package entry point published through
-        // the build output's `package.json`, never imported by another source
-        // file, so never flagged.
-        if ctx.project.is_ng_package_entry_file(&canon) {
+        // A file the package publishes: the entry its manifest declares, an
+        // ng-packagr public-API barrel, or the barrel at a declared source root.
+        // Its exports cross the package boundary, so no in-repo importer is
+        // expected.
+        if is_public_entry_file(ctx.project, &canon) {
             return Vec::new();
         }
         // shadcn-style component-registry source file — listed under a
@@ -777,13 +776,12 @@ impl TextCheck for Check {
         // having no importer. Computed lazily, like the scans above.
         let mut custom_element_classes: Option<FxHashSet<String>> = None;
 
-        // Names of this file's symbols re-exported by an ng-packagr public-API
-        // entry barrel (`lib.entryFile` of an `ng-package.json`). Such a symbol
-        // is part of the library's published surface, consumed externally — the
-        // entry barrel re-exports it but no source file imports it. Computed
-        // lazily: only an export that survived every cheap check pays for the
-        // per-barrel scan.
-        let mut ng_reexported: Option<FxHashSet<String>> = None;
+        // Names of this file's symbols re-exported by a published entry barrel.
+        // Such a symbol is part of the package's published surface, consumed
+        // externally — the entry barrel re-exports it but no source file imports
+        // it. Computed lazily: only an export that survived every cheap check
+        // pays for the per-barrel scan.
+        let mut entry_reexported: Option<FxHashSet<String>> = None;
 
         // Whether this module is a Cloudflare Worker module-format entry point —
         // an `export default` object carrying a `fetch`/`scheduled`/… lifecycle
@@ -960,9 +958,9 @@ impl TextCheck for Check {
             if custom_element_classes.contains(export.name.as_str()) {
                 continue;
             }
-            let ng_reexported = ng_reexported
-                .get_or_insert_with(|| collect_ng_package_reexported_names(index, ctx.project, &canon));
-            if ng_reexported.contains(export.name.as_str()) {
+            let entry_reexported = entry_reexported
+                .get_or_insert_with(|| collect_entry_reexported_names(index, ctx.project, &canon));
+            if entry_reexported.contains(export.name.as_str()) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -1205,10 +1203,34 @@ fn is_script_entry_point(
     script_entry_files.iter().any(|entry| *entry == rel)
 }
 
+/// True when `path` is a file the project publishes as an entry point, whose
+/// exports are therefore consumed across the package boundary rather than by an
+/// in-repo importer. Four ways to qualify, in evaluation order:
+///
+/// - the conventional `main`/`index` directly at the project root
+///   ([`is_root_entry_point`]);
+/// - the `index` barrel at a source root the project's tsconfig declares, for a
+///   package a consumer can name;
+/// - the source of an entry its own `package.json` declares, a declared build
+///   artifact being inverted back to the source that produces it;
+/// - an Angular library's public-API barrel
+///   ([`ProjectCtx::is_ng_package_entry_file`]).
+///
+/// The middle two both come from [`ProjectCtx::is_declared_entry_source`].
+///
+/// `path` must be the import index's canonical form, which
+/// [`ProjectCtx::is_ng_package_entry_file`] requires to be absolute.
+fn is_public_entry_file(project: &crate::project::ProjectCtx, path: &Path) -> bool {
+    is_root_entry_point(path, project.project_root.as_deref())
+        || project.is_declared_entry_source(path)
+        || project.is_ng_package_entry_file(path)
+}
+
 /// Entry points we deliberately never flag: `main.*` and `index.*` directly
-/// at the project root. Nested `index.ts` files (e.g. barrel files in
-/// feature folders) are expected to be imported and stay subject to the rule.
-fn is_entry_point(path: &Path, project_root: Option<&Path>) -> bool {
+/// at the project root. A nested `index.ts` is expected to be imported and stays
+/// subject to the rule unless [`is_public_entry_file`] recognizes it — a barrel
+/// at a declared source root is published, one in a feature folder is not.
+fn is_root_entry_point(path: &Path, project_root: Option<&Path>) -> bool {
     let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
         return false;
     };
@@ -4668,7 +4690,7 @@ mod tests {
     // top-level `examples/` directory exports its mounted instance by the Vite
     // `export default app` convention; nothing imports it, but it is a runnable
     // demo entry, not dead code. Nested `examples/.../src/main.ts` is missed by
-    // the root-only `is_entry_point` and the example's non-library
+    // the root-only `is_root_entry_point` and the example's non-library
     // `package.json`, so the sample-dir guard must carry it.
     #[test]
     fn no_fp_for_export_in_examples_dir_main_issue_2201() {
@@ -4805,5 +4827,242 @@ mod tests {
             diags.iter().any(|d| d.message.contains("orphan")),
             "an unimported export in a Vite src/lib/main.ts must still be flagged: {diags:?}"
         );
+    }
+
+    /// The `retejs/rete` tree from #8355: a published library whose build tool
+    /// generates the dist manifest, so the checked-in `package.json` names no
+    /// entry and `tsconfig.json` is the only place the source root appears.
+    fn rete_files(package_json: &str) -> (String, Vec<(&'static str, &'static str)>) {
+        (
+            package_json.to_string(),
+            vec![
+                ("tsconfig.json", r#"{ "include": ["src", "test"] }"#),
+                (
+                    "src/scope.ts",
+                    "export type Pipe<T> = (data: T) => Promise<T | undefined>;\n\
+                     export class Scope<T> { pipes: Pipe<T>[] = []; }\n\
+                     export class Signal<T> { pipes: Pipe<T>[] = []; }\n\
+                     export function useHelper(): number { return 1; }\n",
+                ),
+                (
+                    "src/index.ts",
+                    "export type { Pipe } from './scope'\n\
+                     export { Scope, Signal } from './scope'\n",
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn no_fp_for_public_barrel_at_the_declared_source_root_issue_8355() {
+        // `retejs/rete`: `src/index.ts` is the package's whole published API and
+        // nothing in the repo imports it — a barrel is not imported by its own
+        // package. `tsconfig.json` names `src` as a source root, so the barrel is
+        // the entry point the project declares, and the symbols it re-exports are
+        // the published surface.
+        let no_manifest_entry = r#"{"name":"rete","version":"2.0.6",
+            "scripts":{"build":"rete build -c rete.config.ts"},
+            "devDependencies":{"rete-cli":"^2.1.0"}}"#;
+        let (pkg, files) = rete_files(no_manifest_entry);
+        let (_d0, barrel) = run_on_project_with_pkg(Some(&pkg), &files, "src/index.ts");
+        assert!(barrel.is_empty(), "the published barrel is not dead: {barrel:?}");
+
+        let (_d1, scope) = run_on_project_with_pkg(Some(&pkg), &files, "src/scope.ts");
+        let names: Vec<&str> = scope.iter().map(|d| d.message.as_str()).collect();
+        assert!(
+            !names.iter().any(|m| m.contains("`Scope`") || m.contains("`Signal`")),
+            "symbols the entry barrel re-exports are published, not dead: {names:?}"
+        );
+        // rete's ninth diagnostic, the true positive: `useHelper` is not in the
+        // barrel and nothing imports it.
+        assert_eq!(scope.len(), 1, "only the unexported-through-the-barrel symbol is dead: {names:?}");
+        assert!(scope[0].message.contains("useHelper"), "{names:?}");
+    }
+
+    #[test]
+    fn verdict_does_not_hinge_on_a_declared_build_artifact_path_issue_8355() {
+        // #8355's `r240` reduction, whose every export is published through the
+        // barrel: adding `"main": "dist/index.js"` — a path absent from the
+        // source tree, `dist/` being gitignored — used to move it from five
+        // diagnostics to zero. The published surface is the same either way, so
+        // the two verdicts must be the same. They reach it by different routes —
+        // the source-root barrel without the key, the whole-package library bail
+        // with it — which is the point: the verdict must not depend on which.
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            (
+                "src/scope.ts",
+                "export type Pipe<T> = (data: T) => Promise<T | undefined>;\n\
+                 export class Scope<T> { pipes: Pipe<T>[] = []; }\n\
+                 export class Signal<T> { pipes: Pipe<T>[] = []; }\n",
+            ),
+            (
+                "src/index.ts",
+                "export type { Pipe } from './scope'\n\
+                 export { Scope, Signal } from './scope'\n",
+            ),
+        ];
+        let without_entry = r#"{"name":"r240","version":"2.0.6",
+            "devDependencies":{"rete-cli":"^2.1.0"}}"#;
+        let with_entry = r#"{"name":"r240","version":"2.0.6","main":"dist/index.js",
+            "devDependencies":{"rete-cli":"^2.1.0"}}"#;
+        for target in ["src/index.ts", "src/scope.ts"] {
+            let (_d0, before) = run_on_project_with_pkg(Some(without_entry), &files, target);
+            let (_d1, after) = run_on_project_with_pkg(Some(with_entry), &files, target);
+            let before: Vec<&str> = before.iter().map(|d| d.message.as_str()).collect();
+            let after: Vec<&str> = after.iter().map(|d| d.message.as_str()).collect();
+            assert!(
+                before.is_empty(),
+                "{target}: the package's published surface is not dead: {before:?}"
+            );
+            assert_eq!(
+                before, after,
+                "{target}: declaring an absent build artifact must not change the verdict"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_build_artifact_resolves_to_its_source_issue_8355() {
+        // `browser` is an entry field that does not mark the package a library,
+        // so the rule really runs: the artifact `dist/gateway.js` is absent from
+        // the tree and has to be inverted to the source that produces it,
+        // `src/gateway.ts`. That source is not an `index`, so the inversion is
+        // the only route to it. A barrel nested below the source root is not an
+        // entry point and stays subject to the rule.
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            ("src/gateway.ts", "export const publicThing = 1;\n"),
+            ("src/components/index.ts", "export const nestedThing = 2;\n"),
+            ("src/other.ts", "export const plain = 3;\n"),
+        ];
+        let pkg = r#"{"name":"lib","version":"1.0.0","browser":"dist/gateway.js"}"#;
+
+        let (_d0, entry) = run_on_project_with_pkg(Some(pkg), &files, "src/gateway.ts");
+        assert!(entry.is_empty(), "the source of `dist/gateway.js` is the entry: {entry:?}");
+
+        let (_d1, nested) = run_on_project_with_pkg(Some(pkg), &files, "src/components/index.ts");
+        assert_eq!(nested.len(), 1, "a nested barrel is not an entry point: {nested:?}");
+        let (_d2, other) = run_on_project_with_pkg(Some(pkg), &files, "src/other.ts");
+        assert_eq!(other.len(), 1, "an ordinary module stays subject to the rule: {other:?}");
+    }
+
+    #[test]
+    fn out_dir_prefixed_artifact_maps_through_the_root_dir_issue_8355() {
+        // With both `outDir` and `rootDir` declared the inversion is exact: strip
+        // `dist/`, join the remainder onto `source/`. The sibling module under the
+        // same output directory is not an entry point.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "tsconfig.json",
+                r#"{ "compilerOptions": { "outDir": "dist", "rootDir": "source" } }"#,
+            ),
+            ("source/api/client.ts", "export const request = 1;\n"),
+            ("source/api/internal.ts", "export const secret = 2;\n"),
+        ];
+        let pkg = r#"{"name":"lib","version":"1.0.0","browser":"dist/api/client.js"}"#;
+
+        let (_d0, entry) = run_on_project_with_pkg(Some(pkg), &files, "source/api/client.ts");
+        assert!(entry.is_empty(), "`dist/api/client.js` inverts to its source: {entry:?}");
+        let (_d1, sibling) = run_on_project_with_pkg(Some(pkg), &files, "source/api/internal.ts");
+        assert_eq!(sibling.len(), 1, "a sibling of the entry source is not an entry: {sibling:?}");
+    }
+
+    #[test]
+    fn root_dir_selects_the_source_root_over_a_conventional_src_issue_8355() {
+        // The source root is whichever directory the project declares, not a
+        // hardcoded `src`: under `"rootDir": "source"` the barrel at `source/` is
+        // the entry point and a same-named one under `src/` is not.
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "compilerOptions": { "rootDir": "source" } }"#),
+            ("source/index.ts", "export const declaredEntry = 1;\n"),
+            ("src/index.ts", "export const notTheRoot = 2;\n"),
+        ];
+        let pkg = r#"{"name":"lib","version":"1.0.0"}"#;
+
+        let (_d0, declared) = run_on_project_with_pkg(Some(pkg), &files, "source/index.ts");
+        assert!(declared.is_empty(), "`rootDir` names the source root: {declared:?}");
+        let (_d1, other) = run_on_project_with_pkg(Some(pkg), &files, "src/index.ts");
+        assert_eq!(other.len(), 1, "`src` is not a source root here: {other:?}");
+    }
+
+    #[test]
+    fn include_root_other_than_src_is_a_source_root_issue_8355() {
+        // `"include": ["lib"]` makes `lib/index.ts` the entry point; a sibling
+        // module inside the same root is unaffected.
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "include": ["lib/**/*.ts"] }"#),
+            ("lib/index.ts", "export const declaredEntry = 1;\n"),
+            ("lib/helpers.ts", "export const helper = 2;\n"),
+        ];
+        let pkg = r#"{"name":"lib","version":"1.0.0"}"#;
+
+        let (_d0, entry) = run_on_project_with_pkg(Some(pkg), &files, "lib/index.ts");
+        assert!(entry.is_empty(), "`include` names `lib` as a source root: {entry:?}");
+        let (_d1, helpers) = run_on_project_with_pkg(Some(pkg), &files, "lib/helpers.ts");
+        assert_eq!(helpers.len(), 1, "a module inside the source root is not an entry: {helpers:?}");
+    }
+
+    #[test]
+    fn unmappable_declared_artifact_keeps_the_conventional_entry_issue_8355() {
+        // A bundler may merge several sources into one artifact, so `dist/all.js`
+        // inverts to nothing. Failing to invert must not cost the source root's
+        // own barrel its entry status.
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            ("src/index.ts", "export const publicThing = 1;\n"),
+            ("src/other.ts", "export const plain = 2;\n"),
+        ];
+        let pkg = r#"{"name":"lib","version":"1.0.0","browser":"dist/all.js"}"#;
+
+        let (_d0, entry) = run_on_project_with_pkg(Some(pkg), &files, "src/index.ts");
+        assert!(entry.is_empty(), "the conventional entry survives: {entry:?}");
+        let (_d1, other) = run_on_project_with_pkg(Some(pkg), &files, "src/other.ts");
+        assert_eq!(other.len(), 1, "an ordinary module stays subject to the rule: {other:?}");
+    }
+
+    #[test]
+    fn entry_barrel_reexport_exemption_is_scoped_to_entry_barrels_issue_8355() {
+        // Only a *published entry* barrel's re-export marks a symbol live. A
+        // feature-folder barrel that nothing imports leaves the symbols it
+        // re-exports dead, exactly as before.
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            ("src/index.ts", "export const unrelated = 1;\n"),
+            ("src/feature/index.ts", "export { helper } from './impl'\n"),
+            ("src/feature/impl.ts", "export const helper = () => {};\n"),
+        ];
+        let pkg = r#"{"name":"lib","version":"1.0.0"}"#;
+
+        let (_d0, impl_diags) = run_on_project_with_pkg(Some(pkg), &files, "src/feature/impl.ts");
+        assert_eq!(
+            impl_diags.len(),
+            1,
+            "a non-entry barrel's re-export does not publish a symbol: {impl_diags:?}"
+        );
+        assert!(impl_diags[0].message.contains("helper"), "{impl_diags:?}");
+    }
+
+    #[test]
+    fn unversioned_app_barrel_at_a_declared_source_root_stays_flagged_issue_8355() {
+        // An application: private, no version, no build script, no entry field.
+        // Its tsconfig declares `src` a source root all the same, but nothing can
+        // depend on this manifest by name, so `src/index.ts` is reached only from
+        // inside the repo and an export nobody imports is still dead.
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            ("src/index.ts", "export const unusedThing = 1;\n"),
+            ("src/other.ts", "export const plain = 2;\n"),
+        ];
+        let pkg = r#"{"name":"app","private":true}"#;
+
+        let (_d0, barrel) = run_on_project_with_pkg(Some(pkg), &files, "src/index.ts");
+        assert_eq!(barrel.len(), 1, "an unversioned manifest publishes nothing: {barrel:?}");
+
+        // The same tree with a version is a package a consumer can name, and its
+        // source-root barrel becomes the entry.
+        let versioned = r#"{"name":"app","private":true,"version":"1.0.0"}"#;
+        let (_d1, published) = run_on_project_with_pkg(Some(versioned), &files, "src/index.ts");
+        assert!(published.is_empty(), "a versioned package publishes its barrel: {published:?}");
     }
 }

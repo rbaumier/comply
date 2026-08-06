@@ -116,7 +116,11 @@ fn detect_entry_points<'a>(
                 || is_typeorm_glob_loaded_file(p)
                 || is_gecko_dynamic_loaded_file(p, &gecko_loaded_module_names)
                 || project.entrypoints_contains(p)
+                // The allocation-free fast path for a target that names an
+                // existing file outright; `is_declared_entry_source` reaches the
+                // same verdict after a stem comparison and a probe.
                 || project.is_package_entry_file(p)
+                || project.is_declared_entry_source(p)
                 || project.is_wildcard_entry_file(p)
                 || project.is_in_published_files_surface(p)
                 || project.is_declared_entry_barrel(p)
@@ -2564,6 +2568,27 @@ mod tests {
             diags.is_empty(),
             "a bare `setup.ts` runner bootstrap is test infrastructure, not dead \
              code: {diags:?}"
+        );
+    }
+
+    // #8355: the entry point is the barrel at the source root the project
+    // declares, whatever that root is called. Under `"include": ["lib"]` the
+    // barrel seeds the reachability walk, so the module it imports is reachable
+    // and only the module nothing imports is dead.
+    #[test]
+    fn barrel_at_a_declared_source_root_seeds_reachability_issue_8355() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"lib","version":"1.0.0"}"#),
+            ("tsconfig.json", r#"{ "include": ["lib"] }"#),
+            ("lib/index.ts", "export { helper } from './helper';\n"),
+            ("lib/helper.ts", "export const helper = 1;\n"),
+            ("lib/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the module the barrel does not reach is dead: {diags:?}"
         );
     }
 }

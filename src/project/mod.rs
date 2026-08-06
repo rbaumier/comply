@@ -22,6 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -146,11 +147,12 @@ pub struct PackageJson {
     /// Lets a consumer recognize a CLI-runner package whose binary a script
     /// runs even though no source file ES-imports the package.
     pub script_command_heads: BTreeSet<String>,
-    /// Relative paths this package declares as its own entry point: the `main`
-    /// value, the `exports` `.` target(s), and the `browser`/`react-native`
-    /// substitute targets (the browser/native build bundlers swap in). Stored
-    /// manifest-dir-relative, forward-slash, no leading `./`, so a consumer can
-    /// join them onto the manifest directory and compare against a file path.
+    /// Relative paths this package declares as its own entry point: the
+    /// `main`/`module`/`types`/`typings` values, every `exports` target, the
+    /// `browser`/`react-native` substitute targets (the browser/native build
+    /// bundlers swap in), and every `bin` target. Stored manifest-dir-relative,
+    /// forward-slash, no leading `./`, so a consumer can join them onto the
+    /// manifest directory and compare against a file path.
     pub entry_files: BTreeSet<String>,
     /// Manifest-dir-relative `exports` targets that contain a `*` wildcard — e.g.
     /// `src/v4/locales/*` from `"./v4/locales/*": { ... }`. Gathered from every
@@ -730,8 +732,9 @@ fn collect_substitute_targets(node: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
-/// The relative paths this package declares as its own entry points: the `main`
-/// value plus every `exports` target — the `.` subpath and every other subpath
+/// The relative paths this package declares as its own entry points: the
+/// `main`/`module`/`types`/`typings` values plus every `exports` target — the
+/// `.` subpath and every other subpath
 /// (e.g. `./inputrules`), each including its conditional `import`/`require`/
 /// `default` variants. A package that publishes a library as a set of subpath
 /// exports (e.g. `@tiptap/pm` exposing `@tiptap/pm/inputrules` →
@@ -745,10 +748,12 @@ fn collect_substitute_targets(node: &Value, out: &mut BTreeSet<String>) {
 /// command → file).
 fn collect_entry_files(json: &Value) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    if let Some(main) = json.get("main").and_then(Value::as_str)
-        && let Some(rel) = normalize_main_path(main)
-    {
-        out.insert(rel);
+    for field in ["main", "module", "types", "typings"] {
+        if let Some(target) = json.get(field).and_then(Value::as_str)
+            && let Some(rel) = normalize_main_path(target)
+        {
+            out.insert(rel);
+        }
     }
     if let Some(exports) = json.get("exports") {
         collect_export_targets(exports, &mut out);
@@ -1788,6 +1793,40 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// The fixed directory prefix of a tsconfig `include` entry: everything before
+/// its first glob metacharacter, with a leading `./` and any trailing slash
+/// removed. `src` → `src`, `src/**/*.ts` → `src`, `./lib/**/*` → `lib`,
+/// `**/*` → `` (the config directory itself).
+///
+/// An entry whose glob precedes a literal segment (`packages/*/src`) yields an
+/// ancestor of the directories it names, not one of them: a glob in that position
+/// enumerates a set this function cannot resolve without walking the tree.
+fn include_fixed_prefix(entry: &str) -> String {
+    let normalized = entry.replace('\\', "/");
+    let relative = normalized.strip_prefix("./").unwrap_or(&normalized);
+    let fixed = match relative.find(['*', '?']) {
+        Some(pos) => &relative[..pos],
+        None => relative,
+    };
+    fixed.trim_end_matches('/').to_string()
+}
+
+/// A package entry target with its trailing extension removed when a compiler
+/// rewrites that extension — a module extension, a declaration extension, or any
+/// other source extension the tree may hold: `index.js` → `index`,
+/// `index.d.ts` → `index`, `esm/dom.mjs` → `esm/dom`, `widget.vue` → `widget`.
+/// Two paths that differ only by such an extension then compare equal, and the
+/// remainder can be probed against every source extension.
+fn strip_entry_target_extension(path: &Path) -> PathBuf {
+    let stripped = strip_module_extension(path);
+    match stripped.extension().and_then(|e| e.to_str()) {
+        // `strip_module_extension` takes the `.ts` of a `.d.ts` and leaves the `d`.
+        Some("d") => stripped.with_extension(""),
+        Some(ext) if TS_SOURCE_EXTENSIONS.contains(&ext) => stripped.with_extension(""),
+        _ => stripped,
+    }
+}
+
 /// `path` with a single trailing JS/TS module extension removed, if present.
 fn strip_module_extension(path: &Path) -> PathBuf {
     const MODULE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"];
@@ -1819,69 +1858,34 @@ pub struct Tsconfig {
     /// uses native HTML attribute names in JSX.
     pub jsx_import_source: Option<String>,
     pub out_dir: Option<PathBuf>,
+    /// `compilerOptions.rootDir` — the directory the compiler treats as the root
+    /// of the input source tree. When set it names the source root outright, so a
+    /// consumer mapping a build artifact back to the source that produced it does
+    /// not have to guess.
+    ///
+    /// Anchored, like [`out_dir`], on the directory of the nearest config rather
+    /// than of the config that declared it: a value inherited through `extends`
+    /// resolves against the base's directory in `tsc`, a divergence no consumer
+    /// currently depends on because a base config rarely declares one.
+    ///
+    /// [`out_dir`]: Tsconfig::out_dir
+    pub root_dir: Option<PathBuf>,
+    /// Top-level `include` entries verbatim (e.g. `["src", "test/**/*.ts"]`),
+    /// `None` when the key is absent. Together with [`root_dir`] these are the
+    /// source roots the project declares for itself, with the same anchoring.
+    /// An explicit `[]` compiles nothing and is kept distinct from absence, which
+    /// inherits through `extends`.
+    ///
+    /// [`root_dir`]: Tsconfig::root_dir
+    pub include: Option<Vec<String>>,
 }
 
 impl Tsconfig {
+    /// The parsed form of a tsconfig's JSONC text. Field extraction lives in
+    /// [`parse_tsconfig_value`] so the `&str` and `&Value` entry points cannot
+    /// drift apart.
     pub fn parse(raw: &str) -> Option<Self> {
-        let json: Value = parse_jsonc(raw)?;
-        let co = json.get("compilerOptions");
-        let paths = co
-            .and_then(|x| x.get("paths"))
-            .and_then(|x| x.as_object())
-            .map(|o| {
-                o.iter()
-                    .map(|(k, val)| {
-                        let list: Vec<String> = val
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(String::from))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        (k.clone(), list)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Some(Tsconfig {
-            paths,
-            base_url: co
-                .and_then(|x| x.get("baseUrl"))
-                .and_then(|s| s.as_str())
-                .map(PathBuf::from),
-            module: co
-                .and_then(|x| x.get("module"))
-                .and_then(|s| s.as_str())
-                .map(String::from),
-            module_resolution: co
-                .and_then(|x| x.get("moduleResolution"))
-                .and_then(|s| s.as_str())
-                .map(String::from),
-            strict: co
-                .and_then(|x| x.get("strict"))
-                .and_then(|b| b.as_bool())
-                .unwrap_or(false),
-            exact_optional_property_types: co
-                .and_then(|x| x.get("exactOptionalPropertyTypes"))
-                .and_then(|b| b.as_bool())
-                .unwrap_or(false),
-            use_unknown_in_catch_variables: co
-                .and_then(|x| x.get("useUnknownInCatchVariables"))
-                .and_then(|b| b.as_bool()),
-            jsx: co
-                .and_then(|x| x.get("jsx"))
-                .and_then(|s| s.as_str())
-                .map(String::from),
-            jsx_import_source: co
-                .and_then(|x| x.get("jsxImportSource"))
-                .and_then(|s| s.as_str())
-                .map(String::from),
-            out_dir: co
-                .and_then(|x| x.get("outDir"))
-                .and_then(|s| s.as_str())
-                .map(PathBuf::from),
-        })
+        Some(parse_tsconfig_value(&parse_jsonc(raw)?))
     }
 
     /// Alias prefixes with any trailing `/*` stripped. Consumed by
@@ -2103,13 +2107,30 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
             .and_then(|x| x.get("outDir"))
             .and_then(|s| s.as_str())
             .map(PathBuf::from),
+        root_dir: co
+            .and_then(|x| x.get("rootDir"))
+            .and_then(|s| s.as_str())
+            .map(PathBuf::from),
+        include: parse_tsconfig_include(json),
     }
 }
 
+/// The top-level `include` entries of a tsconfig JSON value, as declared, or
+/// `None` when the key is absent. Non-string entries are dropped.
+fn parse_tsconfig_include(json: &Value) -> Option<Vec<String>> {
+    json.get("include").and_then(Value::as_array).map(|arr| {
+        arr.iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect()
+    })
+}
+
 /// Overlay `child` onto `parent`. Scalars (`base_url`, `module`,
-/// `module_resolution`, `jsx`, `jsx_import_source`, `out_dir`) are taken from the
-/// child when present;
-/// `paths`
+/// `module_resolution`, `jsx`, `jsx_import_source`, `out_dir`, `root_dir`,
+/// `include`) are taken from the child when present — a child redeclares
+/// `include` in full or omits it to inherit, matching TypeScript, and an explicit
+/// `[]` is a redeclaration. `paths`
 /// are merged key-by-key so parent-only aliases survive. Boolean flags
 /// (`strict`, `exact_optional_property_types`) default to false in
 /// `parse_tsconfig_value`, so a child that omits the flag inherits the parent's
@@ -2135,6 +2156,8 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
         jsx: child.jsx.or(parent.jsx),
         jsx_import_source: child.jsx_import_source.or(parent.jsx_import_source),
         out_dir: child.out_dir.or(parent.out_dir),
+        root_dir: child.root_dir.or(parent.root_dir),
+        include: child.include.or(parent.include),
     }
 }
 
@@ -4028,11 +4051,13 @@ impl ProjectCtx {
         chain
     }
 
-    /// True when `path` is the entry point its own `package.json` declares —
-    /// the file named by `main` or the `exports` `.` target of the nearest
-    /// manifest. Such a file's job is to dispatch to the built artifact (e.g. a
-    /// CJS root that `require`s `./dist/...` based on `NODE_ENV`); rules about
-    /// "import from the package entry point" must not fire on the entry itself.
+    /// True when `path` is literally an entry target its own `package.json`
+    /// declares — every [`entry_files`] target, matched as written. Such a file's
+    /// job is to dispatch to the built artifact (e.g. a CJS root that `require`s
+    /// `./dist/...` based on `NODE_ENV`); rules about "import from the package
+    /// entry point" must not fire on the entry itself.
+    ///
+    /// [`entry_files`]: PackageJson::entry_files
     pub fn is_package_entry_file(&self, path: &Path) -> bool {
         let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
             return false;
@@ -4116,10 +4141,13 @@ impl ProjectCtx {
     ///
     /// A `files` entry covers `path` when it names `path` or an ancestor directory
     /// of `path` (npm ships a listed directory recursively, matched component-wise
-    /// so `lib` covers `lib/util.js` but not `library/`). npm additionally always
-    /// ships the `main`/`exports`/`bin` entry ([`is_package_entry_file`]) and, when
-    /// no `main` is declared, the default root `index.js` regardless of `files`, so
-    /// those are treated as covered and never reported excluded.
+    /// so `lib` covers `lib/util.js` but not `library/`). Any file the manifest
+    /// names as an entry ([`is_package_entry_file`]) and the root `index.js` —
+    /// npm's default `main` — are treated as covered and never reported
+    /// excluded. npm's own implicit inclusion is narrower: it ships the `main`
+    /// file, not a `types` or `module` target. A declared entry left out of
+    /// `files` is therefore treated as published although npm would not ship it,
+    /// so the caller keeps applying its rule to it.
     ///
     /// Returns false — preserving the caller's default behavior — when no `files`
     /// field is declared (npm then ships nearly everything, so exclusion cannot be
@@ -5007,6 +5035,220 @@ impl ProjectCtx {
         let dir = self.nearest_tsconfig_dir(path)?;
         let tsc = self.nearest_tsconfig(path)?;
         tsc.out_dir.as_ref().map(|o| dir.join(o))
+    }
+
+    /// Absolute directories the TypeScript project governing `path` declares as
+    /// the root of its input source tree. `compilerOptions.rootDir` names one
+    /// outright; otherwise each top-level `include` entry contributes the fixed
+    /// directory prefix before its first glob metacharacter (`src/**/*.ts` →
+    /// `src`, `src/index.ts` → `src`). A config with no `include` key reads the
+    /// whole subtree below itself, so its own directory is the single root —
+    /// which is also what a project with no tsconfig at all gets, anchored on the
+    /// nearest `package.json` directory. An `include` present but empty compiles
+    /// nothing and names no root at all, as does an entry naming a path absent
+    /// from the checkout.
+    ///
+    /// This is the project's own statement of where its sources live: the
+    /// discriminator for "is this file a conventional entry point" and for
+    /// mapping a declared build artifact back to the source that produces it.
+    ///
+    /// Two shapes answer with the config's own directory although the sources sit
+    /// below it: a config listing `files` instead of `include`, and a
+    /// solution-style config that delegates to project `references` (only their
+    /// `paths` are merged) while declaring no `include` of its own. Both make the
+    /// answer wider than the truth, so a caller
+    /// reads it as "no narrower root is declared", never as "every file here is a
+    /// source root".
+    fn typescript_source_roots(&self, path: &Path) -> Vec<PathBuf> {
+        let Some(config_dir) = self.nearest_tsconfig_dir(path) else {
+            return self.nearest_package_json_dir(path).into_iter().collect();
+        };
+        let Some(tsc) = self.nearest_tsconfig(path) else {
+            return vec![config_dir];
+        };
+        if let Some(root_dir) = tsc.root_dir.as_ref() {
+            return vec![lexical_normalize(&config_dir.join(root_dir))];
+        }
+        let Some(entries) = tsc.include.as_ref() else {
+            return vec![config_dir];
+        };
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            let candidate = lexical_normalize(&config_dir.join(include_fixed_prefix(entry)));
+            // An `include` entry naming a single file (`src/index.ts`) points at
+            // its directory; one naming a path the checkout does not hold — a
+            // directory left behind in the config — names no root.
+            let root = if candidate.is_dir() {
+                candidate
+            } else if candidate.is_file() {
+                match candidate.parent() {
+                    Some(parent) => parent.to_path_buf(),
+                    None => continue,
+                }
+            } else {
+                continue;
+            };
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+        roots
+    }
+
+    /// True when `target` is the source file that produces the package entry
+    /// `entry_rel` — a manifest-dir-relative target of the manifest in
+    /// `manifest_dir`. `target` must be lexically normalized.
+    ///
+    /// A manifest names either a path that exists in the tree (`src/index.ts`) or
+    /// a build artifact that exists only after the build runs (`dist/index.js`,
+    /// and `dist/` is typically git-ignored). The artifact is inverted back to its
+    /// source by removing the compiler's `outDir` prefix when the target sits
+    /// under it, dropping the module or declaration extension, and probing the
+    /// remainder under each declared source root.
+    ///
+    /// Undecidable — and so `false` — for any artifact whose remainder matches no
+    /// source file: a bundler may merge several sources into one artifact, rename
+    /// it, or emit it from a generator, and none of those is invertible from the
+    /// path alone. A glob subpath target falls out the same way: neither
+    /// resolution below expands a glob, so a trailing `*` (`dist/locales/*.js`)
+    /// leaves a file name no real source can equal, and a `*` further up
+    /// (`dist/*/index.js`) leaves a directory no probe can find. The second shape
+    /// then resolves like a plain artifact of the same name, which can only widen
+    /// the exemption, never narrow it.
+    fn declared_entry_produces(
+        &self,
+        manifest_dir: &Path,
+        entry_rel: &str,
+        target: &Path,
+        target_stem: Option<&OsStr>,
+    ) -> bool {
+        let relative = Path::new(entry_rel);
+        // Every path the two resolutions below can accept carries the entry's file
+        // stem under a source extension, so a stem mismatch rules the entry out
+        // before any filesystem probe. The caller hoists `target_stem` out of its
+        // loop over the manifest's entries, where it does not vary.
+        if strip_entry_target_extension(relative).file_name() != target_stem {
+            return false;
+        }
+        let declared = manifest_dir.join(entry_rel);
+        if declared.is_file() {
+            return lexical_normalize(&declared) == target;
+        }
+        // Anchor the tsconfig lookup on the manifest, not on the artifact path:
+        // the artifact's directory need not exist.
+        let probe = manifest_dir.join("package.json");
+        let under_out_dir = self
+            .nearest_tsconfig(&probe)
+            .and_then(|tsc| tsc.out_dir.clone())
+            .and_then(|out_dir| {
+                // `"outDir": "./dist"` names the directory `"dist"` names.
+                let trimmed = out_dir.strip_prefix(".").unwrap_or(&out_dir);
+                relative.strip_prefix(trimmed).ok().map(Path::to_path_buf)
+            });
+        // Without a matching `outDir` only the artifact's file name carries over:
+        // the directories above it are the bundler's output layout, not the
+        // source tree's.
+        let base = match under_out_dir {
+            Some(sub) => sub,
+            None => match relative.file_name() {
+                Some(name) => PathBuf::from(name),
+                None => return false,
+            },
+        };
+        let base = strip_entry_target_extension(&base);
+        let Some(base_str) = base.to_str() else {
+            return false;
+        };
+        self.typescript_source_roots(&probe).iter().any(|root| {
+            TS_SOURCE_EXTENSIONS.iter().any(|ext| {
+                let candidate = root.join(format!("{base_str}.{ext}"));
+                candidate.is_file() && lexical_normalize(&candidate) == target
+            })
+        })
+    }
+
+    /// True when `path` is an entry point the project itself declares — a file
+    /// reached across the package boundary, so no file in the repo imports it.
+    ///
+    /// Two ways to qualify, both taken from what the project states about itself:
+    ///
+    /// - it is the source a `package.json` entry target
+    ///   (`main`/`module`/`types`/`exports`/`browser`/`react-native`/`bin`)
+    ///   resolves to — directly, or through [`declared_entry_produces`]'s
+    ///   artifact-to-source inversion, so a published `dist/index.js` still
+    ///   identifies `src/index.ts`;
+    /// - it is the `index` module at a declared TypeScript source root
+    ///   ([`is_source_root_index`]), the entry a consumer resolves the package to.
+    ///   This holds whether or not the manifest names an entry: a build tool that
+    ///   generates the published manifest leaves the checked-in one a placeholder,
+    ///   and a manifest naming some other artifact still does not demote the
+    ///   source root's own barrel.
+    ///
+    /// The two branches anchor their tsconfig lookup differently:
+    /// [`declared_entry_produces`] resolves it from the manifest directory,
+    /// because the artifact directory it starts from need not exist, while
+    /// [`is_source_root_index`] resolves it from `path` itself. A package
+    /// carrying a nested `src/tsconfig.json` therefore reads a different config
+    /// in each branch, and a sub-package with no tsconfig of its own takes its
+    /// source roots from an ancestor package's config while taking `version`
+    /// from its own manifest.
+    ///
+    /// [`declared_entry_produces`]: ProjectCtx::declared_entry_produces
+    /// [`is_source_root_index`]: ProjectCtx::is_source_root_index
+    pub fn is_declared_entry_source(&self, path: &Path) -> bool {
+        let target = lexical_normalize(path);
+        if self.is_source_root_index(&target) {
+            return true;
+        }
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        let target_stem = strip_entry_target_extension(&target);
+        let target_stem = target_stem.file_name();
+        pkg.entry_files
+            .iter()
+            .any(|entry| self.declared_entry_produces(&manifest_dir, entry, &target, target_stem))
+    }
+
+    /// True when `path` is the `index` module directly at one of the project's
+    /// declared TypeScript source roots ([`typescript_source_roots`]) and the
+    /// package names a version — the entry a consumer resolves the package to
+    /// when the manifest declares none. A nested barrel
+    /// (`src/components/index.ts`) sits below a source root, not at one, and
+    /// stays an ordinary module.
+    ///
+    /// The version is what makes this a *package* entry rather than a directory.
+    /// What names the source root's barrel as the published entry is the build
+    /// config, which comply does not parse, so `version` stands in as the
+    /// cheapest evidence that the manifest is published at all — the shape a
+    /// build tool leaves behind when it generates the published manifest from a
+    /// checked-in placeholder. A manifest with no `version` names
+    /// nothing consumable, so every entry into it comes from inside the repo and
+    /// its barrel is an ordinary module. Only `index` qualifies: a source root's
+    /// `main.ts` is an entry solely because a bundler config or an HTML document
+    /// names it, which the declared-entry branch and the framework entry helpers
+    /// already answer.
+    ///
+    /// [`typescript_source_roots`]: ProjectCtx::typescript_source_roots
+    fn is_source_root_index(&self, path: &Path) -> bool {
+        if path.file_stem().and_then(|s| s.to_str()) != Some("index") {
+            return false;
+        }
+        if !self
+            .nearest_package_json(path)
+            .is_some_and(|pkg| pkg.version.is_some())
+        {
+            return false;
+        }
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        self.typescript_source_roots(path)
+            .iter()
+            .any(|root| root == parent)
     }
 
     /// Walk up from `path` to the nearest `Cargo.toml`, returning the parsed
@@ -6419,7 +6661,9 @@ fn walk_up_finding_cached(
 
 /// Extensions TypeScript appends when resolving an extension-less module
 /// specifier. Mirrors the resolver's extension list so a `baseUrl` import like
-/// `src/types/Foo` matches `Foo.ts`, `Foo/index.ts`, etc.
+/// `src/types/Foo` matches `Foo.ts`, `Foo/index.ts`, etc. Read the same way when
+/// probing a stem against the tree — the set a source file may carry — so
+/// `.json` and `.vue` are candidates there too.
 const TS_SOURCE_EXTENSIONS: &[&str] =
     &["ts", "tsx", "d.ts", "mts", "cts", "js", "jsx", "mjs", "cjs", "vue", "json"];
 
@@ -9975,5 +10219,240 @@ model Envelope {
             !is_non_react_jsx_file(plain, &ctx, path),
             "a plain JSX file with no project default stays React (default-on)"
         );
+    }
+
+    #[test]
+    fn include_fixed_prefix_stops_at_the_first_glob() {
+        assert_eq!(include_fixed_prefix("src"), "src");
+        assert_eq!(include_fixed_prefix("./src"), "src");
+        assert_eq!(include_fixed_prefix("src/"), "src");
+        assert_eq!(include_fixed_prefix("src/**/*"), "src");
+        // A glob before a literal segment leaves an ancestor of the real roots.
+        assert_eq!(include_fixed_prefix("packages/*/src"), "packages");
+        assert_eq!(include_fixed_prefix("**/*.ts"), "");
+        // `?` is a glob metacharacter too, so the prefix can stop mid-segment. A
+        // Windows-style separator normalizes before the scan.
+        assert_eq!(include_fixed_prefix("src/file?.ts"), "src/file");
+        assert_eq!(include_fixed_prefix(".\\lib\\**\\*"), "lib");
+        // The empty prefix means the config directory itself: joining it must not
+        // leave a trailing separator behind.
+        assert_eq!(
+            lexical_normalize(&Path::new("/a/b").join(include_fixed_prefix("**/*"))),
+            PathBuf::from("/a/b")
+        );
+    }
+
+    /// An `include` entry naming a path the checkout does not hold contributes no
+    /// source root: promoting the config directory instead would make every file
+    /// beside it a root-level entry.
+    #[test]
+    fn typescript_source_roots_drop_an_entry_absent_from_the_tree() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"p"}"#).unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"include":["src","typings"]}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert_eq!(
+            ctx.typescript_source_roots(&dir.path().join("src/a.ts")),
+            vec![dir.path().join("src")]
+        );
+    }
+
+    /// A child `include: []` compiles nothing, so it neither inherits the
+    /// parent's roots through `extends` nor falls back to the config directory.
+    #[test]
+    fn typescript_source_roots_honor_an_empty_include_over_extends() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"p"}"#).unwrap();
+        std::fs::write(dir.path().join("tsconfig.base.json"), r#"{"include":["src"]}"#).unwrap();
+        let probe = dir.path().join("src/a.ts");
+
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"extends":"./tsconfig.base.json"}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert_eq!(ctx.typescript_source_roots(&probe), vec![dir.path().join("src")]);
+
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"extends":"./tsconfig.base.json","include":[]}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.typescript_source_roots(&probe).is_empty());
+    }
+
+    #[test]
+    fn strip_entry_target_extension_handles_declaration_files() {
+        let strip = |s: &str| strip_entry_target_extension(Path::new(s));
+        assert_eq!(strip("index.js"), PathBuf::from("index"));
+        assert_eq!(strip("esm/dom.mjs"), PathBuf::from("esm/dom"));
+        assert_eq!(strip("index.d.ts"), PathBuf::from("index"));
+        assert_eq!(strip("index.d.mts"), PathBuf::from("index"));
+        // A source extension a bundler compiles away strips like a module one, so
+        // an artifact and the single-file component behind it compare equal.
+        assert_eq!(strip("widget.vue"), PathBuf::from("widget"));
+        // No extension to strip — a directory target stays whole.
+        assert_eq!(strip("dist/bundle"), PathBuf::from("dist/bundle"));
+    }
+
+    /// A tsconfig with neither `rootDir` nor `include` compiles its whole
+    /// subtree, so its own directory is the single source root — the same answer
+    /// a project with no tsconfig gets from its `package.json` directory.
+    #[test]
+    fn typescript_source_roots_defaults_to_the_config_directory() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"p"}"#).unwrap();
+        let probe = dir.path().join("src/a.ts");
+
+        let ctx = ProjectCtx::empty();
+        assert_eq!(ctx.typescript_source_roots(&probe), vec![dir.path().to_path_buf()]);
+
+        std::fs::write(dir.path().join("tsconfig.json"), r#"{"compilerOptions":{}}"#).unwrap();
+        let ctx = ProjectCtx::empty();
+        assert_eq!(ctx.typescript_source_roots(&probe), vec![dir.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn typescript_source_roots_reads_root_dir_then_include() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("source")).unwrap();
+        std::fs::create_dir_all(dir.path().join("test")).unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"p"}"#).unwrap();
+        let probe = dir.path().join("source/a.ts");
+
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"include":["source/**/*.ts","test"]}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert_eq!(
+            ctx.typescript_source_roots(&probe),
+            vec![dir.path().join("source"), dir.path().join("test")]
+        );
+
+        // `rootDir` is the project's explicit statement and wins over `include`.
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"rootDir":"source"},"include":["source","test"]}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert_eq!(ctx.typescript_source_roots(&probe), vec![dir.path().join("source")]);
+    }
+
+    /// #8355: the published entry names a build artifact that only exists after
+    /// `npm run build`, so it has to be inverted to the source that produces it.
+    /// The artifact is not named `index`, so the inversion is the only route:
+    /// the source-root convention cannot answer for `src/entry.ts`.
+    #[test]
+    fn is_declared_entry_source_inverts_an_absent_build_artifact() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/components")).unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"lib","main":"dist/entry.js"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("tsconfig.json"), r#"{"include":["src"]}"#).unwrap();
+        std::fs::write(dir.path().join("src/entry.ts"), "export {};").unwrap();
+        std::fs::write(dir.path().join("src/components/index.ts"), "export {};").unwrap();
+        std::fs::write(dir.path().join("src/util.ts"), "export {};").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_declared_entry_source(&dir.path().join("src/entry.ts")));
+        assert!(!ctx.is_declared_entry_source(&dir.path().join("src/components/index.ts")));
+        assert!(!ctx.is_declared_entry_source(&dir.path().join("src/util.ts")));
+    }
+
+    /// The artifact's own directories are the output layout, and `outDir` is what
+    /// maps them back onto the source tree — including when it is written `./dist`.
+    /// Without that mapping the file name alone matches the wrong source.
+    #[test]
+    fn is_declared_entry_source_maps_a_dot_prefixed_out_dir() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/api")).unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"lib","main":"dist/api/client.js"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"outDir":"./dist"},"include":["src"]}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("src/api/client.ts"), "export {};").unwrap();
+        std::fs::write(dir.path().join("src/client.ts"), "export {};").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_declared_entry_source(&dir.path().join("src/api/client.ts")));
+        assert!(!ctx.is_declared_entry_source(&dir.path().join("src/client.ts")));
+    }
+
+    /// A glob subpath export names a set of files, not one file, so it inverts to
+    /// nothing — and the conventional source-root barrel is unaffected by that.
+    #[test]
+    fn is_declared_entry_source_ignores_a_glob_export_target() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/locales")).unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"lib","version":"1.0.0","exports":{"./locales/*":"./dist/locales/*.js"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("tsconfig.json"), r#"{"include":["src"]}"#).unwrap();
+        std::fs::write(dir.path().join("src/index.ts"), "export {};").unwrap();
+        std::fs::write(dir.path().join("src/locales/de.ts"), "export {};").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_declared_entry_source(&dir.path().join("src/locales/de.ts")));
+        assert!(ctx.is_declared_entry_source(&dir.path().join("src/index.ts")));
+    }
+
+    /// `module` and `types`/`typings` are entry fields like `main`, so a manifest
+    /// shipping its sources names an entry through them too.
+    #[test]
+    fn is_package_entry_file_matches_module_and_types_targets() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"lib","module":"src/index.ts","types":"src/index.d.ts"}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_package_entry_file(&dir.path().join("src/index.ts")));
+        assert!(ctx.is_package_entry_file(&dir.path().join("src/index.d.ts")));
+        assert!(!ctx.is_package_entry_file(&dir.path().join("src/other.ts")));
+    }
+
+    /// A declared entry that already exists in the tree needs no inversion.
+    #[test]
+    fn is_declared_entry_source_matches_an_entry_that_exists() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"cli","bin":{"cli":"./bin/run.ts"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("bin/run.ts"), "export {};").unwrap();
+        std::fs::write(dir.path().join("bin/helper.ts"), "export {};").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_declared_entry_source(&dir.path().join("bin/run.ts")));
+        assert!(!ctx.is_declared_entry_source(&dir.path().join("bin/helper.ts")));
     }
 }
