@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2027 rules across 147 categories.
+2026 rules across 147 categories.
 
 ## Categories
 
@@ -22,7 +22,7 @@
 - [better-result](#better-result) (20 rules)
 - [bundle-size](#bundle-size) (3 rules)
 - [ci-cd](#ci-cd) (9 rules)
-- [code-quality](#code-quality) (259 rules)
+- [code-quality](#code-quality) (258 rules)
 - [code-quality > imports](#code-quality-imports) (4 rules)
 - [code-quality > regex](#code-quality-regex) (17 rules)
 - [comments](#comments) (5 rules)
@@ -470,7 +470,6 @@
 | `no-ignored-exceptions` | Empty `catch` block silently swallows exceptions. | At minimum, log the error or re-throw it. Silent catch blocks hide bugs and make debugging extremely difficult. If intentional, add an explanatory comment. |
 | `no-ignored-return` | Return value of a pure method is ignored — the call has no effect. | Assign or return the result: `const result = arr.map(...)` or use a side-effect method instead. |
 | `no-immediate-mutation` | Disallow immediate mutation after variable assignment. | Chain the mutation onto the initialiser: `const arr = [3,1,2].sort()` instead of declaring then mutating on the next line. This makes the intent clearer and avoids an intermediate mutable state. |
-| `no-implicit-deps` | Import of a bare specifier that is not a known Node.js builtin — may be an unlisted dependency. | Ensure the package is listed in `package.json` dependencies. Bare specifier imports that are neither relative paths nor Node.js builtins may break when not explicitly installed. |
 | `no-in-misuse` | `in` operator on arrays checks keys (indices), not values — use `.includes()` instead. | Replace `x in arr` with `arr.includes(x)` or use a `Set`. |
 | `no-inconsistent-returns` | Function has inconsistent returns — some paths return a value, others return nothing. | Ensure every return path either returns a value or returns nothing. Mixing `return expr;` with bare `return;` or implicit returns is confusing. |
 | `no-incorrect-string-concat` | Suspicious string concatenation with a number variable. | Use explicit conversion: `"text" + String(num)` or template literals: `\`text${num}\``. |
@@ -1253,8 +1252,8 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
+| `no-implicit-deps` | Bare import of an npm package that is not declared in package.json. | Ensure the package is listed in `package.json` dependencies. Bare specifier imports that are neither relative paths nor Node.js builtins may break when not explicitly installed. |
 | `type-only-dependency` | Production dependency is only imported via `import type` — move to devDependencies. | Move the package from `dependencies` to `devDependencies` since it's only used for type information at build time. |
-| `unlisted-dependency` | Import references an npm package not declared in package.json. | Add the package to the appropriate section of package.json (dependencies or devDependencies). |
 | `unused-dependency` | Dependency in package.json is never imported in the project. | Remove the dependency from package.json, or add an import if it's actually needed. |
 
 ## imports > testing
