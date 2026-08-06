@@ -1101,10 +1101,11 @@ pub fn node_has_preceding_deprecated_tag(
 
 /// Convert an oxc byte offset into 1-based `(line, column)`.
 ///
-/// Shared across all `OxcCheck` rules that emit diagnostics. Rules call this
-/// once per emitted diagnostic, so a naive scan from the start of the file
-/// costs O(byte_offset) per call — quadratic on files that emit many
-/// diagnostics. Instead we build a per-file index of line-start offsets once
+/// Shared by every rule that emits a diagnostic from a byte offset, whichever
+/// backend produced it. Rules call this once per emitted diagnostic, so a naive
+/// scan from the start of the file costs O(byte_offset) per call — quadratic on
+/// files that emit many diagnostics. Instead we build a per-file index of
+/// line-start offsets once
 /// (cached in a thread-local, keyed by the source `(ptr, len)` identity) and
 /// binary-search it: O(log lines) to find the line, then O(line length) to
 /// count the column (chars, skipping `\r`).
