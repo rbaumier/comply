@@ -13,6 +13,7 @@
 //! `Option`/`Result`, never a lazy `Iterator`.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::block_tail_produces_value;
 
 const ITERATOR_METHODS: &[&str] = &[
     "map",
@@ -42,31 +43,14 @@ fn is_iterator_method_call(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 /// True when the closure body block produces a value: it ends in a tail
-/// expression or contains an explicit `return`.
-///
-/// In Rust a block returns its final expression when that expression has no
-/// trailing `;`. tree-sitter-rust wraps block-like tail expressions (`match`,
-/// `if`/`else`, `loop`, `while`, `unsafe`) in an `expression_statement`; such a
-/// node is the implicit return iff it does not end in a semicolon. Other tail
-/// expressions (`x + 1`, `async { .. }`) appear directly as the block's final
-/// named child.
+/// expression, per the shared [`block_tail_produces_value`]. A block with no
+/// element at all produces none.
 fn block_returns_value(block: tree_sitter::Node) -> bool {
     let count = block.named_child_count();
     let Some(last) = count.checked_sub(1).and_then(|i| block.named_child(i)) else {
         return false;
     };
-    match last.kind() {
-        "let_declaration" | "empty_statement" => false,
-        "expression_statement" => !expression_statement_has_semicolon(last),
-        _ => true,
-    }
-}
-
-/// True when an `expression_statement` ends in a `;` (a discarded statement,
-/// not a tail expression).
-fn expression_statement_has_semicolon(stmt: tree_sitter::Node) -> bool {
-    stmt.child(stmt.child_count().saturating_sub(1))
-        .is_some_and(|last| last.kind() == ";")
+    block_tail_produces_value(last)
 }
 
 /// True when the closure's parameter list is the single bare `_` wildcard.
@@ -278,7 +262,6 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         });
     }
 }
-
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {

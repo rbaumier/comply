@@ -1223,6 +1223,41 @@ fn collect_use_leaves(node: Node, source: &[u8], out: &mut Vec<UsePathLeaf>) {
     }
 }
 
+/// The full path `segments` denotes, with its leading segment resolved through
+/// the `use` declarations of the file `path` sits in. `segments` are the segments
+/// of the path node `path` ([`rust_path_segments`]), taken as an argument so a
+/// caller that already reads them does not read them twice.
+///
+/// `exit` under a `use std::process::exit;` resolves to `std::process::exit`,
+/// `process::exit` under a `use std::process;` to the same, and an already
+/// qualified `std::process::exit` to itself. An `as` rename resolves to the
+/// upstream name, so `use std::process::exit as die;` makes `die` the same path.
+///
+/// A leading segment no `use` binds by name is kept as written: the answer then
+/// names whatever that segment means in scope — a module of this crate, a local
+/// item, a prelude name, or a glob import, which binds no name this walk can
+/// read. Callers compare the result against paths they know, so an unresolved
+/// name simply does not match.
+///
+/// Every `use` of the file counts, including those inside an inline `mod`, so a
+/// name imported by a sibling module resolves here as well. A caller that must
+/// distinguish the modules of one file has to scope the walk itself.
+fn resolve_path_through_use(path: Node, segments: &[String], source: &[u8]) -> Vec<String> {
+    let Some((head, tail)) = segments.split_first() else {
+        return segments.to_vec();
+    };
+    let mut leaves = Vec::new();
+    collect_use_leaves(root_node(path), source, &mut leaves);
+    let Some(leaf) = leaves.iter().find(|leaf| &leaf.local == head) else {
+        return segments.to_vec();
+    };
+    let upstream = leaf.source_name.as_ref().unwrap_or(&leaf.local);
+    let mut resolved = leaf.module.clone();
+    resolved.push(upstream.clone());
+    resolved.extend_from_slice(tail);
+    resolved
+}
+
 /// The leaves one `use_declaration` binds. The declaration's own
 /// `visibility_modifier` is not part of the path, so the scan starts at the first
 /// child after it.
@@ -4061,22 +4096,40 @@ fn callee_name<'a>(function: Node, source: &'a [u8]) -> Option<&'a str> {
 }
 
 /// True if a `function_item` named `name` defined anywhere in the same file has a
-/// `return_type` of exactly `bool`. Walks to the `source_file` root and scans all
-/// descendant function items (free functions and `impl`/`trait` methods). The
-/// match is by name only — same-file resolution does not model receiver types, so
-/// a name collision across `impl` blocks would conservatively report the first
-/// `bool`-returning definition; an unresolved name keeps the cast flagged.
+/// `return_type` of exactly `bool`.
 fn fn_returns_bool_in_file(node: Node, name: &str, source: &[u8]) -> bool {
-    let mut root = node;
-    while let Some(parent) = root.parent() {
-        root = parent;
-    }
-    fn_with_name_returns_bool(root, name, source)
+    file_fn_return_type_matches(node, name, source, |return_type| {
+        return_type
+            .utf8_text(source)
+            .is_ok_and(|text| text.trim() == "bool")
+    })
 }
 
-/// Recursively search `node`'s subtree for a `function_item` named `name` whose
-/// `return_type` is `bool`.
-fn fn_with_name_returns_bool(node: Node, name: &str, source: &[u8]) -> bool {
+/// True if a `function_item` named `name` defined anywhere in the same file has a
+/// `return_type` that satisfies `matches_return_type`.
+///
+/// Walks to the `source_file` root and scans all descendant function items (free
+/// functions and `impl`/`trait` methods). The match is by name only — same-file
+/// resolution does not model receiver types, so under a name collision across
+/// `impl` blocks any matching definition answers; a name defined in another file
+/// resolves to nothing, which leaves the caller with its unresolved case.
+fn file_fn_return_type_matches(
+    node: Node,
+    name: &str,
+    source: &[u8],
+    matches_return_type: impl Fn(Node) -> bool + Copy,
+) -> bool {
+    subtree_declares_fn(root_node(node), name, source, matches_return_type)
+}
+
+/// Recursively search `node`'s subtree for the `function_item`
+/// [`file_fn_return_type_matches`] describes.
+fn subtree_declares_fn(
+    node: Node,
+    name: &str,
+    source: &[u8],
+    matches_return_type: impl Fn(Node) -> bool + Copy,
+) -> bool {
     if node.kind() == "function_item"
         && node
             .child_by_field_name("name")
@@ -4084,14 +4137,13 @@ fn fn_with_name_returns_bool(node: Node, name: &str, source: &[u8]) -> bool {
             == Some(name)
         && node
             .child_by_field_name("return_type")
-            .and_then(|rt| rt.utf8_text(source).ok())
-            .is_some_and(|rt| rt.trim() == "bool")
+            .is_some_and(matches_return_type)
     {
         return true;
     }
     let mut cursor = node.walk();
     node.children(&mut cursor)
-        .any(|child| fn_with_name_returns_bool(child, name, source))
+        .any(|child| subtree_declares_fn(child, name, source, matches_return_type))
 }
 
 /// True when the operand of `cast` (a `type_cast_expression`) is a `char`: a
@@ -5435,10 +5487,37 @@ fn exit_guard_if(stmt: Node) -> Option<Node> {
     Some(if_expr)
 }
 
+/// True when an `expression_statement` ends in a `;` — a discarded statement, not
+/// the tail expression of the block holding it.
+///
+/// The grammar leaves a plain tail expression (`0`, `Ok(())`) unwrapped, but wraps
+/// a block-like one (`match`, `if`, `loop`, `unsafe`) in an `expression_statement`
+/// like any statement. The semicolon is what tells the two apart.
+fn expression_statement_has_semicolon(stmt: Node) -> bool {
+    stmt.child(stmt.child_count().saturating_sub(1))
+        .is_some_and(|last| last.kind() == ";")
+}
+
+/// True when `node`, the last element of a `block`, is that block's value.
+///
+/// A `let` and an empty statement produce nothing. Anything else is an
+/// expression, and the `;` is what separates a discarded one from the block's
+/// value — see [`expression_statement_has_semicolon`].
+///
+/// A comment is not an element and answers `true` here; a caller whose block can
+/// end in one drops it before asking.
+pub(crate) fn block_tail_produces_value(node: Node) -> bool {
+    match node.kind() {
+        "let_declaration" | "empty_statement" => false,
+        "expression_statement" => !expression_statement_has_semicolon(node),
+        _ => true,
+    }
+}
+
 /// True if `block` (a `block` node) unconditionally diverges — its final element
-/// is a `return` / `break` / `continue` expression or a diverging macro
-/// (`panic!` / `unreachable!` / `todo!` / `unimplemented!`), so control never falls
-/// through to the statement following the block.
+/// is a diverging tail per [`node_diverges`], so control never falls through to
+/// the statement following the block. A trailing comment is not an element: it
+/// says nothing about where control goes.
 pub(crate) fn block_diverges(block: Node, source: &[u8]) -> bool {
     if block.kind() != "block" {
         return false;
@@ -5446,13 +5525,24 @@ pub(crate) fn block_diverges(block: Node, source: &[u8]) -> bool {
     let mut cursor = block.walk();
     block
         .named_children(&mut cursor)
+        .filter(|child| !is_comment_node(*child))
         .last()
         .is_some_and(|last| node_diverges(last, source))
 }
 
-/// True if `node` is a diverging tail — a `return` / `break` / `continue`
-/// expression, a diverging macro invocation, or an `expression_statement` wrapping
-/// one of those.
+/// True if `node` is a diverging tail: a `return` / `break` / `continue`
+/// expression, a diverging macro invocation, a call to a function declared `-> !`,
+/// an `unsafe` block ending in one of those, or an `expression_statement` wrapping
+/// any of them.
+///
+/// The three control-flow exits and the never-returning macros are language
+/// syntax, so their node kind settles the question. A `-> !` call is spelled like
+/// any other call, so it is settled by resolving the callee instead — see
+/// [`callee_never_returns`].
+///
+/// Only an `unsafe` block is looked through. A `return` inside an `async` or
+/// `try` block leaves that block, not the function around it, so such a block
+/// does not divert the control flow this answers about.
 pub(crate) fn node_diverges(node: Node, source: &[u8]) -> bool {
     match node.kind() {
         "return_expression" | "break_expression" | "continue_expression" => true,
@@ -5461,8 +5551,85 @@ pub(crate) fn node_diverges(node: Node, source: &[u8]) -> bool {
             .child_by_field_name("macro")
             .and_then(|m| m.utf8_text(source).ok())
             .is_some_and(|n| matches!(n, "panic" | "unreachable" | "todo" | "unimplemented")),
+        "call_expression" => callee_never_returns(node, source),
+        "unsafe_block" => node
+            .named_child(0)
+            .is_some_and(|block| block_diverges(block, source)),
         _ => false,
     }
+}
+
+/// The std free functions declared `-> !` that code reaches for. A call to one
+/// leaves the process or is statically unreachable — the property
+/// [`node_diverges`] reads off a macro name, for functions whose signature lives
+/// in another crate and so cannot be read from the file under analysis. A std
+/// function absent from the list simply does not match.
+const NEVER_RETURNING_STD_FNS: [&[&str]; 4] = [
+    &["std", "process", "exit"],
+    &["std", "process", "abort"],
+    &["std", "hint", "unreachable_unchecked"],
+    &["core", "hint", "unreachable_unchecked"],
+];
+
+/// True when the function a `call_expression` names cannot return.
+///
+/// Two same-file resolutions answer this: the callee's path, resolved through the
+/// file's `use` declarations, is one of [`NEVER_RETURNING_STD_FNS`]; or the callee
+/// is an unqualified name this file declares as a `-> !` function. A path naming
+/// another module's item resolves to neither, and a callee defined in another file
+/// is beyond a same-file walk — both answer false, which leaves the caller with
+/// its unresolved case.
+fn callee_never_returns(call: Node, source: &[u8]) -> bool {
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let segments = rust_path_segments(callee, source);
+    let Some(name) = segments.last() else {
+        return false;
+    };
+    let names_std_fn = NEVER_RETURNING_STD_FNS
+        .iter()
+        .any(|path| path.last() == Some(&name.as_str()));
+    // Both resolutions below walk the whole file. A call earns that walk when its
+    // own path already bears one of the std names, or when it is a bare name the
+    // file can bind to a never-returning function — which the file has to spell
+    // somewhere for either resolution to succeed.
+    let may_resolve =
+        names_std_fn || (segments.len() == 1 && file_names_a_never_returning_fn(source));
+    if !may_resolve {
+        return false;
+    }
+    let resolved = resolve_path_through_use(callee, &segments, source);
+    if NEVER_RETURNING_STD_FNS
+        .iter()
+        .any(|path| resolved.iter().map(String::as_str).eq(path.iter().copied()))
+    {
+        return true;
+    }
+    segments.len() == 1
+        && file_fn_return_type_matches(call, name, source, |return_type| {
+            return_type.kind() == "never_type"
+        })
+}
+
+/// Whether the file can bind a bare name to a never-returning function: it
+/// declares one (`-> !`), or spells a std one a `use` can import or rename.
+///
+/// Memoized per file, so the file that says neither answers from its bytes rather
+/// than from a walk per call. A file that says either still has to resolve the
+/// name — the bytes only tell that the question is worth asking. Missing a file
+/// only leaves the call unresolved, which is the answer a caller outside this
+/// file gets anyway.
+fn file_names_a_never_returning_fn(source: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return false;
+    };
+    crate::oxc_helpers::source_contains(text, "-> !")
+        || crate::oxc_helpers::source_contains(text, "->!")
+        || NEVER_RETURNING_STD_FNS.iter().any(|path| {
+            path.last()
+                .is_some_and(|name| crate::oxc_helpers::source_contains(text, name))
+        })
 }
 
 /// True if `name` is re-bound or reassigned anywhere in `consequence` *before*
@@ -8266,6 +8433,30 @@ pub fn local_binding_init_expression<'tree>(
     Some(origin)
 }
 
+/// Whether the binding for `var` visible at `node` is a mutable local — a
+/// `let mut` of an enclosing scope, found by the same walk as
+/// [`local_binding_init_expression`] and therefore through a closure that
+/// captures it.
+///
+/// Only a `let mut` can be mutated in place, so this is what separates a call
+/// that updates the function's own state from one that reaches outside it: a
+/// parameter, a field, a pattern binding and a non-`mut` local all answer false.
+/// The declaration answers on its own, so a `let mut` awaiting its first
+/// assignment (`let mut args; args = …;`) qualifies as well.
+pub fn local_binding_is_mut(node: Node, var: &str, source: &[u8]) -> bool {
+    nearest_binding(node, var, source)
+        .and_then(|binding| binding.declaration)
+        .is_some_and(|declaration| {
+            // The grammar puts `mut` before the pattern field, as a
+            // `mutable_specifier` child of the declaration carrying no field of
+            // its own, so the pattern alone does not answer.
+            let mut cursor = declaration.walk();
+            declaration
+                .children(&mut cursor)
+                .any(|child| child.kind() == "mutable_specifier")
+        })
+}
+
 /// How many renaming rebindings [`local_binding_init_expression`] follows. Each
 /// hop resolves from the initializer's own position, which lies strictly before
 /// the one it came from, so a chain ends on its own; the bound keeps the walk
@@ -8295,26 +8486,43 @@ fn nearest_binding_init_expression<'tree>(
     var: &str,
     source: &[u8],
 ) -> Option<Node<'tree>> {
+    nearest_binding(node, var, source)?.value
+}
+
+/// The binding of `var` the scopes around `node` declare, innermost first — the
+/// one walk behind "where is this name declared" and "what value does it hold".
+///
+/// The walk stops at the first binding it meets, whether or not that binding
+/// answers either question: every binding of `var` shadows the ones outside it,
+/// so an outer one would describe something the code no longer names. It stops at
+/// an enclosing `function_item` as well, since a nested `fn` captures nothing.
+fn nearest_binding<'tree>(
+    node: Node<'tree>,
+    var: &str,
+    source: &[u8],
+) -> Option<BindingSite<'tree>> {
     let mut child = node;
     while let Some(parent) = child.parent() {
         if child.kind() == "function_item" {
             return None;
         }
-        match binding_site_at(parent, child, var, source) {
-            Some(BindingSite::Value(value)) => return Some(value),
-            Some(BindingSite::Opaque) => return None,
-            None => child = parent,
+        if let Some(site) = binding_site_at(parent, child, var, source) {
+            return Some(site);
         }
+        child = parent;
     }
     None
 }
 
-/// What a scope contributes to the walk in [`nearest_binding_init_expression`].
-enum BindingSite<'tree> {
-    /// A binding whose value the walk can follow.
-    Value(Node<'tree>),
-    /// A binding that hides the outer ones without resolving to a value.
-    Opaque,
+/// What a scope contributes to the walk in [`nearest_binding`].
+struct BindingSite<'tree> {
+    /// The `let` declaration that binds the name — `None` when the binding is
+    /// none: a closure parameter, or a `for` / `if let` / `match` pattern.
+    declaration: Option<Node<'tree>>,
+    /// The expression the binding takes its value from — `None` when the walk
+    /// does not follow it: a destructuring pattern, a `let` awaiting its first
+    /// assignment, or a closure parameter outside a seeded fold.
+    value: Option<Node<'tree>>,
 }
 
 /// The binding of `var` that `parent` declares over `child`: a `let` that
@@ -8323,8 +8531,8 @@ enum BindingSite<'tree> {
 ///
 /// A pattern that destructures (`let Some(w) = … else`, `let (a, w) = …`, a
 /// closure parameter outside a seeded fold) binds a part of a value this walk
-/// does not follow, so it reports [`BindingSite::Opaque`]. Answering with an
-/// outer binding there would describe a value the code no longer names.
+/// does not follow, so its site carries no value. Answering with an outer binding
+/// there would describe a value the code no longer names.
 fn binding_site_at<'tree>(
     parent: Node<'tree>,
     child: Node<'tree>,
@@ -8335,31 +8543,36 @@ fn binding_site_at<'tree>(
         return Some(site);
     }
     match parent.kind() {
-        "closure_expression" if closure_parameters_bind(parent, var, source) => Some(
-            fold_seed_for_closure_parameter(parent, var, source)
-                .map_or(BindingSite::Opaque, BindingSite::Value),
-        ),
+        "closure_expression" if closure_parameters_bind(parent, var, source) => Some(BindingSite {
+            declaration: None,
+            value: fold_seed_for_closure_parameter(parent, var, source),
+        }),
         // `for w in ws` — the loop pattern rebinds the name over the loop.
         "for_expression"
             if parent
                 .child_by_field_name("pattern")
                 .is_some_and(|pattern| pattern_contains_identifier(pattern, var, source)) =>
         {
-            Some(BindingSite::Opaque)
+            Some(BindingSite {
+                declaration: None,
+                value: None,
+            })
         }
         // `if let Some(w) = o`, `while let`, `match … { w => … }` — the same
         // rebinding, reached through the body the pattern guards.
-        _ if intervening_pattern_binds_name(parent, child, var, source) => {
-            Some(BindingSite::Opaque)
-        }
+        _ if intervening_pattern_binds_name(parent, child, var, source) => Some(BindingSite {
+            declaration: None,
+            value: None,
+        }),
         _ => None,
     }
 }
 
 /// The last `let` among `parent`'s children before `child` whose pattern names
-/// `var`: [`BindingSite::Value`] when a plain `w` / `mut w` pattern has an
-/// initializer, [`BindingSite::Opaque`] otherwise — a destructuring pattern, or a
-/// deferred `let mut w;` — since neither gives the walk a value to follow.
+/// `var`. Its site carries the initializer when a plain `w` / `mut w` pattern has
+/// one, and no value otherwise — a destructuring pattern, or a `let mut w;`
+/// awaiting its first assignment — since neither gives the walk a value to
+/// follow.
 fn preceding_let_binding<'tree>(
     parent: Node<'tree>,
     child: Node<'tree>,
@@ -8376,9 +8589,12 @@ fn preceding_let_binding<'tree>(
             && let Some(pattern) = sib.child_by_field_name("pattern")
             && pattern_contains_identifier(pattern, var, source)
         {
-            site = Some(match sib.child_by_field_name("value") {
-                Some(value) if let_pattern_binds(pattern, var, source) => BindingSite::Value(value),
-                _ => BindingSite::Opaque,
+            site = Some(BindingSite {
+                declaration: Some(sib),
+                value: match sib.child_by_field_name("value") {
+                    Some(value) if let_pattern_binds(pattern, var, source) => Some(value),
+                    _ => None,
+                },
             });
         }
     }
@@ -11556,6 +11772,102 @@ mod tests {
             assert_eq!(
                 origin, expected,
                 "local_binding_init_expression mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn local_binding_is_mut_reads_the_declaration_of_the_binding_in_scope() {
+        // Anchor on the `probe!()` invocation, mirroring how a caller asks about
+        // a name from where it is used.
+        let cases = [
+            ("fn f() { let mut w = S::new(); probe!(w); }", "w", true),
+            ("fn f() { let w = S::new(); probe!(w); }", "w", false),
+            // A `let mut` awaiting its first assignment declares a mutable local
+            // as much as an initialized one does.
+            ("fn f() { let mut w; w = S::new(); probe!(w); }", "w", true),
+            // A parameter and a pattern binding are not `let mut` locals.
+            ("fn f(w: &mut S) { probe!(w); }", "w", false),
+            (
+                "fn f(o: Option<S>) { if let Some(w) = o { probe!(w); } }",
+                "w",
+                false,
+            ),
+            // The walk crosses a closure, so a captured `let mut` answers.
+            (
+                "fn f() { let mut w = S::new(); xs.for_each(|x| { probe!(w); }); }",
+                "w",
+                true,
+            ),
+            // The innermost binding answers; the outer `mut` one is shadowed.
+            (
+                "fn f() { let mut w = S::new(); let w = w.freeze(); probe!(w); }",
+                "w",
+                false,
+            ),
+            // A nested `fn` captures nothing from the fn around it.
+            (
+                "fn o() { let mut w = S::new(); fn i() { probe!(w); } }",
+                "w",
+                false,
+            ),
+        ];
+        for (src, var, expected) in cases {
+            let tree = parse(src);
+            let probe = first_of_kind(tree.root_node(), "macro_invocation")
+                .expect("snippet should contain a macro invocation");
+            assert_eq!(
+                local_binding_is_mut(probe, var, src.as_bytes()),
+                expected,
+                "local_binding_is_mut mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_path_through_use_reports_the_upstream_path() {
+        // Anchor on the callee of the first call, mirroring how a caller resolves
+        // the function a call names.
+        let cases = [
+            (
+                "use std::process::exit; fn f() { exit(1); }",
+                "std::process::exit",
+            ),
+            (
+                "use std::process; fn f() { process::exit(1); }",
+                "std::process::exit",
+            ),
+            ("fn f() { std::process::exit(1); }", "std::process::exit"),
+            // An `as` rename resolves to the upstream name, item or module.
+            (
+                "use std::process::exit as die; fn f() { die(1); }",
+                "std::process::exit",
+            ),
+            (
+                "use std::process as sys; fn f() { sys::exit(1); }",
+                "std::process::exit",
+            ),
+            // A `use` inside an inline module counts as well.
+            (
+                "mod m { use std::process::exit; } fn f() { exit(1); }",
+                "std::process::exit",
+            ),
+            // No `use` binds the head, so the path stands as written.
+            ("fn f() { exit(1); }", "exit"),
+            ("fn f() { helpers::exit(1); }", "helpers::exit"),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let call = first_call_expression(tree.root_node())
+                .expect("snippet should contain a call expression");
+            let callee = call
+                .child_by_field_name("function")
+                .expect("a call names a callee");
+            let segments = rust_path_segments(callee, src.as_bytes());
+            assert_eq!(
+                resolve_path_through_use(callee, &segments, src.as_bytes()).join("::"),
+                expected,
+                "resolve_path_through_use mismatch for `{src}`"
             );
         }
     }

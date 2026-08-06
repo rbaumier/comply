@@ -33,12 +33,12 @@
 //!   (`A | _ => {}`, `A | other => {}`) that hides the remaining cases.
 //!   An empty arm is also exempt when a sibling CATCH-ALL arm in the same
 //!   `match` diverges — an unguarded `_`/wildcard/bare-binding arm whose body
-//!   cannot fall through: a `panic!`/`unreachable!`/`todo!`/`unimplemented!`
-//!   macro, or a `return`/`break`/`continue` (bare `_ => panic!(…)` or braced
-//!   `_ => { panic!(…) }`). A diverging catch-all sibling makes the `match` an
-//!   assertion/guard: it absorbs and aborts on every case the other arms do not
-//!   match, so the empty arm is unambiguously the intended (expected) case, not
-//!   a forgotten no-op. Requiring the diverging arm to be a catch-all is what
+//!   cannot fall through per the shared `node_diverges` predicate, either as a
+//!   bare arm value (`_ => panic!(…)`) or braced (`_ => { panic!(…) }`). A
+//!   diverging catch-all sibling makes the `match` an assertion/guard: it
+//!   absorbs and aborts on every case the other arms do not match, so the empty
+//!   arm is unambiguously the intended (expected) case, not a forgotten no-op.
+//!   Requiring the diverging arm to be a catch-all is what
 //!   keeps a plain error-swallow like `Ok(v) => return v, Err(e) => {}` flagged
 //!   — there the diverging `Ok` arm is a specific variant and the empty `Err`
 //!   arm still silently swallows. Keyed on the enclosing `match`'s arms, not on
@@ -100,17 +100,15 @@ fn match_arm_needs_justification(arm: tree_sitter::Node, source: &[u8]) -> bool 
 }
 
 /// True when a sibling CATCH-ALL arm in the same `match` diverges — its body
-/// cannot fall through: a `panic!`/`unreachable!`/`todo!`/`unimplemented!` macro,
-/// or a `return`/`break`/`continue`, either as a bare arm value (`_ => panic!(…)`)
-/// or a braced block whose tail diverges (`_ => { panic!(…) }`). A diverging
-/// catch-all sibling turns the `match` into an assertion/guard: it absorbs and
-/// aborts on every case the other arms do not match, so the empty arm is
-/// unambiguously the intended (expected) case and needs no comment. The catch-all
-/// requirement is what keeps a specific-variant divergence like
+/// cannot fall through per [`node_diverges`], either as a bare arm value
+/// (`_ => panic!(…)`) or a braced block whose tail diverges (`_ => { panic!(…) }`).
+/// A diverging catch-all sibling turns the `match` into an assertion/guard: it
+/// absorbs and aborts on every case the other arms do not match, so the empty arm
+/// is unambiguously the intended (expected) case and needs no comment. The
+/// catch-all requirement is what keeps a specific-variant divergence like
 /// `Ok(v) => return v, Err(e) => {}` flagged — there the empty `Err` arm still
 /// silently swallows. Keyed on the enclosing `match_block`'s arms — a structural
-/// property of the `match` — not on the empty arm's own pattern. Reuses the shared
-/// divergence predicates (`block_diverges` / `node_diverges`).
+/// property of the `match` — not on the empty arm's own pattern.
 fn sibling_arm_diverges(arm: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(match_block) = arm.parent() else {
         return false;
@@ -743,6 +741,14 @@ fn f(x: Option<u8>) {
     #[test]
     fn allows_empty_arm_when_sibling_continues_issue_7495() {
         let src = "fn f(r: Result<u8, E>) { loop { match r { Err(e) => {} _ => continue, } } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_arm_when_sibling_exits_the_process() {
+        // `std::process::exit` is declared `-> !`, so the catch-all arm cannot
+        // fall through any more than `panic!` can.
+        let src = "fn f(r: Result<u8, E>) { match r { Err(e) => {} _ => std::process::exit(1), } }";
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 
