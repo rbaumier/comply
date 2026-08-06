@@ -269,13 +269,14 @@ mod tests {
             emittable.insert(rule.meta.id);
         }
 
-        // (canonical id kept) → (former alias ids that must NOT be registered).
-        let groups: [(&str, &[&str]); 5] = [
+        // (canonical id kept) → (alias or retired ids that must NOT be registered).
+        let groups: [(&str, &[&str]); 6] = [
             ("ts-no-explicit-any", &["typescript/no-explicit-any", "no-explicit-any"]),
             ("ts-no-inferrable-types", &["no-inferrable-types"]),
             ("promise-prefer-await-to-then", &["promise/prefer-await-to-then"]),
             ("consistent-type-imports", &["typescript/consistent-type-imports"]),
             ("vue-no-array-index-key", &["vue-v-for-needs-stable-key"]),
+            ("no-delete", &["ts-no-dynamic-delete"]),
         ];
         for (canonical, aliases) in groups {
             assert!(

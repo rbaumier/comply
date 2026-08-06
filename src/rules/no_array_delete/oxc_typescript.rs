@@ -1,9 +1,9 @@
 //! no-array-delete oxc backend — flag `delete arr[i]` on array targets.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_array_delete_target};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, TSType, TSTypeName, TSTypeOperatorOperator};
+use oxc_ast::ast::MemberExpression;
 use std::sync::Arc;
 
 pub struct Check;
@@ -35,15 +35,19 @@ impl OxcCheck for Check {
         if ctx.file.path_segments.in_test_dir {
             return;
         }
-        // The argument must be a computed member expression (bracket access).
-        let Expression::ComputedMemberExpression(member) = &unary.argument else {
+        // The argument must be a computed member expression (bracket access),
+        // read through `get_member_expr` so that every spelling `no-delete`
+        // hands over reaches this test — see the `no-delete` rule.
+        let Some(MemberExpression::ComputedMemberExpression(member)) =
+            unary.argument.get_member_expr()
+        else {
             return;
         };
 
         // Only fire with positive evidence the target is an array; deleting a
         // key from a plain object / record / dictionary is a valid operation
         // that creates no sparse hole.
-        if !is_array_target(&member.object, &member.expression, semantic) {
+        if !is_array_delete_target(member, semantic) {
             return;
         }
 
@@ -58,70 +62,6 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
-    }
-}
-
-/// True when there is static evidence the deletion target is an array:
-/// either the index is a numeric literal (`arr[0]`), or the target identifier
-/// resolves to a binding declared as an array (literal `[...]`, `new Array(...)`,
-/// or annotated `T[]` / tuple / `Array<T>` / `ReadonlyArray<T>` / `readonly T[]`).
-fn is_array_target<'a>(
-    object: &Expression<'a>,
-    index: &Expression<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    if matches!(index, Expression::NumericLiteral(_)) {
-        return true;
-    }
-    let Expression::Identifier(id) = object else {
-        return false;
-    };
-    let Some(ref_id) = id.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let AstKind::VariableDeclarator(decl) =
-        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
-    else {
-        return false;
-    };
-    if let Some(annotation) = &decl.type_annotation
-        && is_array_type(&annotation.type_annotation)
-    {
-        return true;
-    }
-    matches!(&decl.init, Some(init) if is_array_initializer(init))
-}
-
-/// True for an initializer that produces an array: an array literal `[...]`
-/// or `new Array(...)`.
-fn is_array_initializer(expr: &Expression<'_>) -> bool {
-    match expr {
-        Expression::ArrayExpression(_) => true,
-        Expression::NewExpression(new_expr) => {
-            matches!(&new_expr.callee, Expression::Identifier(id) if id.name == "Array")
-        }
-        _ => false,
-    }
-}
-
-/// True for a TypeScript type that denotes an array or tuple:
-/// `T[]`, `[A, B]`, `readonly T[]`, `Array<T>`, or `ReadonlyArray<T>`.
-fn is_array_type(ty: &TSType<'_>) -> bool {
-    match ty {
-        TSType::TSArrayType(_) | TSType::TSTupleType(_) => true,
-        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
-            is_array_type(&op.type_annotation)
-        }
-        TSType::TSTypeReference(reference) => matches!(
-            &reference.type_name,
-            TSTypeName::IdentifierReference(name)
-                if matches!(name.name.as_str(), "Array" | "ReadonlyArray")
-        ),
-        _ => false,
     }
 }
 
@@ -171,6 +111,15 @@ mod oxc_tests {
     #[test]
     fn flags_delete_array_typed_binding() {
         let src = "const arr: number[] = []; delete arr[i];";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_delete_through_an_optional_chain() {
+        // `delete arr?.[i]` leaves the same sparse hole. `no-delete` hands the
+        // array case here on the same unwrapped member, so a spelling this rule
+        // did not read would go unreported by both.
+        let src = "const arr = [1, 2, 3]; delete arr?.[i];";
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
 

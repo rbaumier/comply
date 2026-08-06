@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2028 rules across 147 categories.
+2027 rules across 147 categories.
 
 ## Categories
 
@@ -139,7 +139,7 @@
 - [testing > playwright](#testing-playwright) (2 rules)
 - [testing > testing-library](#testing-testing-library) (3 rules)
 - [testing > vitest](#testing-vitest) (7 rules)
-- [typescript](#typescript) (182 rules)
+- [typescript](#typescript) (181 rules)
 - [typescript > async](#typescript-async) (4 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
@@ -1133,10 +1133,10 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
-| `no-delete` | Disallow the `delete` operator — it mutates objects in place. | Build a new object without the property, e.g. `const { [key]: _, ...rest } = obj;` or use `Object.fromEntries(Object.entries(obj).filter(...))`. |
+| `no-delete` | Disallow `delete` except on a local copy the function solely owns — removing a key mutates the object in place. | Build a new object without the property, e.g. `const { [key]: _, ...rest } = obj;` or use `Object.fromEntries(Object.entries(obj).filter(...))`. |
 | `no-let` | Disallow `let` declarations — prefer `const` for immutable bindings. | Replace `let` with `const`. If you truly need to reassign, restructure the code to use a new binding, `reduce`, or a pure function instead. |
 | `no-mutating-methods` | Disallow array mutating methods (push, pop, shift, unshift, splice, sort, reverse, fill, copyWithin). | Use non-mutating alternatives: spread (`[...arr, x]`), `slice`, `toSorted`, `toReversed`, `toSpliced`, `filter`, `map`, or `concat`. |
-| `no-mutation` | Disallow mutating properties of a `const`-bound value — assignment to its fields still mutates shared state. | Build a new object/array with the change (spread or structural copy) and assign it to a new binding, or lift the change up to the producer. |
+| `no-mutation` | Disallow assigning to properties of a `const`-bound value — writing to its fields still mutates shared state. | Build a new object/array with the change (spread or structural copy) and assign it to a new binding, or lift the change up to the producer. |
 | `no-promise-reject` | `Promise.reject()` makes error handling harder — prefer returning error values or throwing typed errors. | Return a Result type, throw a typed error, or use `Promise.resolve()` with an error discriminant. |
 | `no-try-statements` | `try` blocks obscure error flow — prefer Result types or explicit error handling. | Use a Result/Either type, or a wrapper function that returns `{ data, error }` tuples instead of try/catch. |
 | `no-while-loop` | Bans convertible while/do-while loops. | Use recursion, Array methods, or generators instead. |
@@ -1145,7 +1145,7 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
-| `no-property-mutation` | Forbids mutation of object properties. | Use spread syntax `{ ...obj, prop: value }` or immutable update patterns. |
+| `no-property-mutation` | Forbids writing to object properties — `obj.prop = value` and `obj.prop++` mutate a value other code holds. | Use spread syntax `{ ...obj, prop: value }` or immutable update patterns. |
 
 ## hono > correctness
 
@@ -2540,7 +2540,6 @@
 | `ts-no-dupe-class-members` | Duplicate class members shadow earlier definitions and indicate a bug. | Remove or rename the duplicate class member. TS method overloads (without a body) are allowed. |
 | `ts-no-duplicate-enum-values` | Duplicate enum member values cause silent shadowing at runtime. | Assign unique values to each enum member. |
 | `ts-no-duplicate-type-constituents` | Duplicate members in a union or intersection are dead — TS resolves them to the same type but readers and refactors can be confused. | Remove the duplicate type member. Use an alias if the repetition signals a missing concept. |
-| `ts-no-dynamic-delete` | Using `delete` on a computed key is error-prone — use `Map` or `Set` instead. | Remove the dynamic `delete` and use a `Map`/`Set`, or delete a static key. |
 | `ts-no-empty-function` | Empty functions are often a sign of incomplete refactoring. | Add a comment explaining why the function is intentionally empty, or remove it. |
 | `ts-no-empty-object-type` | `{}` as a type matches any non-nullish value — it almost never means what you think. | Use `Record<string, never>` for an empty object, `object` for any object, or `unknown` for any value. |
 | `ts-no-enum-object-literal-pattern` | Indexing an `as const` enum-shaped object with an arbitrary string defeats the narrow type. | Cast the index to `keyof typeof X` (`X[k as keyof typeof X]`), or convert the object to a real enum / discriminated map and accept the narrow keys explicitly. |

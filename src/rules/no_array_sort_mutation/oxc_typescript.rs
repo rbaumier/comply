@@ -315,4 +315,20 @@ mod oxc_tests {
                    sink(xs); xs.sort(); }";
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
+
+    #[test]
+    fn allows_sort_after_a_for_in_enumeration() {
+        // A `for…in` head enumerates the indices and keeps nothing, so it exposes
+        // no pre-sort alias.
+        let src = "function f() { const xs = getItems(); for (const i in xs) { use(i); } xs.sort(); }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_sort_after_object_keys_inspection() {
+        // `Object.keys` reads the indices and returns a new array; it keeps no
+        // reference to the array it inspects.
+        let src = "function f() { const xs = getItems(); const n = Object.keys(xs).length; xs.sort(); return n; }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
 }

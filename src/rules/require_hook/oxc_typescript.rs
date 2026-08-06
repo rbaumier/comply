@@ -389,15 +389,17 @@ fn root_identifier_of_target<'a>(
 
 /// Is `expr` a plain `=` assignment populating a locally-declared data table —
 /// `staticTests[key] = value`, `lookup.foo = value` — where the target's base
-/// object resolves to a same-module `const`/`let` binding initialised to an
-/// object literal?
+/// object resolves to a same-module `const`/`let` binding the declarator freshly
+/// allocates (`is_local_object_builder_binding`): an object literal, an
+/// object-spread, `Object.assign(<fresh>, …)`, `structuredClone(…)`, or an
+/// object pattern's rest element?
 ///
 /// Populating such a table at module scope is static data construction (the
 /// multi-statement form of an object-literal initializer), not stateful setup
 /// that risks cross-test pollution: tests cannot reset it, but nothing outside
 /// the module observes the writes. Assignments whose base object is an imported,
 /// global, or external binding (`process.env.X = …`, `window.foo = …`) do not
-/// resolve to a local object-literal binding and stay flagged, as do compound
+/// resolve to a locally-allocated binding and stay flagged, as do compound
 /// assignments (`+=`, `||=`) which read-then-mutate.
 fn is_local_data_table_assignment(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
     let Expression::AssignmentExpression(assign) = expr else {

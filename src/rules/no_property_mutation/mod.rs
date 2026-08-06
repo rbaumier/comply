@@ -10,7 +10,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-property-mutation",
-    description: "Forbids mutation of object properties.",
+    description: "Forbids writing to object properties — `obj.prop = value` and `obj.prop++` mutate a value other code holds.",
     remediation: "Use spread syntax `{ ...obj, prop: value }` or immutable update patterns.",
     severity: Severity::Error,
     doc_url: None,

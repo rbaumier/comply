@@ -10,8 +10,7 @@ use crate::oxc_helpers::{
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    AssignmentTarget, Expression, IdentifierReference, PropertyKey, UnaryOperator,
-    VariableDeclarationKind,
+    AssignmentTarget, Expression, IdentifierReference, PropertyKey, VariableDeclarationKind,
 };
 use std::sync::Arc;
 
@@ -41,7 +40,6 @@ impl OxcCheck for Check {
         &[
             AstType::AssignmentExpression,
             AstType::UpdateExpression,
-            AstType::UnaryExpression,
             AstType::CallExpression,
         ]
     }
@@ -192,26 +190,6 @@ impl OxcCheck for Check {
                 };
                 if is_declared_as_const(semantic, root) {
                     report(diagnostics, ctx, update.span.start, root, "Mutating property of");
-                }
-            }
-            // delete obj.prop
-            AstKind::UnaryExpression(unary) => {
-                if unary.operator != UnaryOperator::Delete {
-                    return;
-                }
-                if let Some(id) = root_identifier_of_expr(&unary.argument)
-                    && (is_created_dom_element(id, semantic)
-                        || is_rtk_reducer_draft_param(id, semantic)
-                        || is_valtio_proxy_binding(id, semantic)
-                        || is_get_context_call_binding(id, semantic))
-                {
-                    return;
-                }
-                let Some(root) = root_name_of_expr(&unary.argument) else {
-                    return;
-                };
-                if is_declared_as_const(semantic, root) {
-                    report(diagnostics, ctx, unary.span.start, root, "Deleting property of");
                 }
             }
             // arr.push(x), Object.assign(obj, ...)
@@ -1420,17 +1398,12 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_delete_on_reactive_object() {
-        // Parity boundary: the reactive() exemption covers property assignment
-        // and increment/decrement (the two contexts no-property-mutation
-        // exempts), not `delete`; a delete on a reactive object stays flagged in
-        // both rules.
-        let src = r#"
-            import { reactive } from 'vue'
-            const s = reactive({ n: 0 });
-            delete s.n;
-        "#;
-        assert_eq!(run(src).len(), 1);
+    fn leaves_the_delete_operator_to_no_delete_issue_8356() {
+        // Boundary for rbaumier/comply#8356 — one operator, one rule: `no-delete`
+        // decides every `delete`, including on a `const`-bound receiver. Not
+        // subscribing to the kind is what makes that true; the engine never
+        // dispatches it here.
+        assert!(!Check.interested_kinds().contains(&AstType::UnaryExpression));
     }
 
     // Pinia store instance direct state write — issue #7857
