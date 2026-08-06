@@ -55,9 +55,10 @@ pub enum Language {
     JavaScript,
     /// Rust source `.rs`.
     Rust,
-    /// Vue Single-File Component `.vue` — text-based rules only (no
-    /// tree-sitter grammar bundled). Rules check the raw SFC source
-    /// for template/script patterns.
+    /// Vue Single-File Component `.vue` — parsed with the bundled
+    /// `tree-sitter-vue-updated` grammar, which exposes the template's
+    /// elements and directives. The `<script>` body is one opaque token,
+    /// so rules reading script code extract and re-parse the block.
     Vue,
     /// TOML configuration file `.toml` — text-based rules only, parsed
     /// on demand by individual rules via the `toml` crate.

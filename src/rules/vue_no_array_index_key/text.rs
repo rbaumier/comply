@@ -1,58 +1,57 @@
-//! vue-no-array-index-key — Vue text backend.
+//! vue-no-array-index-key AST backend.
 //!
-//! Flags `v-for="(item, index) in items" :key="index"`, where the numeric loop
-//! index is used as `:key` — unstable on reorder/filter; use a stable id instead.
+//! Walks `directive_attribute` nodes. For each `v-for`, reads the `:key` binding
+//! on the same tag and reports when that `:key` binds the numeric loop index,
+//! anchoring the diagnostic on the `:key` attribute.
 //!
-//! `v-for` over an object (`v-for="(value, key) in obj"`) binds the property key
-//! (stable) in the 2nd slot, so only the index-named loop variable is flagged.
+//! Which alias is the numeric index follows Vue's `renderList`: an array, a
+//! string, a number or any iterable binds `(item, index)`, while a plain object
+//! binds `(value, key, index)`. So the 3rd alias is always the numeric index,
+//! and a `v-for` that declares one is written for the object form — making its
+//! 2nd alias the (stable) property key.
+//!
+//! A `v-for` with exactly two aliases is the ambiguous case: the template does
+//! not carry the iterable's runtime type, so the 2nd alias is the numeric index
+//! for an array and the property key for a plain object. Both forms occur in
+//! real code, so the alias's own name is the only signal left, and a 2nd alias
+//! is reported only when it is named like a counter.
+//!
+//! A numeric-literal iterable (`v-for="(_, i) in 6"`) renders a fixed-length
+//! range, where the index is a permanent identity, so it is never reported.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_elements, is_vue_file};
+use crate::rules::vue_directive_ast::{
+    bound_expression, directive_name, directive_value, enclosing_tag, key_directive, split_for,
+    tuple_parts,
+};
 
-/// A destructured `v-for` variable whose name marks it as the numeric loop
-/// index (`(item, index)` / `(value, key, index)` / `(row, rowIndex)`), as
-/// opposed to an object property key (`(value, key)`), which is a stable `:key`.
+/// Whether a two-alias `v-for` names its 2nd alias like a loop counter: the bare
+/// counters `i`/`j`/`n`, or any name containing `index`/`idx` (`rowIndex`,
+/// `idx2`, `_idx`). Object-key names (`key`, `name`, `slotName`) do not match.
 ///
-/// The source-type (array vs object) is unknowable from text, so the index is
-/// identified by name shape: the bare loop counters `i`/`j`/`n`, or any name
-/// containing `index`/`idx` (`rowIndex`, `idx2`, `_idx`). Object keys
-/// (`key`/`name`/`id`/...) never match, so they are not flagged.
-fn is_loop_index_name(name: &str) -> bool {
+/// This is consulted only where Vue's own binding rules leave the answer to the
+/// iterable's runtime type, which a `.vue` template does not carry.
+fn is_loop_counter_name(name: &str) -> bool {
     let name = name.trim_start_matches('_').to_ascii_lowercase();
     name == "i" || name == "j" || name == "n" || name.contains("index") || name.contains("idx")
 }
 
-fn is_id_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
-}
-
-/// The iterable half of a `v-for` value: the text right of the top-level
-/// `in`/`of` keyword, outside any bracket nesting (so an `in`/`of` inside the
-/// alias tuple or a nested expression does not split). Mirrors the top-level
-/// scan of the sibling `vue_valid_v_for` rule's `split_for`.
-fn vfor_iterable(vfor_val: &str) -> Option<&str> {
-    let bytes = vfor_val.as_bytes();
-    let mut depth: i32 = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'i' | b'o' if depth == 0 => {
-                let after = i + 2;
-                let kw = &vfor_val[i..after.min(vfor_val.len())];
-                let prev_boundary = i == 0 || !is_id_char(bytes[i - 1]);
-                let next_boundary = after >= bytes.len() || !is_id_char(bytes[after]);
-                if (kw == "in" || kw == "of") && prev_boundary && next_boundary {
-                    return Some(vfor_val[after..].trim());
-                }
-            }
-            _ => {}
-        }
-        i += 1;
+/// Whether `bound` is the alias a `v-for`'s `aliases` tuple binds to the numeric
+/// loop index. Vue passes at most three arguments, so an alias past the third
+/// binds nothing and is never the index.
+fn binds_loop_index(aliases: &[&str], bound: &str) -> bool {
+    match aliases.iter().position(|a| *a == bound) {
+        // Vue binds a 3rd alias only when iterating a plain object's own keys,
+        // where it is always the numeric position. The name says nothing here.
+        Some(2) => true,
+        // A declared 3rd alias means the object form, so this slot holds the
+        // property key. Without one, the iterable's kind is unknowable from the
+        // template and only the alias's name remains.
+        Some(1) => aliases.len() == 2 && is_loop_counter_name(bound),
+        // The 1st alias is the item/value, never the index; anything else is
+        // not an alias of this `v-for` at all.
+        _ => false,
     }
-    None
 }
 
 /// Whether a `v-for` iterable is a bare numeric literal (`6`, `10`, `3.0`).
@@ -68,175 +67,347 @@ fn is_numeric_literal(iterable: &str) -> bool {
         && s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
 }
 
-#[derive(Debug)]
-pub struct Check;
-
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if !is_vue_file(ctx.path) {
-            return Vec::new();
-        }
-        let mut diagnostics = Vec::new();
-        let lines: Vec<&str> = ctx.source.lines().collect();
-        for elem in extract_elements(ctx.source) {
-            // Look for v-for with an index variable and :key using that index
-            let attrs = elem.attrs;
-            // Extract v-for value
-            let Some(vfor_start) = attrs.find("v-for=\"") else {
-                continue;
-            };
-            let vfor_rest = &attrs[vfor_start + 7..];
-            let Some(vfor_end) = vfor_rest.find('"') else {
-                continue;
-            };
-            let vfor_val = &vfor_rest[..vfor_end];
-
-            // A numeric-literal iterable (`v-for="(_, i) in 6"`, `v-for="n in 10"`)
-            // renders a fixed-length range: the loop index is a permanently stable
-            // identity, so index-as-key is correct (Vue's documented range form).
-            if vfor_iterable(vfor_val).is_some_and(is_numeric_literal) {
-                continue;
-            }
-
-            // Extract the loop index variable. The first slot is always the
-            // item/value; the numeric index lives in a later slot, but object
-            // iteration `(value, key)` binds a stable key there too — so select
-            // the first later param whose name is index-like, skipping the rest.
-            let Some(paren_start) = vfor_val.find('(') else {
-                continue;
-            };
-            let Some(paren_end) = vfor_val.find(')') else {
-                continue;
-            };
-            let params = &vfor_val[paren_start + 1..paren_end];
-            let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
-            let Some(index_var) = parts
-                .iter()
-                .skip(1)
-                .copied()
-                .find(|name| is_loop_index_name(name))
-            else {
-                continue;
-            };
-
-            // Check if :key uses the index variable
-            // Look on the same line and nearby lines
-            let line_idx = elem.line - 1;
-            for offset in 0..3 {
-                if line_idx + offset >= lines.len() {
-                    break;
-                }
-                let line = lines[line_idx + offset];
-                let key_pattern = format!(":key=\"{index_var}\"");
-                if line.contains(&key_pattern) {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "vue-no-array-index-key".into(),
-                        message: format!(
-                            "`:key=\"{index_var}\"` uses the loop index — this breaks on reorder/filter. \
-                             Use a stable id from the data."
-                        ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
-                    break;
-                }
-            }
-        }
-        diagnostics
+crate::ast_check! { on ["directive_attribute"] prefilter = ["v-for"] => |node, source, ctx, diagnostics|
+    if directive_name(node, source) != Some("v-for") {
+        return;
     }
+    let Some(value) = directive_value(node, source) else {
+        return;
+    };
+    let Some((alias, iterable)) = split_for(value) else {
+        return;
+    };
+    if is_numeric_literal(iterable) {
+        return;
+    }
+    let Some(tag) = enclosing_tag(node) else {
+        return;
+    };
+    let Some(key) = key_directive(tag, source) else {
+        return;
+    };
+    let Some(bound) = bound_expression(key, source).map(str::trim) else {
+        return;
+    };
+    let Some(aliases) = tuple_parts(alias) else {
+        return;
+    };
+    if !binds_loop_index(&aliases, bound) {
+        return;
+    }
+
+    diagnostics.push(Diagnostic::at_node(
+        std::sync::Arc::clone(&ctx.path_arc),
+        &key,
+        super::META.id,
+        format!(
+            "`:key=\"{bound}\"` binds the `v-for` loop index. When items reorder, \
+             filter or get inserted, Vue reuses the wrong DOM. Use a stable id \
+             from the data, e.g. `:key=\"item.id\"`."
+        ),
+        Severity::Error,
+    ));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::backend::{AstCheck, CheckCtx};
     use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("component.vue"), source))
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_vue_updated::language())
+            .expect("vue grammar");
+        let tree = parser.parse(source, None).expect("parser");
+        Check.check(&CheckCtx::for_test(Path::new("component.vue"), source), &tree)
+    }
+
+    fn wrap(body: &str) -> String {
+        format!("<template>\n{body}\n</template>")
+    }
+
+    // --- The construct is reported once, on the `:key` attribute ---
+
+    #[test]
+    fn flags_index_key_at_the_key_attribute_column() {
+        // #8368: the diagnostic anchors on `:key`, not on the line start.
+        let body = "  <li v-for=\"(link, index) in links\" :key=\"index\">{{ link }}</li>";
+        let source = wrap(body);
+        let diags = run(&source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 2);
+        let attribute = ":key=\"index\"";
+        let offset = source.find(attribute).expect("`:key` in fixture");
+        assert_eq!(diags[0].column, body.find(attribute).expect("`:key`") + 1);
+        // The span covers the attribute, so the renderer highlights it rather
+        // than the rest of the line.
+        assert_eq!(diags[0].span, Some((offset, attribute.len())));
     }
 
     #[test]
-    fn flags_vue_template() {
-        let source = "<template>\n  <div v-for=\"(item, i) in items\" :key=\"i\">{{ item }}</div>\n</template>";
-        assert_eq!(run(source).len(), 1);
+    fn flags_each_v_for_on_a_shared_line_at_its_own_key() {
+        // #8368: two `v-for`s on one line produce two distinguishable
+        // diagnostics, which a line-anchored report cannot express.
+        let body = "<ul><li v-for=\"(a, i) in xs\" :key=\"i\" /><li v-for=\"(b, j) in ys\" :key=\"j\" /></ul>";
+        let diags = run(&wrap(body));
+        assert_eq!(diags.len(), 2);
+        let mut columns: Vec<usize> = diags.iter().map(|d| d.column).collect();
+        columns.sort_unstable();
+        let first = body.find(":key=\"i\"").expect("first `:key`") + 1;
+        let second = body.find(":key=\"j\"").expect("second `:key`") + 1;
+        assert_eq!(columns, vec![first, second]);
     }
 
     #[test]
-    fn allows_stable_key() {
-        let source = "<template>\n  <div v-for=\"item in items\" :key=\"item.id\">{{ item.name }}</div>\n</template>";
-        assert!(run(source).is_empty());
+    fn flags_multiline_element_once_at_its_key() {
+        // The element spans several lines: one AST node, one diagnostic, on the
+        // `:key`'s own line and column.
+        let source = wrap(
+            "<UButton\n  v-for=\"(link, index) in props.links\"\n  :key=\"index\"\n  color=\"neutral\"\n/>",
+        );
+        let diags = run(&source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 4);
+        assert_eq!(diags[0].column, 3);
     }
 
     #[test]
-    fn allows_object_iteration_key() {
-        // Object `v-for` binds the property key in the 2nd slot — stable, not an index.
-        let source = "<template v-for=\"(value, key) in myMap\" :key=\"key\">\n  <div>{{ key }}: {{ value }}</div>\n</template>";
-        assert!(run(source).is_empty());
+    fn flags_only_the_v_for_whose_key_is_the_index() {
+        // #8368: two `v-for`s on one line, one keyed on the index and one on a
+        // stable id — the diagnostic must land on the second element's `:key`.
+        let body = "<ul><li v-for=\"(a, i) in xs\" :key=\"a.id\" /><li v-for=\"(b, j) in ys\" :key=\"j\" /></ul>";
+        let diags = run(&wrap(body));
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].column, body.find(":key=\"j\"").expect("`:key`") + 1);
     }
 
     #[test]
-    fn allows_object_three_arg_key_as_key() {
-        let source = "<template>\n  <div v-for=\"(value, key, index) in obj\" :key=\"key\">{{ value }}</div>\n</template>";
-        assert!(run(source).is_empty());
+    fn flags_long_form_v_bind_key() {
+        assert_eq!(
+            run(&wrap("<li v-for=\"(item, i) in items\" v-bind:key=\"i\" />")).len(),
+            1
+        );
     }
 
     #[test]
-    fn flags_object_three_arg_index_as_key() {
-        let source = "<template>\n  <div v-for=\"(value, key, index) in obj\" :key=\"index\">{{ value }}</div>\n</template>";
-        assert_eq!(run(source).len(), 1);
+    fn flags_single_quoted_key_declared_before_v_for() {
+        // Quoting and attribute order are the grammar's business: the rule reads
+        // the element's nodes, not the text around the `v-for`.
+        assert_eq!(
+            run(&wrap("<li :key='i' v-for='(item, i) in items' />")).len(),
+            1
+        );
+    }
+
+    // --- Positional criterion ---
+
+    #[test]
+    fn flags_third_alias_regardless_of_name() {
+        // Vue binds a 3rd alias only for a plain object, where it is always the
+        // numeric position — no name test applies.
+        assert_eq!(
+            run(&wrap("<div v-for=\"(value, key, position) in obj\" :key=\"position\" />")).len(),
+            1
+        );
     }
 
     #[test]
-    fn flags_array_index_named_index() {
-        let source = "<template>\n  <div v-for=\"(item, index) in items\" :key=\"index\">{{ item }}</div>\n</template>";
-        assert_eq!(run(source).len(), 1);
+    fn allows_second_alias_when_a_third_is_declared() {
+        // A 3rd alias is only meaningful for the object form: the 2nd alias is the
+        // property key, which is the Vue-recommended stable key (#4431, #4805).
+        assert!(
+            run(&wrap("<div v-for=\"(value, idx, n) in obj\" :key=\"idx\" />")).is_empty(),
+            "a 3-alias v-for binds its 2nd slot to the property key"
+        );
     }
 
     #[test]
-    fn flags_descriptive_index_name() {
-        let source = "<template>\n  <tr v-for=\"(row, rowIndex) in rows\" :key=\"rowIndex\">{{ row }}</tr>\n</template>";
-        assert_eq!(run(source).len(), 1);
+    fn allows_first_alias_as_key() {
+        assert!(run(&wrap("<li v-for=\"(item, i) in items\" :key=\"item\" />")).is_empty());
     }
 
     #[test]
-    fn flags_suffixed_index_name() {
-        let source = "<template>\n  <div v-for=\"(item, idx2) in items\" :key=\"idx2\">{{ item }}</div>\n</template>";
-        assert_eq!(run(source).len(), 1);
+    fn allows_stable_id_key() {
+        // The shape the rule exists not to fire on: an index alias is declared,
+        // and the key comes from the data instead.
+        assert!(run(&wrap("<li v-for=\"(item, index) in items\" :key=\"item.id\" />")).is_empty());
     }
+
+    #[test]
+    fn allows_bare_alias_v_for() {
+        // No tuple: the `v-for` binds no index at all.
+        assert!(run(&wrap("<li v-for=\"item in items\" :key=\"item\" />")).is_empty());
+    }
+
+    // --- Object iteration (#4431, #4805) ---
+
+    #[test]
+    fn flags_index_key_on_a_template_v_for() {
+        // `<template v-for>` is the common Vue 3 wrapper and parses to its own
+        // node kind; without this, a `<template>` fixture asserting no
+        // diagnostic would pass vacuously whatever the grammar did with it.
+        let source =
+            wrap("<template v-for=\"(item, index) in items\" :key=\"index\">\n  <li />\n</template>");
+        let diags = run(&source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 2);
+    }
+
+    #[test]
+    fn allows_object_iteration_property_key() {
+        let source = wrap("<template v-for=\"(value, key) in myObject\" :key=\"key\">\n  <div>{{ value }}</div>\n</template>");
+        assert!(run(&source).is_empty());
+    }
+
+    #[test]
+    fn ignores_key_on_a_template_v_for_child() {
+        // Vue 2 put the key on the children of a `<template v-for>`; Vue 3
+        // requires it on the `<template>` itself, which is what this reads. A
+        // key on a child binds no alias of the parent's iteration.
+        let source = wrap("<template v-for=\"(item, i) in items\">\n  <li :key=\"i\" />\n</template>");
+        assert!(run(&source).is_empty());
+    }
+
+    #[test]
+    fn allows_object_iteration_property_key_named_name() {
+        // nuxt/ui docs/app/pages/team.vue:87 shape — `user.socialAccounts` is a
+        // `Record<string, …>`, so the 2nd alias is the property name.
+        assert!(
+            run(&wrap("<UButton v-for=\"(link, key) in user.socialAccounts\" :key=\"key\" />"))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_object_three_alias_index() {
+        assert_eq!(
+            run(&wrap("<div v-for=\"(value, key, index) in obj\" :key=\"index\" />")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_object_three_alias_key() {
+        assert!(run(&wrap("<div v-for=\"(value, key, index) in obj\" :key=\"key\" />")).is_empty());
+    }
+
+    // --- Numeric-literal range (#7592) ---
 
     #[test]
     fn allows_numeric_literal_range_index_key() {
-        // `v-for="(_, i) in 6"` iterates a numeric literal — a fixed-length
-        // range where the loop index is a stable identity, so index-as-key
-        // is correct.
-        let source = "<template>\n  <input v-for=\"(_, i) in 6\" :key=\"i\" />\n</template>";
-        assert!(run(source).is_empty());
+        assert!(run(&wrap("<input v-for=\"(_, i) in 6\" :key=\"i\" />")).is_empty());
     }
 
     #[test]
     fn allows_single_alias_numeric_range() {
-        // Vue's documented `v-for="n in 10"` range form: the alias itself is
-        // the 1-based counter over a fixed literal range.
-        let source = "<template>\n  <li v-for=\"n in 10\" :key=\"n\">{{ n }}</li>\n</template>";
-        assert!(run(source).is_empty());
-    }
-
-    #[test]
-    fn flags_dotlength_iterable_index_key() {
-        // `list.length` is not a numeric literal — the render length is not
-        // fixed by the template, so an index `:key` stays unstable and flagged.
-        let source = "<template>\n  <li v-for=\"(item, i) in list.length\" :key=\"i\">{{ item }}</li>\n</template>";
-        assert_eq!(run(source).len(), 1);
+        // Vue's documented `v-for="n in 10"` range form: the alias is the
+        // 1-based counter over a fixed literal range, so it is a stable key.
+        assert!(run(&wrap("<li v-for=\"n in 10\" :key=\"n\">{{ n }}</li>")).is_empty());
     }
 
     #[test]
     fn flags_variable_numeric_iterable() {
         // A variable holding a number at runtime (`count`) is not a literal
-        // range visible in the template, so index-as-key stays flagged.
-        let source = "<template>\n  <li v-for=\"(item, i) in count\" :key=\"i\">{{ item }}</li>\n</template>";
-        assert_eq!(run(source).len(), 1);
+        // range visible in the template, so the index stays unstable.
+        assert_eq!(
+            run(&wrap("<li v-for=\"(item, i) in count\" :key=\"i\" />")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_dotlength_iterable_index_key() {
+        // `list.length` is not a literal: the render length is not fixed by the
+        // template, so the index stays unstable.
+        assert_eq!(
+            run(&wrap("<li v-for=\"(item, i) in list.length\" :key=\"i\" />")).len(),
+            1
+        );
+    }
+
+    // --- Counter names at the ambiguous 2nd slot ---
+
+    #[test]
+    fn flags_descriptive_index_name() {
+        assert_eq!(
+            run(&wrap("<tr v-for=\"(row, rowIndex) in rows\" :key=\"rowIndex\" />")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_suffixed_index_name() {
+        assert_eq!(
+            run(&wrap("<div v-for=\"(item, idx2) in items\" :key=\"idx2\" />")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_non_counter_named_second_alias() {
+        // #8368 asks for a purely positional 2nd slot, which would flag this.
+        // It stays clean: `(link, key) in user.socialAccounts` in nuxt/ui
+        // `docs/app/pages/team.vue:87` is the same shape over a
+        // `Record<string, …>`, where the 2nd alias is the property name. What
+        // separates them is the iterable's type, which the template lacks (#8413).
+        assert!(run(&wrap("<li v-for=\"(item, position) in items\" :key=\"position\" />")).is_empty());
+    }
+
+    #[test]
+    fn flags_starindex_from_the_issue_repro() {
+        // #8368 repro line: nuxt/ui docs/app/components/StarsBg.vue:75.
+        assert_eq!(
+            run(&wrap(
+                "<circle v-for=\"(star, starIndex) in layer.stars\" :key=\"starIndex\" />"
+            ))
+            .len(),
+            1
+        );
+    }
+
+    // --- Over-firing guards ---
+
+    #[test]
+    fn ignores_key_on_a_sibling_element() {
+        // The `:key` belongs to another element, which binds no `v-for` alias.
+        let source = wrap("<li v-for=\"(item, i) in items\" /><li :key=\"i\" />");
+        assert!(run(&source).is_empty());
+    }
+
+    #[test]
+    fn ignores_composite_key_expression() {
+        // A key combining the index with something else is not a bare index.
+        assert!(
+            run(&wrap("<li v-for=\"(item, i) in items\" :key=\"item.id + i\" />")).is_empty()
+        );
+    }
+
+    #[test]
+    fn ignores_valueless_key_shorthand() {
+        // Vue 3.5+ `:key` shorthand binds `key`, which this `v-for` does not
+        // declare, so the key is not one of its aliases.
+        assert!(run(&wrap("<li v-for=\"(item, i) in items\" :key />")).is_empty());
+    }
+
+    #[test]
+    fn flags_valueless_key_shorthand_bound_to_an_index_alias() {
+        // The same shorthand over a `v-for` that does declare `key`: it binds
+        // the 3rd alias, which is the numeric position.
+        assert_eq!(
+            run(&wrap("<div v-for=\"(value, name, key) in obj\" :key />")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn ignores_element_without_v_for() {
+        assert!(run(&wrap("<li :key=\"index\" />")).is_empty());
+    }
+
+    #[test]
+    fn ignores_other_directives() {
+        assert!(run(&wrap("<div v-if=\"ok\" :id=\"x\" />")).is_empty());
     }
 }

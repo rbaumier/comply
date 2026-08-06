@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2029 rules across 147 categories.
+2028 rules across 147 categories.
 
 ## Categories
 
@@ -146,7 +146,7 @@
 - [typescript > security](#typescript-security) (1 rules)
 - [typescript > type-aware](#typescript-type-aware) (81 rules)
 - [ui](#ui) (28 rules)
-- [vue](#vue) (68 rules)
+- [vue](#vue) (67 rules)
 - [vue > security](#vue-security) (4 rules)
 - [xstate](#xstate) (14 rules)
 - [zod](#zod) (35 rules)
@@ -2820,7 +2820,6 @@
 | `vue-typed-define-props-emits` | In `lang="ts"` SFCs, `defineProps({ ... })` / `defineEmits([...])` lose type inference. | Use the type form: `defineProps<{ ... }>()` / `defineEmits<{ (e: 'x'): void }>()`. |
 | `vue-url-state-for-filters` | Store filter/pagination state in the URL, not in local `ref()`. | Filters, pagination, search, and sort state should survive a page reload and be shareable by URL. Use `useUrlSearchParams` from VueUse (or your router's query) instead of a local `ref()`. |
 | `vue-use-template-ref` | `ref(null)` as a template ref is superseded by `useTemplateRef('name')` in Vue 3.5+. | Replace `const el = ref(null)` + `ref="el"` with `const el = useTemplateRef('el')`. |
-| `vue-v-for-needs-stable-key` | v-for `:key` must use a stable identifier, not the loop index. | Replace `:key="index"` / `:key="i"` with a stable id from the data: `:key="item.id"`. Index keys cause Vue to reuse the wrong DOM when items reorder, filter, or get inserted. |
 | `vue-v-memo-requires-v-for` | `v-memo="[]"` without `v-for` never re-renders — that's exactly what `v-once` states directly. | Replace standalone `v-memo="[]"` with `v-once`, or give `v-memo` a real dependency array. |
 | `vue-valid-v-cloak` | `v-cloak` must be a bare directive with no argument, no modifiers, and no value. | Use `v-cloak` on its own, dropping any argument, modifier, or value. |
 | `vue-valid-v-for` | `v-for` must have a value, no argument or modifiers, identifier-only secondary aliases, and a `:key` that uses its iteration variables (required on custom components). | Give `v-for` a `alias in iterable` value with no argument or modifier, keep extra aliases as plain identifiers, and add a `:key` referencing an iteration variable. |
