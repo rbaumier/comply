@@ -11,7 +11,7 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "jsdoc/check-tag-names",
     description: "JSDoc tag names must be known (e.g. `@param`, `@returns`, …).",
-    remediation: "Replace the unknown tag with a canonical JSDoc tag, or drop it. Common typos: `@arg` → `@param`, `@thrown` → `@throws`, `@yield` → `@yields`.",
+    remediation: "Replace the unknown tag with a standard JSDoc tag, or drop it. Common typos: `@parameter` → `@param`, `@thrown` → `@throws`, `@exemple` → `@example`.",
     severity: Severity::Error,
     doc_url: Some(
         "https://github.com/gajus/eslint-plugin-jsdoc/blob/main/docs/rules/check-tag-names.md",
