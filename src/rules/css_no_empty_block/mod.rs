@@ -8,8 +8,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "css-no-empty-block",
-    description: "Disallow empty declaration blocks.",
-    remediation: "Remove the empty rule or add at least one declaration.",
+    description: "Disallow style rules whose block holds no content.",
+    remediation: "Delete the rule, or give the block content: a declaration, a nested rule or an at-rule.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["css"],

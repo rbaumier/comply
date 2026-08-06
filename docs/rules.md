@@ -730,7 +730,7 @@
 | `css-no-duplicate-font-family` | Disallow duplicated font names within a `font-family` value. | Remove the duplicate name from the font stack. |
 | `css-no-duplicate-imports` | Duplicate `@import` rules load the same stylesheet twice, wasting bandwidth. | Remove the duplicate `@import`. |
 | `css-no-duplicate-properties` | Disallow duplicated property declarations within the same block. | Remove the redundant declaration; consecutive duplicates for fallbacks are allowed. |
-| `css-no-empty-block` | Disallow empty declaration blocks. | Remove the empty rule or add at least one declaration. |
+| `css-no-empty-block` | Disallow style rules whose block holds no content. | Delete the rule, or give the block content: a declaration, a nested rule or an at-rule. |
 | `css-no-empty-comment` | Disallow empty CSS comments. | Remove the empty comment or add meaningful text. |
 | `css-no-invalid-hex` | Hex color must have 3, 4, 6, or 8 hexadecimal digits. | Replace the value with a valid hex color (e.g. `#ff0000`). |
 | `css-no-invalid-media-query` | Disallow malformed `@media` queries. | Fix the `@media` syntax (e.g. add the missing feature or parenthesis). |
