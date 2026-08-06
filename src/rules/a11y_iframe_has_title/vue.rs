@@ -15,15 +15,14 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
             if elem.tag == "iframe" && !has_attr(elem.attrs, "title") {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-iframe-has-title".into(),
-                    message: "`<iframe>` is missing a `title` attribute.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-iframe-has-title",
+                    "`<iframe>` is missing a `title` attribute.".into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

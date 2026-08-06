@@ -27,9 +27,10 @@ pub struct Diagnostic {
     pub message: String,
     pub severity: Severity,
     /// Byte range into the source file, `(offset, length)`. Populated by
-    /// native tree-sitter rules that have the node in scope. `None` for
-    /// delegated diagnostics (oxlint/clippy/knip/madge) — the renderer
-    /// falls back to whole-line highlighting.
+    /// native rules that know the construct's byte range: tree-sitter rules
+    /// through [`Self::at_node`], text scanners through [`Self::at_offset`].
+    /// `None` for delegated diagnostics (oxlint/clippy/knip/madge) — the
+    /// renderer falls back to whole-line highlighting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span: Option<(usize, usize)>,
 }
@@ -63,6 +64,40 @@ impl Diagnostic {
             message,
             severity,
             span: Some((range.start, range.len())),
+        }
+    }
+
+    /// Build a diagnostic anchored on a byte range of `source`, given as
+    /// `(offset, length)`. Derives `(line, column)` from `offset` and keeps the
+    /// range as the `span`, so the pretty renderer highlights exactly that text.
+    ///
+    /// This is the `TextCheck` counterpart of [`Self::at_node`]: a text backend
+    /// that located its construct by scanning knows the construct's byte offset
+    /// and passes it here instead of emitting a position literal. `span.0` must
+    /// index `source`; an out-of-range offset lands on the last line.
+    ///
+    /// The column counts characters, like every oxc backend
+    /// (`byte_offset_to_line_col`), so a text backend and the oxc backend of the
+    /// same rule report the same position. [`Self::at_node`] instead takes
+    /// tree-sitter's column, which counts bytes.
+    #[must_use]
+    pub fn at_offset(
+        path: impl Into<Arc<Path>>,
+        source: &str,
+        span: (usize, usize),
+        rule_id: &'static str,
+        message: String,
+        severity: Severity,
+    ) -> Self {
+        let (line, column) = crate::oxc_helpers::byte_offset_to_line_col(source, span.0);
+        Self {
+            path: path.into(),
+            line,
+            column,
+            rule_id: Cow::Borrowed(rule_id),
+            message,
+            severity,
+            span: Some(span),
         }
     }
 }

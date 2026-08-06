@@ -22,10 +22,10 @@ use crate::rules::vue_template_helpers::{
 #[derive(Debug)]
 pub struct Check;
 
-/// One static-id occurrence: its source line and the conditional branch
-/// guarding it, if any.
+/// One static-id occurrence: the byte span of the `id` attribute that declares
+/// it and the conditional branch guarding it, if any.
 struct Occurrence {
-    line: usize,
+    id_span: (usize, usize),
     guard: Option<Guard>,
 }
 
@@ -67,7 +67,7 @@ impl TextCheck for Check {
                 continue;
             }
             let occ = Occurrence {
-                line: elem.line,
+                id_span: elem.attr_span("id"),
                 guard: conditional_guard(&lines, elem.line),
             };
             match groups.iter_mut().find(|(v, _)| v == value) {
@@ -83,15 +83,14 @@ impl TextCheck for Check {
             }
             // Flag every occurrence past the first (occurrences 2..N).
             for occ in &occs[1..] {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: occ.line,
-                    column: 1,
-                    rule_id: "html-no-duplicate-id".into(),
-                    message: format!("Duplicate id `{value}` in the same file."),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    occ.id_span,
+                    "html-no-duplicate-id",
+                    format!("Duplicate id `{value}` in the same file."),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

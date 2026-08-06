@@ -49,16 +49,15 @@ impl TextCheck for Check {
                     continue;
                 }
             }
-            diagnostics.push(Diagnostic {
-                path: std::sync::Arc::clone(&ctx.path_arc),
-                line: elem.line,
-                column: 1,
-                rule_id: "a11y-label-has-associated-control".into(),
-                message: "`<label>` is missing `for` — associate it with a form control."
+            diagnostics.push(Diagnostic::at_offset(
+                std::sync::Arc::clone(&ctx.path_arc),
+                ctx.source,
+                elem.span(),
+                "a11y-label-has-associated-control",
+                "`<label>` is missing `for` — associate it with a form control."
                     .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+                Severity::Error,
+            ));
         }
         diagnostics
     }

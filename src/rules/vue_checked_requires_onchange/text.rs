@@ -57,15 +57,14 @@ impl TextCheck for Check {
             {
                 continue;
             }
-            diagnostics.push(Diagnostic {
-                path: std::sync::Arc::clone(&ctx.path_arc),
-                line: elem.line,
-                column: 1,
-                rule_id: "vue-checked-requires-onchange".into(),
-                message: "`checked` without `@change` or `v-model` renders a frozen input.".into(),
-                severity: Severity::Error,
-                span: None,
-            });
+            diagnostics.push(Diagnostic::at_offset(
+                std::sync::Arc::clone(&ctx.path_arc),
+                ctx.source,
+                elem.span(),
+                "vue-checked-requires-onchange",
+                "`checked` without `@change` or `v-model` renders a frozen input.".into(),
+                Severity::Error,
+            ));
         }
         diagnostics
     }

@@ -44,15 +44,14 @@ impl TextCheck for Check {
                 || has_attr(elem.attrs, "v-on:keyup")
                 || has_attr(elem.attrs, "v-on:keypress");
             if !has_key {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-click-events-have-key-events".into(),
-                    message: "Element has `@click` without a corresponding keyboard event handler (`@keydown`/`@keyup`/`@keypress`).".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-click-events-have-key-events",
+                    "Element has `@click` without a corresponding keyboard event handler (`@keydown`/`@keyup`/`@keypress`).".into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

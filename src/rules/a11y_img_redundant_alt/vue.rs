@@ -25,17 +25,16 @@ impl TextCheck for Check {
             if let Some(alt) = attr_value(elem.attrs, "alt")
                 && has_redundant_word(alt)
             {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-img-redundant-alt".into(),
-                    message: format!(
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.attr_span("alt"),
+                    "a11y-img-redundant-alt",
+                    format!(
                         "Redundant word in `alt=\"{alt}\"` — screen readers already announce images."
                     ),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

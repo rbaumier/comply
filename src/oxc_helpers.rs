@@ -38,6 +38,10 @@ thread_local! {
 /// `starts[k]` is the byte offset where line `k + 1` begins (`starts[0] == 0`).
 /// Like [`SourceContainsCache`] it is keyed by the source `(ptr, len)` identity
 /// and rebuilt when that changes; the engine also clears it once per file.
+/// A short-lived buffer can land on a freed buffer's address with the same
+/// length, so the key is only sound for offset-preserving transforms of the same
+/// file: `mask_html_comments` and the other maskers replace bytes one for one
+/// and keep every `\n` in place, which makes a reused index still correct.
 #[derive(Default)]
 struct LineIndex {
     ptr: usize,

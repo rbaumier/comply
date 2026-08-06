@@ -30,17 +30,16 @@ impl TextCheck for Check {
             let trimmed = text.trim().to_lowercase();
             for &ambiguous in AMBIGUOUS_TEXTS {
                 if trimmed == ambiguous {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "a11y-anchor-ambiguous-text".into(),
-                        message: format!(
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.span(),
+                        "a11y-anchor-ambiguous-text",
+                        format!(
                             "Ambiguous link text \"{ambiguous}\". Use descriptive text that indicates the link's purpose."
                         ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                        Severity::Error,
+                    ));
                     break;
                 }
             }

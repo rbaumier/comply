@@ -34,15 +34,14 @@ impl TextCheck for Check {
         for elem in extract_elements(ctx.source) {
             let tag_lower = elem.tag.to_ascii_lowercase();
             if OBSOLETE_TAGS.contains(&tag_lower.as_str()) {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: format!("Obsolete HTML tag `<{tag_lower}>`. Use CSS instead."),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    super::META.id,
+                    format!("Obsolete HTML tag `<{tag_lower}>`. Use CSS instead."),
+                    Severity::Error,
+                ));
             }
 
             // Obsolete presentational attributes (`align`, `border`, `bgcolor`)
@@ -66,17 +65,16 @@ impl TextCheck for Check {
                     {
                         continue;
                     }
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: super::META.id.into(),
-                        message: format!(
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.span(),
+                        super::META.id,
+                        format!(
                             "Obsolete HTML attribute `{name_lower}` on `<{tag_lower}>`. Use CSS instead."
                         ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                        Severity::Error,
+                    ));
                 }
             }
         }

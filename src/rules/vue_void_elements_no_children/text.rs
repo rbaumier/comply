@@ -37,18 +37,17 @@ impl TextCheck for Check {
             let same_line = after_open.split('\n').next().unwrap_or("");
             let has_explicit_close = has_closing_tag(same_line, elem.tag);
             if !elem.self_closing && has_explicit_close {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "vue-void-elements-no-children".into(),
-                    message: format!(
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "vue-void-elements-no-children",
+                    format!(
                         "`<{}>` is a void element and cannot have children.",
                         elem.tag
                     ),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

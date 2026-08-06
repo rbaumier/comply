@@ -19,17 +19,14 @@ impl TextCheck for Check {
             let mut seen = FxHashSet::default();
             for name in &names {
                 if !seen.insert(*name) {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "vue-no-duplicate-props".into(),
-                        message: format!(
-                            "Duplicate attribute `{name}` — the last value silently wins."
-                        ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.span(),
+                        "vue-no-duplicate-props",
+                        format!("Duplicate attribute `{name}` — the last value silently wins."),
+                        Severity::Error,
+                    ));
                 }
             }
         }

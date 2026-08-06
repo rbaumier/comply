@@ -18,17 +18,15 @@ impl TextCheck for Check {
                 continue;
             }
             if !has_attr(elem.attrs, "tabindex") {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-aria-activedescendant-has-tabindex".into(),
-                    message:
-                        "Element with `aria-activedescendant` must have `tabIndex` to be tabbable."
-                            .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-aria-activedescendant-has-tabindex",
+                    "Element with `aria-activedescendant` must have `tabIndex` to be tabbable."
+                        .into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

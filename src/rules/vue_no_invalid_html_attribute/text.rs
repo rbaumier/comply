@@ -68,15 +68,14 @@ impl TextCheck for Check {
             };
             for token in rel_val.split_whitespace() {
                 if !valid_rels.contains(&token) {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "vue-no-invalid-html-attribute".into(),
-                        message: format!("Invalid `rel` value `{token}` on `<{}>`.", elem.tag,),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.span(),
+                        "vue-no-invalid-html-attribute",
+                        format!("Invalid `rel` value `{token}` on `<{}>`.", elem.tag,),
+                        Severity::Error,
+                    ));
                 }
             }
         }

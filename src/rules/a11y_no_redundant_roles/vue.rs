@@ -35,17 +35,16 @@ impl TextCheck for Check {
             if let Some(role) = attr_value(elem.attrs, "role") {
                 for &(tag, redundant_role) in REDUNDANT_PAIRS {
                     if elem.tag == tag && role == redundant_role {
-                        diagnostics.push(Diagnostic {
-                            path: std::sync::Arc::clone(&ctx.path_arc),
-                            line: elem.line,
-                            column: 1,
-                            rule_id: "a11y-no-redundant-roles".into(),
-                            message: format!(
+                        diagnostics.push(Diagnostic::at_offset(
+                            std::sync::Arc::clone(&ctx.path_arc),
+                            ctx.source,
+                            elem.span(),
+                            "a11y-no-redundant-roles",
+                            format!(
                                 "`<{tag}>` has implicit role `{redundant_role}` — `role=\"{role}\"` is redundant."
                             ),
-                            severity: Severity::Error,
-                            span: None,
-                        });
+                            Severity::Error,
+                        ));
                         break;
                     }
                 }

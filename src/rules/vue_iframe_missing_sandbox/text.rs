@@ -19,18 +19,17 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
             if elem.tag == "iframe" && !has_attr(elem.attrs, "sandbox") {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "vue-iframe-missing-sandbox".into(),
-                    message: "`<iframe>` without a `sandbox` attribute can access \
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "vue-iframe-missing-sandbox",
+                    "`<iframe>` without a `sandbox` attribute can access \
                               the parent page. Add `sandbox` to restrict its \
                               capabilities."
                         .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

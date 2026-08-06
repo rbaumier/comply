@@ -76,17 +76,14 @@ impl TextCheck for Check {
             }
             for name in collect_attr_names(elem.attrs) {
                 if name.starts_with("aria-") && !VALID_ARIA.contains(&name) {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "a11y-aria-props".into(),
-                        message: format!(
-                            "Invalid ARIA attribute `{name}`. Use a valid WAI-ARIA attribute."
-                        ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.attr_span(name),
+                        "a11y-aria-props",
+                        format!("Invalid ARIA attribute `{name}`. Use a valid WAI-ARIA attribute."),
+                        Severity::Error,
+                    ));
                 }
             }
         }

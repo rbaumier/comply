@@ -397,15 +397,14 @@ impl TextCheck for Check {
                 if script_components.contains(&tag_to_pascal_case(elem.tag)) {
                     continue;
                 }
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "vue-component-pascal-case".into(),
-                    message: format!("Component `<{}>` should use PascalCase.", elem.tag),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "vue-component-pascal-case",
+                    format!("Component `<{}>` should use PascalCase.", elem.tag),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

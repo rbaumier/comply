@@ -30,40 +30,36 @@ impl TextCheck for Check {
                 {
                     continue;
                 }
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-anchor-is-valid".into(),
-                    message: "Anchor is missing an `href` attribute.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-anchor-is-valid",
+                    "Anchor is missing an `href` attribute.".into(),
+                    Severity::Error,
+                ));
                 continue;
             }
             if let Some(val) = attr_value(elem.attrs, "href") {
                 if val == "#" {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "a11y-anchor-is-valid".into(),
-                        message: "Anchor has `href=\"#\"` — use a `<button>` or a real URL.".into(),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.span(),
+                        "a11y-anchor-is-valid",
+                        "Anchor has `href=\"#\"` — use a `<button>` or a real URL.".into(),
+                        Severity::Error,
+                    ));
                 } else if val.contains("javascript:") {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "a11y-anchor-is-valid".into(),
-                        message:
-                            "Anchor has `href=\"javascript:\"` — use a `<button>` or a real URL."
-                                .into(),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.span(),
+                        "a11y-anchor-is-valid",
+                        "Anchor has `href=\"javascript:\"` — use a `<button>` or a real URL."
+                            .into(),
+                        Severity::Error,
+                    ));
                 }
             }
         }

@@ -40,15 +40,14 @@ impl TextCheck for Check {
                 .copied()
                 .collect();
             if !missing.is_empty() {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-role-has-required-aria-props".into(),
-                    message: format!("Role `{role}` requires ARIA props: {}.", missing.join(", ")),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-role-has-required-aria-props",
+                    format!("Role `{role}` requires ARIA props: {}.", missing.join(", ")),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

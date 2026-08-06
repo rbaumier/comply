@@ -202,17 +202,14 @@ impl TextCheck for Check {
         for elem in extract_elements(ctx.source) {
             for role in role_candidates(elem.attrs) {
                 if !VALID_ROLES.contains(&role.as_str()) {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "a11y-aria-role".into(),
-                        message: format!(
-                            "Invalid ARIA role `{role}`. Use a valid WAI-ARIA role."
-                        ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.attr_span("role"),
+                        "a11y-aria-role",
+                        format!("Invalid ARIA role `{role}`. Use a valid WAI-ARIA role."),
+                        Severity::Error,
+                    ));
                 }
             }
         }
